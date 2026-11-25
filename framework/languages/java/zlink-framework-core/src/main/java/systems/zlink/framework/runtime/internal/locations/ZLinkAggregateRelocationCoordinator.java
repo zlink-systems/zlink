@@ -26,6 +26,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.zip.CRC32C;
 
@@ -38,9 +40,17 @@ public final class ZLinkAggregateRelocationCoordinator {
     private static final ZLinkStoreCancellation NEVER_CANCELLED = () -> false;
 
     final ZLinkLocationRepository authorityStore;
+    private final Predicate<ZLinkLocationOwnerToken> ownerLeaseValid;
 
     public ZLinkAggregateRelocationCoordinator(ZLinkLocationRepository authorityStore) {
+        this(authorityStore, ignored -> false);
+    }
+
+    public ZLinkAggregateRelocationCoordinator(
+            ZLinkLocationRepository authorityStore,
+            Predicate<ZLinkLocationOwnerToken> ownerLeaseValid) {
         this.authorityStore = Objects.requireNonNull(authorityStore, "authorityStore");
+        this.ownerLeaseValid = Objects.requireNonNull(ownerLeaseValid, "ownerLeaseValid");
     }
 
     public CompletionStage<Prepared> prepare(Request request, ZLinkStoreCancellation cancellation) {
@@ -1161,8 +1171,13 @@ public final class ZLinkAggregateRelocationCoordinator {
         }
     }
 
+    /** The prepare and commit results already owned by the target attempt. */
+    public record TargetIngressAuthority(
+            Supplier<Prepared> prepared, Supplier<Published> committed) {}
+
     /** Confirms that the exact target attempt owns this route before application admission. */
     public CompletionStage<Boolean> confirmTargetIngress(
+            TargetIngressAuthority stage,
             ZLinkAggregateFence fence,
             ZLinkLocationOwnerToken targetOwner,
             ZLinkLocationOwnerToken sourceOwner,
@@ -1175,68 +1190,68 @@ public final class ZLinkAggregateRelocationCoordinator {
             ZLinkStoreCancellation cancellation) {
         return authorityStore
                 .read(participant.authorityKey(), cancellation)
-                .thenCompose(
+                .thenApply(
                         read -> {
-                            var publication =
-                                    targetPublication(read, participant, fence, targetOwner);
-                            if (publication == null
-                                    || !(read instanceof ZLinkAuthoritySnapshot snapshot)
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
+                                    || !matchesTargetOwner(snapshot, participant, targetOwner)
+                                    || snapshot.allocation().state()
+                                            != ZLinkPlacementAllocationState.ACTIVE
                                     || snapshot.authorityOwnerGeneration() != authorityGeneration
                                     || !snapshot.allocation().descriptor().equals(targetNode)
                                     || snapshot.allocation().descriptorLifecycleGeneration()
-                                            != targetNodeGeneration
-                                    || snapshot.relocation() == null
-                                    || !snapshot.relocation().hasReached("committed")) {
-                                return CompletableFuture.completedFuture(false);
+                                            != targetNodeGeneration) {
+                                return false;
                             }
-                            if (!publication.sourceOwnerId().equals(sourceOwner.ownerId())
-                                    || publication.sourceOwnerLeaseGeneration()
-                                            != sourceOwner.leaseGeneration()
-                                    || !publication.sourceNodeRid().equals(sourceNode)
-                                    || publication.sourceNodeGeneration() != sourceNodeGeneration
-                                    || !publication.targetNodeRid().equals(targetNode.rid())
-                                    || publication.targetNodeGeneration() != targetNodeGeneration) {
-                                return CompletableFuture.completedFuture(false);
-                            }
-                            return authorityStore
-                                    .readAggregateProgress(fence, cancellation)
-                                    .thenCompose(
-                                            progress -> {
-                                                if (progress.isEmpty())
-                                                    return CompletableFuture.completedFuture(false);
-                                                var marker = progress.orElseThrow();
-                                                var request = marker.request();
-                                                if (!marker.fence().equals(fence)
-                                                        || !request.targetOwner()
-                                                                .equals(targetOwner)
-                                                        || !request.targetDescriptor()
-                                                                .equals(targetNode)
-                                                        || request
-                                                                        .targetDescriptorLifecycleGeneration()
-                                                                != targetNodeGeneration
-                                                        || !java.util.HexFormat.of()
-                                                                .formatHex(
-                                                                        request.inventoryDigest())
-                                                                .equals(
-                                                                        snapshot.relocation()
-                                                                                .sourceInventorySha256())) {
-                                                    return CompletableFuture.completedFuture(false);
-                                                }
-                                                return authorityStore
-                                                        .readOwnerLease(targetOwner.ownerId())
-                                                        .thenApply(
-                                                                lease ->
-                                                                        lease
-                                                                                        instanceof
-                                                                                        ZLinkOwnerLeaseFound
-                                                                                                found
-                                                                                && found.isLiveFor(
-                                                                                        targetOwner
-                                                                                                .ownerId(),
-                                                                                        targetOwner
-                                                                                                .leaseGeneration()));
-                                            });
+                            return matchesStageAuthority(
+                                            stage,
+                                            fence,
+                                            snapshot,
+                                            participant,
+                                            targetOwner,
+                                            sourceOwner,
+                                            sourceNode,
+                                            sourceNodeGeneration,
+                                            targetNode)
+                                    && ownerLeaseValid.test(targetOwner);
                         });
+    }
+
+    private static boolean matchesStageAuthority(
+            TargetIngressAuthority stage,
+            ZLinkAggregateFence fence,
+            ZLinkAuthoritySnapshot snapshot,
+            ExpectedParticipant participant,
+            ZLinkLocationOwnerToken targetOwner,
+            ZLinkLocationOwnerToken sourceOwner,
+            RoutingId sourceNode,
+            long sourceNodeGeneration,
+            ZLinkMeshNodeDescriptorKey targetNode) {
+        var relocation = snapshot.relocation();
+        if (relocation == null) {
+            // Normalization removes the relocation proof from Store. The exact commit result
+            // identifies the owner generation this stage published.
+            var committed = stage.committed().get();
+            return committed != null
+                    && committed.fence().equals(fence)
+                    && Objects.equals(
+                            committed.targetOwnerGenerations().get(participant.authorityKey()),
+                            snapshot.authorityOwnerGeneration());
+        }
+        var prepared = stage.prepared().get();
+        var publication = publicationForAttempt(snapshot, fence, targetOwner);
+        return prepared != null
+                && prepared.fence().equals(fence)
+                && relocation.hasReached("committed")
+                && publication != null
+                && publication.targetAttemptGeneration() == fence.aggregateGeneration()
+                && publication.sourceOwnerId().equals(sourceOwner.ownerId())
+                && publication.sourceOwnerLeaseGeneration() == sourceOwner.leaseGeneration()
+                && publication.sourceNodeRid().equals(sourceNode)
+                && publication.sourceNodeGeneration() == sourceNodeGeneration
+                && publication.targetNodeRid().equals(targetNode.rid())
+                && java.util.HexFormat.of()
+                        .formatHex(prepared.inventoryDigest())
+                        .equals(relocation.sourceInventorySha256());
     }
 
     /** Reads provider-issued owner generations after a target commit. */
@@ -1320,12 +1335,14 @@ public final class ZLinkAggregateRelocationCoordinator {
             ZLinkAggregateFence fence,
             ZLinkLocationOwnerToken targetOwner) {
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
-                || snapshot.objectGeneration() != participant.objectGeneration()
-                || !ownerGenerationAdvanced(
-                        participant.sourceAuthorityOwnerGeneration(),
-                        snapshot.authorityOwnerGeneration())
-                || !snapshot.ownerId().equals(targetOwner.ownerId())
-                || snapshot.ownerLeaseGeneration() != targetOwner.leaseGeneration()) return null;
+                || !matchesTargetOwner(snapshot, participant, targetOwner)) return null;
+        return publicationForAttempt(snapshot, fence, targetOwner);
+    }
+
+    private static ZLinkCanonicalRelocationAuthorityStateCodec.Published publicationForAttempt(
+            ZLinkAuthoritySnapshot snapshot,
+            ZLinkAggregateFence fence,
+            ZLinkLocationOwnerToken targetOwner) {
         var publication =
                 ZLinkAuthorityRelocation.publication(snapshot, fence.aggregateGeneration());
         return publication != null
@@ -1337,6 +1354,18 @@ public final class ZLinkAggregateRelocationCoordinator {
                                 == snapshot.allocation().descriptorLifecycleGeneration()
                 ? publication
                 : null;
+    }
+
+    private static boolean matchesTargetOwner(
+            ZLinkAuthoritySnapshot snapshot,
+            ExpectedParticipant participant,
+            ZLinkLocationOwnerToken targetOwner) {
+        return snapshot.objectGeneration() == participant.objectGeneration()
+                && ownerGenerationAdvanced(
+                        participant.sourceAuthorityOwnerGeneration(),
+                        snapshot.authorityOwnerGeneration())
+                && snapshot.ownerId().equals(targetOwner.ownerId())
+                && snapshot.ownerLeaseGeneration() == targetOwner.leaseGeneration();
     }
 
     private CompletionStage<Map<String, Long>> readPublishedOwnerGenerations(

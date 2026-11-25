@@ -9,6 +9,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
+import systems.zlink.framework.runtime.internal.execution.ZLinkConfirmedReplay;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -348,46 +349,27 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                             records.size() + 1L, ingress.record()));
         }
         List<CompletionStage<Void>> replayObserved = new ArrayList<>(records.size());
-        return CompletableFuture.allOf(
-                        temporary.stream()
-                                .map(PendingIngress::confirmation)
-                                .filter(Objects::nonNull)
-                                .toArray(CompletableFuture[]::new))
-                .thenCompose(
-                        confirmed ->
-                                backend.admitBacklogPrefix(
-                                        staged.actor(),
-                                        staged.request(),
-                                        records,
-                                        (record, terminal) -> {
-                                            int index = Math.toIntExact(record.sequence() - 1);
-                                            if (index < saved.size())
-                                                return replayer.prepareReplay(
-                                                        lane,
-                                                        saved.get(index),
-                                                        terminal,
-                                                        replayObserved::add);
-                                            if (index < saved.size() + relayed.size())
-                                                return replayer.prepareReplay(
-                                                        lane,
-                                                        new ZLinkSerialExecutionQueue.QueuedRecord(
-                                                                1,
-                                                                relayed.get(index - saved.size())
-                                                                        .record()),
-                                                        terminal,
-                                                        replayObserved::add);
-                                            replayObserved.add(terminal);
-                                            var ingress =
-                                                    temporary.get(
-                                                            index - saved.size() - relayed.size());
-                                            return () ->
-                                                    ingress.confirmation() == null
-                                                                    || ingress.confirmation()
-                                                                            .getNow(false)
-                                                            ? replayIngress(staged, ingress)
-                                                            : CompletableFuture.completedFuture(
-                                                                    null);
-                                        }))
+        return backend.admitBacklogPrefix(
+                        staged.actor(),
+                        staged.request(),
+                        records,
+                        (record, terminal) -> {
+                            int index = Math.toIntExact(record.sequence() - 1);
+                            if (index < saved.size())
+                                return replayer.prepareReplay(
+                                        lane, saved.get(index), terminal, replayObserved::add);
+                            if (index < saved.size() + relayed.size())
+                                return replayer.prepareReplay(
+                                        lane,
+                                        new ZLinkSerialExecutionQueue.QueuedRecord(
+                                                1, relayed.get(index - saved.size()).record()),
+                                        terminal,
+                                        replayObserved::add);
+                            replayObserved.add(terminal);
+                            var ingress = temporary.get(index - saved.size() - relayed.size());
+                            return ZLinkConfirmedReplay.after(
+                                    ingress.confirmation(), () -> replayIngress(staged, ingress));
+                        })
                 .thenCompose(
                         accepted -> {
                             List<CompletableFuture<Void>> observed =

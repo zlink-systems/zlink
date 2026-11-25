@@ -5,10 +5,13 @@ import static org.junit.jupiter.api.Assertions.*;
 import static systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireTargetEndpointTest.*;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode.PeerAuthorityFence;
@@ -95,10 +98,12 @@ final class ZLinkTargetEarlyAdmissionTest {
             assertFalse(second.isDone());
             assertFalse(spot.isDone());
             var opening = fixture.endpoint.publish(fixture.request).toCompletableFuture();
-            assertFalse(opening.isDone());
-            assertTrue(fixture.executed.isEmpty());
-            fixture.releaseRead.complete(null);
             opening.get(5, TimeUnit.SECONDS);
+            assertEquals(List.of("spot-1"), fixture.executed);
+            assertFalse(first.isDone());
+            assertFalse(second.isDone());
+            fixture.releaseRead.complete(null);
+            fixture.backend.drainIngress();
             assertEquals(1, spot.get(5, TimeUnit.SECONDS));
             assertEquals(1, first.get(5, TimeUnit.SECONDS));
             assertEquals(2, second.get(5, TimeUnit.SECONDS));
@@ -122,9 +127,11 @@ final class ZLinkTargetEarlyAdmissionTest {
             assertFalse(actor.isDone());
             assertFalse(spot.isDone());
             var opening = fixture.endpoint.publish(fixture.request).toCompletableFuture();
-            assertFalse(opening.isDone());
-            fixture.releaseRead.complete(null);
             opening.get(5, TimeUnit.SECONDS);
+            assertEquals(List.of("actor-1"), fixture.executed);
+            assertFalse(spot.isDone());
+            fixture.releaseRead.complete(null);
+            fixture.backend.drainIngress();
             assertEquals(1, spot.get(5, TimeUnit.SECONDS));
             assertEquals(1, actor.get(5, TimeUnit.SECONDS));
         } finally {
@@ -132,26 +139,121 @@ final class ZLinkTargetEarlyAdmissionTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void relayedAndConfirmedWorkReplayWhileLaterIngressAwaitsConfirmation(
+            boolean readAfterNormalization) throws Exception {
+        var fixture = new Fixture(true, readAfterNormalization);
+        fixture.endpoint
+                .stageRelayedRecord(fixture.request, acceptedSpotRequest(SPOT, 0))
+                .toCompletableFuture()
+                .join();
+        var first = fixture.spot(6, 1);
+        var opening = fixture.endpoint.publish(fixture.request).toCompletableFuture();
+        assertFalse(opening.isDone());
+        var late = new ArrayList<CompletableFuture<Integer>>();
+        try {
+            for (int value = 2; value <= 5; value++) {
+                if (value != 5) fixture.blockedKey.set(SPOT_KEY);
+                late.add(fixture.spot(6, value));
+            }
+            fixture.ready.complete(null);
+            assertEquals(List.of("relayed-spot", "spot-1"), fixture.executed);
+            assertEquals(1, first.join());
+            assertTrue(late.stream().noneMatch(CompletableFuture::isDone));
+            assertNull(
+                    assertInstanceOf(
+                                    ZLinkAuthoritySnapshot.class,
+                                    fixture.authority
+                                            .proxy()
+                                            .read(SPOT_KEY, () -> false)
+                                            .toCompletableFuture()
+                                            .join())
+                            .relocation());
+
+            fixture.releaseRead.complete(null);
+            fixture.backend.drainIngress();
+            opening.get(5, TimeUnit.SECONDS);
+            for (int index = 0; index < late.size(); index++) {
+                assertEquals(index + 2, late.get(index).get(5, TimeUnit.SECONDS));
+            }
+            assertEquals(
+                    List.of("relayed-spot", "spot-1", "spot-2", "spot-3", "spot-4", "spot-5"),
+                    fixture.executed);
+        } finally {
+            fixture.releaseRead.complete(null);
+            fixture.backend.drainIngress();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void confirmationReadsAuthorityAndUsesLocalLease(boolean leaseValid) throws Exception {
+        var fixture = new Fixture();
+        fixture.ownerLeaseValid.set(leaseValid);
+        var before = fixture.authority.storeReads();
+        var reply = fixture.spot(6, 1);
+        var after = fixture.authority.storeReads();
+        assertEquals(
+                List.of(1, 0, 0),
+                List.of(
+                        after.get(0) - before.get(0),
+                        after.get(1) - before.get(1),
+                        after.get(2) - before.get(2)),
+                "authority, aggregate progress, owner lease Store reads");
+        if (leaseValid) {
+            fixture.open();
+            assertEquals(1, reply.get(5, TimeUnit.SECONDS));
+        } else {
+            var rejection =
+                    assertThrows(java.util.concurrent.CompletionException.class, reply::join);
+            assertArrayEquals(
+                    new int[] {
+                        RequestResult.CONFLICT.value(),
+                        (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_GENERATION_STALE
+                    },
+                    ZLinkRequestFailureMapping.outgoing(rejection));
+            fixture.open();
+            assertTrue(fixture.executed.isEmpty());
+        }
+    }
+
     private static final class Fixture {
+        final AuthorityState authority = new AuthorityState();
         final List<String> executed = new ArrayList<>();
         final AtomicReference<String> blockedKey = new AtomicReference<>();
         final CompletableFuture<Void> readStarted = new CompletableFuture<>();
         final CompletableFuture<Void> releaseRead = new CompletableFuture<>();
         final AtomicBoolean committed = new AtomicBoolean();
+        final AtomicBoolean ownerLeaseValid = new AtomicBoolean(true);
         final CompletableFuture<Void> spotRead = new CompletableFuture<>();
         final CompletableFuture<Void> actorRead = new CompletableFuture<>();
         final ZLinkUserSpotRetireTargetEndpoint endpoint;
         final ZLinkSpotRetireControl.StageRequest request;
 
+        final CompletableFuture<Void> ready = new CompletableFuture<>();
+        final FakeStagingBackend backend;
+
         Fixture() {
-            var authority = new AuthorityState();
+            this(false, false);
+        }
+
+        Fixture(boolean delayReady, boolean readAfterNormalization) {
+            if (!delayReady) ready.complete(null);
             var store =
                     authority.proxy(
                             (key, value) -> {
                                 if (key.equals(blockedKey.get())) {
                                     blockedKey.set(null);
                                     readStarted.complete(null);
-                                    return releaseRead.thenApply(ignored -> value);
+                                    return releaseRead.thenCompose(
+                                            ignored ->
+                                                    readAfterNormalization
+                                                            ? authority
+                                                                    .proxy()
+                                                                    .read(key, () -> false)
+                                                            : CompletableFuture.completedFuture(
+                                                                    value));
                                 }
                                 if (key.equals(SPOT_KEY) && committed.get())
                                     spotRead.complete(null);
@@ -160,7 +262,14 @@ final class ZLinkTargetEarlyAdmissionTest {
                                 }
                                 return CompletableFuture.completedFuture(value);
                             });
-            var coordinator = new ZLinkAggregateRelocationCoordinator(store);
+            var coordinator =
+                    new ZLinkAggregateRelocationCoordinator(
+                            store,
+                            owner ->
+                                    ownerLeaseValid.get()
+                                            && owner.equals(
+                                                    new ZLinkLocationOwnerToken(
+                                                            "target-owner", 23)));
             var participants =
                     List.of(
                             new ZLinkSpotRetireControl.ParticipantFence(
@@ -228,8 +337,14 @@ final class ZLinkTargetEarlyAdmissionTest {
             authority.seed(storeRequest);
             var prepared =
                     coordinator.prepare(storeRequest, () -> false).toCompletableFuture().join();
-            var backend =
-                    new FakeStagingBackend() {
+            backend =
+                    new FakeStagingBackend(ZLinkExecutionLanePolicy.spot()) {
+                        @Override
+                        public java.util.concurrent.CompletionStage<Void> completeRelocationReady(
+                                Object spot) {
+                            return ready;
+                        }
+
                         @Override
                         public java.util.concurrent.CompletionStage<Optional<byte[]>> replayActor(
                                 Object spot,
@@ -255,10 +370,33 @@ final class ZLinkTargetEarlyAdmissionTest {
                             coordinator,
                             new ZLinkUserSpotAggregateStagingOwner(backend),
                             ignored -> TestSpot.class,
-                            (lane, record) -> CompletableFuture.completedFuture(null),
+                            (lane, record) -> {
+                                executed.add("relayed-" + lane);
+                                return CompletableFuture.completedFuture(null);
+                            },
                             null,
                             Duration.ofSeconds(1),
-                            ignored -> CompletableFuture.completedFuture(null),
+                            stage ->
+                                    coordinator.normalizePublishedAggregate(
+                                            stage.participants().stream()
+                                                    .map(
+                                                            participant ->
+                                                                    new ZLinkAggregateRelocationCoordinator
+                                                                            .ExpectedParticipant(
+                                                                            participant
+                                                                                    .authorityKey(),
+                                                                            participant
+                                                                                    .objectGeneration(),
+                                                                            participant
+                                                                                    .sourceAuthorityOwnerGeneration()))
+                                                    .toList(),
+                                            new ZLinkAggregateFence(
+                                                    stage.fence().aggregateId(),
+                                                    stage.fence().aggregateGeneration()),
+                                            new ZLinkLocationOwnerToken(
+                                                    stage.targetOwnerId(),
+                                                    stage.targetOwnerLeaseGeneration()),
+                                            () -> false),
                             null,
                             null,
                             store,
@@ -281,8 +419,16 @@ final class ZLinkTargetEarlyAdmissionTest {
                             false,
                             root,
                             participants);
-            endpoint.stage(request).toCompletableFuture().join();
-            coordinator.commit(prepared, () -> false).toCompletableFuture().join();
+            var publication =
+                    new CompletableFuture<ZLinkAggregateRelocationCoordinator.Published>();
+            endpoint.stage(
+                            request,
+                            new ZLinkAggregateRelocationCoordinator.TargetIngressAuthority(
+                                    () -> prepared, () -> publication.getNow(null)))
+                    .toCompletableFuture()
+                    .join();
+            publication.complete(
+                    coordinator.commit(prepared, () -> false).toCompletableFuture().join());
             committed.set(true);
         }
 

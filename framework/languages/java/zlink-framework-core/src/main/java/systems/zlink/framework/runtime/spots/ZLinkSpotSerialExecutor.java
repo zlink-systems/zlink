@@ -575,26 +575,13 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     CompletionStage<Void> executeAcceptedSpotLazyRecord(
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
-            Function<Boolean, CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return executeAcceptedSpotLazyRecord(
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease,
-                null);
-    }
-
-    CompletionStage<Void> executeAcceptedSpotLazyRecord(
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Function<Boolean, CompletionStage<Void>> operation,
+            Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> admission) {
         return spotQueue.enqueueRelocatableLazyRecord(
                 acceptedJournalRecord,
                 acceptedJournalRecordSizeHint,
-                () -> operation.apply(sharedSpotGate),
+                operation,
                 relocationRelease,
                 admission);
     }

@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
+import systems.zlink.framework.runtime.internal.execution.ZLinkConfirmedReplay;
 import systems.zlink.framework.runtime.internal.execution.ZLinkExecutionAvailability;
 import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
@@ -945,7 +946,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return serials.executeAcceptedSpotLazyRecord(
                 acceptedJournalRecord,
                 acceptedJournalRecordSizeHint,
-                yieldAllowed -> runApplicationExecution(null, yieldAllowed, operation),
+                ZLinkConfirmedReplay.wrap(
+                        operation,
+                        replay ->
+                                () ->
+                                        runApplicationExecution(
+                                                null, serials.usesSharedExecutionGate(), replay)),
                 relocationRelease,
                 admission);
     }

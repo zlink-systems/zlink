@@ -30,6 +30,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.execution.ZLinkConfirmedReplay;
 import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -1442,7 +1443,13 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         private ZLinkAggregatePrepareRequest prepared;
         private boolean progress;
         private final AtomicInteger reads = new AtomicInteger();
+        private final AtomicInteger progressReads = new AtomicInteger();
+        private final AtomicInteger leaseReads = new AtomicInteger();
         private String progressStoreVersion;
+
+        List<Integer> storeReads() {
+            return List.of(reads.get(), progressReads.get(), leaseReads.get());
+        }
 
         void seed(ZLinkAggregateRelocationCoordinator.Request request) {
             for (var participant : request.participants()) {
@@ -1533,6 +1540,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                                         (ZLinkAuthorityExpectation) arguments[1],
                                                         (ZLinkAuthorityMutation) arguments[2]);
                                         case "readOwnerLease" -> {
+                                            leaseReads.incrementAndGet();
                                             var now = Instant.now();
                                             yield CompletableFuture.completedFuture(
                                                     new ZLinkOwnerLeaseFound(
@@ -1540,9 +1548,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                                             now.plusSeconds(30),
                                                             now));
                                         }
-                                        case "readAggregateProgress" ->
-                                                readAggregateProgress(
-                                                        (ZLinkAggregateFence) arguments[0]);
+                                        case "readAggregateProgress" -> {
+                                            progressReads.incrementAndGet();
+                                            yield readAggregateProgress(
+                                                    (ZLinkAggregateFence) arguments[0]);
+                                        }
                                         case "removeAggregateProgress" ->
                                                 removeAggregateProgress(
                                                         (ZLinkAggregateFence) arguments[0],
@@ -1681,6 +1691,20 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         private FakeStagingBackend(boolean boundSessionReplay) {
+            this(
+                    boundSessionReplay,
+                    systems.zlink.framework.execution.ZLinkExecutionLanePolicy.generic());
+        }
+
+        FakeStagingBackend(systems.zlink.framework.execution.ZLinkExecutionLanePolicy policy) {
+            this(false, policy);
+        }
+
+        private FakeStagingBackend(
+                boolean boundSessionReplay,
+                systems.zlink.framework.execution.ZLinkExecutionLanePolicy policy) {
+            fifo = new ZLinkSerialExecutionQueue(executor, policy);
+            fifo.enqueueLifecycleBarrier(() -> moving);
             if (!boundSessionReplay) {
                 actorRuntime = null;
                 sessionNode = null;
@@ -1775,14 +1799,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
 
         private final CompletableFuture<Void> moving = new CompletableFuture<>();
         private final ZLinkManualExecutor executor = new ZLinkManualExecutor();
-        private final ZLinkSerialExecutionQueue fifo =
-                new ZLinkSerialExecutionQueue(
-                        executor,
-                        systems.zlink.framework.execution.ZLinkExecutionLanePolicy.generic());
-
-        {
-            fifo.enqueueLifecycleBarrier(() -> moving);
-        }
+        private final ZLinkSerialExecutionQueue fifo;
 
         @Override
         public CompletionStage<QueuedTurn> prepareIngress(Object actor) {
@@ -1839,12 +1856,20 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     fifo.enqueueRelocatableLazyRecord(
                             () -> record,
                             record.length,
-                            () -> {
-                                activeSpotTurns++;
-                                maxActiveSpotTurns = Math.max(maxActiveSpotTurns, activeSpotTurns);
-                                return turn.get()
-                                        .whenComplete((ignored, failure) -> activeSpotTurns--);
-                            },
+                            ZLinkConfirmedReplay.wrap(
+                                    turn,
+                                    next ->
+                                            () -> {
+                                                activeSpotTurns++;
+                                                maxActiveSpotTurns =
+                                                        Math.max(
+                                                                maxActiveSpotTurns,
+                                                                activeSpotTurns);
+                                                return next.get()
+                                                        .whenComplete(
+                                                                (ignored, failure) ->
+                                                                        activeSpotTurns--);
+                                            }),
                             () -> {},
                             admission);
             queuedTerminals.add(terminal.toCompletableFuture());
@@ -1854,8 +1879,12 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         @Override
         public CompletionStage<Void> resumeIngress(Object preparedSpot, Object hold) {
             moving.complete(null);
-            executor.drain();
+            drainIngress();
             return CompletableFuture.completedFuture(null);
+        }
+
+        void drainIngress() {
+            executor.drain();
         }
 
         @Override

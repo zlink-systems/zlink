@@ -150,7 +150,8 @@ public final class ZLinkUserSpotRetireRuntime {
                                 : Objects.requireNonNull(
                                         aggregateRelocationAuthorityStoreDecorator.apply(
                                                 Objects.requireNonNull(authorities, "authorities")),
-                                        "decorated authorities"));
+                                        "decorated authorities"),
+                        spots::isOwnerLeaseValid);
         Objects.requireNonNull(options, "options");
         var transferOptions =
                 new ZLinkRelocationPayloadTransfer.Options(

@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMappi
 import systems.zlink.framework.runtime.internal.diagnostics.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator.TargetIngressAuthority;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -232,9 +233,15 @@ final class ZLinkUserSpotRetireTargetEndpoint
 
     @Override
     public CompletionStage<Void> stage(ZLinkSpotRetireControl.StageRequest request) {
+        return stage(request, null);
+    }
+
+    @Override
+    public CompletionStage<Void> stage(
+            ZLinkSpotRetireControl.StageRequest request, TargetIngressAuthority authority) {
         validateTarget(request);
         if (isStandaloneActor(request)) {
-            return stageActor(request);
+            return stageActor(request, authority);
         }
         //  The directly transferred payload arrives assembled and
         //  checksum-verified with the stage request (spec 28 §4.3).
@@ -247,7 +254,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     new IllegalArgumentException(
                             "relocation payload does not match the target Spot"));
         }
-        return stageAggregate(request, decoded);
+        return stageAggregate(request, decoded, authority);
     }
 
     @Override
@@ -415,7 +422,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         route.ownerLeaseGeneration(),
                         header.request() && header.messageFollowHopCount() == 0);
         for (TargetStage target : stages.values()) {
-            var participant = ingress.participant(target.request(), source);
+            var participant =
+                    ingress.participant(target.request(), source, target.authority() != null);
             if (participant == null) continue;
             var confirmation = ingress.confirmation(participant);
             if (!staging.acceptSpotIngress(
@@ -424,6 +432,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             }
             parts.forEach(Message::close);
             confirmIngress(
+                    target.authority(),
                     target.request(),
                     participant,
                     ingress,
@@ -474,7 +483,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                 && header.boundSession() == null);
         for (ActorTargetStage target : actorStages.values()) {
             var participant =
-                    ingress.participant(target.request(), source, target.directAdmission() == null);
+                    ingress.participant(
+                            target.request(),
+                            source,
+                            target.authority() != null && target.directAdmission() == null);
             if (participant == null) continue;
             var confirmation = ingress.confirmation(participant);
             if (!actorStaging.acceptIngress(
@@ -483,6 +495,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             }
             parts.forEach(Message::close);
             confirmIngress(
+                    target.authority(),
                     target.request(),
                     participant,
                     ingress,
@@ -493,7 +506,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
             return true;
         }
         for (TargetStage target : stages.values()) {
-            var participant = ingress.participant(target.request(), source);
+            var participant =
+                    ingress.participant(target.request(), source, target.authority() != null);
             if (participant == null) continue;
             var confirmation = ingress.confirmation(participant);
             if (confirmation == null
@@ -512,6 +526,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             }
             parts.forEach(Message::close);
             confirmIngress(
+                    target.authority(),
                     target.request(),
                     participant,
                     ingress,
@@ -567,6 +582,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     }
 
     private void confirmIngress(
+            TargetIngressAuthority authority,
             ZLinkSpotRetireControl.StageRequest stage,
             ZLinkSpotRetireControl.ParticipantFence participant,
             IngressRoute ingress,
@@ -582,6 +598,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
         try {
             check =
                     coordinator.confirmTargetIngress(
+                            authority,
                             new ZLinkAggregateFence(
                                     stage.fence().aggregateId(),
                                     stage.fence().aggregateGeneration()),
@@ -630,12 +647,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
             long authorityGeneration,
             long ownerLeaseGeneration,
             boolean directRequest) {
-        ZLinkSpotRetireControl.ParticipantFence participant(
-                ZLinkSpotRetireControl.StageRequest stage,
-                ZLinkInternalMeshNode.PeerAuthorityFence source) {
-            return participant(stage, source, true);
-        }
-
         ZLinkSpotRetireControl.ParticipantFence participant(
                 ZLinkSpotRetireControl.StageRequest stage,
                 ZLinkInternalMeshNode.PeerAuthorityFence source,
@@ -1119,7 +1130,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
         }
     }
 
-    private CompletionStage<Void> stageActor(ZLinkSpotRetireControl.StageRequest request) {
+    private CompletionStage<Void> stageActor(
+            ZLinkSpotRetireControl.StageRequest request, TargetIngressAuthority authority) {
         if (actorStaging == null) {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("standalone Actor relocation target is unavailable"));
@@ -1146,6 +1158,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                 request,
                                 targetRequest,
                                 request.relocationPayload(),
+                                authority,
                                 directAdmission,
                                 previousMembership));
     }
@@ -1488,11 +1501,12 @@ final class ZLinkUserSpotRetireTargetEndpoint
 
     private CompletionStage<Void> stageAggregate(
             ZLinkSpotRetireControl.StageRequest request,
-            ZLinkUserSpotAggregateStagingOwner.Request decoded) {
+            ZLinkUserSpotAggregateStagingOwner.Request decoded,
+            TargetIngressAuthority authority) {
         return staging.stage(decoded, NOT_CANCELLED)
                 .thenCompose(
                         value -> {
-                            TargetStage target = new TargetStage(request, value);
+                            TargetStage target = new TargetStage(request, value, authority);
                             if (stages.putIfAbsent(request.fence(), target) == null) {
                                 return CompletableFuture.<Void>completedFuture(null);
                             }
@@ -1510,6 +1524,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             ZLinkSpotRetireControl.StageRequest request,
             ZLinkStandaloneActorRelocationStagingOwner.Request targetRequest,
             byte[] payload,
+            TargetIngressAuthority authority,
             ZLinkActorJoinRelocationPort.Admission directAdmission,
             ZLinkActorJoinCanonicalAdapter.PreviousMembership previousMembership) {
         return actorStaging
@@ -1521,6 +1536,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                             request,
                                             targetRequest,
                                             staged,
+                                            authority,
                                             directAdmission,
                                             previousMembership,
                                             new CompletableFuture<>(),
@@ -1649,12 +1665,14 @@ final class ZLinkUserSpotRetireTargetEndpoint
 
     private record TargetStage(
             ZLinkSpotRetireControl.StageRequest request,
-            ZLinkUserSpotAggregateStagingOwner.Staged staged) {}
+            ZLinkUserSpotAggregateStagingOwner.Staged staged,
+            TargetIngressAuthority authority) {}
 
     private record ActorTargetStage(
             ZLinkSpotRetireControl.StageRequest request,
             ZLinkStandaloneActorRelocationStagingOwner.Request targetRequest,
             ZLinkStandaloneActorRelocationStagingOwner.Staged staged,
+            TargetIngressAuthority authority,
             ZLinkActorJoinRelocationPort.Admission directAdmission,
             ZLinkActorJoinCanonicalAdapter.PreviousMembership previousMembership,
             CompletableFuture<Void> publishRequested,

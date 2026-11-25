@@ -9,6 +9,7 @@ import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTur
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
+import systems.zlink.framework.runtime.internal.execution.ZLinkConfirmedReplay;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
@@ -459,116 +460,82 @@ final class ZLinkUserSpotAggregateStagingOwner {
     private CompletionStage<Void> admitBacklog(
             DurableBacklog backlog, List<QueuedTurn> dispatches) {
         Staged staged = backlog.staged;
-        Supplier<CompletionStage<Void>> result =
-                inStateLane(
-                        staged,
-                        () -> {
-                            if (backlog.consumed) {
-                                return () ->
-                                        CompletableFuture.<Void>failedFuture(
-                                                new IllegalStateException(
-                                                        "aggregate durable backlog was already consumed"));
-                            }
-                            var temporary = new ArrayList<>(backlog.temporary);
-                            temporary.addAll(staged.pendingIngress);
-                            var unconfirmed =
-                                    temporary.stream()
-                                            .map(PendingIngress::confirmation)
-                                            .filter(
-                                                    confirmation ->
-                                                            confirmation != null
-                                                                    && !confirmation.isDone())
-                                            .toArray(CompletableFuture[]::new);
-                            if (unconfirmed.length != 0) {
-                                return () ->
-                                        CompletableFuture.allOf(unconfirmed)
-                                                .thenCompose(
-                                                        ignored ->
-                                                                admitBacklog(backlog, dispatches));
-                            }
-                            backlog.consumed = true;
-                            List<CompletableFuture<Void>> replay = new ArrayList<>();
-                            for (var lane : backlog.finalRequest.acceptedJournal().entrySet()) {
-                                for (var record : lane.getValue()) {
-                                    CompletionStage<Void> admitted =
-                                            enqueueBacklogTurn(
-                                                    staged,
-                                                    dispatches,
-                                                    lane.getKey(),
-                                                    record.payload(),
-                                                    () ->
-                                                            backlog.replayer.replay(
-                                                                    lane.getKey(), record),
-                                                    null);
-                                    assert (admitted =
-                                                    backlog.debugProbe.completeOn(
-                                                            admitted,
-                                                            "journal:"
-                                                                    + lane.getKey()
-                                                                    + ":"
-                                                                    + record.sequence()))
-                                            != null;
-                                    replay.add(admitted.toCompletableFuture());
-                                }
-                            }
-                            int relayedIndex = 0;
-                            for (PendingIngress ingress : backlog.relayed) {
-                                CompletionStage<Void> admitted =
-                                        enqueueBacklogTurn(
-                                                staged,
-                                                dispatches,
-                                                ingress.laneId(),
-                                                ingress.record(),
-                                                () ->
-                                                        backlog.replayer.replayFrozen(
-                                                                ingress.laneId(), ingress.record()),
-                                                null);
-                                assert (admitted =
-                                                backlog.debugProbe.completeOn(
-                                                        admitted,
-                                                        "relayed:"
-                                                                + ingress.laneId()
-                                                                + ":"
-                                                                + relayedIndex))
-                                        != null;
-                                relayedIndex++;
-                                replay.add(admitted.toCompletableFuture());
-                            }
-                            int temporaryIndex = 0;
-                            for (PendingIngress ingress : temporary) {
-                                String obligation = null;
-                                assert (obligation =
-                                                "temporary:"
-                                                        + ingress.laneId()
-                                                        + ":"
-                                                        + temporaryIndex)
-                                        != null;
-                                temporaryIndex++;
-                                if (ingress.confirmation() != null
-                                        && !ingress.confirmation().getNow(false)) {
-                                    assert backlog.debugProbe.complete(obligation);
-                                    continue;
-                                }
-                                CompletionStage<Void> admitted =
-                                        enqueueBacklogTurn(
-                                                staged,
-                                                dispatches,
-                                                ingress.laneId(),
-                                                ingress.record(),
-                                                () -> replayIngress(staged, ingress),
-                                                ingress);
-                                assert (admitted =
-                                                backlog.debugProbe.completeOn(admitted, obligation))
-                                        != null;
-                                replay.add(admitted.toCompletableFuture());
-                            }
-                            staged.pendingIngress.clear();
-                            var admitted =
-                                    CompletableFuture.allOf(
-                                            replay.toArray(CompletableFuture[]::new));
-                            return () -> admitted;
-                        });
-        return result.get();
+        return inStateLane(
+                staged,
+                () -> {
+                    if (backlog.consumed) {
+                        return CompletableFuture.<Void>failedFuture(
+                                new IllegalStateException(
+                                        "aggregate durable backlog was already consumed"));
+                    }
+                    var temporary = new ArrayList<>(backlog.temporary);
+                    temporary.addAll(staged.pendingIngress);
+                    backlog.consumed = true;
+                    List<CompletableFuture<Void>> replay = new ArrayList<>();
+                    for (var lane : backlog.finalRequest.acceptedJournal().entrySet()) {
+                        for (var record : lane.getValue()) {
+                            CompletionStage<Void> admitted =
+                                    enqueueBacklogTurn(
+                                            staged,
+                                            dispatches,
+                                            lane.getKey(),
+                                            record.payload(),
+                                            () -> backlog.replayer.replay(lane.getKey(), record),
+                                            null);
+                            assert (admitted =
+                                            backlog.debugProbe.completeOn(
+                                                    admitted,
+                                                    "journal:"
+                                                            + lane.getKey()
+                                                            + ":"
+                                                            + record.sequence()))
+                                    != null;
+                            replay.add(admitted.toCompletableFuture());
+                        }
+                    }
+                    int relayedIndex = 0;
+                    for (PendingIngress ingress : backlog.relayed) {
+                        CompletionStage<Void> admitted =
+                                enqueueBacklogTurn(
+                                        staged,
+                                        dispatches,
+                                        ingress.laneId(),
+                                        ingress.record(),
+                                        () ->
+                                                backlog.replayer.replayFrozen(
+                                                        ingress.laneId(), ingress.record()),
+                                        null);
+                        assert (admitted =
+                                        backlog.debugProbe.completeOn(
+                                                admitted,
+                                                "relayed:" + ingress.laneId() + ":" + relayedIndex))
+                                != null;
+                        relayedIndex++;
+                        replay.add(admitted.toCompletableFuture());
+                    }
+                    int temporaryIndex = 0;
+                    for (PendingIngress ingress : temporary) {
+                        String obligation = null;
+                        assert (obligation = "temporary:" + ingress.laneId() + ":" + temporaryIndex)
+                                != null;
+                        temporaryIndex++;
+                        CompletionStage<Void> admitted =
+                                enqueueBacklogTurn(
+                                        staged,
+                                        dispatches,
+                                        ingress.laneId(),
+                                        ingress.record(),
+                                        ZLinkConfirmedReplay.after(
+                                                ingress.confirmation(),
+                                                () -> replayIngress(staged, ingress)),
+                                        ingress);
+                        assert (admitted = backlog.debugProbe.completeOn(admitted, obligation))
+                                != null;
+                        replay.add(admitted.toCompletableFuture());
+                    }
+                    staged.pendingIngress.clear();
+                    return CompletableFuture.allOf(replay.toArray(CompletableFuture[]::new));
+                });
     }
 
     private CompletionStage<Void> enqueueBacklogTurn(

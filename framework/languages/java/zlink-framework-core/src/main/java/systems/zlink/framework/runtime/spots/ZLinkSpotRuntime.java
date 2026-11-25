@@ -4073,6 +4073,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return publishers.client();
     }
 
+    boolean isOwnerLeaseValid(ZLinkLocationOwnerToken owner) {
+        return spotLocations.isOwnerLeaseValid(owner);
+    }
+
     public void setLocationLifecycle(ZLinkLocationLifecycle lifecycle) {
         spotLocations.setLifecycle(lifecycle);
     }
