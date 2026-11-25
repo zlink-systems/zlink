@@ -394,7 +394,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                                             "seed-1",
                                             ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                             authority.rows.get(actorAuthorityKey).payload(),
-                                            new byte[0])),
+                                            new byte[] {'[', ']'})),
                             request.relocationPayload(),
                             new ZLinkMeshNodeDescriptorKey(MESH, TARGET_RID),
                             TARGET_NODE_GENERATION,

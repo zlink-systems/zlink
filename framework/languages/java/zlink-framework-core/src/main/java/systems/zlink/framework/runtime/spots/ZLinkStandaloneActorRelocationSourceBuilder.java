@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactory
 import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
@@ -275,6 +276,17 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             ZLinkActorJoinRelocationPort.Goal directJoin,
             ZLinkStoreCancellation cancellation) {
         UUID relocationId = directJoin == null ? UUID.randomUUID() : directJoin.relocationId();
+        var fence = ZLinkAggregateFence.markerlessRelocation(relocationId);
+        var target = admission.target();
+        String targetSpotId =
+                directJoin == null ? hostTargetSpotId(admission) : directJoin.targetSpotId();
+        long targetSpotGeneration =
+                directJoin != null
+                        ? directJoin.targetSpotGeneration()
+                        : admission.owned().isUserSpotMember()
+                                ? admission.owned().authority().currentSpotGeneration()
+                                : target.lifecycleGeneration();
+        int targetSpotKind = target.entrySpotId().filter(targetSpotId::equals).isPresent() ? 1 : 2;
         var phaseParticipants =
                 List.of(
                         new ZLinkAggregateRelocationCoordinator.ExpectedParticipant(
@@ -314,8 +326,22 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                     phaseParticipants,
                                                     ZLinkAuthorityKeyCodec.actor(
                                                             admission.owned().actorId()),
-                                                    relocationId,
-                                                    admission.target().applicationVersion(),
+                                                    fence,
+                                                    target.applicationVersion(),
+                                                    snapshot ->
+                                                            authorities.encode(
+                                                                    ZLinkActorAuthorityPayloadCodec
+                                                                            .State.READY,
+                                                                    admission.owned().stableType(),
+                                                                    admission.owned().actorId(),
+                                                                    targetSpotId,
+                                                                    targetSpotGeneration,
+                                                                    targetSpotKind,
+                                                                    target.ownerId(),
+                                                                    target.leaseGeneration(),
+                                                                    target.meshName(),
+                                                                    target.rid(),
+                                                                    target.lifecycleGeneration()),
                                                     cancellation)
                                             .thenCompose(
                                                     ignored ->
@@ -338,10 +364,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                                 + " null")
                                                                 .clone();
 
-                                                String targetSpotId =
-                                                        directJoin == null
-                                                                ? hostTargetSpotId(admission)
-                                                                : directJoin.targetSpotId();
                                                 byte[] actorJoinRecovery = null;
                                                 if (directJoin != null) {
                                                     String relocationContentType =
@@ -483,7 +505,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                                 timerEnvelope,
                                                                                 stageRequest(
                                                                                         admission,
-                                                                                        relocationId,
+                                                                                        fence,
                                                                                         ZLinkCanonicalActorRelocationEnvelope
                                                                                                 .encode(
                                                                                                         relocationId,
@@ -534,7 +556,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                 admission.owned().actorId());
                                                 return coordinator
                                                         .abortSourceProgress(
-                                                                phaseParticipants,
+                                                                phaseParticipants.getFirst(),
                                                                 relocationId,
                                                                 admission
                                                                         .owned()
@@ -562,8 +584,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                                                 "Source relocation queue was lost during abort"));
                                                                     return coordinator
                                                                             .clearSourceProgress(
-                                                                                    phaseParticipants,
-                                                                                    relocationId,
+                                                                                    phaseParticipants
+                                                                                            .getFirst(),
+                                                                                    fence,
                                                                                     admission
                                                                                             .owned()
                                                                                             .snapshot()
@@ -880,7 +903,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
 
     private ZLinkSpotRetireControl.StageRequest stageRequest(
             Admission admission,
-            UUID relocationId,
+            ZLinkAggregateFence fence,
             byte[] relocationPayload,
             Optional<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute,
             String targetSpotId,
@@ -888,7 +911,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         Owned actor = admission.owned();
         ZLinkMeshNodeDescriptor target = admission.target();
         return new ZLinkSpotRetireControl.StageRequest(
-                new ZLinkSpotRetireControl.Fence(relocationId, 1),
+                new ZLinkSpotRetireControl.Fence(fence.aggregateId(), fence.aggregateGeneration()),
                 localNodeRid,
                 localNodeGeneration,
                 actor.snapshot().ownerId(),
@@ -1587,23 +1610,15 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                 retained ->
                                         coordinator
                                                 .abortSource(
-                                                        List.of(
-                                                                new ZLinkAggregateRelocationCoordinator
-                                                                        .ExpectedParticipant(
-                                                                        ZLinkAuthorityKeyCodec
-                                                                                .actor(
-                                                                                        owned
-                                                                                                .actorId()),
-                                                                        owned.snapshot()
-                                                                                .objectGeneration(),
-                                                                        owned.snapshot()
-                                                                                .authorityOwnerGeneration())),
-                                                        new systems.zlink.framework.runtime.internal
-                                                                .locations.ZLinkAggregateFence(
-                                                                stageRequest.fence().aggregateId(),
-                                                                stageRequest
-                                                                        .fence()
-                                                                        .aggregateGeneration()),
+                                                        new ZLinkAggregateRelocationCoordinator
+                                                                .ExpectedParticipant(
+                                                                ZLinkAuthorityKeyCodec.actor(
+                                                                        owned.actorId()),
+                                                                owned.snapshot().objectGeneration(),
+                                                                owned.snapshot()
+                                                                        .authorityOwnerGeneration()),
+                                                        ZLinkAggregateFence.markerlessRelocation(
+                                                                stageRequest.fence().aggregateId()),
                                                         owned.snapshot().ownerId(),
                                                         owned.snapshot().ownerLeaseGeneration(),
                                                         () -> false)
@@ -1643,16 +1658,15 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                     }
                                     return coordinator
                                             .clearSourceProgress(
-                                                    List.of(
-                                                            new ZLinkAggregateRelocationCoordinator
-                                                                    .ExpectedParticipant(
-                                                                    ZLinkAuthorityKeyCodec.actor(
-                                                                            owned.actorId()),
-                                                                    owned.snapshot()
-                                                                            .objectGeneration(),
-                                                                    owned.snapshot()
-                                                                            .authorityOwnerGeneration())),
-                                                    relocationId,
+                                                    new ZLinkAggregateRelocationCoordinator
+                                                            .ExpectedParticipant(
+                                                            ZLinkAuthorityKeyCodec.actor(
+                                                                    owned.actorId()),
+                                                            owned.snapshot().objectGeneration(),
+                                                            owned.snapshot()
+                                                                    .authorityOwnerGeneration()),
+                                                    ZLinkAggregateFence.markerlessRelocation(
+                                                            relocationId),
                                                     owned.snapshot().ownerId(),
                                                     owned.snapshot().ownerLeaseGeneration(),
                                                     () -> false)

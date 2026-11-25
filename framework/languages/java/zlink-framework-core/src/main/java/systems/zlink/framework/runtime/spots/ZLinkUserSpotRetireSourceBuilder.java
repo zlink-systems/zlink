@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactory
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -392,6 +393,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
             ZLinkUserSpotRelocationBarrier.Seal seal,
             ZLinkRelocationMetricOperation metrics) {
         UUID aggregateId = UUID.randomUUID();
+        var fence = ZLinkAggregateFence.markerlessRelocation(aggregateId);
+        var target = admission.target();
         var phaseParticipants =
                 Stream.concat(
                                 Stream.of(admission.inventory().spot()),
@@ -418,8 +421,22 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                     .prepareSource(
                                             phaseParticipants,
                                             current.spot().key(),
-                                            aggregateId,
-                                            admission.target().applicationVersion(),
+                                            fence,
+                                            target.applicationVersion(),
+                                            snapshot ->
+                                                    ZLinkAggregateRelocationCoordinator
+                                                            .projectAuthorityPayload(
+                                                                    snapshot.payload(),
+                                                                    new ZLinkMeshNodeDescriptorKey(
+                                                                            target.meshName(),
+                                                                            target.rid()),
+                                                                    target.lifecycleGeneration(),
+                                                                    new ZLinkLocationOwnerToken(
+                                                                            target.ownerId(),
+                                                                            target
+                                                                                    .leaseGeneration()),
+                                                                    ZLinkAuthorityGenerationTransition
+                                                                            .NEW_OWNER),
                                             cancellation)
                                     .thenCompose(
                                             ignored ->
@@ -504,7 +521,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                                 unresolved,
                                                                 stageRequest(
                                                                         exact,
-                                                                        aggregateId,
+                                                                        fence,
                                                                         root,
                                                                         admission.target())));
                                             });
@@ -529,7 +546,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             CompletionStage<Void> release =
                                     coordinator
                                             .abortSourceProgress(
-                                                    phaseParticipants,
+                                                    phaseParticipants.getFirst(),
                                                     aggregateId,
                                                     admission
                                                             .inventory()
@@ -554,8 +571,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             .thenCompose(
                                                     ignored ->
                                                             coordinator.clearSourceProgress(
-                                                                    phaseParticipants,
-                                                                    aggregateId,
+                                                                    phaseParticipants.getFirst(),
+                                                                    fence,
                                                                     admission
                                                                             .inventory()
                                                                             .spot()
@@ -1246,13 +1263,13 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
     private ZLinkSpotRetireControl.StageRequest stageRequest(
             Captured captured,
-            UUID aggregateId,
+            ZLinkAggregateFence fence,
             byte[] relocationPayload,
             ZLinkMeshNodeDescriptor target) {
         ZLinkAuthoritySnapshot source = captured.inventory().spot().snapshot();
         var inventory = participantFences(captured);
         return new ZLinkSpotRetireControl.StageRequest(
-                new ZLinkSpotRetireControl.Fence(aggregateId, 1),
+                new ZLinkSpotRetireControl.Fence(fence.aggregateId(), fence.aggregateGeneration()),
                 localNodeRid,
                 localNodeGeneration,
                 source.ownerId(),
@@ -1591,25 +1608,18 @@ final class ZLinkUserSpotRetireSourceBuilder {
             //  restore, then terminal progress removal while the lanes are
             //  still paused. Lane resume is the last observable step. Command 44
             //  abort follows the source restore (Session-Actor binding §8.1).
-            var participants =
-                    Stream.concat(
-                                    Stream.of(captured.inventory().spot()),
-                                    captured.inventory().actors().stream())
-                            .map(
-                                    owned ->
-                                            new ZLinkAggregateRelocationCoordinator
-                                                    .ExpectedParticipant(
-                                                    owned.key(),
-                                                    owned.snapshot().objectGeneration(),
-                                                    owned.snapshot().authorityOwnerGeneration()))
-                            .toList();
-            var source = captured.inventory().spot().snapshot();
+            var spot = captured.inventory().spot();
+            var source = spot.snapshot();
+            var primary =
+                    new ZLinkAggregateRelocationCoordinator.ExpectedParticipant(
+                            spot.key(),
+                            source.objectGeneration(),
+                            source.authorityOwnerGeneration());
             return coordinator
                     .abortSource(
-                            participants,
-                            new ZLinkAggregateFence(
-                                    stageRequest.fence().aggregateId(),
-                                    stageRequest.fence().aggregateGeneration()),
+                            primary,
+                            ZLinkAggregateFence.markerlessRelocation(
+                                    stageRequest.fence().aggregateId()),
                             source.ownerId(),
                             source.ownerLeaseGeneration(),
                             () -> false)
@@ -1680,8 +1690,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     .thenCompose(
                             ignored ->
                                     coordinator.clearSourceProgress(
-                                            participants,
-                                            stageRequest.fence().aggregateId(),
+                                            primary,
+                                            ZLinkAggregateFence.markerlessRelocation(
+                                                    stageRequest.fence().aggregateId()),
                                             source.ownerId(),
                                             source.ownerLeaseGeneration(),
                                             () -> false))

@@ -7,6 +7,7 @@ import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.LocationOperation;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -397,6 +398,27 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
         return observeStore(
                 LocationOperation.COMPARE_EXCHANGE,
                 () -> authority.abortAggregate(fence, cancellation));
+    }
+
+    @Override
+    public CompletionStage<byte[]> sealAggregateInventory(
+            ZLinkAggregateFence fence,
+            List<ZLinkAggregateParticipant> participants,
+            ZLinkStoreCancellation cancellation) {
+        return authority.sealAggregateInventory(fence, participants, cancellation);
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkAggregateInventoryStore.StoredParticipant>>
+            readAggregateInventory(
+                    ZLinkAggregateFence fence, byte[] digest, ZLinkStoreCancellation cancellation) {
+        return authority.readAggregateInventory(fence, digest, cancellation);
+    }
+
+    @Override
+    public CompletionStage<Void> deleteAggregateInventory(
+            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+        return authority.deleteAggregateInventory(fence, cancellation);
     }
 
     @Override

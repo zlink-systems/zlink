@@ -23,9 +23,7 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
@@ -52,8 +50,9 @@ final class ZLinkProviderAuthorityRepository {
     private static final ObjectMapper CANONICAL_JSON = new ObjectMapper();
     private static final String AGGREGATE_PREFIX = "zlink:v11:aggregate:";
     private static final byte AGGREGATE_STAGING = 0;
-    private static final byte AGGREGATE_PREPARED = 1;
+    static final byte AGGREGATE_PREPARED = 1;
     private static final byte AGGREGATE_COMMITTED = 2;
+    private static final byte AGGREGATE_ABORTED = 3;
     private static final Duration AGGREGATE_PREPARE_RETRY_WINDOW = Duration.ofSeconds(5);
     private final ZLinkLocationStore provider;
     private final java.util.concurrent.ConcurrentHashMap<
@@ -1848,7 +1847,8 @@ final class ZLinkProviderAuthorityRepository {
                 .thenCompose(
                         existing -> {
                             if (existing instanceof ZLinkStoreReadFound found) {
-                                PreparedAggregate prepared = decodeAggregate(found.value().bytes());
+                                PreparedAggregate prepared =
+                                        decodeAggregate(found.value().bytes(), fence);
                                 if (!sameAggregateRequest(prepared, request)) {
                                     return completed(new ZLinkAggregateConflict());
                                 }
@@ -2066,7 +2066,7 @@ final class ZLinkProviderAuthorityRepository {
         if (!(raced instanceof ZLinkStoreReadFound found)) {
             return completed(new ZLinkAggregateConflict());
         }
-        PreparedAggregate current = decodeAggregate(found.value().bytes());
+        PreparedAggregate current = decodeAggregate(found.value().bytes(), fence);
         if (!sameAggregateRequest(current, request)) {
             return completed(new ZLinkAggregateConflict());
         }
@@ -2170,7 +2170,8 @@ final class ZLinkProviderAuthorityRepository {
                                             .equals(expectedStoreVersion)) {
                                 return completed(false);
                             }
-                            PreparedAggregate aggregate = decodeAggregate(found.value().bytes());
+                            PreparedAggregate aggregate =
+                                    decodeAggregate(found.value().bytes(), fence);
                             if (aggregate.state() != AGGREGATE_STAGING) {
                                 return completed(false);
                             }
@@ -2249,19 +2250,16 @@ final class ZLinkProviderAuthorityRepository {
                             if (!(read instanceof ZLinkStoreReadFound found)) {
                                 return completed(Optional.of(ZLinkAggregateCommitResult.STALE));
                             }
-                            PreparedAggregate prepared = decodeAggregate(found.value().bytes());
+                            PreparedAggregate prepared =
+                                    decodeAggregate(found.value().bytes(), fence);
                             if (prepared.state() == AGGREGATE_COMMITTED) {
-                                return aggregateInventory
-                                        .load(
-                                                fence,
-                                                prepared.participantCount(),
-                                                prepared.inventoryDigest(),
-                                                opaqueCancellation)
+                                return loadAggregateParticipants(
+                                                fence, prepared, opaqueCancellation)
                                         .thenCompose(
                                                 participants ->
                                                         normalizeAggregateParticipants(
                                                                 fence,
-                                                                prepared.request(participants),
+                                                                participants.request(),
                                                                 opaqueCancellation))
                                         .thenApply(
                                                 ignored ->
@@ -2272,105 +2270,81 @@ final class ZLinkProviderAuthorityRepository {
                             if (prepared.state() != AGGREGATE_PREPARED) {
                                 return completed(Optional.of(ZLinkAggregateCommitResult.STALE));
                             }
-                            return aggregateInventory
-                                    .load(
-                                            fence,
-                                            prepared.participantCount(),
-                                            prepared.inventoryDigest(),
-                                            opaqueCancellation)
+                            return loadAggregateParticipants(fence, prepared, opaqueCancellation)
                                     .thenCompose(
                                             participants -> {
                                                 ZLinkAggregatePrepareRequest request =
-                                                        prepared.request(participants);
-                                                return loadParticipants(
-                                                                request.participants(),
+                                                        participants.request();
+                                                List<LoadedParticipant> rows = participants.rows();
+                                                if (!aggregateMarkersMatch(request, fence, rows)) {
+                                                    return completed(
+                                                            Optional.of(
+                                                                    ZLinkAggregateCommitResult
+                                                                            .STALE));
+                                                }
+                                                List<ZLinkStoreCondition> conditions =
+                                                        new ArrayList<>();
+                                                conditions.add(
+                                                        new ZLinkStoreVersionCondition(
+                                                                marker, found.value().version()));
+                                                return requireLiveOwner(
+                                                                request.targetOwner(),
+                                                                conditions,
                                                                 opaqueCancellation)
                                                         .thenCompose(
-                                                                rows -> {
-                                                                    if (rows.size()
-                                                                                    != request.participants()
-                                                                                            .size()
-                                                                            || !aggregateMarkersMatch(
-                                                                                    request, fence,
-                                                                                    rows)) {
+                                                                live ->
+                                                                        live
+                                                                                ? requireAggregateMembership(
+                                                                                        request,
+                                                                                        rows,
+                                                                                        conditions,
+                                                                                        opaqueCancellation)
+                                                                                : completed(false))
+                                                        .thenCompose(
+                                                                live -> {
+                                                                    if (!live) {
                                                                         return completed(
                                                                                 Optional.of(
                                                                                         ZLinkAggregateCommitResult
                                                                                                 .STALE));
                                                                     }
-                                                                    List<ZLinkStoreCondition>
-                                                                            conditions =
-                                                                                    new ArrayList<>();
-                                                                    conditions.add(
-                                                                            new ZLinkStoreVersionCondition(
+                                                                    var mutations =
+                                                                            aggregateCapacityMutations(
+                                                                                    request, rows);
+                                                                    mutations.add(
+                                                                            new ZLinkStorePut(
                                                                                     marker,
-                                                                                    found.value()
-                                                                                            .version()));
-                                                                    return requireLiveOwner(
-                                                                                    request
-                                                                                            .targetOwner(),
-                                                                                    conditions,
+                                                                                    encodeAggregate(
+                                                                                            AGGREGATE_COMMITTED,
+                                                                                            request),
+                                                                                    null));
+                                                                    return write(
+                                                                                    new ZLinkStoreWriteRequest(
+                                                                                            conditions,
+                                                                                            mutations),
                                                                                     opaqueCancellation)
                                                                             .thenCompose(
-                                                                                    live ->
-                                                                                            live
-                                                                                                    ? requireAggregateMembership(
-                                                                                                            request,
-                                                                                                            rows,
-                                                                                                            conditions,
-                                                                                                            opaqueCancellation)
-                                                                                                    : completed(
-                                                                                                            false))
-                                                                            .thenCompose(
-                                                                                    live -> {
-                                                                                        if (!live) {
-                                                                                            return completed(
-                                                                                                    Optional
-                                                                                                            .of(
-                                                                                                                    ZLinkAggregateCommitResult
-                                                                                                                            .STALE));
+                                                                                    result -> {
+                                                                                        if (!(result
+                                                                                                instanceof
+                                                                                                ZLinkStoreWriteApplied)) {
+                                                                                            return retryAggregateCommit(
+                                                                                                    fence,
+                                                                                                    cancellation,
+                                                                                                    found.value()
+                                                                                                            .version(),
+                                                                                                    request);
                                                                                         }
-                                                                                        var
-                                                                                                mutations =
-                                                                                                        aggregateCapacityMutations(
-                                                                                                                request,
-                                                                                                                rows);
-                                                                                        mutations
-                                                                                                .add(
-                                                                                                        new ZLinkStorePut(
-                                                                                                                marker,
-                                                                                                                encodeAggregate(
-                                                                                                                        AGGREGATE_COMMITTED,
-                                                                                                                        request),
-                                                                                                                null));
-                                                                                        return write(
-                                                                                                        new ZLinkStoreWriteRequest(
-                                                                                                                conditions,
-                                                                                                                mutations),
+                                                                                        return normalizeAggregateParticipants(
+                                                                                                        fence,
+                                                                                                        request,
                                                                                                         opaqueCancellation)
-                                                                                                .thenCompose(
-                                                                                                        result -> {
-                                                                                                            if (!(result
-                                                                                                                    instanceof
-                                                                                                                    ZLinkStoreWriteApplied)) {
-                                                                                                                return retryAggregateCommit(
-                                                                                                                        fence,
-                                                                                                                        cancellation,
-                                                                                                                        found.value()
-                                                                                                                                .version(),
-                                                                                                                        request);
-                                                                                                            }
-                                                                                                            return normalizeAggregateParticipants(
-                                                                                                                            fence,
-                                                                                                                            request,
-                                                                                                                            opaqueCancellation)
-                                                                                                                    .thenApply(
-                                                                                                                            ignored ->
-                                                                                                                                    Optional
-                                                                                                                                            .of(
-                                                                                                                                                    ZLinkAggregateCommitResult
-                                                                                                                                                            .COMMITTED));
-                                                                                                        });
+                                                                                                .thenApply(
+                                                                                                        ignored ->
+                                                                                                                Optional
+                                                                                                                        .of(
+                                                                                                                                ZLinkAggregateCommitResult
+                                                                                                                                        .COMMITTED));
                                                                                     });
                                                                 });
                                             });
@@ -2407,22 +2381,18 @@ final class ZLinkProviderAuthorityRepository {
                             if (!(read instanceof ZLinkStoreReadFound found)) {
                                 return completed(Optional.of(ZLinkAggregateCommitResult.STALE));
                             }
-                            PreparedAggregate current = decodeAggregate(found.value().bytes());
+                            PreparedAggregate current =
+                                    decodeAggregate(found.value().bytes(), fence);
                             if (!sameAggregateRequest(current, request)) {
                                 return completed(Optional.of(ZLinkAggregateCommitResult.STALE));
                             }
                             if (current.state() == AGGREGATE_COMMITTED) {
-                                return aggregateInventory
-                                        .load(
-                                                fence,
-                                                current.participantCount(),
-                                                current.inventoryDigest(),
-                                                opaqueCancellation)
+                                return loadAggregateParticipants(fence, current, opaqueCancellation)
                                         .thenCompose(
                                                 participants ->
                                                         normalizeAggregateParticipants(
                                                                 fence,
-                                                                current.request(participants),
+                                                                participants.request(),
                                                                 opaqueCancellation))
                                         .thenApply(
                                                 ignored ->
@@ -2450,6 +2420,23 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
+    CompletionStage<byte[]> sealAggregateInventory(
+            ZLinkAggregateFence fence,
+            List<ZLinkAggregateParticipant> participants,
+            ZLinkStoreCancellation cancellation) {
+        return aggregateInventory.store(fence, participants, adapt(cancellation));
+    }
+
+    CompletionStage<List<ZLinkAggregateInventoryStore.StoredParticipant>> readAggregateInventory(
+            ZLinkAggregateFence fence, byte[] digest, ZLinkStoreCancellation cancellation) {
+        return aggregateInventory.load(fence, -1, digest, adapt(cancellation));
+    }
+
+    CompletionStage<Void> deleteAggregateInventory(
+            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+        return aggregateInventory.delete(fence, adapt(cancellation));
+    }
+
     CompletionStage<Optional<ZLinkAggregateProgressSnapshot>> readAggregateProgress(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(fence, "fence");
@@ -2459,24 +2446,19 @@ final class ZLinkProviderAuthorityRepository {
                             if (!(read instanceof ZLinkStoreReadFound found)) {
                                 return completed(Optional.empty());
                             }
-                            PreparedAggregate aggregate = decodeAggregate(found.value().bytes());
+                            PreparedAggregate aggregate =
+                                    decodeAggregate(found.value().bytes(), fence);
                             if (aggregate.state() != AGGREGATE_COMMITTED) {
                                 return completed(Optional.empty());
                             }
-                            return aggregateInventory
-                                    .load(
-                                            fence,
-                                            aggregate.participantCount(),
-                                            aggregate.inventoryDigest(),
-                                            adapt(cancellation))
+                            return loadAggregateParticipants(fence, aggregate, adapt(cancellation))
                                     .thenApply(
                                             participants ->
                                                     Optional.of(
                                                             new ZLinkAggregateProgressSnapshot(
                                                                     fence,
                                                                     found.value().version().value(),
-                                                                    aggregate.request(
-                                                                            participants))));
+                                                                    participants.request())));
                         });
     }
 
@@ -2499,7 +2481,8 @@ final class ZLinkProviderAuthorityRepository {
                             if (!found.value().version().value().equals(expectedStoreVersion)) {
                                 return completed(false);
                             }
-                            PreparedAggregate aggregate = decodeAggregate(found.value().bytes());
+                            PreparedAggregate aggregate =
+                                    decodeAggregate(found.value().bytes(), fence);
                             if (aggregate.state() != AGGREGATE_COMMITTED) {
                                 return completed(false);
                             }
@@ -2605,9 +2588,87 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
+    private static PreparedAggregate decodeLegacyAggregate(byte[] bytes) {
+        try {
+            var in = new DataInputStream(new ByteArrayInputStream(bytes));
+            byte state = in.readByte();
+            if (state != AGGREGATE_STAGING
+                    && state != AGGREGATE_PREPARED
+                    && state != AGGREGATE_COMMITTED) {
+                throw new IOException("aggregate marker state is invalid");
+            }
+            var id = new UUID(in.readLong(), in.readLong());
+            long generation = in.readLong();
+            var descriptor =
+                    new ZLinkMeshNodeDescriptorKey(in.readUTF(), RoutingId.fromHex(in.readUTF()));
+            long descriptorGeneration = in.readLong();
+            var owner = new ZLinkLocationOwnerToken(in.readUTF(), in.readLong());
+            byte[] digest = readBytes(in);
+            int actors = in.readInt();
+            int spots = in.readInt();
+            Optional<ZLinkSpotTypeCapacityDelta> spotType =
+                    in.readBoolean()
+                            ? Optional.of(
+                                    new ZLinkSpotTypeCapacityDelta(
+                                            ZLinkPlacementObjectKind.values()[in.readInt()],
+                                            in.readUTF(),
+                                            in.readInt()))
+                            : Optional.empty();
+            int count = in.readInt();
+            if (count < 1) {
+                throw new IOException("aggregate participant count is invalid");
+            }
+            byte[] fingerprint = readBytes(in);
+            if (fingerprint.length != 32) {
+                throw new IOException("aggregate request fingerprint is invalid");
+            }
+            if (in.available() != 0) {
+                throw new IOException("aggregate marker has trailing bytes");
+            }
+            return new PreparedAggregate(
+                    state,
+                    id,
+                    generation,
+                    descriptor,
+                    descriptorGeneration,
+                    owner,
+                    digest,
+                    actors,
+                    spots,
+                    spotType,
+                    count);
+        } catch (IOException | RuntimeException failure) {
+            throw new IllegalStateException("Location Store aggregate record is invalid", failure);
+        }
+    }
+
+    private static byte[] readBytes(DataInputStream in) throws IOException {
+        int length = in.readInt();
+        if (length < 0 || length > 64 * 1024 * 1024) {
+            throw new IOException("invalid byte length");
+        }
+        byte[] bytes = in.readNBytes(length);
+        if (bytes.length != length) {
+            throw new IOException("truncated byte value");
+        }
+        return bytes;
+    }
+
     private static PreparedAggregate legacyAggregate(ZLinkStoreScanItem item) {
         try {
-            PreparedAggregate aggregate = decodeAggregate(item.value().bytes());
+            byte[] body = item.value().bytes();
+            PreparedAggregate aggregate;
+            if (body.length > 0 && body[0] == '{') {
+                String identity = item.key().value().substring(AGGREGATE_PREFIX.length());
+                int separator = identity.lastIndexOf(':');
+                var fence =
+                        new ZLinkAggregateFence(
+                                UUID.fromString(identity.substring(0, separator)),
+                                Long.parseLong(identity.substring(separator + 1)));
+                aggregate = decodeAggregate(body, fence);
+            } else {
+                aggregate = decodeLegacyAggregate(body);
+            }
             // A committed aggregate already moved its authority rows and v11 capacity; settling it
             // only clears its markers, inventory and root, like the other states.
             if (!aggregateKey(
@@ -2766,7 +2827,8 @@ final class ZLinkProviderAuthorityRepository {
                                                                         ZLinkAggregateAbortResult
                                                                                 .STALE));
                             }
-                            PreparedAggregate aggregate = decodeAggregate(found.value().bytes());
+                            PreparedAggregate aggregate =
+                                    decodeAggregate(found.value().bytes(), fence);
                             if (aggregate.state() == AGGREGATE_COMMITTED) {
                                 return completed(ZLinkAggregateAbortResult.STALE);
                             }
@@ -2959,33 +3021,66 @@ final class ZLinkProviderAuthorityRepository {
                 : removeAllByOwner(owner, cursor, removed, restartCount, cancellation);
     }
 
-    private CompletionStage<List<LoadedParticipant>> loadParticipants(
-            List<ZLinkAggregateParticipant> participants,
+    private CompletionStage<LoadedAggregate> loadAggregateParticipants(
+            ZLinkAggregateFence fence,
+            PreparedAggregate marker,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        CompletionStage<List<LoadedParticipant>> loaded = completed(new ArrayList<>());
-        for (ZLinkAggregateParticipant participant : participants) {
-            loaded =
-                    loaded.thenCompose(
-                            rows ->
-                                    provider.read(
-                                                    authorityKey(participant.authorityKey()),
-                                                    cancellation)
-                                            .thenApply(
-                                                    read -> {
-                                                        if (read
-                                                                instanceof
-                                                                ZLinkStoreReadFound found) {
-                                                            rows.add(
-                                                                    new LoadedParticipant(
-                                                                            authorityKey(
-                                                                                    participant
-                                                                                            .authorityKey()),
-                                                                            found.value()));
-                                                        }
-                                                        return rows;
-                                                    }));
-        }
-        return loaded.thenApply(List::copyOf);
+        return aggregateInventory
+                .load(fence, marker.participantCount(), marker.inventoryDigest(), cancellation)
+                .thenCompose(
+                        entries -> {
+                            List<LoadedParticipant> rows = new ArrayList<>(entries.size());
+                            List<ZLinkAggregateParticipant> participants =
+                                    new ArrayList<>(entries.size());
+                            CompletionStage<Void> reads = completed(null);
+                            for (var entry : entries) {
+                                var key = authorityKey(entry.authorityKey());
+                                reads =
+                                        reads.thenCompose(
+                                                ignored ->
+                                                        provider.read(key, cancellation)
+                                                                .thenAccept(
+                                                                        read -> {
+                                                                            if (!(read
+                                                                                    instanceof
+                                                                                    ZLinkStoreReadFound
+                                                                                            found)) {
+                                                                                throw new ZLinkAggregateRelocationCoordinator
+                                                                                        .RelocationDataLostException(
+                                                                                        "aggregate participant authority is missing");
+                                                                            }
+                                                                            rows.add(
+                                                                                    new LoadedParticipant(
+                                                                                            key,
+                                                                                            found
+                                                                                                    .value()));
+                                                                            var authority =
+                                                                                    decode(
+                                                                                            found.value()
+                                                                                                    .bytes());
+                                                                            participants.add(
+                                                                                    new ZLinkAggregateParticipant(
+                                                                                            entry
+                                                                                                    .authorityKey(),
+                                                                                            authority
+                                                                                                    .objectGeneration(),
+                                                                                            authority
+                                                                                                    .authorityOwnerGeneration(),
+                                                                                            entry
+                                                                                                    .expectedStoreVersion(),
+                                                                                            entry
+                                                                                                    .ownerTransition(),
+                                                                                            entry
+                                                                                                    .authorityPayload(),
+                                                                                            entry
+                                                                                                    .membershipMutation()));
+                                                                        }));
+                            }
+                            return reads.thenApply(
+                                    ignored ->
+                                            new LoadedAggregate(
+                                                    marker.request(participants), rows));
+                        });
     }
 
     private static boolean aggregateMarkersMatch(
@@ -3071,7 +3166,12 @@ final class ZLinkProviderAuthorityRepository {
                             AggregateParticipantMarker marker = current.aggregate();
                             if (marker == null) {
                                 return aggregateInventory
-                                        .readParticipantPayload(fence, index, cancellation)
+                                        .readParticipantPayload(
+                                                fence,
+                                                index,
+                                                ZLinkAggregateInventoryStore.sha256(
+                                                        participant.authorityPayload()),
+                                                cancellation)
                                         .thenCompose(
                                                 payload ->
                                                         isNormalizedAggregateParticipant(
@@ -3101,18 +3201,13 @@ final class ZLinkProviderAuthorityRepository {
                                                         + " normalization"));
                             }
                             return aggregateInventory
-                                    .readParticipantPayload(fence, index, cancellation)
+                                    .readParticipantPayload(
+                                            fence,
+                                            index,
+                                            marker.authorityPayloadSha256(),
+                                            cancellation)
                                     .thenCompose(
                                             payload -> {
-                                                if (!Arrays.equals(
-                                                        marker.authorityPayloadSha256(),
-                                                        ZLinkAggregateInventoryStore.sha256(
-                                                                payload))) {
-                                                    return failed(
-                                                            new IllegalStateException(
-                                                                    "aggregate participant payload"
-                                                                            + " checksum is invalid"));
-                                                }
                                                 boolean moves =
                                                         marker.ownerTransition()
                                                                 == ZLinkAuthorityGenerationTransition
@@ -3205,8 +3300,7 @@ final class ZLinkProviderAuthorityRepository {
             return false;
         }
         if (participant.ownerTransition() == ZLinkAuthorityGenerationTransition.NEW_OWNER) {
-            return current.authorityOwnerGeneration() > participant.sourceAuthorityOwnerGeneration()
-                    && current.ownerId().equals(request.targetOwner().ownerId())
+            return current.ownerId().equals(request.targetOwner().ownerId())
                     && current.ownerLeaseGeneration() == request.targetOwner().leaseGeneration()
                     && current.allocation().descriptor().equals(request.targetDescriptor())
                     && current.allocation().descriptorLifecycleGeneration()
@@ -3296,7 +3390,7 @@ final class ZLinkProviderAuthorityRepository {
                                                                 .value()
                                                                 .equals(
                                                                         participant
-                                                                                .expectedStoreVersion())
+                                                                                .casStoreVersion())
                                                         || current.allocation().state()
                                                                 != ZLinkPlacementAllocationState
                                                                         .ACTIVE) {
@@ -3436,7 +3530,8 @@ final class ZLinkProviderAuthorityRepository {
                                                 }
                                                 var aggregate =
                                                         decodeAggregate(
-                                                                aggregateFound.value().bytes());
+                                                                aggregateFound.value().bytes(),
+                                                                fence);
                                                 if (!sameAggregateRequest(aggregate, request)
                                                         || (aggregate.state() != AGGREGATE_STAGING
                                                                 && aggregate.state()
@@ -4087,26 +4182,22 @@ final class ZLinkProviderAuthorityRepository {
                                                         + " aggregate marker"));
                             }
                             PreparedAggregate aggregate =
-                                    decodeAggregate(aggregateFound.value().bytes());
+                                    decodeAggregate(aggregateFound.value().bytes(), fence);
                             if (aggregate.state() != AGGREGATE_COMMITTED) {
                                 return completed(
                                         snapshot(
                                                 record,
-                                                marker.expectedStoreVersion(),
+                                                record.visibleStoreVersion(),
                                                 found.value().storeNow()));
                             }
                             return aggregateInventory
-                                    .readParticipantPayload(fence, marker.index(), cancellation)
+                                    .readParticipantPayload(
+                                            fence,
+                                            marker.index(),
+                                            marker.authorityPayloadSha256(),
+                                            cancellation)
                                     .thenApply(
                                             payload -> {
-                                                if (!Arrays.equals(
-                                                        marker.authorityPayloadSha256(),
-                                                        ZLinkAggregateInventoryStore.sha256(
-                                                                payload))) {
-                                                    throw new IllegalStateException(
-                                                            "committed aggregate participant"
-                                                                    + " payload checksum is invalid");
-                                                }
                                                 AuthorityRecord projected =
                                                         marker.ownerTransition()
                                                                         == ZLinkAuthorityGenerationTransition
@@ -4483,117 +4574,135 @@ final class ZLinkProviderAuthorityRepository {
                 HexFormat.of().parseHex(node.path("membershipMutationSha256").asText()));
     }
 
-    private static byte[] encodeAggregate(byte state, ZLinkAggregatePrepareRequest request) {
-        try {
-            var bytes = new ByteArrayOutputStream();
-            var out = new DataOutputStream(bytes);
-            out.writeByte(state);
-            out.writeLong(request.aggregateId().getMostSignificantBits());
-            out.writeLong(request.aggregateId().getLeastSignificantBits());
-            out.writeLong(request.aggregateGeneration());
-            out.writeUTF(request.targetDescriptor().meshName());
-            out.writeUTF(request.targetDescriptor().rid().toHex());
-            out.writeLong(request.targetDescriptorLifecycleGeneration());
-            out.writeUTF(request.targetOwner().ownerId());
-            out.writeLong(request.targetOwner().leaseGeneration());
-            writeBytes(out, request.inventoryDigest());
-            out.writeInt(request.capacityBundle().actorSlots());
-            out.writeInt(request.capacityBundle().spotSlots());
-            out.writeBoolean(request.capacityBundle().spotType().isPresent());
-            if (request.capacityBundle().spotType().isPresent()) {
-                ZLinkSpotTypeCapacityDelta delta =
-                        request.capacityBundle().spotType().orElseThrow();
-                out.writeInt(delta.objectKind().ordinal());
-                out.writeUTF(delta.stableType());
-                out.writeInt(delta.slots());
-            }
-            out.writeInt(request.participants().size());
-            writeBytes(out, ZLinkAggregateInventoryStore.fingerprint(request));
-            out.flush();
-            return bytes.toByteArray();
-        } catch (IOException failure) {
-            throw new IllegalStateException(failure);
+    static byte[] encodeAggregate(byte state, ZLinkAggregatePrepareRequest request) {
+        var root = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+        root.put("aggregateId", request.aggregateId().toString());
+        root.put("aggregateGeneration", Long.toString(request.aggregateGeneration()));
+        root.put(
+                "state",
+                switch (state) {
+                    case AGGREGATE_STAGING -> "preparing";
+                    case AGGREGATE_PREPARED -> "prepared";
+                    case AGGREGATE_COMMITTED -> "committed";
+                    case AGGREGATE_ABORTED -> "aborted";
+                    default -> throw new IllegalArgumentException("invalid aggregate state");
+                });
+        root.put("participantCount", request.participants().size());
+        root.put("inventoryDigestSha256", HexFormat.of().formatHex(request.inventoryDigest()));
+        root.putObject("targetDescriptor")
+                .put("meshName", request.targetDescriptor().meshName())
+                .put("routingIdHex", request.targetDescriptor().rid().toHex());
+        root.put(
+                "targetDescriptorLifecycleGeneration",
+                Long.toUnsignedString(request.targetDescriptorLifecycleGeneration()));
+        root.putObject("targetOwner")
+                .put("ownerId", request.targetOwner().ownerId())
+                .put(
+                        "ownerLeaseGeneration",
+                        Long.toString(request.targetOwner().leaseGeneration()));
+        var capacity =
+                root.putObject("capacity")
+                        .put("actors", request.capacityBundle().actorSlots())
+                        .put("spots", request.capacityBundle().spotSlots());
+        var spot = request.capacityBundle().spotType();
+        if (spot.isEmpty()) {
+            capacity.putNull("spotType");
+        } else {
+            var delta = spot.orElseThrow();
+            capacity.putObject("spotType")
+                    .put("objectKind", authorityObjectKindWire(delta.objectKind()))
+                    .put("stableType", delta.stableType())
+                    .put("count", delta.slots());
         }
+        return ZLinkAggregateInventoryStore.canonical(root);
     }
 
-    private static PreparedAggregate decodeAggregate(byte[] bytes) {
-        try {
-            var in = new DataInputStream(new ByteArrayInputStream(bytes));
-            byte state = in.readByte();
-            if (state != AGGREGATE_STAGING
-                    && state != AGGREGATE_PREPARED
-                    && state != AGGREGATE_COMMITTED) {
-                throw new IOException("aggregate marker state is invalid");
-            }
-            var id = new UUID(in.readLong(), in.readLong());
-            long generation = in.readLong();
-            var descriptor =
-                    new ZLinkMeshNodeDescriptorKey(in.readUTF(), RoutingId.fromHex(in.readUTF()));
-            long descriptorGeneration = in.readLong();
-            var owner = new ZLinkLocationOwnerToken(in.readUTF(), in.readLong());
-            byte[] digest = readBytes(in);
-            int actors = in.readInt();
-            int spots = in.readInt();
-            Optional<ZLinkSpotTypeCapacityDelta> spotType =
-                    in.readBoolean()
-                            ? Optional.of(
-                                    new ZLinkSpotTypeCapacityDelta(
-                                            ZLinkPlacementObjectKind.values()[in.readInt()],
-                                            in.readUTF(),
-                                            in.readInt()))
-                            : Optional.empty();
-            int count = in.readInt();
-            if (count < 1) {
-                throw new IOException("aggregate participant count is invalid");
-            }
-            byte[] fingerprint = readBytes(in);
-            if (fingerprint.length != 32) {
-                throw new IOException("aggregate request fingerprint is invalid");
-            }
-            if (in.available() != 0) {
-                throw new IOException("aggregate marker has trailing bytes");
-            }
-            return new PreparedAggregate(
-                    state,
-                    id,
-                    generation,
-                    descriptor,
-                    descriptorGeneration,
-                    owner,
-                    digest,
-                    actors,
-                    spots,
-                    spotType,
-                    count,
-                    fingerprint);
-        } catch (IOException | RuntimeException failure) {
-            throw new IllegalStateException("Location Store aggregate record is invalid", failure);
+    private static PreparedAggregate decodeAggregate(byte[] bytes, ZLinkAggregateFence fence) {
+        var root =
+                ZLinkAggregateInventoryStore.object(
+                        bytes,
+                        "aggregateId",
+                        "aggregateGeneration",
+                        "state",
+                        "participantCount",
+                        "inventoryDigestSha256",
+                        "targetDescriptor",
+                        "targetDescriptorLifecycleGeneration",
+                        "targetOwner",
+                        "capacity");
+        var descriptor =
+                ZLinkAggregateInventoryStore.object(
+                        root.get("targetDescriptor"), "meshName", "routingIdHex");
+        var owner =
+                ZLinkAggregateInventoryStore.object(
+                        root.get("targetOwner"), "ownerId", "ownerLeaseGeneration");
+        var capacity =
+                ZLinkAggregateInventoryStore.object(
+                        root.get("capacity"), "actors", "spots", "spotType");
+        Optional<ZLinkSpotTypeCapacityDelta> spot = Optional.empty();
+        if (!capacity.get("spotType").isNull()) {
+            var type =
+                    ZLinkAggregateInventoryStore.object(
+                            capacity.get("spotType"), "objectKind", "stableType", "count");
+            spot =
+                    Optional.of(
+                            new ZLinkSpotTypeCapacityDelta(
+                                    authorityObjectKindFromWire(
+                                            ZLinkAggregateInventoryStore.text(type, "objectKind")),
+                                    ZLinkAggregateInventoryStore.text(type, "stableType"),
+                                    ZLinkAggregateInventoryStore.number(type, "count")));
         }
+        byte state =
+                switch (ZLinkAggregateInventoryStore.text(root, "state")) {
+                    case "preparing" -> AGGREGATE_STAGING;
+                    case "prepared" -> AGGREGATE_PREPARED;
+                    case "committed" -> AGGREGATE_COMMITTED;
+                    case "aborted" -> AGGREGATE_ABORTED;
+                    default -> throw new IllegalStateException("invalid aggregate state");
+                };
+        String aggregateId = ZLinkAggregateInventoryStore.text(root, "aggregateId");
+        UUID id = UUID.fromString(aggregateId);
+        if (!id.toString().equals(aggregateId)) {
+            throw new IllegalStateException("noncanonical aggregate id");
+        }
+        long generation = aggregateGeneration(root, "aggregateGeneration");
+        if (!id.equals(fence.aggregateId()) || generation != fence.aggregateGeneration()) {
+            throw new IllegalStateException("aggregate record does not match its key");
+        }
+        String routingIdHex = ZLinkAggregateInventoryStore.text(descriptor, "routingIdHex");
+        RoutingId routingId = RoutingId.fromHex(routingIdHex);
+        if (!routingId.toHex().equals(routingIdHex)) {
+            throw new IllegalStateException("noncanonical aggregate target routing id");
+        }
+        return new PreparedAggregate(
+                state,
+                id,
+                generation,
+                new ZLinkMeshNodeDescriptorKey(
+                        ZLinkAggregateInventoryStore.text(descriptor, "meshName"), routingId),
+                aggregateGeneration(root, "targetDescriptorLifecycleGeneration"),
+                new ZLinkLocationOwnerToken(
+                        ZLinkAggregateInventoryStore.text(owner, "ownerId"),
+                        aggregateGeneration(owner, "ownerLeaseGeneration")),
+                HexFormat.of()
+                        .parseHex(
+                                ZLinkAggregateInventoryStore.checksum(
+                                        root, "inventoryDigestSha256")),
+                ZLinkAggregateInventoryStore.number(capacity, "actors"),
+                ZLinkAggregateInventoryStore.number(capacity, "spots"),
+                spot,
+                ZLinkAggregateInventoryStore.number(root, "participantCount"));
     }
 
-    private static void writeBytes(DataOutputStream out, byte[] bytes) throws IOException {
-        out.writeInt(bytes.length);
-        out.write(bytes);
+    private static long aggregateGeneration(JsonNode node, String field) {
+        String text = ZLinkAggregateInventoryStore.text(node, field);
+        long generation = Long.parseUnsignedLong(text);
+        if (generation == 0 || !Long.toUnsignedString(generation).equals(text)) {
+            throw new IllegalStateException("noncanonical aggregate generation");
+        }
+        return generation;
     }
 
-    private static byte[] readBytes(DataInputStream in) throws IOException {
-        int length = in.readInt();
-        if (length < 0 || length > 64 * 1024 * 1024) {
-            throw new IOException("invalid byte length");
-        }
-        byte[] bytes = in.readNBytes(length);
-        if (bytes.length != length) {
-            throw new IOException("truncated byte value");
-        }
-        return bytes;
-    }
-
-    // Canonical cross-language logical key preimage
-    // (21-location-runtime.md#2.4): "authority\0{actor|spot}\0{Id}". The
-    // second segment collapses every Spot kind onto one "spot" string --
-    // one Id has exactly one authority row regardless of Spot kind -- and
-    // {Id} is the raw ActorId/SpotId, not the "zla1:..." wire form the rest
-    // of this class carries as its authority-key contract value.
     private static final String AUTHORITY_PREIMAGE_PREFIX = "authority\0";
     private static final String ACTOR_AUTHORITY_PREIMAGE_PREFIX =
             AUTHORITY_PREIMAGE_PREFIX + "actor\0";
@@ -4641,7 +4750,7 @@ final class ZLinkProviderAuthorityRepository {
         return ZLinkOwnerLeaseRecordCodec.key(ownerId);
     }
 
-    private static ZLinkStoreKey aggregateKey(ZLinkAggregateFence fence) {
+    static ZLinkStoreKey aggregateKey(ZLinkAggregateFence fence) {
         return new ZLinkStoreKey(
                 AGGREGATE_PREFIX + fence.aggregateId() + ":" + fence.aggregateGeneration());
     }
@@ -4684,10 +4793,7 @@ final class ZLinkProviderAuthorityRepository {
                 && prepared.targetOwner().equals(request.targetOwner())
                 && prepared.capacityBundle().equals(request.capacityBundle())
                 && prepared.participantCount() == request.participants().size()
-                && Arrays.equals(prepared.inventoryDigest(), request.inventoryDigest())
-                && Arrays.equals(
-                        prepared.requestFingerprint(),
-                        ZLinkAggregateInventoryStore.fingerprint(request));
+                && Arrays.equals(prepared.inventoryDigest(), request.inventoryDigest());
     }
 
     private static List<ZLinkStoreMutation> concat(
@@ -4894,6 +5000,9 @@ final class ZLinkProviderAuthorityRepository {
         }
     }
 
+    private record LoadedAggregate(
+            ZLinkAggregatePrepareRequest request, List<LoadedParticipant> rows) {}
+
     private record LoadedParticipant(ZLinkStoreKey key, ZLinkStoreValue value) {}
 
     private record PreparedAggregate(
@@ -4907,11 +5016,9 @@ final class ZLinkProviderAuthorityRepository {
             int actors,
             int spots,
             Optional<ZLinkSpotTypeCapacityDelta> spotType,
-            int participantCount,
-            byte[] requestFingerprint) {
+            int participantCount) {
         PreparedAggregate {
             inventoryDigest = inventoryDigest.clone();
-            requestFingerprint = requestFingerprint.clone();
         }
 
         ZLinkPlacementCapacityBundle capacityBundle() {
@@ -4933,22 +5040,12 @@ final class ZLinkProviderAuthorityRepository {
                             targetDescriptorLifecycleGeneration,
                             capacityBundle(),
                             targetOwner);
-            if (!Arrays.equals(
-                    requestFingerprint, ZLinkAggregateInventoryStore.fingerprint(request))) {
-                throw new IllegalStateException(
-                        "aggregate inventory request fingerprint differs from marker");
-            }
             return request;
         }
 
         @Override
         public byte[] inventoryDigest() {
             return inventoryDigest.clone();
-        }
-
-        @Override
-        public byte[] requestFingerprint() {
-            return requestFingerprint.clone();
         }
     }
 }
