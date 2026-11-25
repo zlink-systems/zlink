@@ -71,10 +71,12 @@ export class Session implements ZLinkSession {
         .requestToActor(actor.ref.actorId, new LeaveDungeonRequest())
         .submit<DungeonLeft>();
       // Close from outside the Dungeon turn once its membership change has completed.
-      const dungeon = await this.spots.find(left.dungeonId);
-      if (dungeon?.objectGeneration === left.objectGeneration) await this.spots.close(dungeon);
+      if (left.remainingPlayers === 0) {
+        const dungeon = await this.spots.find(left.dungeonId);
+        if (dungeon?.objectGeneration === left.objectGeneration) await this.spots.close(dungeon);
+      }
       await this.context.client
-        .reply(new DungeonLeft(left.dungeonId, left.objectGeneration))
+        .reply(new DungeonLeft(left.dungeonId, left.objectGeneration, left.remainingPlayers))
         .submit();
       return;
     }

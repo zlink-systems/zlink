@@ -122,6 +122,8 @@ Relocation changes an object's execution host; drain moves a host's workload els
 5. When all members arrive, Dungeon moves to Active and sends RunStarted to Party Spot. Advance reaches FinalStage (3), moves to Completed and sends RunCompleted. Party Spot retains members during a run.
 6. Reconnect returns the current view. Relocation preserves domain snapshots; update observes relocation and safe shutdown before replacing the host.
 
+`LeaveDungeonRequest` runs in the Dungeon Actor handler. The Dungeon reports `remainingPlayers` from its joined players after the public membership leave. Only when the count is zero does the Session ask the public Spot manager to close the same Spot generation from outside the Dungeon turn. The Session then replies with `DungeonLeft`. Disconnect preserves Dungeon membership for reconnect.
+
 ## Extending the MORPG domain
 
 1. When creating a typed message, declare nullability and wire types in the shared contract.

@@ -136,8 +136,8 @@ class PlayerClient {
   async view(): Promise<DungeonView> {
     return this.send(new ViewRequest(), PacketNames.dungeonView);
   }
-  async leave(): Promise<void> {
-    await this.connector.request(new LeaveDungeonRequest()).submit(DungeonLeft);
+  async leave(): Promise<DungeonLeft> {
+    return this.connector.request(new LeaveDungeonRequest()).submit(DungeonLeft);
   }
   async close(): Promise<void> {
     await this.connector.close();
@@ -205,6 +205,43 @@ async function enter(a: PlayerClient, b: PlayerClient, party: string): Promise<D
   sameDungeon(first, await b.view());
   return first;
 }
+
+async function verifyDungeonLeave(
+  create: (suffix: string) => Promise<PlayerClient>,
+  enter: (leader: PlayerClient, member: PlayerClient) => Promise<DungeonView>
+): Promise<void> {
+  const leader = await create('leave-leader');
+  const member = await create('leave-member');
+  const otherLeader = await create('leave-other-leader');
+  const otherMember = await create('leave-other-member');
+  const freshLeader = await create('leave-fresh-leader');
+  const freshMember = await create('leave-fresh-member');
+  const original = await enter(leader, member);
+  const other = await enter(otherLeader, otherMember);
+  assert.notEqual(original.nodeId, other.nodeId, 'Each instance must hold one Dungeon');
+
+  const first = await leader.leave();
+  sameDungeon(original, await member.view());
+  const last = await member.leave();
+  assert.equal(first.dungeonId, original.dungeonId);
+  assert.equal(last.dungeonId, original.dungeonId);
+  assert.equal(first.objectGeneration, last.objectGeneration);
+  assert.equal(first.remainingPlayers, 1);
+  assert.equal(last.remainingPlayers, 0);
+
+  const fresh = await enter(freshLeader, freshMember);
+  assert.equal(
+    fresh.nodeId,
+    original.nodeId,
+    'Last departure did not release the original Dungeon slot'
+  );
+  assert.notEqual(fresh.dungeonId, original.dungeonId);
+  await freshLeader.leave();
+  await freshMember.leave();
+  await otherLeader.leave();
+  await otherMember.leave();
+}
+
 export async function scenario(
   name: string,
   endpoint: string,
@@ -224,7 +261,15 @@ export async function scenario(
   };
   const failures: unknown[] = [];
   const dungeonMembers = new Set<PlayerClient>();
-  try {
+  const play = async () => {
+    if (name === 'dungeon-leave') {
+      await verifyDungeonLeave(create, async (leader, member) => {
+        await leader.join(Positions.dungeon);
+        await member.join(Positions.dungeon);
+        return enter(leader, member, '');
+      });
+      return;
+    }
     const a = await create('p1'),
       b = await create('p2');
     if (name === 'field') {
@@ -406,6 +451,9 @@ export async function scenario(
     assert.equal(a.disconnects, 0);
     if (name !== 'reconnect') assert.equal(b.disconnects, 0);
     for (const member of dungeonMembers) await member.leave();
+  };
+  try {
+    await play();
   } catch (error) {
     failures.push(error);
   } finally {

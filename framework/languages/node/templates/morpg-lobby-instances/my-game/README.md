@@ -58,7 +58,7 @@ The Windows wrappers start PowerShell 7 with UTF-8 output and a process-scoped e
 
 `run-e2e` detects a ready server through `.logs/server.json` and runs the compatible scenarios against it. Attached runs execute lobby, party, and reconnect. The update scenario replaces nodes and runs in isolation. Stop the server before running the full Docker e2e. Use `--local` or `-Local` to request a separate local run with Redis in Docker.
 
-Send `LeaveDungeonRequest` as a request to leave a Dungeon. The last departure closes the Dungeon before the server replies with `DungeonLeft`. A connection loss preserves Dungeon membership for reconnect.
+Send `LeaveDungeonRequest` and wait for `DungeonLeft`. The Dungeon counts the players still inside after the leave and returns that count as `remainingPlayers`. At zero, the Session closes that Spot generation before replying and releases its capacity. A disconnect preserves Dungeon membership for reconnect.
 
 `.logs/run-<id>/` contains generated node settings, separate `*.out.log`, `*.err.log` and `*.flow.log` files, and failure details. Attached runs keep their client results in a new run directory and print the path. The running server continues writing node logs to its own run directory. Docker build and cleanup logs are in `.logs/docker-<project>/`.
 
@@ -171,3 +171,5 @@ Node typed handler payloads require the packet-name-to-class restoration table b
 Start Redis, then Lobby and Instance processes, and finally the session node. Each role has a separate entry point: `dist/server/lobby/main.js`, `dist/server/instance/main.js`, and `dist/server/session/main.js`. Pass the corresponding `server/config/<node>.json` as its sole argument. Listener endpoints use port zero; `READY` reports the bound endpoint. Instance capacity is one Dungeon per node in the example so the update test can prove replacement admission.
 
 For maintenance, send `drain` on the selected play node (dungeon)'s stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown` and verify `STOPPED` with outcome `Stopped` and reason `None` before starting its replacement with the same settings. Production hosting must provide a reachable mesh address and Redis credentials appropriate to its environment.
+
+The `dungeon-leave` scenario verifies the remaining player and releases the slot.

@@ -18,7 +18,7 @@
         ".\\run-e2e.cmd -Scenario field,dungeon,reconnect,update"
       ]
     },
-    "scenarios": ["field", "dungeon", "reconnect", "update"]
+    "scenarios": ["field", "dungeon", "reconnect", "update", "dungeon-leave"]
   },
   "nodes": [
     {

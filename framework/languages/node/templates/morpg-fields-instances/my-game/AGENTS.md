@@ -128,6 +128,8 @@ Requests in the example game follow this path. Reading the code along this path 
 5. When the leader sends `EnterDungeon`, `Field.enter` calls `getOrCreate` for the `Dungeon`, sends `PrepareDungeon` to it as a request, and sends `JoinDungeon` to each member's Actor. `DungeonTravel` requests the join, `Dungeon.onJoinedActor` pushes `DungeonView`, and `Advance` moves the stage.
 6. To replace a node, the `drain` command in `runHost` requests relocation. Framework takes the game state from `capture` in `FieldRelocation`, `DungeonRelocation`, and `PlayerRelocation` and calls `restore` on another node.
 
+`LeaveDungeonRequest` runs in the Dungeon Actor handler. The Dungeon reports `remainingPlayers` from its joined players after the public membership leave. Only when the count is zero does the Session ask the public Spot manager to close the same Spot generation from outside the Dungeon turn. The Session then replies with `DungeonLeft`. Disconnect preserves Dungeon membership for reconnect.
+
 ## Extending the template domain
 
 1. When creating a typed message, declare nullability and wire types in the shared contract.

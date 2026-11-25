@@ -10,6 +10,7 @@ import type {
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
 import { Names, Rejection } from '../shared/constants';
 import {
+  DungeonLeft,
   DungeonView,
   DungeonPrepared,
   JoinDungeon,
@@ -58,7 +59,18 @@ export class Dungeon implements ZLinkSpot<Player> {
         .submit();
     await this.broadcast();
   }
-  async onLeaveActor(_actor: Player): Promise<void> {}
+  async onLeaveActor(actor: Player): Promise<void> {
+    this.state.joined = this.state.joined.filter((id) => id !== actor.context.actorId);
+  }
+
+  async leave(actor: Player): Promise<DungeonLeft> {
+    await this.context.leaveActor(actor);
+    return new DungeonLeft(
+      String(this.context.spotId),
+      this.context.objectGeneration,
+      this.state.joined.length
+    );
+  }
   private view(): DungeonView {
     return new DungeonView(
       String(this.context.spotId),

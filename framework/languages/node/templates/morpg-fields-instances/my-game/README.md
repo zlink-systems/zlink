@@ -57,7 +57,7 @@ The Windows wrappers start PowerShell 7 with UTF-8 output and a process-scoped e
 
 `run-e2e` detects a ready server through `.logs/server.json` and runs the compatible scenarios against it. Attached runs execute field, dungeon, and reconnect. The update scenario replaces nodes and runs in isolation. Stop the server before running the full Docker e2e. Use `--local` or `-Local` to request a separate local run with Redis in Docker.
 
-Send `LeaveDungeonRequest` as a request to leave a Dungeon. The last departure closes the Dungeon before the server replies with `DungeonLeft`. A connection loss preserves Dungeon membership for reconnect.
+Send `LeaveDungeonRequest` and wait for `DungeonLeft`. The Dungeon counts the players still inside after the leave and returns that count as `remainingPlayers`. At zero, the Session closes that Spot generation before replying and releases its capacity. A disconnect preserves Dungeon membership for reconnect.
 
 `.logs/run-<id>/` contains generated node settings, separate `*.out.log`, `*.err.log` and `*.flow.log` files, and failure details. Attached runs keep their client results in a new run directory and print the path. The running server continues writing node logs to its own run directory. Docker build and cleanup logs are in `.logs/docker-<project>/`.
 
@@ -145,12 +145,13 @@ Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuratio
 .\run-e2e.cmd -CheckStructure
 ```
 
-| Scenario    | Verification                                                                                                                                        |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `field`     | Field crossing, border visibility, Session continuity, cross-field party membership and leader, immutable movement rejection and server retry delay |
-| `dungeon`   | Server IDs, duplicate entry sharing one run, immutable nonleader rejection, shared Dungeon and completion at stage 3                                |
-| `reconnect` | Reconnected member retains Actor identity, Dungeon, RunId, Phase and stage                                                                          |
-| `update`    | Instance drain, relocation and SafeToShutdown; unchanged connections, RunId, Phase and stage; replacement accepts a distinct party run              |
+| Scenario        | Verification                                                                                                                                        |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `field`         | Field crossing, border visibility, Session continuity, cross-field party membership and leader, immutable movement rejection and server retry delay |
+| `dungeon`       | Server IDs, duplicate entry sharing one run, immutable nonleader rejection, shared Dungeon and completion at stage 3                                |
+| `reconnect`     | Reconnected member retains Actor identity, Dungeon, RunId, Phase and stage                                                                          |
+| `update`        | Instance drain, relocation and SafeToShutdown; unchanged connections, RunId, Phase and stage; replacement accepts a distinct party run              |
+| `dungeon-leave` | Verify that the remaining player can query the same Dungeon after the first departure and that the last departure releases the slot.                |
 
 The runner checks the structure before startup, creates a unique Redis Compose project and key prefix, and binds listeners to port zero. Run-specific configurations, node stdout/stderr, message-flow records and client events are preserved under `.logs/run-<id>/`. Cleanup failures produce a nonzero exit code.
 

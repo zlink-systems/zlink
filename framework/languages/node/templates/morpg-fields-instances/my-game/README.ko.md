@@ -45,6 +45,8 @@ Docker와 Compose v2를 준비합니다. 로컬 서버는 Node.js 22 이상과 n
 
 ## 로컬 서버와 e2e 실행
 
+`dungeon-leave` 시나리오는 한 명이 떠난 뒤 남은 플레이어가 같은 Dungeon을 조회하고, 마지막 퇴장으로 슬롯이 반환되는지 확인합니다.
+
 프로젝트 폴더에서 서버를 시작하고 다른 터미널에서 e2e를 실행합니다.
 
 ```bash
@@ -61,7 +63,7 @@ PowerShell 7 스크립트는 `run-server.ps1`과 `run-e2e.ps1`입니다. 서버 
 
 e2e는 `.logs/server.json`에서 준비된 로컬 서버를 확인하고 연결합니다. 연결 실행은 `field`, `dungeon`, `reconnect`를 검사합니다. 노드를 교체하는 `update`는 격리 실행에서 검사합니다. 전체 시나리오를 Docker에서 격리 실행하려면 서버를 종료한 뒤 e2e를 실행합니다. `--local` 또는 `-Local`은 별도 로컬 테스트 실행을 선택합니다. 이때도 Redis는 Docker에서 실행합니다. 로컬 빌드를 재사용하려면 `--no-build` 또는 `-NoBuild`를 함께 지정합니다.
 
-Dungeon을 떠날 때는 `LeaveDungeonRequest` 요청에 대한 `DungeonLeft` 응답을 기다립니다. 마지막 멤버가 떠나면 응답 전에 Dungeon을 닫습니다. 연결이 끊기면 재접속을 위해 멤버십을 유지합니다.
+Dungeon을 떠나려면 `LeaveDungeonRequest`를 보내고 `DungeonLeft` 응답을 기다립니다. Dungeon은 퇴장 후 남은 플레이어 수를 `remainingPlayers`에 담습니다. 이 값이 0이면 Session이 같은 세대의 Dungeon Spot을 닫아 응답 전에 슬롯을 반환합니다. 연결이 끊기면 재접속에 사용할 멤버십을 유지합니다.
 
 `.logs/run-<id>/`에는 노드 설정, `*.out.log`, `*.err.log`, `*.flow.log`와 실패 상세 파일을 저장합니다. 연결 e2e는 별도 폴더에 client 결과를 저장합니다. Docker 빌드와 정리 로그는 `.logs/docker-<project>/`에 저장합니다.
 

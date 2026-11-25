@@ -18,7 +18,7 @@
         ".\\run-e2e.cmd -Scenario lobby,party,reconnect,update"
       ]
     },
-    "scenarios": ["lobby", "party", "reconnect", "update"]
+    "scenarios": ["lobby", "party", "reconnect", "update", "dungeon-leave"]
   },
   "nodes": [
     {

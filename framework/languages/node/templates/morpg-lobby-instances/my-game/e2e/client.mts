@@ -126,8 +126,8 @@ class PlayerClient {
     await this.connector.send(new ViewRequest()).submit();
     return this.wait<DungeonView>(PacketNames.dungeonView, index);
   }
-  async leave(): Promise<void> {
-    await this.connector.request(new LeaveDungeonRequest()).submit(DungeonLeft);
+  async leave(): Promise<DungeonLeft> {
+    return this.connector.request(new LeaveDungeonRequest()).submit(DungeonLeft);
   }
   async close(): Promise<void> {
     await this.connector.close();
@@ -140,6 +140,43 @@ function sameActor(before: SessionInfo, after: SessionInfo): void {
   assert.equal(after.actorId, before.actorId);
   assert.equal(after.objectGeneration, before.objectGeneration);
 }
+
+async function verifyDungeonLeave(
+  create: (suffix: string) => Promise<PlayerClient>,
+  enter: (leader: PlayerClient, member: PlayerClient) => Promise<DungeonView>
+): Promise<void> {
+  const leader = await create('leave-leader');
+  const member = await create('leave-member');
+  const otherLeader = await create('leave-other-leader');
+  const otherMember = await create('leave-other-member');
+  const freshLeader = await create('leave-fresh-leader');
+  const freshMember = await create('leave-fresh-member');
+  const original = await enter(leader, member);
+  const other = await enter(otherLeader, otherMember);
+  assert.notEqual(original.nodeId, other.nodeId, 'Each instance must hold one Dungeon');
+
+  const first = await leader.leave();
+  sameState(original, await member.view());
+  const last = await member.leave();
+  assert.equal(first.dungeonId, original.dungeonId);
+  assert.equal(last.dungeonId, original.dungeonId);
+  assert.equal(first.objectGeneration, last.objectGeneration);
+  assert.equal(first.remainingPlayers, 1);
+  assert.equal(last.remainingPlayers, 0);
+
+  const fresh = await enter(freshLeader, freshMember);
+  assert.equal(
+    fresh.nodeId,
+    original.nodeId,
+    'Last departure did not release the original Dungeon slot'
+  );
+  assert.notEqual(fresh.dungeonId, original.dungeonId);
+  await freshLeader.leave();
+  await freshMember.leave();
+  await otherLeader.leave();
+  await otherMember.leave();
+}
+
 export async function scenario(
   name: string,
   endpoint: string,
@@ -276,10 +313,14 @@ export async function scenario(
     assert.equal(views[0].stage, stage);
     return views[0];
   }
-  const a = create('p1'),
-    b = create('p2');
   const failures: unknown[] = [];
-  try {
+  const play = async () => {
+    if (name === 'dungeon-leave') {
+      await verifyDungeonLeave(async (suffix) => create(suffix), enter);
+      return;
+    }
+    const a = create('p1'),
+      b = create('p2');
     const initial = await enter(a, b);
     const sa = await a.sessionInfo(),
       sb = await b.sessionInfo();
@@ -355,6 +396,9 @@ export async function scenario(
     assert.equal(a.disconnects, 0);
     if (name !== 'reconnect') assert.equal(b.disconnects, 0);
     for (const member of dungeonMembers) await member.leave();
+  };
+  try {
+    await play();
   } catch (error) {
     failures.push(error);
   } finally {

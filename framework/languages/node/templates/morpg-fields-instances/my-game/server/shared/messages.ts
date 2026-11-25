@@ -100,7 +100,8 @@ export class LeaveDungeonRequest {}
 export class DungeonLeft {
   constructor(
     readonly dungeonId: string,
-    readonly objectGeneration: bigint
+    readonly objectGeneration: bigint,
+    readonly remainingPlayers: number
   ) {}
 }
 export class SessionInfoRequest {}

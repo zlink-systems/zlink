@@ -11,6 +11,7 @@ import { NODE_CONFIG, type NodeConfig } from '../shared/config';
 import { PacketNames } from '../shared/constants';
 import {
   restoreNotification,
+  DungeonLeft,
   DungeonView,
   DungeonPrepared,
   JoinDungeon,
@@ -54,10 +55,21 @@ export class Dungeon implements ZLinkSpot<Player> {
         .requestToSpot(this.state.partyId, new RunStarted(this.state.runId))
         .submit<PartyCommandResult>();
       if (started.rejection) throw new Error(started.rejection.reason);
-      for (const id of this.state.members) await this.actors.sendToActor(id, this.view()).submit();
+      for (const id of this.state.entered) await this.actors.sendToActor(id, this.view()).submit();
     }
   }
-  async onLeaveActor(_actor: Player): Promise<void> {}
+  async onLeaveActor(actor: Player): Promise<void> {
+    this.state.entered = this.state.entered.filter((id) => id !== actor.context.actorId);
+  }
+
+  async leave(actor: Player): Promise<DungeonLeft> {
+    await this.context.leaveActor(actor);
+    return new DungeonLeft(
+      String(this.context.spotId),
+      this.context.objectGeneration,
+      this.state.entered.length
+    );
+  }
   async onDisconnectActor(_actor: Player): Promise<void> {}
   private view(): DungeonView {
     return new DungeonView(
@@ -87,7 +99,7 @@ export class Dungeon implements ZLinkSpot<Player> {
     }
     const view = this.view();
     await actor.context.boundSession.send(view).submit();
-    for (const id of this.state.members)
+    for (const id of this.state.entered)
       if (id !== actor.context.actorId) await this.actors.sendToActor(id, view).submit();
   }
   async enter(actor: Player): Promise<void> {

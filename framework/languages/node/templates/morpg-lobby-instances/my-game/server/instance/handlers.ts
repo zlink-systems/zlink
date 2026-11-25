@@ -167,7 +167,6 @@ export class RejectDelivery {
 })
 export class LeaveDungeon {
   async handle(spot: Dungeon, actor: Player): Promise<DungeonLeft> {
-    await spot.context.leaveActor(actor);
-    return new DungeonLeft(String(spot.context.spotId), spot.context.objectGeneration);
+    return spot.leave(actor);
   }
 }
