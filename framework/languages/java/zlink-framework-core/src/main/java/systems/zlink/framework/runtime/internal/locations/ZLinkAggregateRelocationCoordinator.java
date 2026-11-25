@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.internal.locations;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.*;
 
 import java.io.ByteArrayOutputStream;
@@ -1501,9 +1503,9 @@ public final class ZLinkAggregateRelocationCoordinator {
         }
     }
 
-    public static final class RelocationDataLostException extends RuntimeException {
+    public static final class RelocationDataLostException extends ZLinkFrameworkException {
         public RelocationDataLostException(String message) {
-            super(message);
+            super(ZLinkFrameworkErrorKind.DATA_LOST, message);
         }
     }
 

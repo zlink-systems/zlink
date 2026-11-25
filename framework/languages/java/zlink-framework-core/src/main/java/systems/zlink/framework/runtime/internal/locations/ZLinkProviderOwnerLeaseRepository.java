@@ -4,7 +4,6 @@ import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locations.*;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
@@ -153,8 +152,10 @@ final class ZLinkProviderOwnerLeaseRepository {
                                             counter -> {
                                                 long generation =
                                                         counter instanceof ZLinkStoreReadFound found
-                                                                ? decodeCounter(
-                                                                        found.value().bytes())
+                                                                ? ZLinkLocationStoreFormat
+                                                                        .decodeGeneration(
+                                                                                found.value()
+                                                                                        .bytes())
                                                                 : 1;
                                                 if (generation == Long.MAX_VALUE) {
                                                     return completed(
@@ -186,9 +187,10 @@ final class ZLinkProviderOwnerLeaseRepository {
                                                                                 leaseTtl),
                                                                         new ZLinkStorePut(
                                                                                 OWNER_COUNTER,
-                                                                                encodeCounter(
-                                                                                        generation
-                                                                                                + 1),
+                                                                                ZLinkLocationStoreFormat
+                                                                                        .encodeCounter(
+                                                                                                generation
+                                                                                                        + 1),
                                                                                 null)));
                                                 CompletionStage<ZLinkStoreWriteResult> write;
                                                 try {
@@ -256,32 +258,6 @@ final class ZLinkProviderOwnerLeaseRepository {
                             }
                             throw new CompletionException(originalFailure);
                         });
-    }
-
-    // Cross-language counter row: dotnet, cpp, and node all read/write
-    // "zlink:v11:owner-counter" as a UTF-8 decimal string (no sign, no
-    // whitespace). Java previously wrote 8 raw big-endian bytes, which the
-    // other runtimes could not parse (binary bytes such as 0x0A rendered
-    // as "\n" in their decimal parsers).
-    private static byte[] encodeCounter(long value) {
-        return Long.toString(value).getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static long decodeCounter(byte[] bytes) {
-        String text = new String(bytes, StandardCharsets.UTF_8);
-        long value;
-        try {
-            value = Long.parseUnsignedLong(text);
-        } catch (NumberFormatException failure) {
-            throw new IllegalStateException("Location Store owner counter is invalid", failure);
-        }
-        if (value <= 0 || !Long.toString(value).equals(text)) {
-            // 0 is never issued; values past 2^63-1 are outside the
-            // spec's counter range (generation exhaustion caps at 2^63-1),
-            // and the stored value must be its bare canonical decimal form.
-            throw new IllegalStateException("Location Store owner counter is invalid");
-        }
-        return value;
     }
 
     // Canonical cross-language logical key preimage

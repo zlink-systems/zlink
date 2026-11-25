@@ -52,7 +52,10 @@ public record ZLinkStoreReadFound(ZLinkStoreValue value)
  implements ZLinkStoreReadResult {}
 
 public sealed interface ZLinkStoreCondition
- permits ZLinkStoreMissingCondition, ZLinkStoreVersionCondition, ZLinkStoreValueCondition {}
+ permits ZLinkStoreMissingCondition, ZLinkStoreVersionCondition, ZLinkStoreValueCondition,
+  ZLinkStoreSumAtMostCondition {
+ default List<ZLinkStoreKey> keys();
+}
 
 public record ZLinkStoreMissingCondition(ZLinkStoreKey key)
  implements ZLinkStoreCondition {}
@@ -67,8 +70,18 @@ public record ZLinkStoreValueCondition(
  byte[] expected)
  implements ZLinkStoreCondition {}
 
+public record ZLinkStoreSumAtMostCondition(
+ List<ZLinkStoreKey> keys,
+ long delta,
+ long limit)
+ implements ZLinkStoreCondition {
+ public boolean matches(Function<ZLinkStoreKey, byte[]> snapshot);
+}
+
 public sealed interface ZLinkStoreMutation
- permits ZLinkStorePut, ZLinkStoreDelete {}
+ permits ZLinkStorePut, ZLinkStoreDelete, ZLinkStoreAdd {
+ ZLinkStoreKey key();
+}
 
 public record ZLinkStorePut(
  ZLinkStoreKey key,
@@ -79,12 +92,17 @@ public record ZLinkStorePut(
 public record ZLinkStoreDelete(ZLinkStoreKey key)
  implements ZLinkStoreMutation {}
 
+public record ZLinkStoreAdd(ZLinkStoreKey key, long delta)
+ implements ZLinkStoreMutation {
+ public ZLinkStorePut resolve(byte[] current);
+}
+
 public record ZLinkStoreWriteRequest(
  List<ZLinkStoreCondition> conditions,
  List<ZLinkStoreMutation> mutations) {}
 
 public sealed interface ZLinkStoreWriteResult
- permits ZLinkStoreWriteApplied, ZLinkStoreWriteConflict {}
+ permits ZLinkStoreWriteApplied, ZLinkStoreWriteConflict, ZLinkStoreWriteCorrupt {}
 
 public record ZLinkStoreWriteApplied(
  Map<ZLinkStoreKey, ZLinkStoreVersion> putVersions,
@@ -92,6 +110,9 @@ public record ZLinkStoreWriteApplied(
  implements ZLinkStoreWriteResult {}
 
 public record ZLinkStoreWriteConflict(Instant storeNow)
+ implements ZLinkStoreWriteResult {}
+
+public record ZLinkStoreWriteCorrupt(Instant storeNow)
  implements ZLinkStoreWriteResult {}
 
 public record ZLinkStoreScanRequest(

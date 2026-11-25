@@ -18,6 +18,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.locationprovider.ZLinkStoreAdd;
 import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStoreMissingCondition;
@@ -79,7 +80,13 @@ final class ZLinkProviderCreationTerminalTest {
         assertEquals(applied(state), fixture.complete(terminal));
         assertEquals(1, fixture.provider.writes.size());
         var write = fixture.provider.writes.getFirst();
-        assertEquals(3, write.mutations().size());
+        boolean activated = state == ZLinkCreationTerminalState.CREATED;
+        assertEquals(activated ? 4 : 3, write.mutations().size());
+        assertTrue(
+                write.mutations().contains(new ZLinkStoreAdd(fixture.capacityKey("pending"), -1)));
+        assertEquals(
+                activated,
+                write.mutations().contains(new ZLinkStoreAdd(fixture.capacityKey("active"), 1)));
         var terminalPuts = fixture.provider.terminalPuts();
         assertEquals(1, terminalPuts.size());
         var terminalPut = terminalPuts.getFirst();
@@ -673,6 +680,19 @@ final class ZLinkProviderCreationTerminalTest {
                                     await(repository.reserve(request("actor"), () -> false)))
                             .reservation();
             provider.writes.clear();
+        }
+
+        ZLinkStoreKey capacityKey(String state) {
+            String dimension = objectKind == ZLinkPlacementObjectKind.ACTOR ? "actors" : "spots";
+            return new ZLinkStoreKey(
+                    "zlink:v12:capacity\0"
+                            + descriptor.meshName()
+                            + '\0'
+                            + descriptor.rid().toHex()
+                            + '\0'
+                            + dimension
+                            + '\0'
+                            + state);
         }
 
         ZLinkObjectReservationRequest request(String id) {
