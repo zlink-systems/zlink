@@ -10,6 +10,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$PSNativeCommandUseErrorActionPreference = $false
 . (Join-Path $PSScriptRoot 'scripts/run-helpers.ps1')
 Initialize-Console
 $root = $PSScriptRoot
@@ -17,28 +18,31 @@ Set-Location $root
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
-if (-not ($Attach -or $Local -or $BuildOnly -or $CheckStructure) -and (Test-ServerStatus '--server-running')) {
-    Write-Host 'Using the running server (.logs/server.json)'
-    $Attach = $true
+$scenarioRun = -not ($RunnerArguments -contains '--check-structure' -or $RunnerArguments -contains '--domain-checks-only')
+if (-not ($Attach -or $Local -or $BuildOnly -or $NoBuild) -and $scenarioRun -and (Test-Path .logs/server.json)) {
+    & node scripts/run-server.mjs --status
+    $Attach = $LASTEXITCODE -eq 0
 }
 if ($Attach) {
-    if ($BuildOnly -or $CheckStructure) { throw '-Attach requires a scenario run.' }
-    & node dist/e2e/runner.js --attach @RunnerArguments
+    if ($BuildOnly -or -not $scenarioRun) { throw '-Attach requires a scenario run.' }
+    & node scripts/run-server.mjs --attach @RunnerArguments
     exit $LASTEXITCODE
 }
 if ($Local) {
     if (-not $NoBuild) {
-        Assert-NoRunningServer
-        Build-Local
+        & node scripts/run-server.mjs --build
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
-    if ($BuildOnly) {
-        & node dist/e2e/runner.js --domain-checks-only
-        exit $LASTEXITCODE
-    }
+    if ($BuildOnly) { $RunnerArguments = @('--domain-checks-only') }
     & node dist/e2e/runner.js @RunnerArguments
     exit $LASTEXITCODE
 }
 if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer cache automatically.' }
+if (-not $IsWindows -and (Test-Path '/var/run/docker.sock')) {
+    $env:MY_GAME_RUNNER_USER = "$(& id -u):$(& id -g)"
+    $env:MY_GAME_DOCKER_GID = & stat -c '%g' /var/run/docker.sock
+    if ($LASTEXITCODE -ne 0) { $env:MY_GAME_DOCKER_GID = & stat -f '%g' /var/run/docker.sock }
+}
 $project = 'my-game-e2e-' + [guid]::NewGuid().ToString('N')
 $logs = Join-Path $root ".logs/docker-$project"
 New-Item -ItemType Directory $logs | Out-Null
@@ -57,7 +61,7 @@ try {
         Get-Content (Join-Path $logs 'build.log') -Tail 30 | Write-Host
         throw 'Docker image build failed.'
     }
-    if ($BuildOnly) {
+    if ($BuildOnly -or $RunnerArguments -contains '--domain-checks-only') {
         & docker @compose run --rm --no-deps -T --name "$project-domain" runner --domain-checks-only
         $result = $LASTEXITCODE
     }

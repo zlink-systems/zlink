@@ -36,7 +36,7 @@ The Framework package is pinned to `0.34.0` and the binding to `1.26.0`. Copy on
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-This compiles TypeScript and generates the Framework default typed JSON schema from the contract DTOs. The server loads the generated schema through the public `ZLinkPacket` registration path. `--build-only` also runs the seven domain checks and prints `Domain checks: 7/7`; it does not start nodes. Do not add per-message codecs.
+This compiles TypeScript and generates the Framework default typed JSON schema from the contract DTOs. The server loads the generated schema through the public `ZLinkPacket` registration path. `--build-only` also runs the nine domain checks and prints `Domain checks: 9/9`; it does not start nodes. Do not add per-message codecs.
 
 ## Local server
 
@@ -157,7 +157,7 @@ Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuratio
 
 After the structure check, the isolated runner starts Redis and writes the generated configuration, including the node endpoints and the Redis key prefix, under `.logs/run-<id>/`. After the nodes report `READY`, the runner executes the scenarios and removes the processes and Compose project it started.
 
-Both modes print a heading and a pass or fail line for each scenario, followed by `Scenarios: N/M passed`. The isolated runner also prints `Domain checks: 7/7`. The runner writes failure details, node stderr and client JSONL under each run's log directory. A scenario or cleanup failure returns exit code 1. Nodes export message-flow diagnostics to stderr through OpenTelemetry.
+Both modes print a heading and a pass or fail line for each scenario, followed by `Scenarios: N/M passed`. The isolated runner also prints `Domain checks: 9/9`. The runner writes failure details, node stderr and client JSONL under each run's log directory. A scenario or cleanup failure returns exit code 1. Nodes export message-flow diagnostics to stderr through OpenTelemetry.
 
 ### Scenario coverage
 
@@ -168,7 +168,7 @@ Both modes print a heading and a pass or fail line for each scenario, followed b
 | `match`        | Two players receive the same dynamically assigned room, take distinct seats, and settle a hand.                                                                                                                                                                                                                                                           |
 | `match-cancel` | A waiting player reconnects and cancels the same ticket. Two other players then match and settle a hand.                                                                                                                                                                                                                                                  |
 | `update`       | Both clients retain their connection and game state through relocation. The hand settles on the replacement node with every hand cleared; a post-settlement private-hand query is empty. The replacement then hosts a new table.                                                                                                                          |
-| `persist`      | Both players settle a hand. After the Table processes restart, newly created Actors with the same player IDs load the settled chips. The previous table ID returns `not-seated` on reconnect before a fresh join. |
+| `persist`      | Both players settle a hand. After the Table processes restart, newly created Actors with the same player IDs load the settled chips. The previous table ID returns `not-seated` on reconnect before a fresh join.                                                                                                                                         |
 
 The runner executes these scenarios in the order listed in `zlink.structure.json`.
 
@@ -218,7 +218,7 @@ npm run format:check
 node --test dist/e2e/domain.test.js
 ```
 
-The runner reports `Domain checks: 7/7` after all seven domain checks pass.
+The runner reports `Domain checks: 9/9` after all seven domain checks pass.
 
 When extending, follow the public API boundaries and state ownership rules in [AGENTS.md](AGENTS.md).
 

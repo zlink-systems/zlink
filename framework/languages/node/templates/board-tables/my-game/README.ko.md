@@ -46,7 +46,7 @@ Framework는 `0.34.0`, binding은 `1.26.0`으로 고정한다. 이 디렉터리�
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-TypeScript를 컴파일하고 메시지 DTO에서 Framework의 기본 typed JSON schema를 생성한다. 서버는 공개 `ZLinkPacket` 등록으로 이 schema를 읽는다. 빌드 전용 실행은 서버를 시작하지 않고 도메인 검사 7개를 실행한 뒤 `Domain checks: 7/7`을 출력한다. 메시지별 codec을 추가하지 않는다.
+TypeScript를 컴파일하고 메시지 DTO에서 Framework의 기본 typed JSON schema를 생성한다. 서버는 공개 `ZLinkPacket` 등록으로 이 schema를 읽는다. 빌드 전용 실행은 서버를 시작하지 않고 도메인 검사 9개를 실행한 뒤 `Domain checks: 9/9`을 출력한다. 메시지별 codec을 추가하지 않는다.
 
 ## 로컬 서버
 
@@ -167,7 +167,7 @@ Docker는 E2E runner와 각 node를 컨테이너로 실행한다. 모든 node는
 
 구조 검사가 통과하면 runner가 Redis를 시작하고 node 주소와 Redis 키 접두사를 포함한 설정을 `.logs/run-<id>/`에 쓴다. node가 `READY`를 출력하면 시나리오를 실행하고, 종료할 때 실행 중 생성한 프로세스와 Compose 프로젝트를 정리한다.
 
-두 실행 방식 모두 시나리오별 제목과 통과 또는 실패 한 줄을 출력한 뒤 `Scenarios: N/M passed`를 표시한다. 격리 실행에서는 `Domain checks: 7/7`도 출력한다. runner는 실패 세부 정보, node stderr, client JSONL을 실행 로그 디렉터리에 남긴다. 시나리오 또는 정리가 실패하면 종료 코드는 1이다. node의 OpenTelemetry exporter는 message-flow 진단을 stderr에 기록한다.
+두 실행 방식 모두 시나리오별 제목과 통과 또는 실패 한 줄을 출력한 뒤 `Scenarios: N/M passed`를 표시한다. 격리 실행에서는 `Domain checks: 9/9`도 출력한다. runner는 실패 세부 정보, node stderr, client JSONL을 실행 로그 디렉터리에 남긴다. 시나리오 또는 정리가 실패하면 종료 코드는 1이다. node의 OpenTelemetry exporter는 message-flow 진단을 stderr에 기록한다.
 
 ### 시나리오 검증 항목
 
@@ -226,7 +226,7 @@ npm run format:check
 node --test dist/e2e/domain.test.js
 ```
 
-도메인 검사 7개가 통과하면 runner가 `Domain checks: 7/7`을 출력한다. 확장할 때는 [개발 가이드](AGENTS.md)의 공개 API와 상태 소유권 규칙을 따른다.
+도메인 검사 9개가 통과하면 runner가 `Domain checks: 9/9`을 출력한다. 확장할 때는 [개발 가이드](AGENTS.md)의 공개 API와 상태 소유권 규칙을 따른다.
 
 ## Windows 환경
 

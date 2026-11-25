@@ -1,20 +1,21 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import {
-  createWriteStream,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync
-} from 'node:fs';
+import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { finished } from 'node:stream/promises';
 import { inspect } from 'node:util';
 import { checkStructure, isNodeRole } from './structure';
+import {
+  attachedScenarios,
+  captureMessageFlow,
+  keepRunning,
+  reportFailure,
+  scenarioStart,
+  type Endpoints,
+  type Foreground
+} from './run-support';
 import {
   Limits,
   Scenarios,
@@ -25,10 +26,16 @@ import {
 import type { NodeControl } from './client.mjs' with { 'resolution-mode': 'import' };
 import type { NodeConfig } from '../server/shared/config';
 
+// Scenario failures are nested AggregateErrors; print every level so the cause reaches the CI log (#5312).
+inspect.defaultOptions.depth = null;
+
+const markers = Object.values(Control);
+const isolatedScenarios = ['update', 'persist'];
+
 function runDomainChecks(): void {
   execFileSync(process.execPath, ['--test', 'dist/e2e/domain.test.js'], { stdio: 'inherit' });
-  console.log('Domain checks: 7/7');
 }
+
 class NodeProcess {
   readonly child: ChildProcess;
   private readonly out: ReturnType<typeof createWriteStream>;
@@ -53,15 +60,29 @@ class NodeProcess {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
+    console.log(`[${config.id}] Starting`);
     this.child.once('spawn', () => this.logDiagnostic('process-spawn'));
+    const flow = captureMessageFlow(
+      this.child.stderr!,
+      `${logDir}/${config.id}-${sequence}.flow.log`,
+      config.id,
+      foreground
+    );
+    // The exit promise reports a log failure after all streams close.
+    void flow.catch(() => {});
     this.child.stdout!.pipe(this.out);
     this.child.stderr!.pipe(err);
     const reader = createInterface({ input: this.child.stdout! });
     reader.on('line', (line) => {
       const at = new Date().toISOString();
-      this.lines.push(line);
+      if (markers.some((marker) => line.startsWith(marker))) this.lines.push(line);
+      else if (foreground) console.log(`[${config.id}] ${line}`);
       this.lastLine = { at, line };
-      if (line.startsWith(Control.ready)) this.logDiagnostic('ready-line-received', { line }, at);
+      if (line.startsWith(Control.ready)) {
+        this.logDiagnostic('ready-line-received', { line }, at);
+        const { endpoint } = JSON.parse(line.slice(Control.ready.length)) as { endpoint: string };
+        console.log(`[${config.id}] Ready ${endpoint}`);
+      }
       this.changed.emit('change');
     });
     this.exit = new Promise<Error | undefined>((resolve) => {
@@ -70,7 +91,8 @@ class NodeProcess {
         this.exited = true;
         this.changed.emit('change');
         reader.close();
-        Promise.all([finished(this.out), finished(err)]).then(
+        console.log(`[${config.id}] Stopped (exit=${code ?? signal})`);
+        Promise.all([finished(this.out), finished(err), flow]).then(
           () =>
             code === 0
               ? resolve(undefined)
@@ -147,52 +169,6 @@ class NodeProcess {
     }
   }
 }
-const serverFile = '.logs/server.json';
-
-interface ServerState {
-  pid: number;
-  endpoint?: string;
-}
-
-function runningServer(): ServerState | undefined {
-  try {
-    const state = JSON.parse(readFileSync(serverFile, 'utf8')) as ServerState;
-    assert(Number.isSafeInteger(state.pid) && state.pid > 0, 'Invalid server PID');
-    process.kill(state.pid, 0);
-    return state;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ESRCH') return undefined;
-    throw error;
-  }
-}
-
-async function runScenarios(
-  selected: readonly string[],
-  endpoint: string,
-  runId: string,
-  logDir: string,
-  control?: NodeControl
-): Promise<boolean> {
-  const { scenario } = await import('./client.mjs');
-  let passed = 0;
-  for (const [index, name] of selected.entries()) {
-    console.log(`━━ ${name} (${index + 1}/${selected.length}) ━━`);
-    try {
-      await scenario(name, endpoint, runId, logDir, control);
-      passed++;
-      console.log(`✓ ${name}`);
-    } catch (error) {
-      const path = `${logDir}/${name}-failure.log`;
-      writeFileSync(path, inspect(error, { depth: null }) + '\n');
-      const message = error instanceof Error ? error.message.split('\n')[0] : String(error);
-      console.error(`✗ ${name}: ${message} (${path})`);
-    }
-  }
-  console.log(`Scenarios: ${passed}/${selected.length} passed`);
-  return passed === selected.length;
-}
-
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args[0] === '--domain-checks-only') {
@@ -205,59 +181,27 @@ async function main(): Promise<void> {
     checkStructure(args[1]);
     return;
   }
-  if (args[0] === '--server-running' || args[0] === '--server-active') {
-    assert.equal(args.length, 1);
-    const server = runningServer();
-    process.exitCode = (args[0] === '--server-running' ? server?.endpoint : server) ? 0 : 1;
-    return;
-  }
-  const foreground = args[0] === '--serve';
-  const attach = args[0] === '--attach';
-  if (foreground || attach) args.shift();
-  if (foreground) assert.equal(args.length, 0);
-  const isolated = (name: string): boolean => name === 'update' || name === 'persist';
-  let selected: readonly string[] = Scenarios;
-  if (args.length) {
-    assert.equal(args.length, 2);
-    assert.equal(args[0], '--scenario');
-    const requested = args[1].split(',');
-    assert.equal(new Set(requested).size, requested.length, 'Duplicate scenario');
-    for (const name of requested)
-      assert(Scenarios.includes(name as (typeof Scenarios)[number]), `Unknown scenario ${name}`);
-    selected = Scenarios.filter((s) => requested.includes(s));
-  }
+  const selected = selectScenarios(args);
   checkStructure();
-  if (!foreground && !attach) runDomainChecks();
+  runDomainChecks();
   const runId = randomUUID();
   const logDir = `.logs/run-${runId}`;
   mkdirSync(logDir, { recursive: true });
-  if (attach) {
-    const server = runningServer();
-    assert(server?.endpoint, 'Start the server with run-server and wait for its STREAM endpoint.');
-    if (args.length === 0) {
-      selected = selected.filter((name) => !isolated(name));
-      console.log(
-        'Running against the started server; update and persist require an isolated run.'
-      );
-    }
-    assert(!selected.some(isolated), 'The update and persist scenarios require an isolated run.');
-    console.log(`Attached to Session STREAM: ${server.endpoint}`);
-    console.log(`Logs: ${logDir}`);
-    process.exitCode = (await runScenarios(selected, server.endpoint, runId, logDir)) ? 0 : 1;
-    return;
-  }
+  process.exitCode = (await runCluster(selected, runId, logDir)) ? 0 : 1;
+}
 
+async function runCluster(
+  selected: readonly string[],
+  runId: string,
+  logDir: string,
+  foreground?: Foreground
+): Promise<boolean> {
   const project = `my-game-${runId}`;
-  const dockerProject = process.env.MY_GAME_DOCKER_PROJECT;
+  const dockerProject = foreground ? undefined : process.env.MY_GAME_DOCKER_PROJECT;
   const containers: string[] = [];
   const nodes = new Map<string, NodeProcess>();
   const all: NodeProcess[] = [];
   let failed = false;
-  const abort = new AbortController();
-  const interrupt = (): void => abort.abort();
-  const stopping = new Promise<void>((resolve) => {
-    abort.signal.addEventListener('abort', () => resolve(), { once: true });
-  });
   async function docker(args: string[], label: string): Promise<string> {
     const log = createWriteStream(`${logDir}/docker-${label}.log`);
     const child = spawn('docker', args, {
@@ -287,7 +231,7 @@ async function main(): Promise<void> {
     writeFileSync(path, JSON.stringify(config, null, 2));
     const entrypoint = `dist/${NodeEntrypoints[role].replace(/\.ts$/, '.js')}`;
     let command = process.execPath;
-    let args = [entrypoint, path];
+    let args = ['--require', './dist/server/shared/diagnostics.js', entrypoint, path];
     if (dockerProject) {
       const container = `${dockerProject}-${config.id.toLowerCase()}-${runId}-${all.length}`;
       const image = process.env.MY_GAME_NODE_IMAGE;
@@ -304,7 +248,7 @@ async function main(): Promise<void> {
           '--network',
           `container:${runner}`,
           image,
-          entrypoint,
+          ...args.slice(0, -1),
           '/template/node.json'
         ],
         `${config.id}-create-${all.length}`
@@ -317,31 +261,24 @@ async function main(): Promise<void> {
       command = 'docker';
       args = ['start', '-a', '-i', container];
     }
-    const node = new NodeProcess(config, role, command, args, logDir, all.length, foreground);
+    const node = new NodeProcess(config, role, command, args, logDir, all.length, !!foreground);
     all.push(node);
     nodes.set(config.id, node);
     return node;
   }
-  if (foreground) {
-    if (existsSync(serverFile)) {
-      assert(!runningServer(), 'A server is already starting or running. Stop it with Ctrl+C.');
-      rmSync(serverFile, { force: true });
-    }
-    writeFileSync(serverFile, JSON.stringify({ pid: process.pid }), { flag: 'wx' });
-    process.on('SIGINT', interrupt);
-    process.on('SIGTERM', interrupt);
-  }
-  const pendingState = `${logDir}/server.json`;
-  console.log(`Logs: ${logDir}`);
   try {
-    if (!dockerProject) await compose(['up', '-d', '--wait'], 'up');
-    if (abort.signal.aborted) return;
+    if (!dockerProject) {
+      console.log('[redis] Starting');
+      await compose(['up', '-d', '--wait'], 'up');
+      console.log('[redis] Ready');
+    }
+    foreground?.signal.throwIfAborted();
     const redis = dockerProject ? 'redis:6379' : await compose(['port', 'redis', '6379'], 'port');
     const structure = JSON.parse(readFileSync('zlink.structure.json', 'utf8')) as {
       nodes: { role: string; config: string | null }[];
     };
     for (const node of structure.nodes) {
-      if (abort.signal.aborted) return;
+      foreground?.signal.throwIfAborted();
       if (!isNodeRole(node.role)) continue;
       assert(node.config);
       const cfg = JSON.parse(readFileSync(node.config, 'utf8')) as NodeConfig;
@@ -358,75 +295,150 @@ async function main(): Promise<void> {
     const endpoint = ready.find((r) => r.id === session.config.id)!.endpoint;
     assert(endpoint.startsWith('ws://'), 'Session must publish a WebSocket endpoint.');
     if (foreground) {
-      if (abort.signal.aborted) return;
-      writeFileSync(pendingState, JSON.stringify({ pid: process.pid, endpoint }));
-      renameSync(pendingState, serverFile);
-      console.log(`Server ready: ${endpoint} (game clients connect here)`);
-      const exited = await Promise.race([
-        stopping.then(() => undefined),
-        ...all.map((node) =>
-          node.exit.then((error) => error ?? new Error(`${node.config.id} exited`))
-        )
-      ]);
-      if (exited) throw exited;
-      return;
+      const api = ready.find(({ id }) => nodes.get(id)?.role === 'api');
+      const matchmaker = ready.find(({ id }) => nodes.get(id)?.role === 'matchmaker');
+      assert(api && matchmaker);
+      console.log(`Matchmaker ready: ${matchmaker.endpoint}`);
+      await keepRunning(
+        foreground,
+        { stream: endpoint, api: api.endpoint },
+        logDir,
+        all.map((node) => node.exit.then((error) => error ?? new Error(`${node.config.id} exited`)))
+      );
+    } else {
+      const control = {
+        async restartTables(): Promise<void> {
+          const tables = [...nodes.values()].filter((node) => node.role === 'table');
+          await Promise.all(tables.map((table) => table.stop()));
+          const replacements = [];
+          for (const table of tables) replacements.push(await start(table.config, table.role));
+          await Promise.all(replacements.map((table) => table.ready()));
+        },
+        async drain(id: string): Promise<void> {
+          const node = nodes.get(id);
+          assert(node, `Unknown host ${id}`);
+          await node.drain();
+        },
+        async replace(id: string): Promise<void> {
+          const node = nodes.get(id);
+          assert(node);
+          await node.stop();
+          const replacement = await start(node.config, node.role);
+          await replacement.ready();
+        }
+      };
+      failed = !(await runScenarios(selected, endpoint, runId, logDir, control));
     }
-    const control = {
-      async restartTables(): Promise<void> {
-        const tables = [...nodes.values()].filter((node) => node.role === 'table');
-        await Promise.all(tables.map((table) => table.stop()));
-        const replacements = [];
-        for (const table of tables) replacements.push(await start(table.config, table.role));
-        await Promise.all(replacements.map((table) => table.ready()));
-      },
-      async drain(id: string): Promise<void> {
-        const node = nodes.get(id);
-        assert(node, `Unknown host ${id}`);
-        await node.drain();
-      },
-      async replace(id: string): Promise<void> {
-        const node = nodes.get(id);
-        assert(node);
-        await node.stop();
-        const replacement = await start(node.config, node.role);
-        await replacement.ready();
-      }
-    };
-    failed = !(await runScenarios(selected, endpoint, runId, logDir, control));
   } catch (error) {
-    failed = true;
-    console.error('Server failed', error);
+    if (!foreground || error !== foreground.signal.reason) {
+      failed = true;
+      reportFailure(foreground ? 'Server failed' : 'Startup failed', error, logDir, 'startup');
+    }
   } finally {
     for (const node of all.reverse())
       try {
         await node.stop();
       } catch (error) {
         failed = true;
-        console.error('Node cleanup failed', error);
+        reportFailure('Node cleanup failed', error, logDir, node.config.id + '-cleanup');
       }
     for (const container of containers) {
       try {
         await docker(['rm', '-f', container], `${container}-remove`);
       } catch (error) {
         failed = true;
-        console.error('Container cleanup failed', error);
+        reportFailure('Container cleanup failed', error, logDir, container + '-cleanup');
       }
     }
     try {
-      if (!dockerProject) await compose(['down', '--volumes', '--remove-orphans'], 'down');
+      if (!dockerProject) await compose(['logs', '--no-color'], 'redis');
     } catch (error) {
       failed = true;
-      console.error('Redis cleanup failed', error);
+      reportFailure('Redis log collection failed', error, logDir, 'redis-logs');
     }
-    if (foreground) {
-      rmSync(serverFile, { force: true });
-      process.off('SIGINT', interrupt);
-      process.off('SIGTERM', interrupt);
+    try {
+      if (!dockerProject) {
+        await compose(['down', '--volumes', '--remove-orphans'], 'down');
+        console.log('[redis] Stopped');
+      }
+    } catch (error) {
+      failed = true;
+      reportFailure('Redis cleanup failed', error, logDir, 'redis-cleanup');
     }
-    process.exitCode = failed ? 1 : 0;
   }
+  if (!foreground || failed) console.log(`Logs: ${logDir}`);
+  return !failed;
 }
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+function selectScenarios(args: string[]): readonly string[] {
+  let selected: readonly string[] = Scenarios;
+  if (args.length) {
+    assert.equal(args.length, 2);
+    assert.equal(args[0], '--scenario');
+    const requested = args[1].split(',');
+    assert.equal(new Set(requested).size, requested.length, 'Duplicate scenario');
+    for (const name of requested)
+      assert(Scenarios.includes(name as (typeof Scenarios)[number]), `Unknown scenario ${name}`);
+    selected = Scenarios.filter((s) => requested.includes(s));
+  }
+  return selected;
+}
+
+export async function serve(
+  runId: string,
+  logDir: string,
+  signal: AbortSignal,
+  publish: Foreground['publish']
+): Promise<void> {
+  checkStructure();
+  process.exitCode = (await runCluster([], runId, logDir, { signal, publish })) ? 0 : 1;
+}
+
+export async function attach(args: string[], endpoints: Endpoints): Promise<void> {
+  const requested = selectScenarios(args);
+  if (args.length) {
+    assert(
+      !requested.some((name) => isolatedScenarios.includes(name)),
+      'The update and persist scenarios require an isolated run.'
+    );
+  }
+  const selected = attachedScenarios(
+    requested,
+    isolatedScenarios,
+    'update and persist require an isolated run.'
+  );
+  const runId = randomUUID();
+  const logDir = `.logs/run-${runId}`;
+  mkdirSync(logDir, { recursive: true });
+  console.log(`Logs: ${logDir}`);
+  process.exitCode = (await runScenarios(selected, endpoints.stream, runId, logDir)) ? 0 : 1;
+}
+
+async function runScenarios(
+  selected: readonly string[],
+  endpoint: string,
+  runId: string,
+  logDir: string,
+  control?: NodeControl
+): Promise<boolean> {
+  const { scenario } = await import('./client.mjs');
+  let passed = 0;
+  for (const name of selected) {
+    scenarioStart(name, selected);
+    try {
+      await scenario(name, endpoint, runId, logDir, control);
+      passed++;
+      console.log(`✓ ${name}`);
+    } catch (error) {
+      reportFailure(`✗ ${name}`, error, logDir, name);
+    }
+  }
+  console.log(`Scenarios: ${passed}/${selected.length} passed`);
+  return passed === selected.length;
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

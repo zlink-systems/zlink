@@ -22,7 +22,7 @@ export interface Assignment {
     | { phase: 'withdrawing'; requeue: string[] };
 }
 
-export type Decision = 'commit' | 'withdraw';
+export type Decision = 'commit' | 'withdraw' | 'finish-withdrawal';
 
 function* waitingTickets(tickets: Iterable<Ticket>): Iterable<Ticket> {
   for (const ticket of tickets) {
@@ -46,8 +46,10 @@ export function waitingCancellation(ticket: Ticket, now: number): string | undef
 }
 
 export function decide(assignment: Assignment, now: number, failed = false): Decision | undefined {
+  if (now >= assignment.deadline)
+    return assignment.state.phase === 'withdrawing' ? 'finish-withdrawal' : 'withdraw';
   if (assignment.state.phase === 'withdrawing') return undefined;
-  if (now >= assignment.deadline || failed) return 'withdraw';
+  if (failed) return 'withdraw';
   if (assignment.state.phase === 'preparing') return undefined;
   if (assignment.entered.length === assignment.members.length) return 'commit';
   return undefined;

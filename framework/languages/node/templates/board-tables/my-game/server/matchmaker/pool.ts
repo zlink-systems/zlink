@@ -101,9 +101,14 @@ export class Pool implements ZLinkInstanceSpot {
   async advance(): Promise<void> {
     const now = performance.now();
     for (const assignment of this.assignments.values()) {
-      if (decide(assignment, now) !== 'withdraw') continue;
-      if (assignment.state.phase === 'preparing') this.release(assignment);
-      else await this.withdraw(assignment);
+      const decision = decide(assignment, now);
+      if (decision === 'finish-withdrawal') {
+        this.finishWithdrawal(assignment);
+        await this.closeRoom(assignment.id);
+      } else if (decision === 'withdraw') {
+        if (assignment.state.phase === 'preparing') this.release(assignment);
+        else await this.withdraw(assignment, now);
+      }
     }
     for (const ticket of this.tickets.values()) {
       const reason = waitingCancellation(ticket, now);
@@ -184,7 +189,7 @@ export class Pool implements ZLinkInstanceSpot {
     if (report.ok && now < assignment.deadline) assignment.entered.push(ticket.playerId);
     const decision = decide(assignment, now, !report.ok);
     if (decision === 'withdraw') {
-      await this.withdraw(assignment, now < assignment.deadline ? ticket.playerId : undefined);
+      await this.withdraw(assignment, now, now < assignment.deadline ? ticket.playerId : undefined);
     }
     if (decision === 'commit') {
       await this.context.outbound.sendToSpot(assignment.id, new CommitRoom(assignment.id)).submit();
@@ -192,7 +197,11 @@ export class Pool implements ZLinkInstanceSpot {
     }
   }
 
-  private async withdraw(assignment: Assignment, failedPlayer?: string): Promise<void> {
+  private async withdraw(
+    assignment: Assignment,
+    now: number,
+    failedPlayer?: string
+  ): Promise<void> {
     const requeue =
       failedPlayer === undefined
         ? assignment.entered
@@ -200,6 +209,7 @@ export class Pool implements ZLinkInstanceSpot {
             .filter((ticket) => ticket.playerId !== failedPlayer)
             .map((ticket) => ticket.playerId);
     assignment.state = { phase: 'withdrawing', requeue };
+    assignment.deadline = now + Matchmaking.entryMs;
     await this.context.outbound.sendToSpot(assignment.id, new WithdrawRoom(assignment.id)).submit();
   }
 
@@ -243,7 +253,11 @@ export class Pool implements ZLinkInstanceSpot {
 
   roomClosed(message: RoomClosed): void {
     const assignment = this.assignments.get(message.assignmentId);
-    if (assignment?.state.phase !== 'withdrawing') return;
+    if (assignment) this.finishWithdrawal(assignment);
+  }
+
+  private finishWithdrawal(assignment: Assignment): void {
+    if (assignment.state.phase !== 'withdrawing') return;
     const { requeue } = assignment.state;
     this.release(assignment);
     if (!requeue.length) return;

@@ -1,13 +1,20 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
+import { performance } from 'node:perf_hooks';
+import { Pool } from '../server/matchmaker/pool';
+import type { Ticket } from '../server/matchmaker/domain/queue';
+import { RoomProvisioner } from '../server/table/infrastructure/room-provisioner';
 import { TableState } from '../server/table/domain/table-state';
 import {
   deserializeTableSnapshot,
   serializeTableSnapshot
 } from '../server/table/infrastructure/table-snapshot-json';
-import { Game, Reasons } from '../server/shared/constants';
+import { Game, Matchmaking, Names, Reasons } from '../server/shared/constants';
 import {
   HandResult,
+  ReturnReport,
+  type RoomClosed,
+  WithdrawRoom,
   MaxContractInteger,
   isContractInteger,
   tryAddContractIntegers
@@ -20,7 +27,7 @@ function completeCheck(): void {
 }
 
 after(() => {
-  if (completedChecks === 7) process.stdout.write('Domain checks: 7/7\n');
+  if (completedChecks === 9) process.stdout.write('Domain checks: 9/9\n');
 });
 
 test('a: shuffled deck contains every card exactly once and admission remains stable', () => {
@@ -189,3 +196,97 @@ test('g: starting at the maximum hand number rejects without mutation', () => {
   assert.deepEqual(table.snapshot, before);
   completeCheck();
 });
+
+for (const missingReport of [true, false]) {
+  test(
+    missingReport
+      ? 'h: withdrawal expiry releases both tickets when a return report is missing'
+      : 'i: withdrawal expiry retries an occupied room close and releases both tickets',
+    async (t) => {
+      let now = Matchmaking.entryMs;
+      t.mock.method(performance, 'now', () => now);
+      const closeRequests: WithdrawRoom[] = [];
+      const outbound = {
+        sendToSpot: (id: string, message: object) => ({
+          instanceSpot: () => ({
+            inMesh: () => ({
+              submit: async () => {
+                if (id === Names.roomProvisionerKey && message instanceof WithdrawRoom)
+                  closeRequests.push(message);
+              }
+            })
+          }),
+          submit: async () => {}
+        })
+      };
+      const pool = new Pool({} as ConstructorParameters<typeof Pool>[0]);
+      Object.defineProperty(pool, 'context', { value: { outbound } });
+      const members: [Ticket, Ticket] = [
+        { playerId: 'p1', ticketId: 't1', requestKey: 'r1', waitingSince: 0, assignmentId: 'old' },
+        { playerId: 'p2', ticketId: 't2', requestKey: 'r2', waitingSince: 0, assignmentId: 'old' }
+      ];
+      for (const ticket of members) pool.tickets.set(ticket.playerId, ticket);
+      pool.assignments.set('old', {
+        id: 'old',
+        state: { phase: 'entering' },
+        deadline: now,
+        members,
+        entered: members.map(({ playerId }) => playerId),
+        returned: []
+      });
+
+      await pool.advance();
+      await pool.returned(new ReturnReport('t1', 'old'));
+
+      let closeAttempts = 0;
+      const provisioner = new RoomProvisioner({
+        find: async () => ({}),
+        close: async () => ++closeAttempts > 1 || missingReport
+      } as unknown as ConstructorParameters<typeof RoomProvisioner>[0]);
+      Object.defineProperty(provisioner, 'context', {
+        value: {
+          outbound: {
+            sendToSpot: (_id: string, message: RoomClosed) => ({
+              instanceSpot: () => ({
+                inMesh: () => ({ submit: async () => pool.roomClosed(message) })
+              })
+            })
+          }
+        }
+      });
+      if (!missingReport) {
+        await pool.returned(new ReturnReport('t2', 'old'));
+        assert.deepEqual(
+          closeRequests.map(({ assignmentId }) => assignmentId),
+          ['old']
+        );
+        await assert.rejects(provisioner.close(closeRequests.shift()!.assignmentId), {
+          message: 'Room still occupied: old'
+        });
+      }
+
+      now += Matchmaking.entryMs - 1;
+      await pool.advance();
+      assert(pool.assignments.has('old'));
+      assert(members.every((ticket) => ticket.assignmentId === 'old'));
+      assert.equal(closeRequests.length, 0);
+
+      now++;
+      await pool.advance();
+      assert(!pool.assignments.has('old'), 'the expired withdrawal released its assignment');
+      const replacementId = members[0].assignmentId;
+      assert(replacementId && replacementId !== 'old');
+      assert.equal(members[1].assignmentId, replacementId);
+      assert.deepEqual(pool.assignments.get(replacementId)?.members, members);
+      assert.deepEqual(
+        closeRequests.map(({ assignmentId }) => assignmentId),
+        ['old']
+      );
+      await provisioner.close(closeRequests[0].assignmentId);
+      assert.equal(closeAttempts, missingReport ? 1 : 2);
+      assert.equal(pool.assignments.size, 1);
+      assert(members.every((ticket) => ticket.assignmentId === replacementId));
+      completeCheck();
+    }
+  );
+}
