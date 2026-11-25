@@ -96,6 +96,7 @@ public sealed class MessageFlowTracerTests
                 "invalid_frame",
                 "no_handler",
                 "reply_path_missing",
+                "session_creation_failed",
                 "shutdown",
                 "stale_target",
                 "unexpected_reply",

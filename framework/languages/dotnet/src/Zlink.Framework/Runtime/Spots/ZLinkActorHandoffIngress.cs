@@ -1,4 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -26,14 +28,16 @@ internal static class ZLinkActorHandoffIngress
             ingress.Reply is null ? 0u : 1u,
             DeadlineUnixMs: ingress.DeadlineUnixMs
         );
-        return state.Handoff.CapturesSourceIngress
+        return ingress.EarlyAdmission is not null
+            || state.Handoff.CapturesSourceIngress
             || ZLinkActorMessageFollowDispatcher.CanFollow(state, actor, route);
     }
 
     internal static bool TryCaptureOrFollowStaleManagedIngress(
         ZLinkFrameworkRuntime runtime,
         IReadOnlyList<ZLinkBackendActorPart> parts,
-        string receiverMeshName
+        string receiverMeshName,
+        ActorMessageFollowIngress? ingress = null
     )
     {
         if (parts.Count == 0)
@@ -41,12 +45,23 @@ internal static class ZLinkActorHandoffIngress
         var headerPart = parts[0];
         if (!runtime.TryGetActorState(headerPart.Actor.ActorId, out var state))
             return false;
+        var earlyAdmission = ingress?.EarlyAdmission;
+        var target = earlyAdmission is null
+            ? null
+            : runtime.Services.GetService<ZLinkSpotRetireTargetRuntime>();
+        var stage = ingress is { } candidate
+            ? target?.FindActorAdmissionStage(state, candidate)
+            : null;
         if (
-            !state.Handoff.CapturesSourceIngress
-            && !ZLinkActorMessageFollowDispatcher.CanFollow(
-                state,
-                headerPart.Actor,
-                headerPart.RouteContext
+            stage is null
+            && (
+                earlyAdmission is not null && headerPart.SourceNodeRid == headerPart.Actor.NodeRid
+                || !state.Handoff.CapturesSourceIngress
+                    && !ZLinkActorMessageFollowDispatcher.CanFollow(
+                        state,
+                        headerPart.Actor,
+                        headerPart.RouteContext
+                    )
             )
         )
             return false;
@@ -54,7 +69,9 @@ internal static class ZLinkActorHandoffIngress
         var index = 1;
         if (
             !ZLinkSpotActorFrameReader.TryRead(
-                ZLinkApplicationJobOrigin.Remote,
+                earlyAdmission is not null && headerPart.SourceNodeRid == headerPart.Actor.NodeRid
+                    ? ZLinkApplicationJobOrigin.Local
+                    : ZLinkApplicationJobOrigin.Remote,
                 parts,
                 ref index,
                 headerPart,
@@ -62,11 +79,61 @@ internal static class ZLinkActorHandoffIngress
                 out var frame
             )
         )
+        {
+            if (stage is not null)
+                earlyAdmission!.Reject();
             return true;
+        }
         var frameTransferred = false;
         try
         {
             frame.AcceptedState = state;
+            if (stage is not null)
+            {
+                var admission = earlyAdmission!;
+                // Reserve in arrival order. The Store check completes outside the
+                // state lane, before replay may fill this frame's queue position.
+                var authorization = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                frame.TargetAdmission = authorization.Task;
+                if (
+                    frame.RequestSource is { } source
+                    && state.Handoff.TryCaptureTargetRequest(
+                        stage.Envelope.AggregateId.ToString("N"),
+                        frame,
+                        runtime
+                    ) == ZLinkActorHandoffCaptureResult.Captured
+                )
+                {
+                    _ = ConfirmTargetRequestAsync(
+                        target!,
+                        stage,
+                        frame.Actor,
+                        frame.RouteContext.AuthorityOwnerGeneration,
+                        source,
+                        admission,
+                        authorization,
+                        runtime
+                    );
+                    return true;
+                }
+
+                if (!admission.IsCurrent())
+                {
+                    admission.Reject();
+                    return true;
+                }
+
+                var ready = new ZLinkSpotActorFrameBatch([frame]);
+                frameTransferred = TryDispatch(runtime, receiverMeshName, ready);
+                if (frameTransferred)
+                    admission.OnAccepted?.Invoke();
+                else
+                    admission.Reject();
+                return true;
+            }
+
             var capture = state.Handoff.TryCapture(
                 frame,
                 runtime,
@@ -106,17 +173,7 @@ internal static class ZLinkActorHandoffIngress
 
             var owned = new ZLinkSpotActorFrameBatch([frame]);
             frameTransferred = true;
-            if (
-                !runtime.TryRunDetached(
-                    "actor-stale-managed-ingress",
-                    cancellationToken =>
-                        new ZLinkActorInboundPipeline(
-                            runtime,
-                            new ZLinkEntrySpotActorInboundEndpoint(runtime),
-                            receiverMeshName
-                        ).DispatchAsync(owned, cancellationToken)
-                )
-            )
+            if (!TryDispatch(runtime, receiverMeshName, owned))
                 owned.Dispose();
             return true;
         }
@@ -126,6 +183,77 @@ internal static class ZLinkActorHandoffIngress
                 frame.Dispose();
             for (; index < parts.Count; index++)
                 parts[index].Message.Dispose();
+        }
+    }
+
+    private static bool TryDispatch(
+        ZLinkFrameworkRuntime runtime,
+        string receiverMeshName,
+        ZLinkSpotActorFrameBatch batch
+    ) =>
+        runtime.TryRunDetached(
+            "actor-stale-managed-ingress",
+            token =>
+                new ZLinkActorInboundPipeline(
+                    runtime,
+                    new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                    receiverMeshName
+                ).DispatchAsync(batch, token)
+        );
+
+    private static async Task ConfirmTargetRequestAsync(
+        ZLinkSpotRetireTargetRuntime target,
+        TargetStage stage,
+        ZLinkBackendActorRef actor,
+        ulong authorityOwnerGeneration,
+        ZLinkServiceWireCodec.RequestSourceFence source,
+        EarlyActorRequestAdmission admission,
+        TaskCompletionSource<bool> authorization,
+        ZLinkFrameworkRuntime runtime
+    )
+    {
+        var accepted = false;
+        try
+        {
+            accepted =
+                await target
+                    .MatchesAdmissionAuthorityAsync(
+                        stage,
+                        ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId),
+                        authorityOwnerGeneration,
+                        admission.CancellationToken
+                    )
+                    .ConfigureAwait(false) || admission.IsCurrent();
+            if (accepted)
+                accepted =
+                    await ZLinkRequestSourceFenceResolver
+                        .AcceptOrUnavailableAsync(
+                            stage.Node.Node,
+                            source.NodeRid,
+                            source.NodeGeneration,
+                            admission.CancellationToken
+                        )
+                        .ConfigureAwait(false) == source;
+            if (accepted)
+                admission.OnAccepted?.Invoke();
+            else
+                admission.Reject();
+        }
+        catch (OperationCanceledException)
+            when (admission.CancellationToken.IsCancellationRequested)
+        {
+            accepted = false;
+            admission.Reject();
+        }
+        catch (Exception error)
+        {
+            accepted = false;
+            runtime.ErrorSink.ReportRuntimeTaskException("actor-target-admission", error);
+            admission.Reject();
+        }
+        finally
+        {
+            authorization.TrySetResult(accepted);
         }
     }
 

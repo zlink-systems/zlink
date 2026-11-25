@@ -43,4 +43,5 @@ if (!isMainThread && process.env.ZLINK_TEST_MESSAGE_FLOW_CHANNEL) {
     if (data.kind === 'fail') failProvider = data.value;
     channel.postMessage({ kind: 'ack', id: data.id });
   };
+  setImmediate(() => channel.postMessage({ kind: 'ready' }));
 }

@@ -191,7 +191,6 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
                       owner};
     request.capacity_bundle = {
       0, 1, fw::spot_type_capacity_delta_t{fw::placement_object_kind_t::user_spot, room_type, 1}};
-    request.relocation_policy = fw::detail::factory_relocation_kind_t::disabled;
     const auto reservation = original.reserve (request).result ();
     ASSERT_TRUE (reservation);
     const auto *reserved = std::get_if<fw::object_reserved_t> (&reservation.value ());
@@ -232,10 +231,9 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
     }
     auto evidence = std::make_shared<observations_t> ();
     host_t host;
-    // The source remains healthy but accepts no new placements. The ended
-    // owner's Ready record must be released before that capacity result.
+    // Only the relocation-enabled case has an eligible placement target.
     configure (host, evidence, first_rid, view, std::make_shared<in_memory_relocation_store_t> (),
-               default_follow_duration, 1, retained, entry_kind_t::member, 0);
+               default_follow_duration, 1, retained, entry_kind_t::member, retained ? 1 : 0);
     host.start ();
     ASSERT_TRUE (ready (host));
     auto services = host.app.advanced ().services ().build_provider ();
@@ -276,7 +274,7 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
     const auto current =
       original.read_authority (fw::runtime::spot_authority_key (request.key.global_id)).result ();
     ASSERT_TRUE (current);
-    if (retained) {
+    if (!creating) {
         const auto *kept = std::get_if<fw::authority_snapshot_t> (&current.value ());
         ASSERT_NE (kept, nullptr);
         EXPECT_EQ (kept->store_version,
@@ -310,14 +308,14 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
           std::find_if (listed.value ().items.begin (), listed.value ().items.end (),
                         [&] (const auto &item) { return item.rid == descriptor.rid; });
         ASSERT_NE (old, listed.value ().items.end ());
-        EXPECT_EQ (old->capacity.spots.active, retained ? 1u : 0u);
+        EXPECT_EQ (old->capacity.spots.active, 1u);
         EXPECT_EQ (old->capacity.spots.reserved, 0u);
     }
     std::lock_guard lock (evidence->mutex);
     EXPECT_EQ (evidence->room_factories, 0);
 }
 
-TEST (UserSpotCreation, ExpiredReadyUsesRepositoryReleaseBeforePlacement)
+TEST (UserSpotCreation, ExpiredReadyWithoutFactoryTargetKeepsAuthority)
 {
     user_spot_authority_qualification (user_spot_authority_case_t::expired_ready);
 }

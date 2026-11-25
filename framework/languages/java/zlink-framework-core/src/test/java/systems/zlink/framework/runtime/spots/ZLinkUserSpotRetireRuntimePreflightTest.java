@@ -149,9 +149,9 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
                         "preflight:spot-b",
                         "preflight:actor-c",
                         "host-state",
+                        "relocate:actor-c",
                         "relocate:spot-a",
-                        "relocate:spot-b",
-                        "relocate:actor-c"),
+                        "relocate:spot-b"),
                 events);
     }
 
@@ -184,13 +184,105 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
     }
 
     @Test
+    void spotWidePrepareStartsAfterEntryActorBatchCompletes() {
+        var actorTerminal = new CompletableFuture<Void>();
+        var prepareStarts = new AtomicInteger();
+        var completion =
+                ZLinkUserSpotRetireRuntime.executePlan(
+                        new ZLinkUserSpotRetireRuntime.RelocationPlan(
+                                List.of("spot-wide"), List.of("entry-actor")),
+                        spotId -> CompletableFuture.completedFuture(null),
+                        actorId -> CompletableFuture.completedFuture(null),
+                        () -> {},
+                        () -> false,
+                        spotId -> {
+                            prepareStarts.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        actorId -> actorTerminal);
+
+        assertEquals(0, prepareStarts.get(), "SpotWide PREPARE before Entry Actor terminal");
+        assertEquals(false, completion.toCompletableFuture().isDone());
+
+        actorTerminal.complete(null);
+        completion.toCompletableFuture().join();
+
+        assertEquals(1, prepareStarts.get(), "SpotWide PREPARE after Entry Actor terminal");
+    }
+
+    @Test
+    void entryActorRejectionPreventsSpotWidePrepareWhileStartedActorsSettle() {
+        var rejected = new CompletableFuture<Void>();
+        var settling = new CompletableFuture<Void>();
+        var startedActors = new ArrayList<String>();
+        var prepareStarts = new AtomicInteger();
+        var completion =
+                ZLinkUserSpotRetireRuntime.executePlan(
+                        new ZLinkUserSpotRetireRuntime.RelocationPlan(
+                                List.of("spot-wide"), List.of("entry-a", "entry-b")),
+                        spotId -> CompletableFuture.completedFuture(null),
+                        actorId -> CompletableFuture.completedFuture(null),
+                        () -> {},
+                        () -> false,
+                        spotId -> {
+                            prepareStarts.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        actorId -> {
+                            startedActors.add(actorId);
+                            return actorId.equals("entry-a") ? rejected : settling;
+                        });
+
+        assertEquals(List.of("entry-a", "entry-b"), startedActors);
+        rejected.completeExceptionally(new IllegalStateException("Entry Actor PREPARE rejected"));
+        assertEquals(false, completion.toCompletableFuture().isDone());
+        int preparesDuringSettlement = prepareStarts.get();
+
+        settling.complete(null);
+        var failure =
+                assertThrows(
+                        CompletionException.class, () -> completion.toCompletableFuture().join());
+        var split =
+                assertInstanceOf(
+                        ZLinkUserSpotRetireRuntime.RelocationAuthorityErrorException.class,
+                        failure.getCause());
+        assertEquals("Entry Actor PREPARE rejected", split.getCause().getMessage());
+        assertEquals(0, preparesDuringSettlement, "SpotWide PREPARE during Batch 2 settlement");
+        assertEquals(0, prepareStarts.get(), "SpotWide PREPARE after Batch 2 rejection");
+    }
+
+    @Test
+    void spotWideFailurePreservesEntryActorCommitInHostOutcome() {
+        var rejected = new IllegalStateException("SpotWide PREPARE rejected");
+        var completion =
+                ZLinkUserSpotRetireRuntime.executePlan(
+                        new ZLinkUserSpotRetireRuntime.RelocationPlan(
+                                List.of("spot-wide"), List.of("entry-actor")),
+                        spotId -> CompletableFuture.completedFuture(null),
+                        actorId -> CompletableFuture.completedFuture(null),
+                        () -> {},
+                        () -> false,
+                        spotId -> CompletableFuture.failedFuture(rejected),
+                        actorId -> CompletableFuture.completedFuture(null));
+
+        var failure =
+                assertThrows(
+                        CompletionException.class, () -> completion.toCompletableFuture().join());
+        var split =
+                assertInstanceOf(
+                        ZLinkUserSpotRetireRuntime.RelocationAuthorityErrorException.class,
+                        failure.getCause());
+        org.junit.jupiter.api.Assertions.assertSame(rejected, split.getCause());
+    }
+
+    @Test
     void readyUnitsRelocateWithoutWaitingForAnEarlierUnitToFinish() {
         var first = new CompletableFuture<Void>();
         var events = new ArrayList<String>();
         var completion =
                 ZLinkUserSpotRetireRuntime.executePlan(
                         new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                                List.of("spot-a", "spot-b"), List.of("actor-c")),
+                                List.of("spot-a", "spot-b", "spot-c"), List.of()),
                         spotId -> CompletableFuture.completedFuture(null),
                         actorId -> CompletableFuture.completedFuture(null),
                         () -> {},
@@ -201,12 +293,9 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
                                     ? first
                                     : CompletableFuture.completedFuture(null);
                         },
-                        actorId -> {
-                            events.add("start:" + actorId);
-                            return CompletableFuture.completedFuture(null);
-                        });
+                        actorId -> CompletableFuture.completedFuture(null));
 
-        assertEquals(List.of("start:spot-a", "start:spot-b", "start:actor-c"), events);
+        assertEquals(List.of("start:spot-a", "start:spot-b", "start:spot-c"), events);
         assertEquals(false, completion.toCompletableFuture().isDone());
 
         first.complete(null);
