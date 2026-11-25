@@ -161,7 +161,6 @@ final class ZLinkFrameworkActorSubsystem {
                                     actors,
                                     serializer,
                                     spots.activationAdmission(meshActorNode.meshName()),
-                                    meshActorNode::actorRelocationPolicy,
                                     meshActorNode::acceptsNewActor);
                     meshNode.setActorCreateOperationHandler(creation);
                     actors.setCreationSubmitter(creation);
@@ -277,6 +276,12 @@ final class ZLinkFrameworkActorSubsystem {
                                         @Override
                                         public boolean hasSource(String actorId) {
                                             return actors.hasMessageFollowSource(actorId);
+                                        }
+
+                                        @Override
+                                        public ZLinkServiceM6BWireCodec.ActorRouteFence sourceFence(
+                                                ZLinkBackendActorRef actor) {
+                                            return actors.messageFollowSourceFence(actor);
                                         }
 
                                         @Override

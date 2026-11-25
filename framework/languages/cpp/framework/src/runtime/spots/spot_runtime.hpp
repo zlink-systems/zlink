@@ -35,6 +35,7 @@
 #include <exception>
 #include <future>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -832,13 +833,15 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         return _state_lane->run ([this] { return timer_queues_on_lane (); }).get ();
     }
 
-    void cancel_timer (const std::string &timer_name)
+    void cancel_timers ()
     {
-        if (!_state_lane || _state_lane->is_on_lane ()) {
-            cancel_timer_on_lane (timer_name);
-            return;
-        }
-        _state_lane->run ([this, &timer_name] { cancel_timer_on_lane (timer_name); }).get ();
+        const auto take_queues = [this] { return std::exchange (_timer_queues, {}); };
+        const auto queues = !_state_lane || _state_lane->is_on_lane ()
+                              ? take_queues ()
+                              : _state_lane->run (take_queues).get ();
+        for (const auto &[_, queue] : queues)
+            if (queue)
+                queue->cancel_pending ();
     }
 
     bool uses_spot_execution_gate () const noexcept { return _spot_policy.allows_turn_yield (); }
@@ -1155,17 +1158,6 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         return result;
     }
 
-    void cancel_timer_on_lane (const std::string &timer_name)
-    {
-        assert_on_lane ();
-        const auto found = _timer_queues.find (timer_name);
-        if (found == _timer_queues.end ())
-            return;
-        if (found->second)
-            found->second->cancel_pending ();
-        _timer_queues.erase (found);
-    }
-
     std::vector<queue_ptr_t> close_on_lane ()
     {
         assert_on_lane ();
@@ -1203,6 +1195,36 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
     std::map<std::string, queue_ptr_t> _timer_queues;
     std::shared_ptr<const actor_executor_map_t> _actor_executor_snapshot =
       std::make_shared<actor_executor_map_t> ();
+};
+
+class spot_timer_registry_t
+{
+    using timer_ptr_t = std::shared_ptr<timer_state_t>;
+    using snapshot_t = std::vector<timer_ptr_t>;
+
+    struct snapshot_iterator_t
+    {
+        snapshot_t timers;
+        std::size_t position = 0;
+
+        const timer_ptr_t &operator* () const { return timers[position]; }
+        void operator++ () { ++position; }
+        bool operator!= (std::default_sentinel_t) const { return position != timers.size (); }
+    };
+
+  public:
+    timer_ptr_t push_back (const timer_ptr_t &timer);
+    void erase (const timer_ptr_t &timer);
+    snapshot_t snapshot () const;
+
+    // Node maintenance can inspect the registry while application timers run.
+    operator snapshot_t () const { return snapshot (); }
+    auto begin () const { return snapshot_iterator_t{snapshot ()}; }
+    auto end () const { return std::default_sentinel; }
+
+  private:
+    mutable std::mutex _mutex;
+    snapshot_t _timers;
 };
 
 class spot_context_state_t : public std::enable_shared_from_this<spot_context_state_t>
@@ -1438,7 +1460,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     std::vector<spot_handler_registry_t::invoker_t> handler_invokers;
     std::map<std::type_index, spot_actor_admission_callbacks_t> actor_admissions;
     std::weak_ptr<service::spot_t> native_spot;
-    std::vector<std::shared_ptr<timer_state_t>> timers;
+    spot_timer_registry_t timers;
     std::shared_ptr<service_scope_t> activation_scope;
     std::map<std::type_index, std::shared_ptr<void>> timer_handler_instances;
     std::shared_ptr<void> spot_instance;

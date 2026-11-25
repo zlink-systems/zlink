@@ -99,6 +99,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             new AtomicReference<>();
     private static final AtomicReference<CompletableFuture<Void>> LEAVE_ENTERED =
             new AtomicReference<>();
+    private static final AtomicReference<CompletableFuture<Void>> LEAVE_SUBMISSION_GATE =
+            new AtomicReference<>();
+    private static final AtomicReference<CompletableFuture<Void>> LEAVE_SUBMISSION_ENTERED =
+            new AtomicReference<>();
     private static final AtomicReference<ZLinkActorJoinOperationId> ACCEPTED =
             new AtomicReference<>();
     private static final AtomicReference<CompletableFuture<ZLinkActorJoinOperationId>>
@@ -165,6 +169,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 Scenario.TARGET_AUTHORITY_MISSING);
     }
 
+    @org.junit.jupiter.api.Test
+    void targetAcceptedDoesNotWaitForSourceLeaveSubmission() throws Exception {
+        actualHostsUseOneCanonicalOwnerForB1B2D1AndLifecycleOrdering(
+                Scenario.SOURCE_LEAVE_PENDING_ACCEPTANCE);
+        actualHostsUseOneCanonicalOwnerForB1B2D1AndLifecycleOrdering(
+                Scenario.SOURCE_LEAVE_PENDING_FAILURE);
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("canonicalScenarios")
     void actualHostsUseOneCanonicalOwnerForB1B2D1AndLifecycleOrdering(Scenario scenario)
@@ -182,6 +194,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         PUSH_TERMINAL.set(new CompletableFuture<>());
         LEAVE_GATE.set(new CompletableFuture<>());
         LEAVE_ENTERED.set(new CompletableFuture<>());
+        LEAVE_SUBMISSION_GATE.set(new CompletableFuture<>());
+        LEAVE_SUBMISSION_ENTERED.set(new CompletableFuture<>());
         RESTORE_ENTERED.set(new CompletableFuture<>());
         RESTORE_GATE.set(CompletableFuture.completedFuture(null));
         var locationStore = new ZLinkInMemoryLocationStore();
@@ -218,6 +232,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         () -> {
                             nextJoinRelease.complete(null);
                             LEAVE_GATE.get().complete(null);
+                            LEAVE_SUBMISSION_GATE.get().complete(null);
                             RESTORE_GATE.get().complete(null);
                             PUSH_TERMINAL.get().complete(null);
                             releaseSettlement.complete(null);
@@ -880,11 +895,43 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 assertFalse(EVENTS.contains("command44"));
                 return;
             }
+            if (scenario.leaveMode() == LeaveMode.PENDING) {
+                LEAVE_SUBMISSION_ENTERED.get().get(4, TimeUnit.SECONDS);
+                assertTrue(EVENTS.contains("target.joined"));
+                assertFalse(
+                        LEAVE_SUBMISSION_GATE.get().isDone(),
+                        "source leave acceptance must remain pending until after target Accepted");
+                PUSH_TERMINAL.get().complete(null);
+                var accepted =
+                        assertInstanceOf(
+                                ZLinkActorJoinCompletion.Accepted.class,
+                                COMPLETION.get().get(4, TimeUnit.SECONDS));
+                assertEquals(operationId, accepted.operationId());
+                assertEquals(1, EVENTS.stream().filter("leave.submit"::equals).count());
+                assertEquals(1, EVENTS.stream().filter("target.completion"::equals).count());
+                if (scenario == Scenario.SOURCE_LEAVE_PENDING_FAILURE) {
+                    assertTrue(
+                            LEAVE_SUBMISSION_GATE
+                                    .get()
+                                    .completeExceptionally(
+                                            new IllegalStateException(
+                                                    "injected source leave connection failure")));
+                    String warning = diagnostics.sourceLeaveWarning.get(4, TimeUnit.SECONDS);
+                    assertTrue(warning.contains("injected source leave connection failure"));
+                    assertEquals(1, diagnostics.sourceLeaveWarnings.size());
+                } else {
+                    assertTrue(LEAVE_SUBMISSION_GATE.get().complete(null));
+                    assertEquals(0, diagnostics.sourceLeaveWarnings.size());
+                }
+            }
+
             PUSH_SUBMITTED.get().get(4, TimeUnit.SECONDS);
-            assertFalse(
-                    link.targetCompletion.isDone(),
-                    "target normalization must wait for the client push terminal");
-            PUSH_TERMINAL.get().complete(null);
+            if (scenario.leaveMode() != LeaveMode.PENDING) {
+                assertFalse(
+                        link.targetCompletion.isDone(),
+                        "target normalization must wait for the client push terminal");
+                PUSH_TERMINAL.get().complete(null);
+            }
 
             ZLinkActorJoinRelocationPort.Submission submission;
             try {
@@ -960,6 +1007,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertEquals(
                     1, targetCommits.get(), "only the target canonical owner may commit authority");
             link.targetCompletion.get(4, TimeUnit.SECONDS);
+            if (scenario.leaveMode() == LeaveMode.PENDING) {
+                assertInstanceOf(
+                        ZLinkActorJoinCompletion.Accepted.class, COMPLETION.get().getNow(null));
+                assertEquals(1, EVENTS.stream().filter("target.completion"::equals).count());
+                assertEquals(
+                        scenario == Scenario.SOURCE_LEAVE_PENDING_FAILURE ? 1 : 0,
+                        diagnostics.sourceLeaveWarnings.size());
+            }
             if (scenario == Scenario.NEXT_DEFERRED_JOIN) {
                 nextJoined.get(4, TimeUnit.SECONDS);
                 assertNotNull(firstPrefixTerminal);
@@ -1060,16 +1115,27 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         private final java.util.logging.Logger logger =
                 java.util.logging.Logger.getLogger(
                         "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer");
+        private final java.util.logging.Logger sourceLeaveLogger =
+                java.util.logging.Logger.getLogger(ZLinkActorJoinCanonicalAdapter.class.getName());
         final List<String> errors = new CopyOnWriteArrayList<>();
+        final List<String> sourceLeaveWarnings = new CopyOnWriteArrayList<>();
+        final CompletableFuture<String> sourceLeaveWarning = new CompletableFuture<>();
 
         JoinFailureDiagnostics() {
             ZLinkTelemetryTestFence.awaitIdle();
             logger.addHandler(this);
+            sourceLeaveLogger.addHandler(this);
         }
 
         @Override
         public void publish(java.util.logging.LogRecord record) {
-            errors.add(record.getMessage());
+            String message = record.getMessage();
+            if (message.startsWith("Actor Join source leave submission failed: ")) {
+                sourceLeaveWarnings.add(message);
+                sourceLeaveWarning.complete(message);
+            } else {
+                errors.add(message);
+            }
         }
 
         @Override
@@ -1079,6 +1145,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         public void close() {
             ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(this);
+            sourceLeaveLogger.removeHandler(this);
         }
     }
 
@@ -1502,6 +1569,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         TARGET_AUTHORITY_MISSING(LeaveMode.DELIVER),
         NEXT_DEFERRED_JOIN(LeaveMode.DELIVER),
         LEAVE_FAILED_FUTURE(LeaveMode.FAILED_FUTURE),
+        SOURCE_LEAVE_PENDING_ACCEPTANCE(LeaveMode.PENDING),
+        SOURCE_LEAVE_PENDING_FAILURE(LeaveMode.PENDING),
         RELOCATE_BEFORE_SOURCE_LEAVE(LeaveMode.FAILED_FUTURE),
         LEAVE_THROW(LeaveMode.THROW),
         JOINED_TYPED_FAILURE(LeaveMode.DELIVER),
@@ -1546,7 +1615,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     private enum LeaveMode {
         DELIVER,
         FAILED_FUTURE,
-        THROW
+        THROW,
+        PENDING
     }
 
     private static final class CanonicalLink {
@@ -1902,6 +1972,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                         throw new IllegalStateException(
                                                                 "injected synchronous source leave"
                                                                         + " failure");
+                                                case PENDING -> {
+                                                    LEAVE_SUBMISSION_ENTERED.get().complete(null);
+                                                    yield LEAVE_SUBMISSION_GATE.get();
+                                                }
                                             };
                                         }
                                         case "toString" -> descriptor.rid().toString();

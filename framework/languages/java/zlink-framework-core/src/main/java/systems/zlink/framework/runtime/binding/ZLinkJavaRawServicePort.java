@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRequestProgress;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
 
@@ -298,9 +299,30 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 target,
                 frames,
                 timeout,
-                reply -> reply.stream().map(Message::toByteArray).toList(),
                 requestAdmission,
-                terminal);
+                terminal,
+                ZLinkServiceRequestProgress.NONE);
+    }
+
+    CompletionStage<?> requestTo(
+            RouterSocket router,
+            RoutingId target,
+            List<byte[]> frames,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission,
+            BiConsumer<List<byte[]>, Throwable> terminal,
+            ZLinkServiceRequestProgress progress) {
+        return requestMessagesTo(
+                router,
+                target,
+                copyMessages(frames, "service request must not be empty"),
+                timeout,
+                reply -> reply.stream().map(Message::toByteArray).toList(),
+                null,
+                terminal,
+                null,
+                requestAdmission,
+                progress);
     }
 
     <T> CompletionStage<?> requestTo(
@@ -423,6 +445,31 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState
                     receivedAdmission,
             CompletableFuture<Void> requestAdmission) {
+        return requestMessagesTo(
+                router,
+                target,
+                messages,
+                timeout,
+                decodeReply,
+                mapFailure,
+                terminal,
+                receivedAdmission,
+                requestAdmission,
+                ZLinkServiceRequestProgress.NONE);
+    }
+
+    private <T> CompletionStage<?> requestMessagesTo(
+            RouterSocket router,
+            RoutingId target,
+            List<Message> messages,
+            Duration timeout,
+            Function<List<Message>, T> decodeReply,
+            Function<Throwable, T> mapFailure,
+            BiConsumer<T, Throwable> terminal,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState
+                    receivedAdmission,
+            CompletableFuture<Void> requestAdmission,
+            ZLinkServiceRequestProgress progress) {
         List<Message> ownedMessages = claimMessages(messages);
         boolean replyOwns = false;
         try {
@@ -449,11 +496,12 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                 }
                                 return submit.timeout(timeout).submit();
                             });
+            progress.bindingSubmitted();
             CompletionStage<List<Message>> bindingReply =
                     ZLinkJavaSocketSupport.observeReply(
                             submission,
                             admission,
-                            requestAdmission,
+                            progress.bindingAdmission(requestAdmission),
                             (reply, failure) -> {
                                 try {
                                     deliverTerminal(

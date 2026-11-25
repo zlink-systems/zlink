@@ -3,6 +3,7 @@
 
 #include "runtime/connector_runtime.hpp"
 #include <boost/asio/error.hpp>
+#include <zlink/Contracts/Messaging/message.hpp>
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -245,7 +246,11 @@ class fed_read_connection_t final : public zlink::stream_connector::detail::stre
     void feed (const zlink::message_t &frame)
     {
         const auto text = frame.to_string ();
-        std::vector<std::uint8_t> bytes (text.begin (), text.end ());
+        feed (std::vector<std::uint8_t> (text.begin (), text.end ()));
+    }
+
+    void feed (std::vector<std::uint8_t> bytes)
+    {
         std::unique_lock lock (_mutex);
         if (!_pending_read) {
             _inbound.insert (_inbound.end (), bytes.begin (), bytes.end ());
@@ -289,6 +294,12 @@ class fed_read_connection_t final : public zlink::stream_connector::detail::stre
             return std::nullopt;
         }
         return _written[index];
+    }
+
+    std::size_t write_count ()
+    {
+        std::lock_guard lock (_mutex);
+        return _written.size ();
     }
 
     boost::system::error_code shutdown_and_close () override

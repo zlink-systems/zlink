@@ -15,7 +15,6 @@ import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
@@ -151,8 +150,7 @@ final class ZLinkEntrySpotStoreParityTest {
                 1,
                 owner,
                 new byte[] {1},
-                ZLinkPlacementCapacityBundle.spot(kind, TYPE, 1),
-                new ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled());
+                ZLinkPlacementCapacityBundle.spot(kind, TYPE, 1));
     }
 
     private record WriteResults(

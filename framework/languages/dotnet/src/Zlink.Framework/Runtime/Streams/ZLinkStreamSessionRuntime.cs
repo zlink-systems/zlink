@@ -299,18 +299,31 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         );
     }
 
+    internal void RecordRejectedApplicationInbound()
+    {
+        _liveness.RecordInbound();
+        _liveness.RecordApplicationInbound();
+    }
+
     public void EnqueuePacket(
         Message header,
         Message payload,
         ZlinkStreamHeader decoded,
-        ZLinkApplicationJobQueueLease? applicationJobAdmission = null
+        ZLinkApplicationJobQueueLease? applicationJobAdmission = null,
+        ZLinkAuthenticationAdmission.Lease? authentication = null
     )
     {
         if (
-            TryEnqueuePacket(header, payload, decoded, applicationJobAdmission)
-            == ZLinkSerialPostAdmission.Accepted
+            TryEnqueuePacket(
+                header,
+                payload,
+                decoded,
+                applicationJobAdmission,
+                authentication: authentication
+            ) == ZLinkSerialPostAdmission.Accepted
         )
             return;
+        authentication?.Release();
         DisposeRejectedPacket(header, payload, applicationJobAdmission);
     }
 
@@ -319,7 +332,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         Message payload,
         ZlinkStreamHeader decoded,
         ZLinkApplicationJobQueueLease? applicationJobAdmission = null,
-        IDisposable? payloadOwner = null
+        IDisposable? payloadOwner = null,
+        ZLinkAuthenticationAdmission.Lease? authentication = null
     )
     {
         if (Volatile.Read(ref _applicationDispatchClosed) != 0)
@@ -332,12 +346,19 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 using var admissionScope = applicationJobAdmission is { } admission
                     ? ZLinkApplicationJobQueueInvocation.Enter(admission)
                     : null;
-                await DispatchPacketAsync(header, payload, decoded, cancellationToken)
+                await DispatchPacketAsync(
+                        header,
+                        payload,
+                        decoded,
+                        cancellationToken,
+                        authentication
+                    )
                     .ConfigureAwait(false);
             },
             Math.Max(payload.Size, 0),
             Math.Max(header.Size, 0),
-            applicationJobAdmission is not null
+            applicationJobAdmission is not null,
+            authentication
         );
         if (admission == ZLinkSerialPostAdmission.Accepted)
             _liveness.RecordApplicationInbound();
@@ -633,7 +654,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         Message header,
         Message payload,
         ZlinkStreamHeader decoded,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkAuthenticationAdmission.Lease? authentication
     )
     {
         using (header)
@@ -666,7 +688,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                     }
                 );
 
-            var dispatch = _context.EnterDispatch(decoded);
+            var dispatch = _context.EnterDispatch(decoded, authentication);
             if (dispatch is null)
             {
                 if (decoded.RequestSeq.HasValue)

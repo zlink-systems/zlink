@@ -66,8 +66,11 @@ void complete_cancel_if_ready (const std::shared_ptr<detail::timer_state_t> &sta
             result = state->cleanup_result;
         }
     }
-    if (completion)
+    if (completion) {
+        if (const auto context = state->spot_context.lock ())
+            context->timers.erase (state);
         completion->complete (std::move (*result));
+    }
 }
 
 } // namespace
@@ -143,6 +146,7 @@ timer_t spot_context_t::add_timer_erased (
     state->period = period;
     state->options = options;
     state->handler_type = handler_type;
+    state->spot_context = _state;
     const auto existing_handler = _state->timer_handler_instances.find (handler_type);
     if (existing_handler != _state->timer_handler_instances.end ()) {
         state->handler_instance = existing_handler->second;
@@ -174,16 +178,11 @@ timer_t spot_context_t::add_timer_erased (
                                   detail::timer_runtime_t::post_fire_count (
                                     context, state, timer_queue, fire_count);
                               });
-    const auto previous =
-      std::find_if (_state->timers.rbegin (), _state->timers.rend (), [&state] (const auto &timer) {
-          return timer->name == state->name && !timer->disposed;
-      });
-    if (previous != _state->timers.rend ()) {
+    if (auto previous = _state->timers.push_back (state)) {
         // Retire the previous generation only after the new timer started. Its cancellation
         // may complete only after the callback performing this replacement returns.
-        (void) timer_t (*previous).cancel ();
+        (void) timer_t (std::move (previous)).cancel ();
     }
-    _state->timers.push_back (state);
     return timer_t (state);
 }
 
@@ -191,6 +190,30 @@ timer_t spot_context_t::add_timer_erased (
 
 namespace zlink::framework::detail
 {
+
+std::shared_ptr<timer_state_t> spot_timer_registry_t::push_back (const timer_ptr_t &timer)
+{
+    std::lock_guard lock (_mutex);
+    const auto previous =
+      std::find_if (_timers.rbegin (), _timers.rend (), [&timer] (const auto &candidate) {
+          return candidate->name == timer->name && !candidate->disposed;
+      });
+    auto replaced = previous == _timers.rend () ? nullptr : *previous;
+    _timers.push_back (timer);
+    return replaced;
+}
+
+void spot_timer_registry_t::erase (const timer_ptr_t &timer)
+{
+    std::lock_guard lock (_mutex);
+    std::erase (_timers, timer);
+}
+
+spot_timer_registry_t::snapshot_t spot_timer_registry_t::snapshot () const
+{
+    std::lock_guard lock (_mutex);
+    return _timers;
+}
 
 result_t<void> core_timer_resource_t::cancel () noexcept
 {
@@ -606,12 +629,13 @@ void timer_runtime_t::cancel_all () const noexcept
 
 void timer_runtime_t::cancel_all (spot_context_state_t &context) noexcept
 {
-    for (const auto &timer : context.timers) {
+    for (const auto &timer : context.timers.snapshot ()) {
         framework::timer_t handle (timer);
         (void) handle.cancel ();
-        if (const auto coordinator = context.ensure_spot_serial_executor ())
-            coordinator->cancel_timer (timer->name);
     }
+    // A retired timer's named queue can still hold work that has to be discarded.
+    if (const auto coordinator = context.spot_serial_executor)
+        coordinator->cancel_timers ();
 }
 
 void timer_test_access_t::finish_callback (const std::shared_ptr<timer_state_t> &state)

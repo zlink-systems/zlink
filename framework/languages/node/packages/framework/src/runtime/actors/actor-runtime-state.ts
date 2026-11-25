@@ -269,7 +269,12 @@ export class ZLinkActorRuntimeState {
    * no target for it.
    */
   get remoteBoundSessionTarget(): ZLinkRemoteBoundSessionTarget | undefined {
-    const binding = this.boundSession;
+    return this.remoteBoundSessionTargetFor(this.boundSession);
+  }
+
+  remoteBoundSessionTargetFor(
+    binding: ZLinkRemoteBoundSessionTarget | undefined
+  ): ZLinkRemoteBoundSessionTarget | undefined {
     const actorNodeRid = this.nativeActorRefValue?.nodeRid;
     return binding?.sessionNodeRid !== undefined &&
       actorNodeRid !== undefined &&

@@ -49,18 +49,26 @@ export class MeshRouterResolver {
   }
 
   remoteBoundSessionTargetForSource(
-    sourceNodeRid: RoutingId
+    sourceNodeRid: RoutingId,
+    previousRoute?: ZLinkRemoteBoundSessionTarget
   ): ZLinkRemoteBoundSessionTarget | undefined {
     const routerChannelId = this.defaultSpotRouterChannelId() ?? this.defaultRouterChannelId();
     if (routerChannelId === undefined) {
       return undefined;
     }
     const targetNodeRid = normalizeRuntimeRoutingId(sourceNodeRid);
-    return {
+    if (
+      previousRoute?.routerChannelId === routerChannelId &&
+      previousRoute.targetNodeRid === targetNodeRid &&
+      previousRoute.spotId === targetNodeRid
+    ) {
+      return previousRoute;
+    }
+    return Object.freeze({
       routerChannelId,
       targetNodeRid,
       spotId: targetNodeRid
-    };
+    });
   }
 
   primaryMeshName(): string | undefined {
