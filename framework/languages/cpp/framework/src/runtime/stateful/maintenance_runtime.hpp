@@ -25,6 +25,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <stop_token>
 #include <string>
 #include <tuple>
@@ -145,6 +146,27 @@ struct relocation_authority_fence_t
     std::vector<std::uint8_t> source_node_routing_id{};
     std::uint64_t source_node_generation = 0;
     std::uint64_t target_attempt_generation = 0;
+    std::vector<std::uint8_t> target_node_routing_id{};
+    std::uint64_t target_node_generation = 0;
+
+    static relocation_authority_fence_t from_prepare (const object_ref_t &source,
+                                                      const protocol::relocation_prepare_t &prepare)
+    {
+        const auto &coordinator = prepare.coordinator;
+        const auto &target = prepare.target;
+        return {source.kind,
+                source.key,
+                coordinator.expected_authority_store_version,
+                {coordinator.owner_id, static_cast<std::int64_t> (coordinator.lease_generation)},
+                {target.target_owner_id,
+                 static_cast<std::int64_t> (target.target_owner_lease_generation)},
+                prepare.relocation,
+                coordinator.node_routing_id,
+                coordinator.node_generation,
+                prepare.target_attempt_generation,
+                target.target_node_routing_id,
+                target.target_node_generation};
+    }
 };
 
 /* Settled authority of one relocation unit as the Location Store shows it.
@@ -240,13 +262,23 @@ class authority_relocation_port_t
              protocol::relocation_id_t relocation = {},
              location_owner_token_t source_owner = {},
              const protocol::relocation_prepare_t *prepare = nullptr) = 0;
-    virtual bool capture_source (const std::vector<object_ref_t> &,
-                                 const relocation_authority_fence_t &,
-                                 const std::string &,
-                                 std::uint64_t,
-                                 std::uint64_t)
+    virtual task_t<std::optional<std::string>>
+    begin_source_capture (const std::vector<object_ref_t> &,
+                          const relocation_authority_fence_t &fence,
+                          const std::string &,
+                          std::uint64_t,
+                          std::uint64_t)
     {
-        return true;
+        co_return std::optional{fence.expected_store_version};
+    }
+    virtual task_t<bool> capture_source (const object_ref_t &, const std::string &)
+    {
+        co_return true;
+    }
+    virtual task_t<bool> record_target_prepared (const object_ref_t &,
+                                                 const protocol::relocation_prepare_t &)
+    {
+        co_return true;
     }
     virtual bool cancel_source_capture (const relocation_authority_fence_t &) { return true; }
     virtual bool finish_relocation (const object_ref_t &, const protocol::relocation_prepare_t &)
@@ -648,10 +680,12 @@ class maintenance_runtime_t
     relocate_prepare_ready (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<relocation_result_t>
     relocate_source_cleanup (std::shared_ptr<relocation_terminal_state_t> state);
-    task_t<bool> relocate_seal (std::shared_ptr<relocation_terminal_state_t> state);
+    task_t<bool> relocate_capture (std::shared_ptr<relocation_terminal_state_t> state,
+                                   const std::vector<object_ref_t> &participants);
     task_t<bool> capture_relocation_session_bindings (
       eligible_relocation_unit_t::canonical_wire_context_t &context);
-    task_t<bool> relocate_encode (std::shared_ptr<relocation_terminal_state_t> state);
+    task_t<bool> relocate_encode (std::shared_ptr<relocation_terminal_state_t> state,
+                                  const std::string &preparing_version);
     static relocation_authority_fence_t source_fence (const relocation_terminal_state_t &state);
     task_t<bool> relocate_prepare_target (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_send_state_chunks (std::shared_ptr<relocation_terminal_state_t> state,
@@ -694,7 +728,8 @@ class maintenance_runtime_t
                               std::uint64_t participant_id,
                               const turn_record_t &turn) const;
     task_t<stateful_error_t>
-    abort_relocation_before_cutover (std::shared_ptr<relocation_terminal_state_t> state);
+    abort_relocation_before_cutover (std::shared_ptr<relocation_terminal_state_t> state,
+                                     std::span<const object_ref_t> before_capture = {});
     task_t<relocation_reason_t>
     prepare_target (const eligible_relocation_unit_t::canonical_wire_context_t &context,
                     const std::vector<frozen_object_state_t> &participants,

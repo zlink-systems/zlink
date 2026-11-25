@@ -504,10 +504,13 @@ class stateful_object_runtime_t
     task_t<std::optional<std::vector<object_inventory_t>>>
     try_begin_maintenance_inventory (bool actors_only = false);
     task_t<void> end_maintenance_inventory ();
-    task_t<aggregate_relocation_seal_attempt_t>
-    try_seal_relocation_aggregate (const std::vector<object_ref_t> &participants,
-                                   std::stop_token cancellation = {},
-                                   const std::function<task_t<bool> ()> &before_capture = {});
+    // If begin_capture was invoked, a failed attempt returns its seal token so
+    // the caller can settle authority before releasing the source seal.
+    task_t<aggregate_relocation_seal_attempt_t> try_seal_relocation_aggregate (
+      const std::vector<object_ref_t> &participants,
+      std::stop_token cancellation = {},
+      const std::function<task_t<bool> ()> &seal_sessions = {},
+      std::function<task_t<bool> (const std::vector<object_ref_t> &)> begin_capture = {});
     // Atomically separates the ingress accepted since capture from ingress
     // that arrives afterwards.  The caller must perform transport work after
     // this method returns; no callback runs while the aggregate mutex is held.

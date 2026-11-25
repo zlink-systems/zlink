@@ -1428,10 +1428,14 @@ class in_memory_location_repository_t : public location_repository_t
             if (snapshot.aggregate || (actor && actor->has_relocation_state))
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
-            if (!discarded
-                && request->relocation_policy != detail::factory_relocation_kind_t::disabled)
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Object owner lease is unavailable");
+            if (!discarded) {
+                const auto &creation_target = request->target;
+                const auto descriptor = _mesh_nodes.find (mesh_node_key (
+                  creation_target.mesh_name, std::string (creation_target.node_rid.value ())));
+                // The descriptor read and authority deletion share this lane turn.
+                require_disabled_creation_policy (
+                  *request, descriptor != _mesh_nodes.end () ? &descriptor->second : nullptr);
+            }
             if (!discarded && snapshot.allocation.object_kind == placement_object_kind_t::actor
                 && (!actor || actor->state != actor_authority_state_t::ready
                     || actor->actor_id != request->key.global_id
@@ -1460,17 +1464,19 @@ class in_memory_location_repository_t : public location_repository_t
         const bool wait_elapsed = !active || authority_release_wait_elapsed (snapshot.owner);
         if (!discarded && active
             && snapshot.allocation.object_kind == placement_object_kind_t::user_spot)
-            members = ended_spot_members_on_lane (key, snapshot, request->key.global_id, now);
+            members = ended_spot_members_on_lane (key, snapshot, *request, now);
         if (discarded && !wait_elapsed)
             return false;
         if (!wait_elapsed)
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "Owner lease release observation is still waiting");
-        const auto descriptor = _mesh_nodes.find (
-          mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
-        if (owner_live && descriptor != _mesh_nodes.end ()
-            && descriptor->second.lifecycle_generation == target.node_lifecycle_generation)
-            return false;
+        if (owner_live) {
+            const auto descriptor = _mesh_nodes.find (
+              mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
+            if (descriptor != _mesh_nodes.end ()
+                && descriptor->second.lifecycle_generation == target.node_lifecycle_generation)
+                return false;
+        }
         const auto reservation = _reservations.find (key);
         if (active) {
             apply_capacity_bundle (_active_by_placement, snapshot.allocation.target,
@@ -1497,22 +1503,24 @@ class in_memory_location_repository_t : public location_repository_t
     // provider repository batch (authority, aggregate lock, owner lease, descriptor and capacity).
     std::vector<std::string> ended_spot_members_on_lane (const std::string &spot_key,
                                                          const authority_snapshot_t &spot,
-                                                         const std::string &spot_id,
+                                                         const object_reserve_request_t &request,
                                                          clock_t::time_point now)
     {
         const auto node = [] (const object_creation_target_t &target) {
             return mesh_node_key (target.mesh_name, std::string (target.node_rid.value ()));
         };
-        std::set<std::string> batch_keys{"authority:" + spot_key, "aggregate-lock:" + spot_key,
+        std::set<std::string> batch_keys{"authority:" + spot_key,
+                                         "aggregate-lock:" + spot_key,
                                          "owner:" + spot.owner.owner_id,
                                          "descriptor:" + node (spot.allocation.target),
+                                         "descriptor:" + node (request.target),
                                          "capacity:" + node (spot.allocation.target)};
         std::vector<std::string> members;
         bool wait_elapsed = true;
         for (const auto &[member_key, authority] : _authorities) {
             const auto member = decode_direct_actor_authority_payload (authority.payload);
             if (!member || member->current_spot_kind != actor_authority_spot_kind_t::user
-                || member->current_spot_id != spot_id
+                || member->current_spot_id != request.key.global_id
                 || member->current_spot_generation != spot.object_generation)
                 continue;
             if (authority.allocation.state != placement_allocation_state_t::active
@@ -1574,22 +1582,7 @@ class in_memory_location_repository_t : public location_repository_t
             || (new_target_selection && descriptor.placement_weight == 0)
             || !owner_token_is_live (target.owner, now))
             return nullptr;
-        const auto capability = find_capability (descriptor, kind, stable_type);
-        if (!capability)
-            return nullptr;
-        return &descriptor;
-    }
-
-    static const object_capability_t *find_capability (const mesh_node_descriptor_t &descriptor,
-                                                       placement_object_kind_t kind,
-                                                       const std::string &stable_type)
-    {
-        const auto found = std::find_if (
-          descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
-          [&] (const object_capability_t &capability) {
-              return capability.object_kind == kind && capability.stable_type == stable_type;
-          });
-        return found == descriptor.object_capabilities.end () ? nullptr : &*found;
+        return find_object_capability (descriptor, kind, stable_type) ? &descriptor : nullptr;
     }
 
     static bool valid_mesh_node_descriptor (const mesh_node_descriptor_t &descriptor)

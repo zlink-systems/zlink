@@ -106,7 +106,10 @@ import {
 } from '../foundation/actor-join-recovery-codec';
 import { OPERATION_IDENTITY_BYTES } from '../foundation/operation-identity';
 import { rewriteServiceAuthorityRoute } from '../foundation/service-authority-payload-codec';
-import { ServiceMaintenanceRuntime } from '../foundation/service-maintenance-runtime';
+import {
+  ServiceMaintenanceRuntime,
+  type ServiceRelocationUnit
+} from '../foundation/service-maintenance-runtime';
 import {
   ServiceRelocationAggregateCommitter,
   type ServicePreparedRelocationAggregate,
@@ -895,10 +898,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     // the host relocation lifecycle to complete.
     if (spotManager === undefined || actorManager === undefined) return;
     const groupedActorIds = new Set<string>();
-    const work: Array<{
-      readonly id: string;
-      readonly relocate: (relocationSignal: AbortSignal) => Promise<void>;
-    }> = [];
+    const shells: Array<Pick<ServiceRelocationUnit, 'id' | 'relocate'>> = [];
+    const actors: typeof shells = [];
+    const aggregates: typeof shells = [];
     for (const activation of spotManager.relocationActivations(meshName)) {
       const kind = this.spotKind(meshName, activation);
       if (kind === undefined) continue;
@@ -912,26 +914,21 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         kind === 'user_spot' &&
         activation.executionMode === ZLinkUserSpotExecutionMode.PerActor
       ) {
-        let shellRelocation: Promise<void> | undefined;
-        const relocateShell = (relocationSignal: AbortSignal): Promise<void> => {
-          shellRelocation ??= this.relocatePerActorSpotShell(
-            meshName,
-            activation,
-            undefined,
-            targetApplicationVersion,
-            relocationSignal
-          );
-          return shellRelocation;
-        };
-        work.push({
+        shells.push({
           id: `spot:${String(activation.spotId)}`,
-          relocate: relocateShell
+          relocate: (relocationSignal) =>
+            this.relocatePerActorSpotShell(
+              meshName,
+              activation,
+              undefined,
+              targetApplicationVersion,
+              relocationSignal
+            )
         });
         for (const state of states) {
-          work.push({
+          actors.push({
             id: `actor:${state.actorId}`,
             relocate: async (relocationSignal) => {
-              await relocateShell(relocationSignal);
               const spotAuthority = await requireAuthority(
                 this.requireLocationStore(),
                 encodeAuthorityKey('user_spot', String(activation.spotId)),
@@ -959,7 +956,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         }
         continue;
       }
-      work.push({
+      aggregates.push({
         id: `spot:${String(activation.spotId)}`,
         relocate: (relocationSignal) =>
           this.relocateSpotAggregate(
@@ -977,7 +974,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     for (const state of actorManager.snapshotStates()) {
       if (state.actor === undefined || groupedActorIds.has(state.actorId)) continue;
       if ((state.meshName ?? meshName) !== meshName) continue;
-      work.push({
+      actors.push({
         id: `actor:${state.actorId}`,
         relocate: (relocationSignal) =>
           this.relocateStandaloneActor(
@@ -989,26 +986,29 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           )
       });
     }
-    if (work.length === 0) return;
+    const unitCount = shells.length + actors.length + aggregates.length;
+    if (unitCount === 0) return;
     const maintenance = new ServiceMaintenanceRuntime({
       preflight: async () => true,
       publishState: () => undefined,
       forceStop: () => undefined
     });
     const started: Array<Promise<void>> = [];
-    for (const unit of work) {
-      maintenance.enqueue({
-        id: unit.id,
-        ready: () => true,
-        relocate: (relocationSignal) => {
-          const run = unit.relocate(relocationSignal);
-          if (isStructuralGuardEnabled()) {
-            trackDiagnosticCompletion(run, `relocation ${unit.id}`);
+    for (const batch of [shells, actors, aggregates]) {
+      maintenance.enqueueBatch(
+        batch.map((unit) => ({
+          id: unit.id,
+          ready: () => true,
+          relocate: (relocationSignal) => {
+            const run = unit.relocate(relocationSignal);
+            if (isStructuralGuardEnabled()) {
+              trackDiagnosticCompletion(run, `relocation ${unit.id}`);
+            }
+            started.push(run);
+            return run;
           }
-          started.push(run);
-          return run;
-        }
-      });
+        }))
+      );
     }
     const operationSignal = signal ?? new AbortController().signal;
     const deadlineMs =
@@ -1041,7 +1041,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
     if (authorityError !== undefined) throw authorityError.reason;
     // A unit that never started also stays on the source.
-    if (targetSide > 0 && targetSide < work.length) {
+    if (targetSide > 0 && targetSide < unitCount) {
       throw new ServiceRelocationAuthorityError(
         'Relocation units settled on both the source and the target.',
         { cause: failure }

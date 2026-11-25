@@ -210,6 +210,21 @@ class join_settlement_authority_t final : public fw::runtime::stateful::authorit
         _inner (repository), _control (std::move (control))
     {
     }
+    fw::task_t<std::optional<std::string>>
+    begin_source_capture (const std::vector<object> &participants,
+                          const fence &value,
+                          const std::string &target_node_id,
+                          std::uint64_t target_node_generation,
+                          std::uint64_t application_version) override
+    {
+        return _inner.begin_source_capture (participants, value, target_node_id,
+                                            target_node_generation, application_version);
+    }
+    fw::task_t<bool> capture_source (const object &primary,
+                                     const std::string &preparing_version) override
+    {
+        return _inner.capture_source (primary, preparing_version);
+    }
     authority observe_relocation (const fence &value) override
     {
         return _inner.observe_relocation (value);
