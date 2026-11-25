@@ -1272,7 +1272,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 "source", spotId, 0, "packet-" + value, Map.of(), new byte[] {(byte) value});
     }
 
-    private static byte[] acceptedSpotRequest(String spotId, int value) {
+    static byte[] acceptedSpotRequest(String spotId, int value) {
         return ZLinkAcceptedJournalTestRecords.spot(
                 "source",
                 spotId,
@@ -1282,7 +1282,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 new byte[] {(byte) value});
     }
 
-    private static byte[] sourceAuthority(String spotId, RoutingId sourceRid) {
+    static byte[] sourceAuthority(String spotId, RoutingId sourceRid) {
         return new ZLinkServiceAuthorityPayloadCodec()
                 .encodeUser(
                         ZLinkServiceAuthorityPayloadCodec.State.READY,
@@ -1437,7 +1437,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         });
     }
 
-    private static final class AuthorityState {
+    static final class AuthorityState {
         private final Map<String, ZLinkAuthoritySnapshot> rows = new ConcurrentHashMap<>();
         private ZLinkAggregatePrepareRequest prepared;
         private boolean progress;
@@ -1493,6 +1493,15 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         ZLinkLocationRepository proxy() {
+            return proxy((key, value) -> CompletableFuture.completedFuture(value));
+        }
+
+        ZLinkLocationRepository proxy(
+                java.util.function.BiFunction<
+                                String,
+                                ZLinkAuthorityReadResult,
+                                CompletionStage<ZLinkAuthorityReadResult>>
+                        read) {
             return (ZLinkLocationRepository)
                     Proxy.newProxyInstance(
                             ZLinkLocationRepository.class.getClassLoader(),
@@ -1510,7 +1519,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                                         ZLinkAggregateAbortResult.ABORTED);
                                         case "read" -> {
                                             reads.incrementAndGet();
-                                            yield CompletableFuture.completedFuture(
+                                            yield read.apply(
+                                                    (String) arguments[0],
                                                     rows.getOrDefault((String) arguments[0], null)
                                                                     == null
                                                             ? new ZLinkAuthorityMissing(
@@ -1522,6 +1532,14 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                                         (String) arguments[0],
                                                         (ZLinkAuthorityExpectation) arguments[1],
                                                         (ZLinkAuthorityMutation) arguments[2]);
+                                        case "readOwnerLease" -> {
+                                            var now = Instant.now();
+                                            yield CompletableFuture.completedFuture(
+                                                    new ZLinkOwnerLeaseFound(
+                                                            prepared.targetOwner(),
+                                                            now.plusSeconds(30),
+                                                            now));
+                                        }
                                         case "readAggregateProgress" ->
                                                 readAggregateProgress(
                                                         (ZLinkAggregateFence) arguments[0]);
@@ -1644,8 +1662,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
     }
 
-    private static final class FakeStagingBackend
-            implements ZLinkUserSpotAggregateStagingOwner.StagingBackend {
+    static class FakeStagingBackend implements ZLinkUserSpotAggregateStagingOwner.StagingBackend {
         private final ArrayList<String> operations = new ArrayList<>();
         private final ArrayList<String> live = new ArrayList<>();
         private int replaySequence;
@@ -1659,7 +1676,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         private final ZLinkInternalSpotNode sessionNode;
         private ZLinkRelocationRawSessionFixture rawSession;
 
-        private FakeStagingBackend() {
+        FakeStagingBackend() {
             this(false);
         }
 
@@ -2071,7 +2088,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
     }
 
-    private static final class TestSpot implements ZLinkSpot<ZLinkActor> {
+    static final class TestSpot implements ZLinkSpot<ZLinkActor> {
         @Override
         public ZLinkSpotContext context() {
             return null;

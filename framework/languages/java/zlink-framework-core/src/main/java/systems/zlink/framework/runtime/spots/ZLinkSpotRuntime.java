@@ -5691,7 +5691,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 });
     }
 
-    private void rememberRecoveredSpot(
+    void rememberRecoveredSpot(
             systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot snapshot,
             String spotId) {
         var allocation = snapshot.allocation();
