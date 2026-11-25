@@ -2250,14 +2250,18 @@ internal sealed class ZLinkSpotNodeCatalog(
                 && instance.State == ZLinkInstanceSpotAuthorityState.Closing
         )
             return false;
-        throw new ZLinkFrameworkException(
+        throw CloseMoving(spotId, "authority names an incarnation this owner does not host");
+    }
+
+    private static ZLinkFrameworkException CloseMoving(string spotId, string reason) =>
+        new(
             ZLinkFrameworkErrorKind.Unavailable,
-            $"User Spot '{spotId}' authority names an incarnation this owner does not host."
+            $"Spot '{spotId}' {reason}.",
+            ZLinkRetryAdvice.RetryAfterBackoff
         )
         {
             FrameworkFailureCode = (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving,
         };
-    }
 
     private async ValueTask<CloseAuthority> BeginCloseAuthorityAsync(
         ZLinkSpotActivation activation,
@@ -2275,6 +2279,16 @@ internal sealed class ZLinkSpotNodeCatalog(
             return new CloseAuthority(CloseAuthorityState.Kept);
         var snapshot = found.Snapshot;
         ThrowIfOtherIncarnation(spotId, activation.ObjectGeneration, snapshot.ObjectGeneration);
+        if (
+            snapshot.Relocation is { Target: { } target } publication
+            && ZLinkAuthorityRelocation.MatchesCommittedTarget(
+                snapshot,
+                publication.RelocationId,
+                target.AttemptGeneration
+            )
+        )
+            throw CloseMoving(spotId, "authority is still settling relocation");
+
         var userDecoded = ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
             snapshot.Payload.Span,
             out var authority

@@ -844,7 +844,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             : null;
     }
 
-    private static ZLinkResolvedSpotLocation? ProjectSpot(ZLinkAuthorityReadResult authority)
+    internal static ZLinkResolvedSpotLocation? ProjectSpot(ZLinkAuthorityReadResult authority)
     {
         if (authority is not ZLinkAuthorityReadResult.Found found)
         {

@@ -129,6 +129,11 @@ public sealed partial class RelocationBehaviorConformanceTests
 
             if (verifyClose)
             {
+                Assert.Equal(
+                    ZLinkFrameworkRelocationOutcome.Relocated,
+                    (await relocation.WaitAsync(timeout)).Outcome
+                );
+                await source.StopAsync().WaitAsync(timeout);
                 var moving = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
                     spots.CloseAsync(opened).AsTask()
                 );

@@ -708,17 +708,10 @@ internal sealed class ZLinkSpotRuntimeManager(
                 if (read is not ZLinkAuthorityReadResult.Found found)
                     break;
                 if (
-                    ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
-                        found.Snapshot.Payload.Span,
-                        out var authority
-                    )
-                    && found.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
+                    found.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
                     && found.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-                    // A Closing authority belongs to a Close that failed after
-                    // step 1; its owner resumes it for this generation.
-                    && authority.State
-                        is ZLinkUserSpotAuthorityState.Ready
-                            or ZLinkUserSpotAuthorityState.Closing
+                    && ZLinkStoreLocationResolvers.ProjectSpot(found)
+                        is { SpotKind: ZLinkSpotKind.User } authority
                 )
                 {
                     if (!string.Equals(authority.MeshName, spot.MeshName, StringComparison.Ordinal))
@@ -734,21 +727,21 @@ internal sealed class ZLinkSpotRuntimeManager(
                             StringComparison.Ordinal
                         )
                     );
-                    if (source is not null && authority.NodeRid != source.Node.RoutingId)
+                    if (source is not null && authority.OwnerNodeRid != source.Node.RoutingId)
                     {
                         var remaining = deadlineAt - Stopwatch.GetElapsedTime(0);
                         if (remaining <= TimeSpan.Zero)
                             throw CloseDeadlineElapsed(spotId);
                         var closed = await source
                             .Node.CloseUserSpotAsync(
-                                authority.NodeRid,
+                                authority.OwnerNodeRid,
                                 new UserSpotCloseFence(
                                     spotId,
                                     spot.ObjectGeneration,
-                                    authority.NodeRid,
-                                    authority.NodeGeneration,
-                                    found.Snapshot.AuthorityOwnerGeneration,
-                                    found.Snapshot.StoreVersion
+                                    authority.OwnerNodeRid,
+                                    authority.OwnerNodeGeneration,
+                                    authority.AuthorityOwnerGeneration,
+                                    authority.StoreVersion
                                 ),
                                 deadlineUnixMs,
                                 remaining,
