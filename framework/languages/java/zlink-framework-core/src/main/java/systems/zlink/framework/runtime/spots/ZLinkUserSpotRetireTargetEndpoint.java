@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
@@ -217,15 +218,42 @@ final class ZLinkUserSpotRetireTargetEndpoint
     }
 
     @Override
-    public ZLinkSpotRetireControl.TargetProfile applyTargetProfile(
-            ZLinkSpotRetireControl.StageRequest request, long defaultActorSpotGeneration) {
-        if (actorJoin != null && isStandaloneActor(request)) {
+    public CompletionStage<ZLinkSpotRetireControl.TargetProfile> applyTargetProfile(
+            ZLinkSpotRetireControl.TargetProfile profile,
+            Supplier<CompletionStage<Void>> awaitShellPublication) {
+        var request = profile.request();
+        if (!isStandaloneActor(request)) return CompletableFuture.completedFuture(profile);
+
+        if (actorJoin != null) {
             actorJoin.claimRecovery(request);
+            var admittedJoin = actorJoin.admittedTargetProfile(request);
+            if (admittedJoin.isPresent()) {
+                return CompletableFuture.completedFuture(admittedJoin.orElseThrow());
+            }
         }
-        return actorJoin == null
-                ? ZLinkSpotRetireControl.TargetEndpoint.super.applyTargetProfile(
-                        request, defaultActorSpotGeneration)
-                : actorJoin.applyTargetProfile(request, defaultActorSpotGeneration);
+        if (profile.actorSpotKind() != 2) return CompletableFuture.completedFuture(profile);
+
+        return awaitShellPublication
+                .get()
+                .thenApply(
+                        ignored -> {
+                            SpotActivation shell =
+                                    sourceReplies == null
+                                            ? null
+                                            : sourceReplies
+                                                    .spotLifecycle()
+                                                    .spotActivationFor(request.spotId());
+                            if (shell == null
+                                    || shell.context.executionMode()
+                                            != ZLinkUserSpotExecutionMode.PER_ACTOR
+                                    || shell.backendSpot.lifecycleGeneration()
+                                            != profile.actorSpotGeneration()
+                                    || !shell.context.nodeRid().equals(localNodeRid)) {
+                                throw new IllegalStateException(
+                                        "Actor relocation target shell differs");
+                            }
+                            return profile;
+                        });
     }
 
     @Override
