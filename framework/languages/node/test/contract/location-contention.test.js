@@ -31,9 +31,11 @@ async function freshStore(t, backend) {
       get isReady() {
         return client.isReady;
       },
-      sendCommand(args, options) {
-        if (args[0] === 'EVAL') evals += 1;
-        return client.sendCommand(args, options);
+      async sendCommand(args, options) {
+        const result = await client.sendCommand(args, options);
+        // Count successful script executions, including the EVAL after a cache miss.
+        if (args[0] === 'EVAL' || args[0] === 'EVALSHA') evals += 1;
+        return result;
       }
     }
   });

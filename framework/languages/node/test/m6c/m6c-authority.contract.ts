@@ -575,9 +575,11 @@ for (const backend of ['provider', 'memory'] as const) {
         backend === 'provider'
           ? new ZLinkLocationStoreRepository(provider, () => now)
           : new ZLinkInMemoryLocationStore(() => now);
-      // The provider batch shares one owner lease and descriptor. Spot total, Spot type
-      // and Actor total are three distinct active counter keys.
-      const batchFits = backend === 'provider' ? 2041 : 2043;
+      // The Spot and member-a share one owner lease and the source descriptor.
+      // The batch also fences the target descriptor. Provider uses three active
+      // counter keys, while memory models capacity with one key for the source.
+      const fixedBatchKeys = backend === 'provider' ? 8 : 6;
+      const batchFits = 2048 - fixedBatchKeys;
       const bulk =
         scenario === 'batchFits' ? batchFits : scenario === 'batchBound' ? batchFits + 1 : 0;
       const configure = async (descriptor: Awaited<ReturnType<typeof writeTargetDescriptor>>) => {
