@@ -502,7 +502,11 @@ public sealed partial class EntrySpotActorDispatchTests
                 );
             },
         };
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, includeSpotRoute: true);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            includeSpotRoute: true,
+            actorRelocationEnabled: true
+        );
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);
