@@ -166,7 +166,7 @@ public sealed class AutoConnectRejectionTests
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
-            if (targetMethod?.Name != nameof(IZLinkBackendSpotNode.ConnectPeer))
+            if (targetMethod?.Name != nameof(IZLinkBackendSpotNode.TryConnectPeerAuto))
                 throw new NotSupportedException(targetMethod?.Name);
             var endpoint = (string)args![1]!;
             Attempts.Add(endpoint);
@@ -176,7 +176,7 @@ public sealed class AutoConnectRejectionTests
                 BusyConnected.TrySetResult();
             else
                 OtherConnected.TrySetResult();
-            return null;
+            return true;
         }
     }
 }

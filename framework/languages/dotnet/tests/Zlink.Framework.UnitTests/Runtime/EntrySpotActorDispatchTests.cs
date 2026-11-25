@@ -16840,6 +16840,13 @@ public sealed partial class EntrySpotActorDispatchTests
             string expectedSecurityIdentity
         ) { }
 
+        public bool TryConnectPeerAuto(
+            RoutingId? peerRid,
+            string endpoint,
+            string expectedSecurityIdentity,
+            ulong? expectedLifecycleGeneration
+        ) => true;
+
         public void SetPeerExpectation(
             RoutingId peerRid,
             string endpoint,

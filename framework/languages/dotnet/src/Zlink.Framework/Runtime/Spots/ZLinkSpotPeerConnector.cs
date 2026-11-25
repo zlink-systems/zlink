@@ -54,7 +54,8 @@ internal sealed class ZLinkSpotPeerConnector(
     public bool ConnectPeerAuto(
         RoutingId? peerRid,
         string endpoint,
-        string expectedSecurityIdentity
+        string expectedSecurityIdentity,
+        ulong? expectedLifecycleGeneration = null
     )
     {
         return AwaitStateLane(
@@ -64,28 +65,32 @@ internal sealed class ZLinkSpotPeerConnector(
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"spot_peer_claim peer={ZLinkFrameworkDebugLog.OrAbsent(peerRid)} endpoint={endpoint} kind={claim.Kind} previous={ZLinkFrameworkDebugLog.OrAbsent(claim.PreviousPeerRid)}"
                 );
-                if (
-                    claim.Kind
-                    is ZLinkSpotAutoPeerClaimKind.AlreadyOwned
-                        or ZLinkSpotAutoPeerClaimKind.SuppressedByManual
-                )
+                if (claim.Kind == ZLinkSpotAutoPeerClaimKind.AlreadyOwned)
                     return true;
 
                 try
                 {
-                    if (claim.Kind == ZLinkSpotAutoPeerClaimKind.Replaced)
-                    {
-                        ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"spot_peer_replace peer={ZLinkFrameworkDebugLog.OrAbsent(peerRid)} endpoint={endpoint}"
+                    var accepted = peerRid is { Size: > 0 } rid
+                        ? node.TryConnectPeerAuto(
+                            rid,
+                            endpoint,
+                            expectedSecurityIdentity,
+                            expectedLifecycleGeneration
+                        )
+                        : node.TryConnectPeerAuto(
+                            null,
+                            endpoint,
+                            ZLinkServiceSecurityIdentity.Plaintext,
+                            null
                         );
-                        node.DisconnectPeer(endpoint);
-                    }
+                    if (accepted)
+                        return true;
 
-                    if (peerRid is { Size: > 0 } rid)
-                        ConnectPeer(rid, endpoint, expectedSecurityIdentity);
+                    if (claim.Kind == ZLinkSpotAutoPeerClaimKind.Replaced)
+                        connections.RestorePeerAuto(endpoint, claim.PreviousPeerRid);
                     else
-                        ConnectPeer(endpoint);
-                    return true;
+                        connections.RollbackPeerAuto(endpoint);
+                    return false;
                 }
                 catch
                 {

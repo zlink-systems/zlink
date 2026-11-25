@@ -762,13 +762,15 @@ internal sealed class ZLinkLocationAutoConnectHost
     {
         public bool Connect(ZLinkAutoConnectTarget target)
         {
-            RefreshTarget(target);
+            node.ObserveRequestSourceFence(target);
+            node.ObservePeerExpectation(target);
             if (!connectRouter || !target.InitiatesConnection)
                 return true;
             return node.ConnectPeerAuto(
                 target.NodeRid,
                 target.Endpoint,
-                ZLinkTransportSecurityIdentity.ToAdmissionIdentity(target.SecurityIdentity)
+                ZLinkTransportSecurityIdentity.ToAdmissionIdentity(target.SecurityIdentity),
+                target.LifecycleGeneration
             );
         }
 
@@ -777,6 +779,9 @@ internal sealed class ZLinkLocationAutoConnectHost
             node.ObserveRequestSourceFence(target);
             node.ObservePeerExpectation(target);
         }
+
+        public void ForgetTarget(ZLinkAutoConnectTarget target) =>
+            node.ForgetPeerExpectation(target);
 
         public bool Disconnect(ZLinkAutoConnectTarget target)
         {

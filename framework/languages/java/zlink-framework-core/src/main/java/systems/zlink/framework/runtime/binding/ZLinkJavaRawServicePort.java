@@ -333,6 +333,26 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             Function<List<Message>, T> decodeReply,
             CompletableFuture<Void> requestAdmission,
             BiConsumer<T, Throwable> terminal) {
+        return requestTo(
+                router,
+                target,
+                frames,
+                timeout,
+                decodeReply,
+                requestAdmission,
+                terminal,
+                ZLinkServiceRequestProgress.NONE);
+    }
+
+    <T> CompletionStage<?> requestTo(
+            RouterSocket router,
+            RoutingId target,
+            List<byte[]> frames,
+            Duration timeout,
+            Function<List<Message>, T> decodeReply,
+            CompletableFuture<Void> requestAdmission,
+            BiConsumer<T, Throwable> terminal,
+            ZLinkServiceRequestProgress progress) {
         return requestMessagesTo(
                 router,
                 target,
@@ -342,7 +362,8 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 null,
                 terminal,
                 null,
-                requestAdmission);
+                requestAdmission,
+                progress);
     }
 
     <T> CompletionStage<T> request(
@@ -458,7 +479,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 ZLinkServiceRequestProgress.NONE);
     }
 
-    private <T> CompletionStage<?> requestMessagesTo(
+    <T> CompletionStage<?> requestMessagesTo(
             RouterSocket router,
             RoutingId target,
             List<Message> messages,
@@ -497,6 +518,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                 return submit.timeout(timeout).submit();
                             });
             progress.bindingSubmitted();
+            var decoder = progress.replyDecoder(decodeReply);
             CompletionStage<List<Message>> bindingReply =
                     ZLinkJavaSocketSupport.observeReply(
                             submission,
@@ -504,8 +526,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                             progress.bindingAdmission(requestAdmission),
                             (reply, failure) -> {
                                 try {
-                                    deliverTerminal(
-                                            reply, failure, decodeReply, mapFailure, terminal);
+                                    deliverTerminal(reply, failure, decoder, mapFailure, terminal);
                                 } finally {
                                     if (reply != null) Message.closeAll(reply);
                                     Message.closeAll(ownedMessages);
