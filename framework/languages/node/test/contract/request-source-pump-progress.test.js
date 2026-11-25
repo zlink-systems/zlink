@@ -36,7 +36,11 @@ for (const complete of [false, true]) {
       );
       const actor = f.backend.stateful.createActor('source-probe');
       const localGeneration = f.backend.stateful.nodeGeneration;
-      const peer = { descriptor: { lifecycleGeneration: 5n }, liveness: { connectionId: 1n } };
+      const peer = {
+        descriptor: { lifecycleGeneration: 5n },
+        liveness: { connectionId: 1n },
+        remoteAdmitReceived: true
+      };
       f.runtime.topology.peer = () => peer;
       f.runtime.topology.admittedPeer = () => peer;
       f.runtime.liveness.recordReceived = () => {};

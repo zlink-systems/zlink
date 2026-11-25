@@ -9,10 +9,12 @@ const wire = require('../../packages/framework/dist/runtime/foundation/service-w
 for (const endpointOnly of [false, true]) {
   for (const hostAttached of [false, true]) {
     test(`NotRequired exchanges both descriptors before retiring the intent (endpointOnly=${endpointOnly}, hostAttached=${hostAttached})`, async () => {
-      const pair = createPair({ endpointOnly, hostAttached, notify: true });
+      const pair = createPair({ endpointOnly, hostAttached });
       const { left, right, disconnected, sent } = pair;
       try {
         // Both canonical HELLO records precede descriptor consumption.
+        await left.observeSelectedRoutes();
+        await right.observeSelectedRoutes();
         assert.equal(await right.pumpOne(), 'infrastructure');
         assert.equal(await left.pumpOne(), 'infrastructure');
         assert.equal(left.topology.notRequiredPeers().length, 1);
@@ -38,7 +40,7 @@ for (const endpointOnly of [false, true]) {
 }
 
 test('NotRequired Admit conveys the peer descriptor before the connector closes', async () => {
-  const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
+  const pair = createPair({ endpointOnly: false, hostAttached: false });
   const { left, right, disconnected } = pair;
   try {
     assert.equal(await left.observeSelectedRoutes(), 1);
@@ -46,6 +48,8 @@ test('NotRequired Admit conveys the peer descriptor before the connector closes'
     assert.equal(right.topology.notRequiredPeers().length, 1);
     assert.equal(left.topology.notRequiredPeers().length, 0);
     assert.deepEqual(disconnected, []);
+    assert.equal(await left.pumpOne(), 'infrastructure');
+    assert.deepEqual(disconnected, [], 'HELLO leaves the intent in place');
     assert.equal(await left.pumpOne(), 'infrastructure');
     await assertTerminalPair(pair);
   } finally {
@@ -80,7 +84,7 @@ async function assertTerminalPair({ left, right, disconnected, sent, selectRoute
 test('HELLO repeats on liveness maintenance until NotRequired ADMIT retires the intent', async (t) => {
   let now = 0;
   t.mock.method(performance, 'now', () => now);
-  const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
+  const pair = createPair({ endpointOnly: false, hostAttached: false });
   const { left, right, sent } = pair;
   try {
     assert.equal(await left.observeSelectedRoutes(), 1);
@@ -91,6 +95,8 @@ test('HELLO repeats on liveness maintenance until NotRequired ADMIT retires the 
     await left.pumpBatch(false);
     assert.equal(sent.length, 3);
     assert.equal(await right.pumpOne(), 'infrastructure');
+    assert.equal(await left.pumpOne(), 'infrastructure');
+    assert.equal(left[inspectRuntime]().expectedPeers, 1);
     assert.equal(await left.pumpOne(), 'infrastructure');
     const admitted = sent.length;
     left.topology.replaceDiscoveredNotRequired([right.topology.localDescriptor()]);
@@ -103,7 +109,7 @@ test('HELLO repeats on liveness maintenance until NotRequired ADMIT retires the 
 });
 
 test('a rejected HELLO does not record acceptance for its selected route', async () => {
-  const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
+  const pair = createPair({ endpointOnly: false, hostAttached: false });
   const { left, right, sent, rejectNextSubmit } = pair;
   try {
     rejectNextSubmit();
@@ -120,7 +126,7 @@ test('a rejected HELLO does not record acceptance for its selected route', async
 });
 
 test('an unexpected HELLO submission failure propagates without recording acceptance', async () => {
-  const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
+  const pair = createPair({ endpointOnly: false, hostAttached: false });
   const cause = new Error('Unexpected adapter failure');
   try {
     pair.rejectNextSubmit(cause);
@@ -134,7 +140,7 @@ test('an unexpected HELLO submission failure propagates without recording accept
 });
 
 test('late HELLO acceptance belongs to the route generation submitted', async () => {
-  const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
+  const pair = createPair({ endpointOnly: false, hostAttached: false });
   const { left, right, sent, selectRoute, holdNextSubmit } = pair;
   try {
     const accept = holdNextSubmit();
@@ -152,7 +158,7 @@ test('late HELLO acceptance belongs to the route generation submitted', async ()
   }
 });
 
-function createPair({ endpointOnly, hostAttached, notify }) {
+function createPair({ endpointOnly, hostAttached }) {
   const queues = { left: [], right: [] };
   let routeGeneration = 1n;
   const disconnected = [];
@@ -174,10 +180,6 @@ function createPair({ endpointOnly, hostAttached, notify }) {
     const connect = endpoint => {
       assert.equal(endpoint, descriptors[remote].advertisedEndpoint);
       connected = true;
-      if (notify) {
-        queues.left.push({ sourceRid: 'right', routeGeneration, parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, right.topology.localDescriptor())] });
-        queues.right.push({ sourceRid: 'left', routeGeneration, parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, left.topology.localDescriptor())] });
-      }
     };
     const router = {
       setRoutingId(value) { assert.equal(value, rid); },

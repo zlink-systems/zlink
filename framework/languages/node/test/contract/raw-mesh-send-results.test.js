@@ -20,7 +20,7 @@ function fixture() {
   const received = [];
   const sent = [];
   let failure;
-  const routes = [];
+  const routes = new Set();
   const router = {
     setRoutingId() {}, bind() {}, close() {}, setReceiveFlowState() {}, localEndpoint() { return descriptor("local").advertisedEndpoint; },
     submitSend(target, parts) {
@@ -39,7 +39,10 @@ function fixture() {
       sent.push({ target, command: wire.decodeHeader(parts[0]).command });
       if (failure !== undefined) { const error = failure; failure = undefined; throw error; }
     },
-    receive() { return received.shift(); }, routesSnapshot() { return routes; }
+    receive() { return received.shift(); },
+    routesSnapshot() {
+      return [...routes].map((routingId) => ({ routingId, routeGeneration: 1n }));
+    }
   };
   const runtime = new RawServiceMeshRuntime({
     descriptor: descriptor('local'),
@@ -49,10 +52,13 @@ function fixture() {
   runtime.start();
   return {
     runtime, sent,
-    selectPeer() { routes.push({ routingId: "peer", routeGeneration: 1n }); },
+    selectPeer(rid = 'peer') {
+      routes.add(rid);
+    },
     fail(error) { failure = error; },
     enqueue(rid, parts) { received.push({ sourceRid: rid, sourceRoute: Buffer.from(rid), routeGeneration: 1n, parts, close() {} }); },
     async admit(rid) {
+      this.selectPeer(rid);
       this.enqueue(rid, [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, descriptor(rid))]);
       assert.equal(await runtime.pumpOne(0), 'infrastructure');
       assert.ok(runtime.topology.peer(rid));
@@ -82,6 +88,8 @@ for (const result of [SubmitResult.NotConnected, SubmitResult.NotFound]) {
       test(`route absence ${result}/${phase} completes received ${response} without exception`, async () => {
         const f = fixture();
         try {
+          f.selectPeer();
+          await f.runtime.observeSelectedRoutes();
           if (response === 'livenessAck') await f.admit('peer');
           const parts = response === 'livenessAck'
             ? [codec.encodeLivenessRecord({ command: wire.M6aServiceWireCommand.livenessProbe, probeId: 1n })]
@@ -120,6 +128,8 @@ test('non-route submission failures propagate from receive and update paths', as
   for (const cause of [new Error('adapter failure'), new ZLinkBackendResultError('submit', SubmitResult.Terminated, undefined, { phase: 'completion' })]) {
     const f = fixture();
     try {
+      f.selectPeer();
+      await f.runtime.observeSelectedRoutes();
       f.enqueue('peer', [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, f.descriptor('peer'))]); f.fail(cause);
       if (cause.phase === 'completion') {
         assert.equal(await f.runtime.pumpOne(0), 'infrastructure');

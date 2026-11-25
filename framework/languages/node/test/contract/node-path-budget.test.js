@@ -300,7 +300,7 @@ test('ordinary ingress transfers its existing permit and payload without operati
       sourceRid: 'peer',
       routeGeneration: 1n,
       parts: [
-        wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, {
+        wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, {
           ...descriptor,
           nodeRoutingId: 'peer'
         })
@@ -312,6 +312,7 @@ test('ordinary ingress transfers its existing permit and payload without operati
     { applicationJobQueue: queue, descriptor },
     {
       receive: () => admissions.shift(),
+      routesSnapshot: () => [{ routingId: 'peer', routeGeneration: 1n }],
       submitSend: () => ({ result: 0 })
     }
   );

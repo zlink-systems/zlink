@@ -664,7 +664,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   disconnectPeer(peerRid: unknown, lifecycleGeneration: bigint): void {
     const nodeRoutingId = String(peerRid);
-    const admitted = this.runtime?.topology.peer(nodeRoutingId);
+    const runtime = this.runtime;
+    const admitted = runtime?.topology.peer(nodeRoutingId);
     if (admitted !== undefined && admitted.descriptor.lifecycleGeneration !== lifecycleGeneration) {
       return;
     }
@@ -679,8 +680,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
           intent.endpoint === admittedEndpoint)
     );
     if (found === undefined) {
-      if (admitted !== undefined) {
-        this.runtime?.disconnectPeer(
+      if (admitted === undefined) {
+        runtime?.topology.forgetEndedAdmission(nodeRoutingId, undefined, lifecycleGeneration);
+      } else {
+        runtime?.disconnectPeer(
           admitted.descriptor.advertisedEndpoint,
           nodeRoutingId,
           lifecycleGeneration

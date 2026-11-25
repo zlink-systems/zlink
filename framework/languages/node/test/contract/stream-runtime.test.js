@@ -5103,10 +5103,16 @@ test('actual raw command 36 from an authenticated peer is admitted by the curren
       }
     },
     applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration())
-  }, { submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() }) });
+  }, {
+    routesSnapshot: () => [
+      { routingId: 'source', routeGeneration: 1n },
+      { routingId: 'target', routeGeneration: 2n }
+    ],
+    submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() })
+  });
   for (const [peer, generation, route] of [['source', 4n, 1n], ['target', 5n, 2n]]) {
     records.push({ sourceRid: peer, sourceRoute: Buffer.from(peer), routeGeneration: route,
-      parts: [serviceWire.encodeRouteMeshAdmission(serviceWire.M6aServiceWireCommand.hello, testServiceNodeDescriptor(peer, generation))], close() {} });
+      parts: [serviceWire.encodeRouteMeshAdmission(serviceWire.M6aServiceWireCommand.admit, testServiceNodeDescriptor(peer, generation))], close() {} });
     assert.equal(await raw.pumpOne(0), 'infrastructure');
     assert.equal(raw.topology.peer(peer).descriptor.lifecycleGeneration, generation);
   }

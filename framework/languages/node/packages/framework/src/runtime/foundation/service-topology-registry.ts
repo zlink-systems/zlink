@@ -57,6 +57,12 @@ export interface AdmittedServicePeer extends ServiceRouteAdmission {
   readonly liveness?: ServiceLivenessConnection;
 }
 
+interface EndedServiceAdmission {
+  readonly routeGeneration: bigint;
+  readonly descriptor: Pick<ServiceNodeDescriptor, 'advertisedEndpoint' | 'lifecycleGeneration'>;
+  readonly liveness?: undefined;
+}
+
 export interface ServicePeerAdmissionExpectation {
   readonly endpoint?: string;
   readonly securityIdentity?: string;
@@ -78,6 +84,7 @@ interface ServiceSelectionCacheEntry {
 export class ServiceTopologyRegistry {
   private local: ServiceNodeDescriptor;
   private readonly peersByRid = new Map<string, AdmittedServicePeer>();
+  private readonly endedByRid = new Map<string, EndedServiceAdmission>();
   private readonly notRequiredByRid = new Map<string, ServiceRouteAdmission>();
   private readonly knownByRid = new Map<string, ServiceNodeDescriptor>();
   private readonly selections = new Map<string, ServiceSelectionCacheEntry>();
@@ -174,12 +181,21 @@ export class ServiceTopologyRegistry {
     };
     if (descriptorConnectionNotRequired(this.local, descriptor)) {
       this.peersByRid.delete(descriptor.nodeRoutingId);
+      this.endedByRid.delete(descriptor.nodeRoutingId);
       this.remember(descriptor);
       this.notRequiredByRid.set(descriptor.nodeRoutingId, admission);
       this.rebuildSelections();
       return 'notRequired';
     }
     this.notRequiredByRid.delete(descriptor.nodeRoutingId);
+    if (receivedAdmit) {
+      this.endedByRid.delete(descriptor.nodeRoutingId);
+    } else {
+      this.discardEndedAdmissionFromPreviousLifecycle(
+        descriptor.nodeRoutingId,
+        descriptor.lifecycleGeneration
+      );
+    }
 
     // Core selects the one route per RID (Core ROUTER §10.1); an admission on
     // that route replaces the admission of a route it replaced.
@@ -193,12 +209,81 @@ export class ServiceTopologyRegistry {
     return 'admitted';
   }
 
-  disconnect(nodeRoutingId: string, connectionId: string | bigint): boolean {
+  disconnect(
+    nodeRoutingId: string,
+    connectionId: string | bigint,
+    endedRoute?: { readonly generation: bigint; readonly expectedLifecycle?: bigint }
+  ): boolean {
     const current = this.peersByRid.get(nodeRoutingId);
     if (current === undefined || current.connectionId !== connectionId) return false;
+    if (endedRoute === undefined) {
+      this.endedByRid.delete(nodeRoutingId);
+    } else if (this.hasRemoteAdmit(nodeRoutingId)) {
+      const { advertisedEndpoint, lifecycleGeneration } = current.descriptor;
+      this.endedByRid.set(nodeRoutingId, {
+        routeGeneration: endedRoute.generation,
+        descriptor: { advertisedEndpoint, lifecycleGeneration }
+      });
+      this.discardEndedAdmissionFromPreviousLifecycle(nodeRoutingId, endedRoute.expectedLifecycle);
+    }
     this.peersByRid.delete(nodeRoutingId);
     this.rebuildSelections();
     return true;
+  }
+
+  discardEndedAdmissionFromPreviousLifecycle(nodeRoutingId: string, lifecycle?: bigint): void {
+    const ended = this.endedByRid.get(nodeRoutingId);
+    if (
+      ended !== undefined &&
+      lifecycle !== undefined &&
+      lifecycle !== 0n &&
+      ended.descriptor.lifecycleGeneration !== lifecycle
+    ) {
+      this.endedByRid.delete(nodeRoutingId);
+    }
+  }
+
+  forgetEndedAdmission(nodeRoutingId: string, endpoint?: string, lifecycle?: bigint): void {
+    const descriptor = this.endedByRid.get(nodeRoutingId)?.descriptor;
+    if (
+      descriptor !== undefined &&
+      (endpoint === undefined || descriptor.advertisedEndpoint === endpoint) &&
+      (lifecycle === undefined || descriptor.lifecycleGeneration === lifecycle)
+    ) {
+      this.endedByRid.delete(nodeRoutingId);
+    }
+  }
+
+  forgetEndedAdmissionsAtEndpoint(
+    endpoint: string,
+    nodeRoutingId?: string,
+    lifecycle?: bigint
+  ): void {
+    if (nodeRoutingId !== undefined) {
+      this.forgetEndedAdmission(nodeRoutingId, endpoint, lifecycle);
+      return;
+    }
+    for (const rid of this.endedByRid.keys()) this.forgetEndedAdmission(rid, endpoint, lifecycle);
+  }
+
+  clearEndedAdmissions(): void {
+    this.endedByRid.clear();
+  }
+
+  claimIngress(
+    nodeRoutingId: string,
+    routeGeneration: bigint,
+    application: boolean
+  ): AdmittedServicePeer | EndedServiceAdmission | undefined {
+    const current = this.admittedPeer(nodeRoutingId);
+    if (
+      current?.liveness?.connectionId === routeGeneration &&
+      (!application || current.remoteAdmitReceived === true)
+    ) {
+      return current;
+    }
+    const ended = application ? this.endedByRid.get(nodeRoutingId) : undefined;
+    return ended?.routeGeneration === routeGeneration ? ended : undefined;
   }
 
   peer(nodeRoutingId: string): AdmittedServicePeer | undefined {

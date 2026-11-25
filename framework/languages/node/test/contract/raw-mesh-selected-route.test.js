@@ -490,10 +490,12 @@ test('native target removal settles pending admission once on liveness expiry', 
 });
 
 test('a retired liveness receipt cannot expire the replacement admission', async () => {
-  const h = selectedRouteRuntime(new Map([['peer', 12n]]));
+  const routes = new Map([['peer', 11n]]);
+  const h = selectedRouteRuntime(routes);
   try {
     assert.equal(await h.admit(descriptor('peer'), 11n, 0), 'infrastructure');
     const retired = h.runtime.topology.peer('peer').liveness;
+    routes.set('peer', 12n);
     assert.equal(await h.admit(descriptor('peer'), 12n, 14000), 'infrastructure');
     assert.equal(retired.isExpired(15000), true);
     assert.deepEqual(h.runtime.tickLiveness(15000).timedOutNodes, []);
@@ -557,7 +559,8 @@ test('a direct RID request selects only the logical target and leaves route acce
 
 for (const admittedGeneration of [undefined, 11n]) {
   test(`unadmitted route records are discarded without processing or replies (${admittedGeneration})`, async () => {
-    const h = selectedRouteRuntime(new Map([['peer', 12n]]));
+    const routes = new Map([['peer', admittedGeneration ?? 12n]]);
+    const h = selectedRouteRuntime(routes);
     let dispatches = 0;
     let replies = 0;
     h.runtime.setServiceIngress(() => {
@@ -567,6 +570,7 @@ for (const admittedGeneration of [undefined, 11n]) {
     try {
       if (admittedGeneration !== undefined)
         assert.equal(await h.admit(descriptor('peer'), admittedGeneration, 0), 'infrastructure');
+      routes.set('peer', 12n);
       for (const parts of [
         [],
         [Buffer.alloc(0)],

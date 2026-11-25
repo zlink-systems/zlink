@@ -3066,7 +3066,7 @@ export class ZLinkFrameworkRuntimeHost
       ...options,
       admission: this.admission,
       errorSink: this.runtimeOrPreStartErrorSink,
-      peerAdmissionSealed: (meshName: string) => !this.admission.accepts(meshName),
+      peerAdmissionSealed: (meshName: string) => this.admission.isSealed(meshName),
       routeActorJoinIngress: (
         meshName: string,
         ...args: Parameters<

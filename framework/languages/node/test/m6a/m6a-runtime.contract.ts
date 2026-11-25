@@ -1175,7 +1175,8 @@ test('remote request is not rejected by legacy mailbox limits after shared admis
       },
       'peer-connection',
       undefined,
-      () => runtime.liveness.admit('peer', 1n, 0)
+      () => runtime.liveness.admit('peer', 1n, 0),
+      M6aServiceWireCommand.admit
     ),
     'admitted'
   );
