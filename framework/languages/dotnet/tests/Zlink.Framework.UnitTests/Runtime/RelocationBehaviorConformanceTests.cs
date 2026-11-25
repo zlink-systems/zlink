@@ -3635,6 +3635,10 @@ internal sealed class CanonicalRelocationTransportProbe
     internal TaskCompletionSource<Exception> PrepareFailure { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal Func<ulong>? Command40DeadlineOverride { get; set; }
+    internal Func<
+        ZLinkServiceWireCodec.RelocationPrepareRecord,
+        ZLinkServiceWireCodec.RelocationPrepareRecord
+    >? PrepareOverride { get; init; }
     internal TaskCompletionSource CutoverSendStarted { get; } = Signal();
     internal TaskCompletionSource ReleaseCutoverSend { get; } = Signal();
     internal TaskCompletionSource CutoverSendSubmitted { get; } = Signal();
@@ -3835,7 +3839,7 @@ internal sealed class CanonicalRelocationTransportProbe
             ready = await transport
                 .PrepareCanonicalRelocationAsync(
                     targetNodeRid,
-                    prepare,
+                    PrepareOverride?.Invoke(prepare) ?? prepare,
                     payload,
                     timeout,
                     cancellationToken

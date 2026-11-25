@@ -1165,6 +1165,13 @@ public sealed partial class RelocationRuntimeTests
             StoreVersion = "source-cas-version",
             Payload = CanonicalFixtureAuthorityPayload(),
             AuthorityOwnerGeneration = stage.SourceAuthorityOwnerGeneration,
+            OwnerId = stage.SourceOwner.OwnerId,
+            OwnerLeaseGeneration = stage.SourceOwner.LeaseGeneration,
+            Allocation = candidate.Authorities[0].Snapshot.Allocation with
+            {
+                Descriptor = new("mesh", stage.SourceNodeRid),
+            },
+            Relocation = null,
         };
         var store = new RecordingAuthorityStore();
         store.Seed(key, source);
@@ -1186,7 +1193,30 @@ public sealed partial class RelocationRuntimeTests
             false,
             "",
             37,
-            []
+            [],
+            source.StoreVersion
+        );
+        var id = stage.Envelope.AggregateId.ToString("N");
+        var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
+            new(Convert.ToUInt64(id[..16], 16), Convert.ToUInt64(id[16..], 16)),
+            1,
+            new(source.OwnerId, 1, stage.SourceNodeRid, 1, source.StoreVersion),
+            new(RoutingId.From("target"), 1, "target-owner", 1),
+            1,
+            ZLinkSpotRetireTargetRuntime.CreateCanonicalRelocationObject(
+                ZLinkPlacementObjectKind.UserSpot,
+                request.StableType,
+                request.SpotId,
+                source.ObjectGeneration,
+                source.AuthorityOwnerGeneration
+            ),
+            stage.SourceNodeRid,
+            1,
+            1,
+            1,
+            37,
+            1,
+            1
         );
 
         var (envelope, recoveries) =
@@ -1194,6 +1224,7 @@ public sealed partial class RelocationRuntimeTests
                 store,
                 candidate.Envelope,
                 request,
+                prepare,
                 CancellationToken.None
             );
         Assert.True(Assert.Single(envelope.Participants).RecoveryPayload.IsEmpty);

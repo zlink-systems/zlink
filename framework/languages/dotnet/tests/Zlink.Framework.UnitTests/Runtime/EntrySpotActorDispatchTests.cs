@@ -14909,11 +14909,20 @@ public sealed partial class EntrySpotActorDispatchTests
                 ?? throw new InvalidOperationException(
                     "The scheduler probe has no staged aggregate."
                 );
+            var representative = Assert.Single(staging.Participants);
+            var store = authorityStore();
+            var captured = Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await store
+                        .ReadAuthorityAsync(representative.Envelope.AuthorityKey, cancellationToken)
+                        .ConfigureAwait(false)
+                )
+                .Snapshot;
             var request = new ZLinkAggregateRelocationRequest(
                 relocation.Envelope.AggregateId,
                 relocation.Envelope.AggregateGeneration,
                 1,
-                staging.Participants,
+                [representative with { ExpectedStoreVersion = captured.StoreVersion }],
                 reservation.TargetDescriptor,
                 reservation.TargetDescriptorLifecycleGeneration,
                 reservation.Capacity,
@@ -14923,15 +14932,10 @@ public sealed partial class EntrySpotActorDispatchTests
                     reservation.Inventory.SourceNodeLifecycleGeneration,
                     reservation.Inventory.SourceOwner.OwnerId,
                     checked((ulong)reservation.Inventory.SourceOwner.LeaseGeneration),
-                    staging
-                        .Participants.Single(participant =>
-                            participant.Envelope.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-                        )
-                        .ExpectedStoreVersion
+                    representative.ExpectedStoreVersion
                 ),
                 relocation.Envelope
             );
-            var store = authorityStore();
             var coordinator = new ZLinkAggregateRelocationCoordinator(
                 new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
                 store,
@@ -14940,15 +14944,8 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = await coordinator
                 .PublishAsync(request, CancellationToken.None, relocation.Relocation)
                 .ConfigureAwait(false);
-            var spotKey = relocation
-                .Envelope.Participants.Single(static participant =>
-                    participant.ObjectKind
-                        is ZLinkPlacementObjectKind.UserSpot
-                            or ZLinkPlacementObjectKind.InstanceSpot
-                )
-                .AuthorityKey;
             var read = await store
-                .ReadAuthorityAsync(spotKey, CancellationToken.None)
+                .ReadAuthorityAsync(representative.Envelope.AuthorityKey, CancellationToken.None)
                 .ConfigureAwait(false);
             return read is ZLinkAuthorityReadResult.Found found
                 ? found.Snapshot.AuthorityOwnerGeneration
