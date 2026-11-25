@@ -3373,6 +3373,25 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-contract;stream;liveness"
     unit)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_stream_liveness)
+  add_executable(test_cpp_framework_stream_liveness_under_ingress_pressure
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_liveness_under_ingress_pressure.cpp)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_stream_liveness_under_ingress_pressure)
+  target_include_directories(test_cpp_framework_stream_liveness_under_ingress_pressure PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_stream_liveness_under_ingress_pressure PRIVATE
+    zlink::framework opentelemetry-cpp::metrics)
+  foreach(_liveness_transport IN ITEMS tcp websocket core)
+    foreach(_liveness_case IN ITEMS
+        unsaturated below_timeout at_timeout above_timeout silent_after_release idle_after_release)
+      zlink_framework_cpp_add_test(
+        NAME test_cpp_framework_stream_liveness_under_ingress_pressure_${_liveness_transport}_${_liveness_case}
+        COMMAND test_cpp_framework_stream_liveness_under_ingress_pressure ${_liveness_transport} ${_liveness_case}
+        LABELS "framework-unit;framework-regression;stream;liveness"
+        TIER contract
+        TIMEOUT 30)
+    endforeach()
+  endforeach()
   add_zlink_framework_test(
     test_cpp_framework_poll_interval_wait
     tests/Zlink.Framework.UnitTests/test_cpp_framework_poll_interval_wait.cpp
