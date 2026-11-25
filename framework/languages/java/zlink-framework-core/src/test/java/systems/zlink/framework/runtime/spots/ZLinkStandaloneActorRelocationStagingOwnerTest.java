@@ -6,17 +6,20 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -34,12 +37,12 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
     @ParameterizedTest
     @ValueSource(strings = {"saved", "relayed", "temporary"})
     void hiddenBacklogIsAdoptedByActorFifoBeforeFinalPublicationOpensHandlers(String origin) {
-        var handlerTerminal = new CompletableFuture<Optional<byte[]>>();
+        var handlerTerminal = new CompletableFuture<Optional<LocalActorReply>>();
         var events = new ArrayList<String>();
         FakeBackend backend =
                 new FakeBackend() {
                     @Override
-                    public CompletionStage<Optional<byte[]>> replay(
+                    public CompletionStage<Optional<LocalActorReply>> replay(
                             Object actor,
                             ZLinkStandaloneActorRelocationStagingOwner.Request request,
                             ZLinkActorAcceptedJournal.Record record) {
@@ -278,7 +281,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                     private int batches;
 
                     @Override
-                    public CompletionStage<Optional<byte[]>> replay(
+                    public CompletionStage<Optional<LocalActorReply>> replay(
                             Object actor,
                             ZLinkStandaloneActorRelocationStagingOwner.Request request,
                             ZLinkActorAcceptedJournal.Record record) {
@@ -644,7 +647,9 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                                 CompletableFuture.failedFuture(
                                         new AssertionError(
                                                 "standalone Actor must not replay Spot")),
-                        record -> owner.replayActor(staged, record),
+                        record ->
+                                owner.replayActor(staged, record)
+                                        .thenApply(ZLinkSpotRuntime::takeReplayPayloadBytes),
                         new ZLinkAcceptedJournalReplayer.ReplyRelay() {
                             @Override
                             public CompletionStage<Void> completeSpot(
@@ -873,7 +878,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
         var events = new ArrayList<Integer>();
         var captured = new AtomicReference<ZLinkSerialExecutionQueue.RelocationSeal>();
-        var p1Terminal = new CompletableFuture<Optional<byte[]>>();
+        var p1Terminal = new CompletableFuture<Optional<LocalActorReply>>();
         var qAdmission = new AtomicReference<CompletableFuture<Void>>();
         var backend =
                 new FakeBackend() {
@@ -946,7 +951,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                     }
 
                     @Override
-                    public CompletionStage<Optional<byte[]>> replay(
+                    public CompletionStage<Optional<LocalActorReply>> replay(
                             Object actor,
                             ZLinkStandaloneActorRelocationStagingOwner.Request request,
                             ZLinkActorAcceptedJournal.Record record) {
@@ -1117,7 +1122,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         }
 
         @Override
-        public CompletionStage<Optional<byte[]>> replay(
+        public CompletionStage<Optional<LocalActorReply>> replay(
                 Object actor,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 ZLinkActorAcceptedJournal.Record record) {
@@ -1129,7 +1134,11 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                 return CompletableFuture.failedFuture(
                         new IllegalStateException("first replay failed"));
             }
-            return CompletableFuture.completedFuture(replayReply);
+            return CompletableFuture.completedFuture(
+                    replayReply.map(
+                            bytes ->
+                                    new LocalActorReply(
+                                            Message.from(bytes), ZLinkStreamCodec.RAW)));
         }
 
         @Override

@@ -80,6 +80,9 @@ final class ZLinkActorReplyDecoder {
             }
             throw new ZLinkFrameworkException(error.frameworkKind(), error.message());
         }
+        if (header.kind() != ZLinkStreamMessageKind.RESPONSE) {
+            throw new IllegalArgumentException("Actor reply kind must be Response or Error.");
+        }
         if (replyType == null) return null;
         return ZLinkMessagePayloads.deserialize(
                 ZLinkCodecRegistration.serializerForReceivedStreamCodec(serializer, header.codec()),

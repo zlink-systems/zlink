@@ -357,6 +357,45 @@ final class ZLinkActorClientRuntimeTest {
         }
     }
 
+    @Test
+    void actorTypedReplyRejectsSendKind() {
+        try (var frame = sendKindReply()) {
+            var failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () ->
+                                    ZLinkActorReplyDecoder.decode(
+                                            List.of(frame),
+                                            new ZLinkJsonMessageSerializer(),
+                                            Pong.class));
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
+        }
+    }
+
+    @Test
+    void actorTerminalReplyRejectsSendKind() {
+        try (var frame = sendKindReply()) {
+            var failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () -> ZLinkActorReplyDecoder.decodeTerminal(List.of(frame)));
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
+        }
+    }
+
+    private static Message sendKindReply() {
+        var header =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.SEND,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.empty(),
+                        "Pong",
+                        Map.of());
+        var body = new ZLinkJsonMessageSerializer().serialize(new Pong("pong")).bytes();
+        return Message.from(ZLinkStreamFrameCodec.encode(header, body));
+    }
+
     @jdk.jfr.Name("zlink.ActorBackendSubmit")
     static final class ActorBackendSubmit extends jdk.jfr.Event {}
 

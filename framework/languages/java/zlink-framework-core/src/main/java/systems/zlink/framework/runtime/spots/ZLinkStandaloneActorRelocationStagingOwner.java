@@ -5,6 +5,7 @@ import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -167,7 +168,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         }
     }
 
-    CompletionStage<Optional<byte[]>> replayActor(
+    CompletionStage<Optional<LocalActorReply>> replayActor(
             Staged staged, ZLinkActorAcceptedJournal.Record record) {
         // The Actor FIFO can execute an accepted record after the temporary stage has ended.
         Objects.requireNonNull(staged, "staged");
@@ -453,22 +454,23 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
     }
 
     private CompletionStage<Void> replayIngress(Staged staged, PendingIngress ingress) {
-        return replayActor(staged, ZLinkActorAcceptedJournal.decode(ingress.record()))
-                .handle(
-                        (reply, failure) -> {
-                            if (failure != null) {
-                                throw new CompletionException(unwrap(failure));
-                            }
-                            if (reply.isPresent() && ingress.reply() != null) {
-                                List<Message> parts = List.of(Message.from(reply.orElseThrow()));
+        var record = ZLinkActorAcceptedJournal.decode(ingress.record());
+        return replayActor(staged, record)
+                .thenAccept(
+                        reply -> {
+                            if (reply.isEmpty()) return;
+                            var value = reply.orElseThrow();
+                            try (Message ignored = value.payload()) {
+                                if (ingress.reply() == null) return;
+                                var frame =
+                                        ActorPacketFrames.encodeRoutedReply(record.header(), value);
                                 try {
-                                    ingress.reply().accept(parts);
-                                } catch (RuntimeException callbackFailure) {
-                                    parts.forEach(Message::close);
+                                    ingress.reply().accept(List.of(frame));
+                                } catch (RuntimeException | Error callbackFailure) {
+                                    frame.close();
                                     throw callbackFailure;
                                 }
                             }
-                            return null;
                         });
     }
 
@@ -949,7 +951,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         CompletionStage<Object> prepare(
                 Request request, byte[] state, ZLinkRelocationCancellation cancellation);
 
-        CompletionStage<Optional<byte[]>> replay(
+        CompletionStage<Optional<LocalActorReply>> replay(
                 Object actor, Request request, ZLinkActorAcceptedJournal.Record record);
 
         CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
@@ -1031,7 +1033,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         }
 
         @Override
-        public CompletionStage<Optional<byte[]>> replay(
+        public CompletionStage<Optional<LocalActorReply>> replay(
                 Object actor, Request request, ZLinkActorAcceptedJournal.Record record) {
             return spots.replayPreparedActorAtSpot(
                     request.targetSpotId(),

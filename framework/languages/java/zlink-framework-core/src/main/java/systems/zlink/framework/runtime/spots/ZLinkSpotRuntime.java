@@ -86,12 +86,9 @@ import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
-import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
-import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.spots.SpotRef;
 import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
@@ -115,7 +112,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -4229,12 +4225,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkSpotLifecycle.PreparedUserSpot preparedSpot,
             ZLinkActorRuntime.PreparedTransferredActor preparedActor,
             ZLinkActorAcceptedJournal.Record record) {
-        ZLinkActor actor = preparedActor.actor();
         Object spotSurface = spotLifecycle.preparedSpot(preparedSpot);
-        return replayPreparedActorOnSurface(spotSurface, preparedActor, record);
+        return replayPreparedActorOnSurface(spotSurface, preparedActor, record)
+                .thenApply(ZLinkSpotRuntime::takeReplayPayloadBytes);
     }
 
-    CompletionStage<Optional<byte[]>> replayPreparedActorAtSpot(
+    CompletionStage<Optional<LocalActorReply>> replayPreparedActorAtSpot(
             String spotId,
             ZLinkActorRuntime.PreparedTransferredActor preparedActor,
             ZLinkActorAcceptedJournal.Record record) {
@@ -4248,7 +4244,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return replayPreparedActorOnSurface(spotSurface, preparedActor, record);
     }
 
-    private CompletionStage<Optional<byte[]>> replayPreparedActorOnSurface(
+    private CompletionStage<Optional<LocalActorReply>> replayPreparedActorOnSurface(
             Object spotSurface,
             ZLinkActorRuntime.PreparedTransferredActor preparedActor,
             ZLinkActorAcceptedJournal.Record record) {
@@ -4285,16 +4281,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             payload.close();
             return CompletableFuture.failedFuture(failure);
         }
-        return dispatched
-                .thenApply(
-                        reply ->
-                                reply.map(
-                                        value -> {
-                                            try (Message replyPayload = value.payload()) {
-                                                return replyPayload.toByteArray();
-                                            }
-                                        }))
-                .whenComplete((ignored, failure) -> payload.close());
+        return dispatched.whenComplete((ignored, failure) -> payload.close());
+    }
+
+    static Optional<byte[]> takeReplayPayloadBytes(Optional<LocalActorReply> reply) {
+        return reply.map(
+                value -> {
+                    try (Message payload = value.payload()) {
+                        return payload.toByteArray();
+                    }
+                });
     }
 
     CompletionStage<Optional<LocalActorReply>> replyTransferredRequestDirect(
@@ -4325,14 +4321,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         LocalActorReply actorReply = reply.get();
         byte[] frameBytes;
         try (Message payload = actorReply.payload()) {
-            ZLinkStreamHeader responseHeader =
-                    ZLinkStreamHeader.createResponse(
-                            requestHeader,
-                            actorReply.codec(),
-                            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                            requestHeader.packetName(),
-                            Map.of());
-            frameBytes = ZLinkStreamFrameCodec.encode(responseHeader, payload.toByteArray());
+            frameBytes =
+                    ActorPacketFrames.encodeReplyBytes(requestHeader, payload, actorReply.codec());
         }
         CompletionStage<Void> submission;
         try {
@@ -4598,7 +4588,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             : ActorPacketFrames.encodeReply(
                                                     packetHeader,
                                                     reply.get().message(),
-                                                    ZLinkPacketNames.resolve(handler.replyType()),
                                                     streamCodecFor(handler.replyType()))) {
                                 frameBytes = frame.toByteArray();
                             }
@@ -7011,7 +7000,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     ? ActorPacketFrames.encodeReply(
                                                             packetHeader,
                                                             payload,
-                                                            packetHeader.packetName(),
                                                             ZLinkStreamCodec.RAW)
                                                     : ActorPacketFrames.encodeError(
                                                             packetHeader, error)) {

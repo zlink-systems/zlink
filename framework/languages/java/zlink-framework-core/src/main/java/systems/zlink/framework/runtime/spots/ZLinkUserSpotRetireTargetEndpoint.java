@@ -1177,7 +1177,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         CompletableFuture.failedFuture(
                                 new IllegalArgumentException(
                                         "standalone Actor root contains a Spot journal")),
-                record -> actorStaging.replayActor(target.staged(), record),
+                record ->
+                        actorStaging
+                                .replayActor(target.staged(), record)
+                                .thenApply(ZLinkSpotRuntime::takeReplayPayloadBytes),
                 new ZLinkAcceptedJournalReplayer.ReplyRelay() {
                     @Override
                     public CompletionStage<Void> completeSpot(

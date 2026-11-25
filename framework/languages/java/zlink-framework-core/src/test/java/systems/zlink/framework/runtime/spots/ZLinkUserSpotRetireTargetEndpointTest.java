@@ -20,6 +20,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.binding.ZLinkRelocationRawSessionFixture;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -479,7 +480,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         RestartActorBackend backend =
                 new RestartActorBackend(new ArrayList<>()) {
                     @Override
-                    public CompletionStage<Optional<byte[]>> replay(
+                    public CompletionStage<Optional<LocalActorReply>> replay(
                             Object actor,
                             ZLinkStandaloneActorRelocationStagingOwner.Request request,
                             ZLinkActorAcceptedJournal.Record record) {
@@ -584,12 +585,12 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
     @Test
     void adoptedActorRecordRunsInsideTheExistingDeferredJoinHandlerScope() {
         var registered = new CompletableFuture<Void>();
-        var handler = new CompletableFuture<Optional<byte[]>>();
+        var handler = new CompletableFuture<Optional<LocalActorReply>>();
         var observed = new java.util.concurrent.atomic.AtomicReference<Throwable>();
         RestartActorBackend backend =
                 new RestartActorBackend(new ArrayList<>()) {
                     @Override
-                    public CompletionStage<Optional<byte[]>> replay(
+                    public CompletionStage<Optional<LocalActorReply>> replay(
                             Object actor,
                             ZLinkStandaloneActorRelocationStagingOwner.Request request,
                             ZLinkActorAcceptedJournal.Record record) {
@@ -2039,7 +2040,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public CompletionStage<Optional<byte[]>> replay(
+        public CompletionStage<Optional<LocalActorReply>> replay(
                 Object actor,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 ZLinkActorAcceptedJournal.Record record) {

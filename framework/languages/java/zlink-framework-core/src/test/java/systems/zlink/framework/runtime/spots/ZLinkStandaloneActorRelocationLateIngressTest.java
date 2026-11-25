@@ -75,18 +75,27 @@ final class ZLinkStandaloneActorRelocationLateIngressTest {
                             (lane, record) -> CompletableFuture.completedFuture(null));
             var failure = new CompletableFuture<Throwable>();
             var reply = new CompletableFuture<String>();
+            byte[] ingress =
+                    ZLinkAcceptedJournalTestRecords.actor(
+                            ACTOR_ID,
+                            1,
+                            Probe.class.getSimpleName(),
+                            Map.of(),
+                            "{\"value\":\"late\"}".getBytes(StandardCharsets.UTF_8));
             assertTrue(
                     owner.acceptIngress(
                             staged,
-                            ZLinkAcceptedJournalTestRecords.actor(
-                                    ACTOR_ID,
-                                    1,
-                                    Probe.class.getSimpleName(),
-                                    Map.of(),
-                                    "{\"value\":\"late\"}".getBytes(StandardCharsets.UTF_8)),
+                            ingress,
                             parts -> {
                                 assertEquals(1, parts.size());
-                                try (var message = parts.getFirst()) {
+                                try (var frame = parts.getFirst();
+                                        var message =
+                                                ActorPacketFrames.decodeRoutedReply(
+                                                                ZLinkActorAcceptedJournal.decode(
+                                                                                ingress)
+                                                                        .header(),
+                                                                frame)
+                                                        .payload()) {
                                     reply.complete(
                                             new ZLinkJsonMessageSerializer()
                                                     .deserializeBorrowed(

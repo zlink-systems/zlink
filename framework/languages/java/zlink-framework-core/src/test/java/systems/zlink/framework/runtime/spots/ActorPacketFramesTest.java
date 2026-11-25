@@ -182,7 +182,6 @@ final class ActorPacketFramesTest {
                         ActorPacketFrames.encodeReply(
                                 ActorPacketFrames.decode(actorReceived(headerPart)),
                                 payload,
-                                "DeclaredReply",
                                 ZLinkStreamCodec.PROTOBUF)) {
             DecodedFrame decoded = decodeFrame(frame);
 

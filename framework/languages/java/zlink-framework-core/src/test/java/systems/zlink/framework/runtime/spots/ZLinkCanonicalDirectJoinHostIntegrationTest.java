@@ -24,6 +24,7 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
@@ -2075,7 +2076,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         }
 
         @Override
-        public CompletionStage<Optional<byte[]>> replay(
+        public CompletionStage<Optional<LocalActorReply>> replay(
                 Object actor,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 ZLinkActorAcceptedJournal.Record record) {

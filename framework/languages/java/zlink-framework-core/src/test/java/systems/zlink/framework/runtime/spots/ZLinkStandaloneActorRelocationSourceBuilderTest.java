@@ -12,6 +12,7 @@ import systems.zlink.framework.locationprovider.ZLinkRelocationStore;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
@@ -25,6 +26,7 @@ import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapte
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -566,8 +568,20 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             List.of(Message.from("target-staged-payload")),
                             null,
                             reply -> {
-                                targetIngressReplies.add(reply.getFirst().toUtf8String());
-                                reply.forEach(Message::close);
+                                try {
+                                    var replay =
+                                            ActorPacketFrames.decodeRoutedReply(
+                                                    ZLinkActorAcceptedJournal.decode(
+                                                                    stagedTargetRecord)
+                                                            .header(),
+                                                    reply.getFirst());
+                                    try (var payload = replay.payload()) {
+                                        assertEquals(ZLinkStreamCodec.RAW, replay.codec());
+                                        targetIngressReplies.add(payload.toUtf8String());
+                                    }
+                                } finally {
+                                    reply.forEach(Message::close);
+                                }
                             },
                             ignored -> targetIngressFailures.incrementAndGet()));
             assertEquals(0, targetIngressFailures.get());
@@ -883,7 +897,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         }
 
         @Override
-        public CompletionStage<Optional<byte[]>> replay(
+        public CompletionStage<Optional<LocalActorReply>> replay(
                 Object actor,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 ZLinkActorAcceptedJournal.Record record) {
@@ -892,7 +906,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             replayedPackets.add(record.header().packetName());
             return CompletableFuture.completedFuture(
                     record.header().packetName().equals("target-staged")
-                            ? Optional.of("target-staged-reply".getBytes())
+                            ? Optional.of(
+                                    new LocalActorReply(
+                                            Message.from("target-staged-reply"),
+                                            ZLinkStreamCodec.RAW))
                             : Optional.empty());
         }
 

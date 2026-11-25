@@ -411,7 +411,6 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                                                 ActorPacketFrames.encodeReply(
                                                         packetHeader,
                                                         replyPayload,
-                                                        packetHeader.packetName(),
                                                         actorReply.codec())) {
                                     host.primaryNode()
                                             .replyActorNoBind(

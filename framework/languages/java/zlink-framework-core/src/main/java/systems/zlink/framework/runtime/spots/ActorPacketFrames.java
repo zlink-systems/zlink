@@ -25,39 +25,29 @@ final class ActorPacketFrames {
         return decodeStream(headerPart.message().toByteArray(), headerPart.requestSeq());
     }
 
-    static Message encodeReply(Header packetHeader, Message payload) {
+    static Message encodeReply(Header requestHeader, Message payload) {
         return encodeReply(
-                packetHeader,
-                payload,
-                packetHeader.packetName(),
-                ZLinkStreamCodec.fromValue(packetHeader.codec()));
+                requestHeader, payload, ZLinkStreamCodec.fromValue(requestHeader.codec()));
     }
 
-    static Message encodeReply(
-            Header packetHeader,
-            Message payload,
-            String replyPacketName,
-            ZLinkStreamCodec replyCodec) {
-        ZLinkStreamHeader replyHeader =
-                ZLinkStreamHeader.createResponse(
-                        packetHeader.toStreamHeader(),
-                        replyCodec,
-                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                        replyPacketName,
-                        Map.of());
-        return Message.from(ZLinkStreamFrameCodec.encode(replyHeader, payload.toByteArray()));
+    static Message encodeReply(Header requestHeader, Message payload, ZLinkStreamCodec replyCodec) {
+        return Message.from(encodeReplyBytes(requestHeader.toStreamHeader(), payload, replyCodec));
     }
 
     static Message encodeRoutedReply(ZLinkStreamHeader requestHeader, LocalActorReply reply) {
+        return Message.from(encodeReplyBytes(requestHeader, reply.payload(), reply.codec()));
+    }
+
+    static byte[] encodeReplyBytes(
+            ZLinkStreamHeader requestHeader, Message payload, ZLinkStreamCodec replyCodec) {
         ZLinkStreamHeader replyHeader =
                 ZLinkStreamHeader.createResponse(
                         requestHeader,
-                        reply.codec(),
+                        replyCodec,
                         EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                        requestHeader.packetName(),
+                        "",
                         Map.of());
-        return Message.from(
-                ZLinkStreamFrameCodec.encode(replyHeader, reply.payload().toByteArray()));
+        return ZLinkStreamFrameCodec.encode(replyHeader, payload.toByteArray());
     }
 
     static LocalActorReply decodeRoutedReply(ZLinkStreamHeader requestHeader, Message frame) {

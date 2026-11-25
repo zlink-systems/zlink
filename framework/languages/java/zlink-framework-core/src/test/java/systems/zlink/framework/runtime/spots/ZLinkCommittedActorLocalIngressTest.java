@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -18,10 +19,12 @@ import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.actors.ZLinkActorClientRuntime;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.binding.ZLinkJavaRawSpotNodeTestAccess;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -45,7 +48,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 final class ZLinkCommittedActorLocalIngressTest {
     private static final String ACTOR = "committed-player";
@@ -261,6 +266,122 @@ final class ZLinkCommittedActorLocalIngressTest {
                 }
             }
         }
+    }
+
+    @RepeatedTest(40)
+    void typedSelfProbeRepliesThroughRelocationReplayAndOrdinaryIngress() throws Exception {
+        pairClient = null;
+        targetFactory = null;
+        joined = new CompletableFuture<>();
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        var committed = new CompletableFuture<Void>();
+        var publish = new CompletableFuture<Void>();
+        var admitted = new CompletableFuture<Boolean>();
+        try (var source = start(options("committed-source", locations, relocations, null));
+                var target =
+                        start(
+                                options(
+                                        "committed-target",
+                                        locations,
+                                        relocations,
+                                        source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH)
+                                                .endpoint()))) {
+            target.spotManager()
+                    .getOrCreate(ROOM, "room")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            source.actorManager()
+                    .create(ACTOR, "player")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            var targetNode = node(target);
+            holdCommittedPublication(targetNode, committed, publish);
+            holdCommittedPublication(node(source), committed, publish);
+            observeStagingAdmission(targetNode, admitted);
+            try {
+                source.actorClient()
+                        .requestToActor(ACTOR, new Join(ROOM))
+                        .submit(String.class)
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                committed.get(WAIT_SECONDS, TimeUnit.SECONDS);
+
+                var client = target.actorClient();
+                var replay =
+                        client.requestToActor(ACTOR, new SelfProbe(7))
+                                .submit(ProbeReply.class)
+                                .toCompletableFuture();
+                assertTrue(
+                        admitted.get(WAIT_SECONDS, TimeUnit.SECONDS), "first probe enters staging");
+                assertFalse(replay.isDone(), "staging holds the probe until publication");
+                publish.complete(null);
+                assertInstanceOf(
+                        ZLinkActorJoinCompletion.Accepted.class,
+                        joined.get(WAIT_SECONDS, TimeUnit.SECONDS));
+                var actors = ZLinkFrameworkRuntimeTestAccess.actors(target);
+                actors.awaitMoveCompletion(actors.localActor(ACTOR).orElseThrow())
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+
+                var ordinary =
+                        client.requestToActor(ACTOR, new SelfProbe(8)).submit(ProbeReply.class);
+                assertEquals(
+                        new ProbeReply(ROOM, 8),
+                        ordinary.toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS));
+                assertEquals(new ProbeReply(ROOM, 7), replay.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            } finally {
+                publish.complete(null);
+            }
+        }
+    }
+
+    private static void observeStagingAdmission(
+            ZLinkInternalSpotNode node, CompletableFuture<Boolean> admitted) {
+        var staging = ZLinkJavaRawSpotNodeTestAccess.relocationStagingIngressHandler(node);
+        node.setRelocationStagingIngressHandler(
+                new ZLinkInternalSpotNode.RelocationStagingIngressHandler() {
+                    @Override
+                    public boolean handleSpot(
+                            ZLinkInternalMeshNode.PeerAuthorityFence source,
+                            ZLinkServiceM6BWireCodec.SpotMessage header,
+                            byte[] metadata,
+                            Supplier<byte[]> record,
+                            int sizeHint,
+                            List<Message> parts,
+                            String contentType,
+                            Consumer<List<Message>> reply,
+                            Consumer<Throwable> failure) {
+                        return staging.handleSpot(
+                                source,
+                                header,
+                                metadata,
+                                record,
+                                sizeHint,
+                                parts,
+                                contentType,
+                                reply,
+                                failure);
+                    }
+
+                    @Override
+                    public boolean handleActor(
+                            ZLinkInternalMeshNode.PeerAuthorityFence source,
+                            ZLinkServiceM6BWireCodec.ActorMessage header,
+                            Supplier<byte[]> record,
+                            List<Message> parts,
+                            String contentType,
+                            Consumer<List<Message>> reply,
+                            Consumer<Throwable> failure) {
+                        boolean accepted =
+                                staging.handleActor(
+                                        source, header, record, parts, contentType, reply, failure);
+                        admitted.complete(accepted);
+                        return accepted;
+                    }
+                });
     }
 
     @Test
@@ -752,6 +873,7 @@ final class ZLinkCommittedActorLocalIngressTest {
         @Override
         public void configure() {
             context.handlers().addHandler(ProbeHandler.class);
+            context.handlers().addHandler(SelfProbeHandler.class);
         }
 
         @Override
@@ -820,6 +942,20 @@ final class ZLinkCommittedActorLocalIngressTest {
                 Lobby spot, Player actor, ZLinkMessageContext context, Join request) {
             actor.context().joinSpot(request.room()).defer();
             return CompletableFuture.completedFuture("scheduled");
+        }
+    }
+
+    public record SelfProbe(int value) {}
+
+    public record ProbeReply(String spot, int value) {}
+
+    public static final class SelfProbeHandler
+            implements ZLinkSpotActorRequestHandler<Room, Player, SelfProbe, ProbeReply> {
+        @Override
+        public CompletionStage<ProbeReply> handle(
+                Room spot, Player actor, ZLinkMessageContext context, SelfProbe probe) {
+            return CompletableFuture.completedFuture(
+                    new ProbeReply(spot.context().spotId(), probe.value()));
         }
     }
 
