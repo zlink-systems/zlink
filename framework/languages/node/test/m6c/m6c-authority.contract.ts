@@ -770,7 +770,6 @@ for (const backend of ['provider', 'memory'] as const) {
               membershipMutation: Buffer.from('aggregate-membership')
             }
           ],
-          inventoryDigest: Buffer.alloc(32, 7),
           targetDescriptor: { meshName: 'mesh', rid: 'node-c' },
           targetDescriptorLifecycleGeneration: live.lifecycleGeneration,
           capacity: { actors: 1, spots: 0 },
@@ -4268,7 +4267,6 @@ test('aggregate prepare reserves one typed bundle until aggregate commit or abor
         membershipMutation: Buffer.from('membership-b')
       }
     ],
-    inventoryDigest: Buffer.alloc(32, 7),
     targetDescriptor: { meshName: 'mesh', rid: 'node-b' },
     targetDescriptorLifecycleGeneration: 2n,
     capacity,
@@ -4334,7 +4332,6 @@ for (const boundary of ['attempts', 'elapsed time', 'cancellation', 'target leas
           membershipMutation: Buffer.from('retry-membership')
         }
       ],
-      inventoryDigest: Buffer.alloc(32, 9),
       targetDescriptor: { meshName: 'mesh', rid: destination.rid },
       targetDescriptorLifecycleGeneration: destination.lifecycleGeneration,
       capacity: userSpotCapacity('room'),
@@ -4683,7 +4680,6 @@ for (const outcome of ['abort', 'commit'] as const) {
           membershipMutation: Buffer.from('membership')
         }
       ],
-      inventoryDigest: Buffer.alloc(32, 9),
       targetDescriptor: { meshName: 'mesh', rid: destination.rid },
       targetDescriptorLifecycleGeneration: destination.lifecycleGeneration,
       capacity: userSpotCapacity('room'),
