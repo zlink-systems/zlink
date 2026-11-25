@@ -4,9 +4,9 @@ import io.lettuce.core.RedisNoScriptException;
 import io.lettuce.core.ScriptOutputType;
 
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.locationprovider.ZLinkStoreAdd;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locationprovider.ZLinkStoreCondition;
-import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStoreMissingCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreMutation;
@@ -21,12 +21,14 @@ import systems.zlink.framework.locationprovider.ZLinkStoreScanPage;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreSumAtMostCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreValue;
 import systems.zlink.framework.locationprovider.ZLinkStoreValueCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreVersion;
 import systems.zlink.framework.locationprovider.ZLinkStoreVersionCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteConflict;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteCorrupt;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.runtime.locations.ZLinkStoreRetention;
@@ -97,6 +99,9 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         MISSING("missing"),
         FOUND("found"),
         CONFLICT("conflict"),
+        CORRUPT("corrupt"),
+        SUM_AT_MOST("sum-at-most"),
+        ADD("add"),
         BACKLOG("backlog"),
         APPLIED("applied"),
         EXPIRED("expired"),
@@ -244,28 +249,121 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                         end
                     end
 
-                    local arg = 3
-                    for i = 1, conditionCount do
-                        local kind = ARGV[arg]
-                        local expected = ARGV[arg + 1]
-                        local members = redis.call('ZREVRANGE', KEYS[i], 0, 0)
-                        local current = nil
-                        local currentValue = nil
+                    local maxCounter = '9223372036854775807'
+
+                    local function compareUnsigned(a, b)
+                        if #a ~= #b then return #a - #b end
+                        if a == b then return 0 end
+                        return a < b and -1 or 1
+                    end
+
+                    -- Lua numbers cannot exactly represent the full counter range.
+                    local function combineUnsigned(a, b, sign)
+                        local digits = {}
+                        local carry = 0
+                        for i = 0, math.max(#a, #b) - 1 do
+                            local left = i < #a and string.byte(a, #a - i) - 48 or 0
+                            local right = i < #b and string.byte(b, #b - i) - 48 or 0
+                            local n = left + sign * right + carry
+                            table.insert(digits, string.char(48 + n % 10))
+                            carry = math.floor(n / 10)
+                        end
+                        if carry > 0 then table.insert(digits, tostring(carry)) end
+                        local result = string.gsub(string.reverse(table.concat(digits)), '^0+', '')
+                        return result == '' and '0' or result
+                    end
+
+                    local function splitSign(value)
+                        if string.sub(value, 1, 1) == '-' then
+                            return -1, string.sub(value, 2)
+                        end
+                        return 1, value
+                    end
+
+                    local function addDecimal(left, right)
+                        local signA, a = splitSign(left)
+                        local signB, b = splitSign(right)
+                        local sign, result
+                        if signA == signB then
+                            sign, result = signA, combineUnsigned(a, b, 1)
+                        elseif compareUnsigned(a, b) >= 0 then
+                            sign, result = signA, combineUnsigned(a, b, -1)
+                        else
+                            sign, result = signB, combineUnsigned(b, a, -1)
+                        end
+                        return sign < 0 and result ~= '0' and '-' .. result or result
+                    end
+
+                    local function compareDecimal(left, right)
+                        local signA, a = splitSign(left)
+                        local signB, b = splitSign(right)
+                        if signA ~= signB then return signA - signB end
+                        return signA * compareUnsigned(a, b)
+                    end
+
+                    local function readLive(keyIndex)
+                        local members = redis.call('ZREVRANGE', KEYS[keyIndex], 0, 0)
                         if #members > 0 then
                             local record = unpackTagged(members[1])
                             local expiresAt = tonumber(record[4])
-                            if record[5] ~= true
-                                and (expiresAt == 0 or expiresAt > nowMs) then
-                                current = record[3]
-                                currentValue = record[2]
+                            if record[5] ~= true and (expiresAt == 0 or expiresAt > nowMs) then
+                                return record[3], record[2]
                             end
                         end
-                        if (kind == '${MISSING}' and current ~= nil)
-                            or (kind == '${VERSION}' and current ~= expected)
-                            or (kind == '${VALUE}' and currentValue ~= expected) then
-                            return { '${CONFLICT}', nowMs }
+                    end
+
+                    local function readCounter(keyIndex)
+                        local _, value = readLive(keyIndex)
+                        if not value or value == '0' then return '0' end
+                        if #value > #maxCounter or not string.match(value, '^[1-9][0-9]*$')
+                            or compareUnsigned(value, maxCounter) > 0 then
+                            return nil
                         end
-                        arg = arg + 2
+                        return value
+                    end
+
+                    local arg = 3
+                    for i = 1, conditionCount do
+                        local kind = ARGV[arg]
+                        if kind == '${SUM_AT_MOST}' then
+                            local total = ARGV[arg + 1]
+                            local limit = ARGV[arg + 2]
+                            local count = tonumber(ARGV[arg + 3])
+                            arg = arg + 4
+                            for j = 1, count do
+                                local value = readCounter(tonumber(ARGV[arg]))
+                                if not value then return { '${CORRUPT}', nowMs } end
+                                total = addDecimal(total, value)
+                                arg = arg + 1
+                            end
+                            if compareDecimal(total, limit) > 0 then
+                                return { '${CONFLICT}', nowMs }
+                            end
+                        else
+                            local current, currentValue = readLive(tonumber(ARGV[arg + 1]))
+                            local expected = ARGV[arg + 2]
+                            if (kind == '${MISSING}' and current ~= nil)
+                                or (kind == '${VERSION}' and current ~= expected)
+                                or (kind == '${VALUE}' and currentValue ~= expected) then
+                                return { '${CONFLICT}', nowMs }
+                            end
+                            arg = arg + 3
+                        end
+                    end
+
+                    local resolvedAdds = {}
+                    for i = 1, mutationCount do
+                        local pos = arg + (i - 1) * 6
+                        if ARGV[pos + 1] == '${ADD}' then
+                            local current = readCounter(tonumber(ARGV[pos]))
+                            if not current then return { '${CORRUPT}', nowMs } end
+                            local nextValue = addDecimal(current, ARGV[pos + 3])
+                            if string.sub(nextValue, 1, 1) == '-'
+                                or compareUnsigned(nextValue, maxCounter) > 0 then
+                                return { '${CORRUPT}', nowMs }
+                            end
+                            resolvedAdds[i] = nextValue
+                        end
                     end
 
                     local checkArg = arg
@@ -284,11 +382,11 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                         local keyIndex = tonumber(ARGV[arg])
                         local kind = ARGV[arg + 1]
                         local originalKey = ARGV[arg + 2]
-                        local value = ARGV[arg + 3]
+                        local value = resolvedAdds[i] or ARGV[arg + 3]
                         local version = ARGV[arg + 4]
                         local retention = tonumber(ARGV[arg + 5])
                         local redisKey = KEYS[keyIndex]
-                        if kind == '${PUT}' then
+                        if kind == '${PUT}' or kind == '${ADD}' then
                             local expiresAt = 0
                             if retention >= 0 then expiresAt = nowMs + retention end
                             redis.call(
@@ -601,6 +699,9 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         if (outcome == ScriptToken.CONFLICT) {
             return new ZLinkStoreWriteConflict(storeNow);
         }
+        if (outcome == ScriptToken.CORRUPT) {
+            return new ZLinkStoreWriteCorrupt(storeNow);
+        }
         if (outcome == ScriptToken.BACKLOG) {
             throw new CompletionException(
                     new IOException("Redis Location Store version backlog is full."));
@@ -663,33 +764,30 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         Set<ZLinkStoreKey> uniqueKeys = new LinkedHashSet<>();
         long encodedBytes = 0;
         for (ZLinkStoreCondition condition : conditions) {
-            ZLinkStoreKey key;
-            if (condition instanceof ZLinkStoreMissingCondition missing) {
-                key = missing.key();
-            } else if (condition instanceof ZLinkStoreVersionCondition version) {
-                key = version.key();
+            if (condition instanceof ZLinkStoreVersionCondition version) {
                 encodedBytes += validateVersion(version.expected());
             } else if (condition instanceof ZLinkStoreValueCondition value) {
-                key = value.key();
-                byte[] expected = Objects.requireNonNull(value.expected(), "value.expected");
+                byte[] expected = value.expected();
                 if (expected.length > MAXIMUM_VALUE_BYTES) {
                     throw new IllegalArgumentException(
                             "A Location Store value can contain at most 1 MiB.");
                 }
                 encodedBytes += expected.length;
-            } else {
-                throw new IllegalArgumentException("Unknown Location Store condition.");
+            } else if (condition instanceof ZLinkStoreSumAtMostCondition sum) {
+                encodedBytes +=
+                        Long.toString(sum.delta()).length() + Long.toString(sum.limit()).length();
             }
-            encodedBytes += validateKey(key);
-            if (!conditionKeys.add(key)) {
-                throw new IllegalArgumentException("A key cannot occur twice in conditions.");
+            for (var key : condition.keys()) {
+                encodedBytes += validateKey(key);
+                if (!conditionKeys.add(key)) {
+                    throw new IllegalArgumentException("A key cannot occur twice in conditions.");
+                }
+                uniqueKeys.add(key);
             }
-            uniqueKeys.add(key);
         }
         for (ZLinkStoreMutation mutation : mutations) {
-            ZLinkStoreKey key;
+            var key = mutation.key();
             if (mutation instanceof ZLinkStorePut put) {
-                key = put.key();
                 byte[] bytes = put.bytes();
                 if (bytes.length > MAXIMUM_VALUE_BYTES) {
                     throw new IllegalArgumentException(
@@ -700,10 +798,8 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                     throw new IllegalArgumentException("Retention must be positive.");
                 }
                 encodedBytes += bytes.length;
-            } else if (mutation instanceof ZLinkStoreDelete delete) {
-                key = delete.key();
-            } else {
-                throw new IllegalArgumentException("Unknown Location Store mutation.");
+            } else if (mutation instanceof ZLinkStoreAdd add) {
+                encodedBytes += Long.toString(add.delta()).length();
             }
             encodedBytes += validateKey(key);
             if (!mutationKeys.add(key)) {
@@ -742,23 +838,34 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         arguments.add(bytes(Integer.toString(conditions.size())));
         arguments.add(bytes(Integer.toString(mutations.size())));
         for (ZLinkStoreCondition condition : conditions) {
+            if (condition instanceof ZLinkStoreSumAtMostCondition sum) {
+                arguments.add(bytes(ScriptToken.SUM_AT_MOST.wire));
+                arguments.add(bytes(Long.toString(sum.delta())));
+                arguments.add(bytes(Long.toString(sum.limit())));
+                arguments.add(bytes(Integer.toString(sum.keys().size())));
+                for (var key : sum.keys()) {
+                    arguments.add(bytes(Integer.toString(keyIndexes.get(key))));
+                }
+                continue;
+            }
+            var keyIndex = bytes(Integer.toString(keyIndexes.get(condition.keys().getFirst())));
             if (condition instanceof ZLinkStoreMissingCondition) {
                 arguments.add(bytes(ScriptToken.MISSING.wire));
+                arguments.add(keyIndex);
                 arguments.add(bytes(""));
             } else if (condition instanceof ZLinkStoreValueCondition value) {
                 arguments.add(bytes(ScriptToken.VALUE.wire));
+                arguments.add(keyIndex);
                 arguments.add(value.expected());
             } else {
                 ZLinkStoreVersionCondition version = (ZLinkStoreVersionCondition) condition;
                 arguments.add(bytes(ScriptToken.VERSION.wire));
+                arguments.add(keyIndex);
                 arguments.add(bytes(version.expected().value()));
             }
         }
         for (ZLinkStoreMutation mutation : mutations) {
-            ZLinkStoreKey key =
-                    mutation instanceof ZLinkStorePut put
-                            ? put.key()
-                            : ((ZLinkStoreDelete) mutation).key();
+            var key = mutation.key();
             arguments.add(bytes(Integer.toString(keyIndexes.get(key))));
             if (mutation instanceof ZLinkStorePut put) {
                 arguments.add(bytes(ScriptToken.PUT.wire));
@@ -771,6 +878,12 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                                         ? "-1"
                                         : Long.toString(
                                                 ZLinkStoreRetention.toMillis(put.retention()))));
+            } else if (mutation instanceof ZLinkStoreAdd add) {
+                arguments.add(bytes(ScriptToken.ADD.wire));
+                arguments.add(bytes(key.value()));
+                arguments.add(bytes(Long.toString(add.delta())));
+                arguments.add(bytes(uuidHex()));
+                arguments.add(bytes("-1"));
             } else {
                 arguments.add(bytes(ScriptToken.DELETE.wire));
                 arguments.add(bytes(key.value()));

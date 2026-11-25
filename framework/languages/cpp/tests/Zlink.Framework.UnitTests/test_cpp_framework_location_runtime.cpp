@@ -716,15 +716,14 @@ const location_options_t asynchronous_heartbeat_options{
   .owner_lease_renew_interval = std::chrono::milliseconds (5),
   .owner_lease_ttl = std::chrono::seconds (15)};
 
-void destroy_location_with_busy_lane (bool start)
+void destroy_location_with_busy_lane (auto prepare)
 {
     using zlink::framework::runtime::location_runtime_test_access_t;
     in_memory_location_repository_t store;
     auto runtime = std::make_unique<location_runtime_t> (store);
-    if (start) {
-        runtime->start (zlink::routing_id_t::from ("location-stop-once"));
-        runtime->stop ();
-    }
+    prepare (*runtime, store);
+    if (::testing::Test::HasFailure ())
+        return;
     zlink::framework::test::close_test_completion_owner ();
     ASSERT_TRUE (zlink::framework::detail::observe_completion_dispatcher ().expired ());
 
@@ -743,7 +742,10 @@ TEST (LocationRuntimeDeathTest, DestroysStoppedRuntimeWithoutCompletionOwner)
 {
     ASSERT_EXIT (
       {
-          destroy_location_with_busy_lane (true);
+          destroy_location_with_busy_lane ([] (auto &runtime, auto &) {
+              runtime.start (zlink::routing_id_t::from ("location-stop-once"));
+              runtime.stop ();
+          });
           std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
       },
       ::testing::ExitedWithCode (0), "");
@@ -753,7 +755,41 @@ TEST (LocationRuntimeDeathTest, DestroysUnstartedRuntimeWithoutCompletionOwner)
 {
     ASSERT_EXIT (
       {
-          destroy_location_with_busy_lane (false);
+          destroy_location_with_busy_lane ([] (auto &, auto &) {});
+          std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
+      },
+      ::testing::ExitedWithCode (0), "");
+}
+
+TEST (LocationRuntimeDeathTest, DestroysUnstartedRuntimeAfterPublicationWithoutCompletionOwner)
+{
+    ASSERT_EXIT (
+      {
+          destroy_location_with_busy_lane ([] (auto &runtime, auto &store) {
+              using namespace zlink::framework;
+              const auto claim =
+                store.claim_owner_lease ("publication-owner", std::chrono::minutes (1))
+                  .result ()
+                  .value ();
+              const auto &token = std::get<owner_lease_claimed_t> (claim).token;
+              mesh_node_descriptor_t descriptor;
+              descriptor.mesh_name = "publication-mesh";
+              descriptor.rid = zlink::routing_id_t::from ("publication-node");
+              descriptor.endpoint = "inproc://publication-node";
+              descriptor.owner_id = token.owner_id;
+              descriptor.lease_generation = token.lease_generation;
+              descriptor.lifecycle_generation = 1;
+              descriptor.descriptor_revision = 1;
+              descriptor.security_identity = "default";
+              descriptor.activation_concurrency.limit = 1;
+              ASSERT_TRUE (runtime
+                             .descriptor_write_confirmed ([&] {
+                                 return store.update_mesh_node (descriptor,
+                                                                location_write_intent_t::new_claim);
+                             })
+                             .result ()
+                             .value ());
+          });
           std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
       },
       ::testing::ExitedWithCode (0), "");

@@ -5,6 +5,7 @@ import type { ZLinkActorRuntimeState } from './actor-runtime-state';
 
 /** Goal port implemented by the Host relocation aggregate for cross-node Actor Join. */
 export interface ZLinkActorJoinRelocation {
+  requireRelocatableActor?(meshName: string, actorType: string): void;
   relocateActorJoin(input: {
     readonly meshName: string;
     readonly actor: ZLinkActor;

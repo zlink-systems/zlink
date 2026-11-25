@@ -90,6 +90,8 @@
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberOwnershipTests.cs"/>
+        <Compile Include="Runtime/SpotWideTargetAdmissionTests.cs"/>
+        <Compile Include="Runtime/SpotWideTargetSpotAdmissionTests.cs"/>
         <Compile Include="Runtime/SpotWideFindReadinessTests.cs"/>
         <Compile Include="Runtime/SpotTargetRelocationReleaseTests.cs"/>
         <Compile Include="Runtime/SpotActorDispatchErrorReasonTests.cs"/>
@@ -128,6 +130,7 @@
         <Compile Include="Runtime/CanonicalActorJoinWireAdmissionNegativeTests.cs"/>
         <Compile Include="Runtime/RemoteJoinerCanonicalReplyTests.cs"/>
         <Compile Include="Runtime/SameNodeActorJoinTests.cs"/>
+        <Compile Include="Runtime/ActorSpotJoinRelocationPolicyTests.cs"/>
         <Compile Include="Runtime/SourceMembershipLeaveCompletionTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
