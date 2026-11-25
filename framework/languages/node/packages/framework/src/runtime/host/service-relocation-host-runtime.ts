@@ -513,6 +513,15 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
 
   constructor(readonly options: ZLinkHostRelocationOptions) {}
 
+  requireRelocatableActor(meshName: string, actorType: string): void {
+    if (this.actorRegistration(meshName, actorType).relocation.kind === 'disabled') {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        `Relocation is disabled for Actor type '${actorType}'.`
+      );
+    }
+  }
+
   async relocateActorJoin(
     input: Parameters<ZLinkActorJoinRelocation['relocateActorJoin']>[0]
   ): ReturnType<ZLinkActorJoinRelocation['relocateActorJoin']> {
