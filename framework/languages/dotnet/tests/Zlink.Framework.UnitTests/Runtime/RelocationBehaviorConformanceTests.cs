@@ -3653,6 +3653,7 @@ internal sealed class CanonicalRelocationTransportProbe
     internal ZLinkRemoteSessionPushRelay? RemoteSessionPush;
     internal ZLinkServiceWireCodec.SessionRelocationRouteRecord? SessionRoute;
     internal int DataSendCount;
+    internal Action? OnCanonicalActorJoinSubmitted { get; init; }
     internal int TargetAbortCallCount => Volatile.Read(ref _targetAbortCallCount);
     internal Guid RelocationId =>
         ZLinkRelocationTransferPayload
@@ -4192,6 +4193,10 @@ internal interface IProbedBackendSpotNode
         IZLinkBackendBoundSessionReplacementNotifications,
         IZLinkBackendBoundSessionBind;
 
+internal interface IActorJoinProbedBackendSpotNode
+    : IProbedBackendSpotNode,
+        IZLinkBackendCanonicalActorJoin;
+
 internal class ProbedBackendSpotNode : DispatchProxy
 {
     private object _target = null!;
@@ -4206,7 +4211,9 @@ internal class ProbedBackendSpotNode : DispatchProxy
         RouteChangeProxy? routeProxy
     )
     {
-        var proxy = Create<IProbedBackendSpotNode, ProbedBackendSpotNode>();
+        var proxy = probe.OnCanonicalActorJoinSubmitted is null
+            ? Create<IProbedBackendSpotNode, ProbedBackendSpotNode>()
+            : Create<IActorJoinProbedBackendSpotNode, ProbedBackendSpotNode>();
         var state = (ProbedBackendSpotNode)(object)proxy;
         state._target = target;
         state._probe = probe;
@@ -4294,6 +4301,12 @@ internal class ProbedBackendSpotNode : DispatchProxy
         try
         {
             var result = targetMethod.Invoke(_target, args);
+            if (
+                targetMethod.Name
+                    == nameof(IZLinkBackendCanonicalActorJoin.RequestCanonicalActorJoin)
+                && result is true
+            )
+                _probe.OnCanonicalActorJoinSubmitted?.Invoke();
             // Publish the real proxy endpoint before startup claims the descriptor.
             if (targetMethod.Name == nameof(IZLinkBackendSpotNode.Start) && _routeProxy is not null)
             {

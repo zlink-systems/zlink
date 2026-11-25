@@ -169,6 +169,12 @@ public sealed partial class RelocationBehaviorConformanceTests
 public class SpotWideNormalizationGate : DispatchProxy
 {
     private IZLinkLocationRepository _store = null!;
+    private ZLinkAuthorityKey? _spotBeforeLocalFence;
+
+    internal TaskCompletionSource BeforeLocalFence { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal TaskCompletionSource ReleaseLocalFence { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal TaskCompletionSource Entered { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -177,18 +183,29 @@ public class SpotWideNormalizationGate : DispatchProxy
     internal TaskCompletionSource<ZLinkAggregateCommitResult> Settled { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    internal static SpotWideNormalizationGate Install(ZLinkLocationRegistration locations)
+    internal static SpotWideNormalizationGate Install(
+        ZLinkLocationRegistration locations,
+        ZLinkAuthorityKey? spotBeforeLocalFence = null
+    )
     {
         var repository = Create<IZLinkLocationRepository, SpotWideNormalizationGate>();
         var gate = (SpotWideNormalizationGate)repository;
         gate._store = locations.ResolveStore()!;
+        gate._spotBeforeLocalFence = spotBeforeLocalFence;
         locations._repository = repository;
         return gate;
     }
 
     protected override object? Invoke(MethodInfo? method, object?[]? args)
     {
-        if (method!.Name == nameof(IZLinkLocationRepository.CommitAggregateForRecoveryAsync))
+        if (
+            method!.Name == nameof(IZLinkLocationRepository.ReadAuthorityAsync)
+            && _spotBeforeLocalFence is { } spot
+            && (ZLinkAuthorityKey)args![0]! == spot
+            && !ReleaseLocalFence.Task.IsCompleted
+        )
+            return ReadBeforeLocalFenceAsync(spot, (CancellationToken)args[1]!);
+        if (method.Name == nameof(IZLinkLocationRepository.CommitAggregateForRecoveryAsync))
             return CommitNormalizationAsync(
                 (ZLinkAggregateFence)args![0]!,
                 (CancellationToken)args[1]!
@@ -202,6 +219,25 @@ public class SpotWideNormalizationGate : DispatchProxy
             ExceptionDispatchInfo.Throw(exception.InnerException);
             throw;
         }
+    }
+
+    private async ValueTask<ZLinkAuthorityReadResult> ReadBeforeLocalFenceAsync(
+        ZLinkAuthorityKey spot,
+        CancellationToken cancellationToken
+    )
+    {
+        var result = await _store.ReadAuthorityAsync(spot, cancellationToken);
+        if (
+            result is ZLinkAuthorityReadResult.Found
+            {
+                Snapshot.Relocation.Phase: ServiceWireCodec.RelocationPhase.Committed,
+            }
+        )
+        {
+            BeforeLocalFence.TrySetResult();
+            await ReleaseLocalFence.Task.WaitAsync(cancellationToken);
+        }
+        return result;
     }
 
     private async ValueTask<ZLinkAggregateCommitResult> CommitNormalizationAsync(

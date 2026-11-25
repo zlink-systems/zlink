@@ -5,11 +5,15 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locationprovider.ZLinkStorePut;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -150,6 +154,32 @@ final class ZLinkProviderDescriptorCapacityProjectionTest {
     }
 
     @Test
+    void projectsCommittedAndReservedCapacityAboveTheCurrentLimit() {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                repository
+                                        .claimOwnerLease("lowered-limit-owner", Duration.ofHours(1))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
+        var descriptor = descriptor(owner, "usage-a", 0);
+        repository
+                .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .join();
+        putActorCounts(provider, descriptor, "6", "1");
+
+        var actors = only(repository).capacity().actors();
+        assertEquals(6, actors.active());
+        assertEquals(1, actors.reserved());
+        assertEquals(5, actors.limit());
+        assertFalse(actors.hasRoomFor(1));
+    }
+
+    @Test
     void malformedCapacityRecordRemainsDecoderFailureWithMetrics() {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var repository = new ZLinkProviderLocationRepository(provider);
@@ -162,29 +192,12 @@ final class ZLinkProviderDescriptorCapacityProjectionTest {
                                         .join())
                         .token();
         try (var observation = repository.registerCapacityObservation()) {
+            var descriptor = descriptor(owner, "usage-a", 0);
             repository
-                    .updateMeshNode(
-                            descriptor(owner, "usage-a", 0), ZLinkLocationWriteIntent.NEW_CLAIM)
+                    .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                     .toCompletableFuture()
                     .join();
-            provider.write(
-                            new systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest(
-                                    List.of(),
-                                    List.of(
-                                            new systems.zlink.framework.locationprovider
-                                                    .ZLinkStorePut(
-                                                    new systems.zlink.framework.locationprovider
-                                                            .ZLinkStoreKey(
-                                                            "zlink:v11:capacity:usage:usage-a"),
-                                                    "{"
-                                                            .getBytes(
-                                                                    java.nio.charset
-                                                                            .StandardCharsets
-                                                                            .UTF_8),
-                                                    null))),
-                            () -> false)
-                    .toCompletableFuture()
-                    .join();
+            putActorCounts(provider, descriptor, "{", "0");
             var failure =
                     assertThrows(
                             java.util.concurrent.CompletionException.class,
@@ -195,6 +208,34 @@ final class ZLinkProviderDescriptorCapacityProjectionTest {
                                             .join());
             assertInstanceOf(IllegalStateException.class, failure.getCause());
         }
+    }
+
+    private static void putActorCounts(
+            ZLinkInMemoryProviderLocationStore provider,
+            ZLinkMeshNodeDescriptor descriptor,
+            String active,
+            String pending) {
+        var prefix =
+                "zlink:v12:capacity\0"
+                        + descriptor.meshName()
+                        + '\0'
+                        + descriptor.rid().toHex()
+                        + "\0actors\0";
+        provider.write(
+                        new ZLinkStoreWriteRequest(
+                                List.of(),
+                                List.of(
+                                        new ZLinkStorePut(
+                                                new ZLinkStoreKey(prefix + "active"),
+                                                active.getBytes(StandardCharsets.UTF_8),
+                                                null),
+                                        new ZLinkStorePut(
+                                                new ZLinkStoreKey(prefix + "pending"),
+                                                pending.getBytes(StandardCharsets.UTF_8),
+                                                null))),
+                        () -> false)
+                .toCompletableFuture()
+                .join();
     }
 
     private static ZLinkMeshNodeDescriptor only(ZLinkProviderLocationRepository repository) {

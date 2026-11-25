@@ -6,7 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -90,8 +91,10 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
             java.time.Instant.parse("2100-01-01T00:00:00Z");
     private static final ZLinkStoreCancellation OPEN = () -> false;
 
-    @Test
-    void readySubmissionFailureRetainsStageAndExactPrepareRetriesReady() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void readySubmissionFailureRetainsStageAndExactPrepareRetriesReady(boolean corruptCommit)
+            throws Exception {
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
         String actorId = "actor-ready-race";
@@ -165,7 +168,12 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 new Class<?>[] {ZLinkLocationRepository.class},
                                 (proxy, method, args) -> {
                                     if (method.getName().equals("commitAggregate")) {
-                                        commits.incrementAndGet();
+                                        if (commits.incrementAndGet() == 1 && corruptCommit) {
+                                            return CompletableFuture.failedFuture(
+                                                    new ZLinkFrameworkException(
+                                                            ZLinkFrameworkErrorKind.DATA_LOST,
+                                                            "Location Store capacity record is inconsistent"));
+                                        }
                                     } else if (method.getName().equals("abortAggregate")) {
                                         aggregateAborts.incrementAndGet();
                                     }
@@ -472,14 +480,26 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         assertEquals(0, targetEndpoint.published.get(), "dispatch stays closed without CUTOVER");
         assertEquals(
                 1, target.get().attemptCountsForTest().targets(), "the target keeps its staging");
-        //  The source resends the retained CUTOVER; its verification alone enables the CAS.
-        target.get()
-                .apply(
-                        sourceRid,
-                        ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
-                        rejectedCutover.get())
-                .toCompletableFuture()
-                .join();
+        // A verified CUTOVER allows the target to submit its first commit.
+        var cutoverResult =
+                target.get()
+                        .apply(
+                                sourceRid,
+                                ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
+                                rejectedCutover.get())
+                        .toCompletableFuture();
+        if (corruptCommit) {
+            var failure =
+                    assertThrows(
+                            ExecutionException.class, () -> cutoverResult.get(3, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DATA_LOST,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            assertEquals(1, commits.get());
+            assertEquals(0, targetEndpoint.published.get());
+            return;
+        }
+        cutoverResult.join();
         assertEquals(1, commits.get());
         assertEquals(1, targetEndpoint.published.get());
         assertEquals(

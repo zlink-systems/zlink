@@ -129,7 +129,7 @@ void close_completion_owner (std::shared_ptr<void> &state)
     state.reset ();
 }
 
-completion_dispatcher_borrow_t borrow_completion_dispatcher ()
+completion_dispatcher_borrow_t try_borrow_completion_dispatcher ()
 {
     if (completion_owner)
         return completion_owner->dispatcher;
@@ -140,10 +140,15 @@ completion_dispatcher_borrow_t borrow_completion_dispatcher ()
     }
     const std::lock_guard lock (completion_creation_mutex);
     const auto dispatcher = active_completion_dispatcher.lock ();
-    if (!dispatcher)
-        throw framework_exception_t (framework_error_kind_t::invalid_operation,
-                                     "asynchronous completion requires a live completion owner");
-    return dispatcher->shared_from_this ();
+    return dispatcher ? dispatcher->shared_from_this () : completion_dispatcher_borrow_t{};
+}
+
+completion_dispatcher_borrow_t borrow_completion_dispatcher ()
+{
+    if (auto dispatcher = try_borrow_completion_dispatcher ())
+        return dispatcher;
+    throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                 "asynchronous completion requires a live completion owner");
 }
 
 std::weak_ptr<completion_dispatcher_t> observe_completion_dispatcher ()
