@@ -1188,6 +1188,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.requireStateful().setActorJoinIngressRouter(route);
   }
 
+  setRelocationRequestAdmission(
+    resolve: import('../../foundation/service-stateful-runtime').ServiceRelocationRequestAdmissionResolver
+  ): void {
+    this.requireStateful().setRelocationRequestAdmission(resolve);
+  }
+
   setActorMessageFollowResolver(
     resolver: (
       fence: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence
@@ -2788,6 +2794,11 @@ function decodeStatefulRecord(
     },
     prepareDispatch:
       record.sourcePreparationOwner === undefined ? undefined : prepareStatefulMailboxDispatch,
+    ...(stateful.spotTargetAdmission === undefined
+      ? {}
+      : {
+          spotTargetAdmission: stateful.spotTargetAdmission
+        }),
     statefulMailboxRecord: record,
     domain: readyDomain(record.domain),
     sourceNodeRid: (record.sourceRoutingId as RoutingId | undefined) ?? null,

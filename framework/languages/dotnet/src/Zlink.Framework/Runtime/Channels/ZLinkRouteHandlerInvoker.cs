@@ -11,92 +11,73 @@ internal sealed class ZLinkRouteHandlerInvoker(
         RoutingId sourceRid,
         ZLinkEnvelopeHeader header,
         IReadOnlyList<Message> parts,
-        CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata = null,
-        DateTimeOffset? receivedAt = null
-    )
-    {
-        var message = ZLinkEnvelopeCodec.DecodeBody(
-            parts,
-            descriptor.MessageType,
-            header.ContentType,
-            codecs
-        );
-
-        await InvokeDecodedSendAsync(
-                descriptor,
-                routerChannelId,
-                sourceRid,
-                header,
-                message,
-                cancellationToken,
-                metadata,
-                receivedAt
-            )
-            .ConfigureAwait(false);
-    }
-
-    internal async ValueTask InvokeSendAsync(
-        ZLinkRouteHandlerDescriptor descriptor,
-        string routerChannelId,
-        RoutingId sourceRid,
-        ZLinkEnvelopeHeader header,
-        ZLinkMultipartPayloadView parts,
-        CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata = null,
-        DateTimeOffset? receivedAt = null
-    )
-    {
-        var message = ZLinkEnvelopeCodec.DecodeBody(
-            parts,
-            descriptor.MessageType,
-            header.ContentType,
-            codecs
-        );
-        using var ownedMessage = message as Message;
-        await InvokeDecodedSendAsync(
-                descriptor,
-                routerChannelId,
-                sourceRid,
-                header,
-                message,
-                cancellationToken,
-                metadata,
-                receivedAt
-            )
-            .ConfigureAwait(false);
-    }
-
-    internal async ValueTask InvokeDecodedSendAsync(
-        ZLinkRouteHandlerDescriptor descriptor,
-        string routerChannelId,
-        RoutingId sourceRid,
-        ZLinkEnvelopeHeader header,
-        object? message,
+        ZLinkMultipartPayloadView? payloadView,
+        object? decodedMessage,
         CancellationToken cancellationToken,
         ZLinkMessageMetadata? metadata,
-        DateTimeOffset? receivedAt
+        DateTimeOffset? receivedAt,
+        ZLinkDispatchFlowScope scope,
+        ZLinkDispatchErrorReporter dispatchErrors
     )
     {
-        var context = new ZLinkRouteMessageContext(
-            routerChannelId,
-            null,
-            sourceRid,
-            header.MessageName!,
-            header.ContentType,
-            metadata,
-            header.CorrelationId,
-            receivedAt
-        );
-        await dispatcher
-            .DispatchRouteAsync(
-                descriptor,
-                message,
-                context,
-                ZLinkHandlerDispatchKind.NodeDirectSend,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        // A relayed Actor frame arrives already decoded; it is not owned here.
+        var message = decodedMessage;
+        if (message is null)
+        {
+            var decoded = payloadView is { } view
+                ? scope.TryDecode(
+                    view,
+                    descriptor.MessageType,
+                    header.ContentType,
+                    codecs,
+                    dispatchErrors,
+                    ZLinkDispatchErrorAction.Drop,
+                    out message
+                )
+                : scope.TryDecode(
+                    parts,
+                    descriptor.MessageType,
+                    header.ContentType,
+                    codecs,
+                    dispatchErrors,
+                    ZLinkDispatchErrorAction.Drop,
+                    out message
+                );
+            if (!decoded)
+                return;
+        }
+
+        var ownedMessage =
+            decodedMessage is null && payloadView is not null ? message as Message : null;
+        try
+        {
+            var context = new ZLinkRouteMessageContext(
+                routerChannelId,
+                null,
+                sourceRid,
+                header.MessageName!,
+                header.ContentType,
+                metadata,
+                header.CorrelationId,
+                receivedAt
+            );
+            await dispatcher
+                .DispatchRouteAsync(
+                    descriptor,
+                    message,
+                    context,
+                    ZLinkHandlerDispatchKind.NodeDirectSend,
+                    cancellationToken,
+                    handlerStarted: dispatchErrors.Flow.Enabled(ZLinkMessageFlowOutcome.Dispatched)
+                        ? scope.CreateHandlerStartTrace(dispatchErrors)
+                        : null
+                )
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            ownedMessage?.Dispose();
+        }
     }
 
     public async ValueTask<ZLinkRouteHandlerReply> InvokeRequestAsync(

@@ -807,6 +807,7 @@ export class ZLinkFrameworkRuntimeHost
     });
     this.actorTransferRuntime = new ZLinkActorTransferRuntime({
       routeTransport: this.routeTransport,
+      flowCreationEnabled: () => this.flowCreationEnabled(),
       messageSerializers: options.registration.messageSerializers,
       spotManager: () => this.spotManager,
       actorManager: () => this.actorManager,
@@ -2382,7 +2383,10 @@ export class ZLinkFrameworkRuntimeHost
     this.ensureLocationRuntime();
     const options = this.actorRuntimeOptionsFactory().createActorClientOptions();
     this.actorClientLocationResolver = options.locationResolver();
-    return options;
+    return {
+      ...options,
+      dispatchErrors: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink)
+    };
   }
 
   createLocationHandleResolver(): ZLinkStoreLocationResolvers | undefined {
@@ -3069,6 +3073,10 @@ export class ZLinkFrameworkRuntimeHost
           import('../foundation/service-stateful-runtime').ZLinkActorJoinIngressRouter
         >
       ) => this.spotManager?.routeActorJoinIngress(meshName, ...args) === true,
+      relocationRequestAdmission: (
+        meshName: string,
+        request: import('../foundation/service-stateful-runtime').ServiceRelocationRequest
+      ) => this.serviceRelocation.resolveTargetRequestAdmission(meshName, request),
       messageFollowReceiver: (record: ServiceMessageFollowRecord) => {
         if (record.source.kind === 'actor') {
           this.actorClientLocationResolver?.invalidateActorRouteIfMatches({

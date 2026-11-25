@@ -40,7 +40,8 @@ internal sealed class ZLinkHandlerDispatcher(
         object? message,
         ZLinkRouteMessageContext context,
         ZLinkHandlerDispatchKind dispatchKind,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action? handlerStarted = null
     )
     {
         return DispatchCoreAsync(
@@ -50,7 +51,8 @@ internal sealed class ZLinkHandlerDispatcher(
             message,
             context,
             dispatchKind,
-            cancellationToken
+            cancellationToken,
+            handlerStarted
         );
     }
 
@@ -61,7 +63,8 @@ internal sealed class ZLinkHandlerDispatcher(
         object? message,
         IZLinkMessageContext context,
         ZLinkHandlerDispatchKind dispatchKind,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action? handlerStarted = null
     ) =>
         registration.Filters.Count == 0
             ? InvokeUnfilteredAsync(
@@ -71,7 +74,8 @@ internal sealed class ZLinkHandlerDispatcher(
                 message,
                 context,
                 dispatchKind,
-                cancellationToken
+                cancellationToken,
+                handlerStarted
             )
             : InvokeFilteredAsync(
                 handlerType,
@@ -80,7 +84,8 @@ internal sealed class ZLinkHandlerDispatcher(
                 message,
                 context,
                 dispatchKind,
-                cancellationToken
+                cancellationToken,
+                handlerStarted
             );
 
     private async ValueTask<ZLinkHandlerDispatchResult> InvokeUnfilteredAsync(
@@ -90,7 +95,8 @@ internal sealed class ZLinkHandlerDispatcher(
         object? message,
         IZLinkMessageContext context,
         ZLinkHandlerDispatchKind dispatchKind,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action? handlerStarted = null
     )
     {
         await using var scope = scopeFactory.CreateAsyncScope();
@@ -123,6 +129,7 @@ internal sealed class ZLinkHandlerDispatcher(
                     context.CorrelationId
                 ).Trace(_channelDispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
             }
+            handlerStarted?.Invoke();
             var result = await ZLinkHandlerInvocationEngine
                 .InvokeAsync(handler, invoker, argumentPlan, message, context, cancellationToken)
                 .ConfigureAwait(false);
@@ -144,7 +151,8 @@ internal sealed class ZLinkHandlerDispatcher(
         object? message,
         IZLinkMessageContext context,
         ZLinkHandlerDispatchKind dispatchKind,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action? handlerStarted = null
     )
     {
         await using var scope = scopeFactory.CreateAsyncScope();
@@ -180,6 +188,7 @@ internal sealed class ZLinkHandlerDispatcher(
                         filterContext.CorrelationId
                     ).Trace(_channelDispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
                 }
+                handlerStarted?.Invoke();
                 result = await ZLinkHandlerInvocationEngine
                     .InvokeAsync(handler, invoker, argumentPlan, message, filterContext.Message, ct)
                     .ConfigureAwait(false);

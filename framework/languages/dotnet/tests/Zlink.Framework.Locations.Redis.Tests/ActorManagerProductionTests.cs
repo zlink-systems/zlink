@@ -19,7 +19,7 @@ namespace Zlink.Framework.Locations.Redis.Tests;
 public sealed class ActorManagerProductionTests
 {
     [Fact]
-    public async Task ConcurrentActorCreationRebuildsSharedCapacityWithoutRepeatingCallbacks()
+    public async Task ConcurrentActorCreationRetriesCompletionWithoutRepeatingCallbacks()
     {
         const int actorCount = 64;
         TestActorFactory.Reset();
@@ -440,69 +440,34 @@ public sealed class ActorManagerProductionTests
         ZLinkMeshNodeDescriptorKey descriptor
     )
     {
-        var key = CapacityKey(descriptor);
-        var read = await store.ReadAsync(key);
-        if (read is ZLinkStoreReadResult.Missing)
-            return (0L, 0L);
+        return (await ReadAsync("pending"), await ReadAsync("active"));
 
-        var found = Assert.IsType<ZLinkStoreReadResult.Found>(read);
-        using var document = JsonDocument.Parse(found.Value.Bytes);
-        var root = document.RootElement;
-        return (
-            root.GetProperty("pending").GetProperty("actors").GetInt64(),
-            root.GetProperty("active").GetProperty("actors").GetInt64()
-        );
-    }
-
-    // Canonical cross-language capacity row key (capacity-row-canonical-
-    // key-json ruling): zlink:v11:capacity:<percentEncode(meshName)>:
-    // <percentEncode(rid)>, no lifecycle generation.
-    private static ZLinkStoreKey CapacityKey(ZLinkMeshNodeDescriptorKey descriptor) =>
-        new(
-            "zlink:v11:capacity:"
-                + EncodeUriComponent(descriptor.MeshName)
-                + ":"
-                + EncodeUriComponent(descriptor.Rid.ToString())
-        );
-
-    private static string EncodeUriComponent(string value)
-    {
-        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
-        var builder = new System.Text.StringBuilder(bytes.Length);
-        foreach (var b in bytes)
+        async ValueTask<long> ReadAsync(string state)
         {
-            if (
-                b
-                is (>= (byte)'A' and <= (byte)'Z')
-                    or (>= (byte)'a' and <= (byte)'z')
-                    or (>= (byte)'0' and <= (byte)'9')
-                    or (byte)'-'
-                    or (byte)'_'
-                    or (byte)'.'
-                    or (byte)'!'
-                    or (byte)'~'
-                    or (byte)'*'
-                    or (byte)'\''
-                    or (byte)'('
-                    or (byte)')'
-            )
-                builder.Append((char)b);
-            else
-                builder.Append('%').Append(b.ToString("X2", CultureInfo.InvariantCulture));
+            var read = await store.ReadAsync(ActorCapacityKey(descriptor, state));
+            return read is ZLinkStoreReadResult.Found found
+                ? long.Parse(
+                    System.Text.Encoding.UTF8.GetString(found.Value.Bytes.Span),
+                    CultureInfo.InvariantCulture
+                )
+                : 0;
         }
-        return builder.ToString();
     }
 
-    private static bool TryGetActorReservationTransaction(
+    private static ZLinkStoreKey ActorCapacityKey(
+        ZLinkMeshNodeDescriptorKey descriptor,
+        string state
+    ) =>
+        new(
+            $"zlink:v12:capacity\0{descriptor.MeshName}\0{descriptor.Rid.ToHex()}\0actors\0{state}"
+        );
+
+    private static bool TryGetActorReservationTarget(
         ZLinkStoreWriteRequest request,
-        out ZLinkStoreMutation.Put capacity,
-        out ZLinkStoreCondition capacityCondition,
-        out RoutingId targetRid
+        out ZLinkMeshNodeDescriptorKey target
     )
     {
-        capacity = null!;
-        capacityCondition = null!;
-        targetRid = default;
+        target = default;
 
         var authority = request
             .Mutations.OfType<ZLinkStoreMutation.Put>()
@@ -521,34 +486,10 @@ public sealed class ActorManagerProductionTests
         )
             return false;
 
-        capacity = request
-            .Mutations.OfType<ZLinkStoreMutation.Put>()
-            .Single(mutation =>
-                mutation.Key.Value.StartsWith("zlink:v11:capacity:", StringComparison.Ordinal)
-            );
-        using (var capacityDocument = JsonDocument.Parse(capacity.Bytes))
-        {
-            if (
-                capacityDocument.RootElement.GetProperty("pending").GetProperty("actors").GetInt32()
-                == 0
-            )
-                return false;
-        }
-
-        var capacityKey = capacity.Key;
-        capacityCondition = request.Conditions.Single(condition =>
-            condition switch
-            {
-                ZLinkStoreCondition.Missing missing => missing.Key == capacityKey,
-                ZLinkStoreCondition.Version version => version.Key == capacityKey,
-                _ => false,
-            }
-        );
-        // ZLinkMeshNodeDescriptorKey.Rid wire name is routingIdHex
-        // (checklist C-4: shared with the authority allocation.descriptor
-        // field, 21-location-runtime.md#2.4), not "rid".
-        targetRid = RoutingId.FromHex(
-            allocation.GetProperty("descriptor").GetProperty("routingIdHex").GetString()!
+        var descriptor = allocation.GetProperty("descriptor");
+        target = new ZLinkMeshNodeDescriptorKey(
+            descriptor.GetProperty("meshName").GetString()!,
+            RoutingId.FromHex(descriptor.GetProperty("routingIdHex").GetString()!)
         );
         return true;
     }
@@ -630,7 +571,7 @@ public sealed class ActorManagerProductionTests
         private int _actorReserveAttempts;
         private readonly object _gate = new();
         private readonly List<RoutingId> _actorReserveTargets = [];
-        private ZLinkStoreKey? _competingCapacityKey;
+        private ZLinkStoreMutation.Add? _competingCapacity;
 
         public int ActorReserveAttempts => Volatile.Read(ref _actorReserveAttempts);
 
@@ -653,30 +594,33 @@ public sealed class ActorManagerProductionTests
             CancellationToken cancellationToken = default
         )
         {
-            if (
-                !TryGetActorReservationTransaction(
-                    request,
-                    out var capacity,
-                    out var capacityCondition,
-                    out var targetRid
-                )
-            )
+            if (!TryGetActorReservationTarget(request, out var target))
                 return await inner.WriteAsync(request, cancellationToken);
 
             var attempt = Interlocked.Increment(ref _actorReserveAttempts);
             lock (_gate)
-                _actorReserveTargets.Add(targetRid);
+                _actorReserveTargets.Add(target.Rid);
             if (attempt != 1)
                 return await inner.WriteAsync(request, cancellationToken);
 
-            var competing = await inner.WriteAsync(
-                new ZLinkStoreWriteRequest([capacityCondition], [capacity]),
-                cancellationToken
+            var pending = ActorCapacityKey(target, "pending");
+            var capacity = Assert.Single(
+                request.Mutations.OfType<ZLinkStoreMutation.Add>(),
+                add => add.Key == pending
             );
-            var applied = Assert.IsType<ZLinkStoreWriteResult.Applied>(competing);
+            var limit = Assert.Single(
+                request.Conditions.OfType<ZLinkStoreCondition.SumAtMost>(),
+                condition => condition.Keys.Contains(pending)
+            );
+            Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                await inner.WriteAsync(
+                    new ZLinkStoreWriteRequest([limit], [capacity]),
+                    cancellationToken
+                )
+            );
             lock (_gate)
-                _competingCapacityKey = capacity.Key;
-            return new ZLinkStoreWriteResult.Conflict(applied.StoreNow);
+                _competingCapacity = capacity;
+            return await inner.WriteAsync(request, cancellationToken);
         }
 
         public ValueTask<ZLinkStoreScanResult> ScanAsync(
@@ -686,19 +630,15 @@ public sealed class ActorManagerProductionTests
 
         public async ValueTask<bool> ReleaseCompetingCapacityAsync()
         {
-            ZLinkStoreKey key;
+            ZLinkStoreMutation.Add capacity;
             lock (_gate)
-                key =
-                    _competingCapacityKey
+                capacity =
+                    _competingCapacity
                     ?? throw new InvalidOperationException(
                         "The competing capacity claim was not created."
                     );
-            var read = Assert.IsType<ZLinkStoreReadResult.Found>(await inner.ReadAsync(key));
             var release = await inner.WriteAsync(
-                new ZLinkStoreWriteRequest(
-                    [new ZLinkStoreCondition.Version(key, read.Value.Version)],
-                    [new ZLinkStoreMutation.Delete(key)]
-                )
+                new ZLinkStoreWriteRequest([], [capacity with { Delta = -capacity.Delta }])
             );
             return release is ZLinkStoreWriteResult.Applied;
         }
@@ -768,7 +708,7 @@ public sealed class ActorManagerProductionTests
                 return inner.WriteAsync(request, cancellationToken);
             }
             if (
-                TryGetActorReservationTransaction(request, out _, out _, out _)
+                TryGetActorReservationTarget(request, out _)
                 && Interlocked.Increment(ref _actorReserveAttempts) <= _conflictsBeforeSuccess
             )
                 return ValueTask.FromResult<ZLinkStoreWriteResult>(
