@@ -345,7 +345,15 @@ TEST_P (DiscardedAuthority, CreationStillRequiresDisabledPolicyAfterCleanupObser
     EXPECT_FALSE (refused.has_value ());
     EXPECT_EQ (refused.error_kind (), framework_error_kind_t::unavailable);
     EXPECT_EQ (read (key).store_version, before.store_version);
-    r.relocation_policy = detail::factory_relocation_kind_t::disabled;
+    ASSERT_EQ (repository->remove_mesh_node ({descriptor.mesh_name, descriptor.rid}, next)
+                 .result ()
+                 .value (),
+               location_write_status_t::stored);
+    ++descriptor.lifecycle_generation;
+    descriptor.object_capabilities.front ().policy = maintenance_policy_kind_t::disabled;
+    publish ();
+    r.target.node_lifecycle_generation = descriptor.lifecycle_generation;
+    r.target.owner = next;
     EXPECT_TRUE (
       repository->release_ended_reservation (key, before.store_version, {}, r).result ().value ());
 }

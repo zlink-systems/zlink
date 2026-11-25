@@ -1,14 +1,13 @@
 export * from '../../contracts/Locations';
-import type { ZLinkObjectReserveRequest as ReserveRequest } from '../../contracts/Locations/Authority';
-import type { ZLinkRelocationConfiguration } from '../../contracts/Configuration/RegistrationTypes';
+import type { ZLinkObjectReserveRequest } from '../../contracts/Locations/Authority';
 
-export interface ZLinkObjectReserveRequest extends ReserveRequest {
-  readonly actorRelocationPolicy?: ZLinkRelocationConfiguration<unknown>['kind'];
-}
-export type ZLinkEndedOwnerReleaseIntent = Pick<
-  ZLinkObjectReserveRequest,
-  'key' | 'actorRelocationPolicy'
-> & { readonly intent: Pick<ZLinkObjectReserveRequest['intent'], 'stableType'> };
+export type ZLinkEndedOwnerReleaseIntent = Pick<ZLinkObjectReserveRequest, 'key'> & {
+  readonly intent: Pick<ZLinkObjectReserveRequest['intent'], 'stableType'>;
+  readonly target: Pick<
+    ZLinkObjectReserveRequest['target'],
+    'meshName' | 'nodeRid' | 'nodeLifecycleGeneration'
+  >;
+};
 export type * from '../../contracts/Locations/Authority';
 export type {
   ZLinkActorLocation,

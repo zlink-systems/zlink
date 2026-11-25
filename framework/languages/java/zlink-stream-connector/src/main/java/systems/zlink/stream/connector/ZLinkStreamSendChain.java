@@ -18,56 +18,20 @@ final class ZLinkStreamSendChain {
     private boolean pumping;
 
     CompletableFuture<Void> enqueue(Supplier<CompletionStage<Void>> write) {
-        CompletableFuture<Void> publication = enqueueDeferred(write, ignored -> {});
+        CompletableFuture<Void> publication = enqueueDeferred(null, write, ignored -> {});
         pump();
         return publication;
     }
 
     CompletableFuture<Void> enqueueDeferred(
-            Supplier<CompletionStage<Void>> write, Consumer<Throwable> writeFailure) {
-        Write operation = new Write(write, writeFailure);
-        admit(operation, () -> {});
-        return operation.publication;
-    }
-
-    CompletableFuture<ZLinkStreamEncodedPayload> enqueueRequestDeferred(
+            ZLinkStreamTransportConnection owner,
             Supplier<CompletionStage<Void>> write,
-            Consumer<Throwable> writeFailure,
-            Consumer<CompletableFuture<ZLinkStreamEncodedPayload>> onAccepted) {
-        Write operation = new Write(write, writeFailure);
-        CompletableFuture<ZLinkStreamEncodedPayload> pending =
-                new CompletableFuture<>() {
-                    @Override
-                    public boolean cancel(boolean mayInterruptIfRunning) {
-                        return cancelWrite(
-                                operation,
-                                () -> {
-                                    boolean completed = super.cancel(mayInterruptIfRunning);
-                                    operation.publication.cancel(false);
-                                    return completed;
-                                });
-                    }
-
-                    @Override
-                    public boolean completeExceptionally(Throwable failure) {
-                        return cancelWrite(
-                                operation,
-                                () -> {
-                                    boolean completed = super.completeExceptionally(failure);
-                                    operation.publication.cancel(false);
-                                    return completed;
-                                });
-                    }
-                };
-        admit(operation, () -> onAccepted.accept(pending));
-        return pending;
-    }
-
-    private void admit(Write operation, Runnable onAccepted) {
+            Consumer<Throwable> writeFailure) {
+        Write operation = new Write(owner, write, writeFailure);
         synchronized (lock) {
             queue.addLast(operation);
-            onAccepted.run();
         }
+        return operation.publication;
     }
 
     private boolean cancelWrite(Write operation, BooleanSupplier complete) {
@@ -82,19 +46,24 @@ final class ZLinkStreamSendChain {
 
     /**
      * Fails the writes of the connection that ended - the ones not yet written and the one being
-     * written - with {@code Disconnected}, before another connection can use the queue. The
-     * connection ending closes the transport before this runs, so no frame reaches the peer after
-     * its operation failed here.
+     * written - with {@code Disconnected}. A null owner resets the queue on connector close. The
+     * transport closes before this runs.
      */
-    void reset() {
-        List<Write> abandoned;
+    void reset(ZLinkStreamTransportConnection owner) {
+        List<Write> abandoned = new ArrayList<>();
         synchronized (lock) {
-            abandoned = new ArrayList<>(queue);
-            if (active != null) {
+            queue.removeIf(
+                    write -> {
+                        if (owner != null && write.owner != owner) {
+                            return false;
+                        }
+                        abandoned.add(write);
+                        return true;
+                    });
+            if (active != null && (owner == null || active.owner == owner)) {
                 abandoned.add(active);
+                active = null;
             }
-            queue.clear();
-            active = null;
             abandoned.forEach(
                     write -> {
                         write.write = null;
@@ -104,6 +73,7 @@ final class ZLinkStreamSendChain {
         ZLinkStreamException disconnected =
                 ZLinkStreamException.disconnected("connection ended before frame write completed");
         abandoned.forEach(write -> write.publication.completeExceptionally(disconnected));
+        pump();
     }
 
     void pump() {
@@ -169,6 +139,7 @@ final class ZLinkStreamSendChain {
     }
 
     private final class Write {
+        private final ZLinkStreamTransportConnection owner;
         private Supplier<CompletionStage<Void>> write;
         private final CompletableFuture<Void> publication =
                 new CompletableFuture<>() {
@@ -179,7 +150,11 @@ final class ZLinkStreamSendChain {
                 };
         private Consumer<Throwable> writeFailure;
 
-        private Write(Supplier<CompletionStage<Void>> write, Consumer<Throwable> writeFailure) {
+        private Write(
+                ZLinkStreamTransportConnection owner,
+                Supplier<CompletionStage<Void>> write,
+                Consumer<Throwable> writeFailure) {
+            this.owner = owner;
             this.write = write;
             this.writeFailure = writeFailure;
         }

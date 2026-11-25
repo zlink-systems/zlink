@@ -14,6 +14,7 @@
 #include <zlink/framework/contracts/spots/spot_identity.hpp>
 #include <zlink/framework/contracts/spots/spot.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <memory>
@@ -314,13 +315,37 @@ struct object_reserve_request_t
     std::vector<std::byte> creating_payload;
     placement_capacity_bundle_t capacity_bundle;
     std::chrono::system_clock::time_point operation_deadline{};
-    std::optional<detail::factory_relocation_kind_t> relocation_policy;
 };
 inline bool authority_matches_creation_type (const authority_snapshot_t &authority,
                                              const object_reserve_request_t &request)
 {
     return authority.allocation.object_kind == request.key.kind
            && authority.allocation.stable_type == request.intent.stable_type;
+}
+
+inline const object_capability_t *find_object_capability (const mesh_node_descriptor_t &descriptor,
+                                                          placement_object_kind_t kind,
+                                                          std::string_view stable_type)
+{
+    const auto found = std::find_if (
+      descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
+      [&] (const object_capability_t &capability) {
+          return capability.object_kind == kind && capability.stable_type == stable_type;
+      });
+    return found == descriptor.object_capabilities.end () ? nullptr : &*found;
+}
+
+inline void require_disabled_creation_policy (const object_reserve_request_t &request,
+                                              const mesh_node_descriptor_t *target)
+{
+    if (target && target->lifecycle_generation == request.target.node_lifecycle_generation) {
+        const auto *capability =
+          find_object_capability (*target, request.key.kind, request.intent.stable_type);
+        if (capability && capability->policy == maintenance_policy_kind_t::disabled)
+            return;
+    }
+    throw framework_exception_t (framework_error_kind_t::unavailable,
+                                 "Object owner lease is unavailable");
 }
 
 struct object_reservation_fence_t

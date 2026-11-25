@@ -16,7 +16,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker Compose with a running Docker daemon, and PowerShell 7 for the PowerShell runner. Dependencies are pinned in `package.json` to public Framework 0.32.0 packages. Copy this directory independently of the ZLink repository.
+Docker Compose with a running Docker daemon, and PowerShell 7 for the PowerShell runner. Dependencies are pinned in `package.json` to public Framework 0.34.0 packages. Copy this directory independently of the ZLink repository.
 
 ## Build
 
@@ -155,7 +155,7 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.0 packages.
 
 The typed push delivery table restores declared DTO classes for the public typed-handler limitation tracked in #1731. Do not replace it with a manual codec.
 

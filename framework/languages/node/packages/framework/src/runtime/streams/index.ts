@@ -57,6 +57,8 @@ import {
   type ZLinkBoundSessionResponseTarget
 } from './bound-session-response-target';
 import { ZLinkBoundSessionService, type ZLinkBoundSessionTransport } from './bound-session-service';
+import { normalizeStreamAuthenticationAdmission } from '../../contracts/Configuration/RegistrationNormalizers';
+import { ZLinkAuthenticationAdmission } from './authentication-admission';
 import { ZLinkManagedStream } from './managed-stream';
 import {
   messageToBytes,
@@ -211,6 +213,7 @@ interface ZLinkStartedStreamNode {
 }
 
 export class ZLinkStreamRuntimeManager {
+  private authenticationAdmission: ZLinkAuthenticationAdmission | undefined;
   private readonly nodes = new Map<string, ZLinkStartedStreamNode>();
   private readonly applicationJobQueue: ApplicationJobQueue;
 
@@ -221,12 +224,19 @@ export class ZLinkStreamRuntimeManager {
   }
 
   start(): void {
-    if (this.options.registration.streamNodes.size === 0) {
-      return;
+    const streamNodes = this.options.registration.streamNodes;
+    const first = streamNodes.values().next().value;
+    if (first === undefined) return;
+    if (first.authenticationPacketName !== undefined) {
+      this.authenticationAdmission = new ZLinkAuthenticationAdmission(
+        normalizeStreamAuthenticationAdmission(first),
+        this.options.metrics,
+        this.options.dispatchErrors
+      );
     }
     const streamAdapter = this.options.backendAdapterFactory.createStreamAdapter();
     const monitoringAdapter = this.options.backendAdapterFactory.createMonitoringAdapter();
-    for (const [nodeName, streamNode] of this.options.registration.streamNodes.entries()) {
+    for (const [nodeName, streamNode] of streamNodes) {
       const actorDispatchEnabled = streamNode.actorDispatchEnabled === true;
       const applicationMeshName = actorDispatchEnabled ? this.options.primaryMeshName : undefined;
       const nativeMeshNode = actorDispatchEnabled ? this.options.nativeMeshNode : undefined;
@@ -311,6 +321,7 @@ export class ZLinkStreamRuntimeManager {
       const readablePoller = streamAdapter.createReadablePoller(socket);
       const runtime = new ZLinkStreamSessionNodeRuntimeCore({
         nodeName,
+        sessionTypeName: sessionType.name,
         heartbeatIntervalMs: streamNode.heartbeatIntervalMs,
         heartbeatTimeoutMs: streamNode.heartbeatTimeoutMs,
         idleTimeoutMs: streamNode.idleTimeoutMs,
@@ -318,6 +329,7 @@ export class ZLinkStreamRuntimeManager {
         createPacket: () => streamAdapter.createStreamPacket(),
         readablePoller,
         applicationJobQueue: this.applicationJobQueue,
+        authenticationAdmission: this.authenticationAdmission,
         nativeSessionService,
         meshCompletions,
         nativeSessionRouteForMesh: (meshName) => nativeSessionRoutes.get(meshName),
@@ -343,18 +355,26 @@ export class ZLinkStreamRuntimeManager {
     }
   }
 
-  async dispose(): Promise<void> {
+  async dispose(shutdownSignal?: AbortSignal): Promise<void> {
     const nodes = [...this.nodes.values()];
-    for (const node of nodes.reverse()) {
-      await node.runtime?.dispose();
-      for (const service of node.nativeSessionServices) {
-        service.shutdown(DEFAULT_STREAM_SERVICE_SHUTDOWN_TIMEOUT_MS);
-        service.close();
+    try {
+      for (const node of nodes.reverse()) {
+        await node.runtime?.dispose(node.meshName === undefined ? shutdownSignal : undefined);
+        for (const service of node.nativeSessionServices) {
+          service.shutdown(DEFAULT_STREAM_SERVICE_SHUTDOWN_TIMEOUT_MS);
+          service.close();
+        }
+        await node.monitor?.dispose();
+        await node.socket.dispose();
       }
-      await node.monitor?.dispose();
-      await node.socket.dispose();
+      this.nodes.clear();
+    } finally {
+      this.authenticationAdmission?.dispose();
     }
-    this.nodes.clear();
+  }
+
+  resetAuthenticationAdmissionMetrics(): void {
+    this.authenticationAdmission?.resetMetrics();
   }
 
   /** Attaches an already-built node without native listeners, for runtime tests. */
@@ -378,11 +398,11 @@ export class ZLinkStreamRuntimeManager {
     );
   }
 
-  async notifyUnscopedServerDrain(): Promise<void> {
+  async notifyUnscopedServerDrain(shutdownSignal: AbortSignal): Promise<void> {
     await Promise.all(
       [...this.nodes.values()]
         .filter((node) => node.meshName === undefined)
-        .map((node) => node.runtime?.drainCloseSessions())
+        .map((node) => node.runtime?.drainCloseSessions(shutdownSignal))
     );
   }
 }

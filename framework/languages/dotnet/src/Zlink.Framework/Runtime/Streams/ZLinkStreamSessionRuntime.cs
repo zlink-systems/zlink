@@ -18,6 +18,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private readonly ZLinkMessageFlowTracer _flow;
     private readonly ILogger _logger;
     private readonly ZLinkStreamSessionLiveness _liveness;
+    private ITimer? _livenessTimer;
     private readonly ZLinkScopedHandlerInstanceOwner _handlerInstances;
     private IZLinkSession _handler = null!;
     private readonly Action<string> _removeSession;
@@ -269,26 +270,60 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         }
     }
 
-    public ZLinkSerialPostAdmission EnqueueConnected(string localAddr, string remoteAddr)
+    public ZLinkSerialPostAdmission EnqueueConnected(
+        string localAddr,
+        string remoteAddr,
+        long? connectedAt = null
+    )
     {
-        _connectionReady.TrySetResult((localAddr, remoteAddr, _timeProvider.GetTimestamp()));
+        if (
+            _connectionReady.TrySetResult(
+                (localAddr, remoteAddr, connectedAt ?? _timeProvider.GetTimestamp())
+            )
+        )
+        {
+            var timer = CreateLivenessTimer();
+            AwaitStateLane(
+                _lane.RunAsync(() =>
+                {
+                    if (IsClosing)
+                        timer.Dispose();
+                    else
+                        _livenessTimer = timer;
+                })
+            );
+            CheckLiveness();
+        }
         return _serial.ExecuteControl(cancellationToken =>
             MarkConnectedAsync(localAddr, remoteAddr, cancellationToken)
         );
+    }
+
+    internal void RecordRejectedApplicationInbound()
+    {
+        _liveness.RecordInbound();
+        _liveness.RecordApplicationInbound();
     }
 
     public void EnqueuePacket(
         Message header,
         Message payload,
         ZlinkStreamHeader decoded,
-        ZLinkApplicationJobQueueLease? applicationJobAdmission = null
+        ZLinkApplicationJobQueueLease? applicationJobAdmission = null,
+        ZLinkAuthenticationAdmission.Lease? authentication = null
     )
     {
         if (
-            TryEnqueuePacket(header, payload, decoded, applicationJobAdmission)
-            == ZLinkSerialPostAdmission.Accepted
+            TryEnqueuePacket(
+                header,
+                payload,
+                decoded,
+                applicationJobAdmission,
+                authentication: authentication
+            ) == ZLinkSerialPostAdmission.Accepted
         )
             return;
+        authentication?.Release();
         DisposeRejectedPacket(header, payload, applicationJobAdmission);
     }
 
@@ -297,7 +332,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         Message payload,
         ZlinkStreamHeader decoded,
         ZLinkApplicationJobQueueLease? applicationJobAdmission = null,
-        IDisposable? payloadOwner = null
+        IDisposable? payloadOwner = null,
+        ZLinkAuthenticationAdmission.Lease? authentication = null
     )
     {
         if (Volatile.Read(ref _applicationDispatchClosed) != 0)
@@ -310,12 +346,19 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 using var admissionScope = applicationJobAdmission is { } admission
                     ? ZLinkApplicationJobQueueInvocation.Enter(admission)
                     : null;
-                await DispatchPacketAsync(header, payload, decoded, cancellationToken)
+                await DispatchPacketAsync(
+                        header,
+                        payload,
+                        decoded,
+                        cancellationToken,
+                        authentication
+                    )
                     .ConfigureAwait(false);
             },
             Math.Max(payload.Size, 0),
             Math.Max(header.Size, 0),
-            applicationJobAdmission is not null
+            applicationJobAdmission is not null,
+            authentication
         );
         if (admission == ZLinkSerialPostAdmission.Accepted)
             _liveness.RecordApplicationInbound();
@@ -386,16 +429,56 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         }
     }
 
-    public void CheckLiveness()
+    private ITimer CreateLivenessTimer()
     {
-        if (IsClosing)
-            return;
-        if (_requireConnectionReady && !_connectionReady.Task.IsCompletedSuccessfully)
-            return;
-        var connectedAt = _connectionReady.Task.IsCompletedSuccessfully
-            ? _connectionReady.Task.Result.ConnectedAt
-            : (long?)null;
-        switch (_liveness.Evaluate(connectedAt))
+        if (ExecutionContext.IsFlowSuppressed())
+            return CreateTimer();
+
+        using (ExecutionContext.SuppressFlow())
+            return CreateTimer();
+
+        ITimer CreateTimer() =>
+            _timeProvider.CreateTimer(
+                static state => ((ZLinkStreamSessionRuntime)state!).OnLivenessTimer(),
+                this,
+                Timeout.InfiniteTimeSpan,
+                Timeout.InfiniteTimeSpan
+            );
+    }
+
+    private void OnLivenessTimer()
+    {
+        try
+        {
+            CheckLiveness();
+        }
+        catch (Exception exception)
+        {
+            _runtime.ErrorSink.ReportRuntimeTaskException(
+                $"stream-liveness:{Stream.SessionId}",
+                exception
+            );
+        }
+    }
+
+    private void CheckLiveness()
+    {
+        var decision = AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (IsClosing || _livenessTimer is not { } timer)
+                    return ZLinkStreamLivenessDecision.None;
+                var (next, delay) = _liveness.Evaluate(_connectionReady.Task.Result.ConnectedAt);
+                if (delay != Timeout.InfiniteTimeSpan)
+                {
+                    // System.Threading.Timer accepts millisecond deadlines up to uint.MaxValue - 1.
+                    var due = Math.Min(Math.Ceiling(delay.TotalMilliseconds), uint.MaxValue - 1);
+                    timer.Change(TimeSpan.FromMilliseconds(due), Timeout.InfiniteTimeSpan);
+                }
+                return next;
+            })
+        );
+        switch (decision)
         {
             case ZLinkStreamLivenessDecision.None:
                 return;
@@ -403,7 +486,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 try
                 {
                     ZLinkStreamControlFrames.SendHeartbeatPing(Stream);
-                    _liveness.RecordHeartbeatPing();
                 }
                 catch (Exception error)
                 {
@@ -572,7 +654,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         Message header,
         Message payload,
         ZlinkStreamHeader decoded,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkAuthenticationAdmission.Lease? authentication
     )
     {
         using (header)
@@ -605,7 +688,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                     }
                 );
 
-            var dispatch = _context.EnterDispatch(decoded);
+            var dispatch = _context.EnterDispatch(decoded, authentication);
             if (dispatch is null)
             {
                 if (decoded.RequestSeq.HasValue)
@@ -939,7 +1022,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 if (_terminalClose is not null)
                     return (Scheduled: false, Rejected: false);
 
-                _terminalClose = new TerminalClose(reason, DisposeOwnsClose: false);
+                SetTerminalClose(reason, disposeOwnsClose: false);
                 if (EnqueueTerminalOutsideStateLane(finalWork))
                     return (Scheduled: true, Rejected: false);
 
@@ -958,6 +1041,13 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             );
         }
         return scheduled;
+    }
+
+    private void SetTerminalClose(ZlinkStreamCloseReason reason, bool disposeOwnsClose)
+    {
+        _terminalClose = new TerminalClose(reason, disposeOwnsClose);
+        _livenessTimer?.Dispose();
+        _livenessTimer = null;
     }
 
     private bool EnqueueTerminalOutsideStateLane(Func<ValueTask> finalWork)
@@ -979,10 +1069,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             {
                 if (_terminalClose is { } terminalClose)
                     return terminalClose.DisposeOwnsClose;
-                _terminalClose = new TerminalClose(
-                    ZlinkStreamCloseReason.TransportError,
-                    DisposeOwnsClose: true
-                );
+                SetTerminalClose(ZlinkStreamCloseReason.TransportError, disposeOwnsClose: true);
                 return true;
             })
         );

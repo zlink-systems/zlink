@@ -963,12 +963,17 @@ class provider_location_repository_t final : public location_repository_t
         }
         if (required_owner && (!owner_live || !same_owner (current.owner, *required_owner)))
             co_return stale_authority_reclaim_result_t::recovery_required;
+        if (active && owner_live)
+            co_return stale_authority_reclaim_result_t::owner_live;
+        const auto descriptor_key = key_mesh (
+          current.allocation.target.mesh_name,
+          zlink::routing_id_t::from (std::string (current.allocation.target.node_rid.value ())));
+        std::optional<store_condition_t> descriptor_condition;
+        std::optional<store_condition_t> target_descriptor_condition;
         std::vector<authority_entry_t> members;
         std::optional<store_condition_t> authority_lock_condition;
         std::vector<store_condition_t> member_lock_conditions;
         if (active) {
-            if (owner_live)
-                co_return stale_authority_reclaim_result_t::owner_live;
             const auto mutation_locked = co_await authority_mutation_locked_async (
               (request ? object_key (request->key)
                        : authority_from_store_key (authority_key)->value),
@@ -976,10 +981,26 @@ class provider_location_repository_t final : public location_repository_t
             if (current.aggregate || (actor && actor->has_relocation_state) || mutation_locked)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
-            if (!discarded
-                && request->relocation_policy != detail::factory_relocation_kind_t::disabled)
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Object owner lease is unavailable");
+            if (!discarded) {
+                const auto target_key = key_mesh (
+                  request->target.mesh_name,
+                  zlink::routing_id_t::from (std::string (request->target.node_rid.value ())));
+                const auto read = co_await _store.read (target_key);
+                const auto *found = std::get_if<store_found_t> (&read);
+                std::optional<mesh_node_descriptor_t> target_descriptor;
+                if (found) {
+                    const auto record =
+                      parse_canonical_record (found->value.bytes, "MeshNode descriptor");
+                    target_descriptor =
+                      decode_mesh_descriptor (record.at (location_record_fields::descriptor));
+                    auto &condition = target_key.value == descriptor_key.value
+                                        ? descriptor_condition
+                                        : target_descriptor_condition;
+                    condition = version_condition (target_key, found->value.version);
+                }
+                require_disabled_creation_policy (*request, target_descriptor ? &*target_descriptor
+                                                                              : nullptr);
+            }
             if (!discarded && current.allocation.object_kind == placement_object_kind_t::actor
                 && (!actor || actor->state != actor_authority_state_t::ready
                     || actor->actor_id != request->key.global_id
@@ -1056,20 +1077,20 @@ class provider_location_repository_t final : public location_repository_t
             if (!matches_store_version (observed, stored_authority.value.version))
                 co_return stale_authority_reclaim_result_t::conflict;
         }
-        const auto descriptor_key = key_mesh (
-          current.allocation.target.mesh_name,
-          zlink::routing_id_t::from (std::string (current.allocation.target.node_rid.value ())));
-        const auto descriptor_read = co_await _store.read (descriptor_key);
-        auto descriptor_condition = missing_condition (descriptor_key);
-        if (const auto *found = std::get_if<store_found_t> (&descriptor_read)) {
-            const auto record = parse_canonical_record (found->value.bytes, "MeshNode descriptor");
-            const auto descriptor =
-              decode_mesh_descriptor (record.at (location_record_fields::descriptor));
-            if (owner_live
-                && descriptor.lifecycle_generation
-                     == current.allocation.target.node_lifecycle_generation)
-                co_return stale_authority_reclaim_result_t::owner_live;
-            descriptor_condition = version_condition (descriptor_key, found->value.version);
+        if (!descriptor_condition) {
+            const auto descriptor_read = co_await _store.read (descriptor_key);
+            descriptor_condition = missing_condition (descriptor_key);
+            if (const auto *found = std::get_if<store_found_t> (&descriptor_read)) {
+                const auto record =
+                  parse_canonical_record (found->value.bytes, "MeshNode descriptor");
+                const auto descriptor =
+                  decode_mesh_descriptor (record.at (location_record_fields::descriptor));
+                if (owner_live
+                    && descriptor.lifecycle_generation
+                         == current.allocation.target.node_lifecycle_generation)
+                    co_return stale_authority_reclaim_result_t::owner_live;
+                descriptor_condition = version_condition (descriptor_key, found->value.version);
+            }
         }
 
         if (!active && !current.pending_creation)
@@ -1077,8 +1098,10 @@ class provider_location_repository_t final : public location_repository_t
 
         store_write_request_t write_request{
           {version_condition (authority_key, stored_authority.value.version),
-           std::move (stale_owner_condition), std::move (descriptor_condition)},
+           std::move (stale_owner_condition), std::move (*descriptor_condition)},
           {store_delete_t{authority_key}}};
+        if (target_descriptor_condition)
+            write_request.conditions.push_back (std::move (*target_descriptor_condition));
         if (authority_lock_condition)
             write_request.conditions.push_back (std::move (*authority_lock_condition));
         for (auto &condition : member_lock_conditions)
@@ -3766,8 +3789,9 @@ class provider_location_repository_t final : public location_repository_t
         return parse_store_enum (value, runtime_state_names, framework_runtime_state_t::preparing);
     }
 
-    static inline constexpr std::array<std::pair<maintenance_policy_kind_t, const char *>, 3>
+    static inline constexpr std::array<std::pair<maintenance_policy_kind_t, const char *>, 4>
       maintenance_policy_names{{
+        {maintenance_policy_kind_t::unspecified, "unspecified"},
         {maintenance_policy_kind_t::disabled, "disabled"},
         {maintenance_policy_kind_t::recreate, "recreate"},
         {maintenance_policy_kind_t::snapshot, "snapshot"},
@@ -3776,13 +3800,13 @@ class provider_location_repository_t final : public location_repository_t
     static const char *maintenance_policy_name (maintenance_policy_kind_t value)
     {
         return store_enum_name (value, maintenance_policy_names,
-                                maintenance_policy_kind_t::disabled);
+                                maintenance_policy_kind_t::unspecified);
     }
 
     static maintenance_policy_kind_t parse_maintenance_policy (const std::string &value)
     {
         return parse_store_enum (value, maintenance_policy_names,
-                                 maintenance_policy_kind_t::disabled);
+                                 maintenance_policy_kind_t::unspecified);
     }
 
     static inline constexpr std::array<const char *, 3> object_role_names{"none", "client",
@@ -3922,11 +3946,7 @@ class provider_location_repository_t final : public location_repository_t
                                 placement_object_kind_t kind,
                                 const std::string &stable_type)
     {
-        return std::any_of (
-          descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
-          [&] (const object_capability_t &capability) {
-              return capability.object_kind == kind && capability.stable_type == stable_type;
-          });
+        return find_object_capability (descriptor, kind, stable_type) != nullptr;
     }
 
     static bool bundle_matches (const placement_capacity_bundle_t &bundle,

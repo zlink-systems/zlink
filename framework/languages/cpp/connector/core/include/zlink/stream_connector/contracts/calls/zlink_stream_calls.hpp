@@ -22,6 +22,11 @@
 #include <utility>
 #include <vector>
 
+namespace zlink::stream_e2e_client
+{
+class coroutine_request_call_t;
+}
+
 namespace zlink::stream_connector
 {
 
@@ -132,6 +137,14 @@ void submit_request_async (std::shared_ptr<void> state,
                            bool deliver_direct = false,
                            std::optional<actor_binding_ref_t> actor_binding = std::nullopt,
                            std::shared_ptr<std::vector<std::uint64_t>> reply_hook_ids = {});
+void submit_request_async (std::shared_ptr<void> state,
+                           packet_t packet,
+                           std::chrono::milliseconds timeout,
+                           std::function<void (result_t<request_reply_t>)> callback,
+                           bool deliver_direct,
+                           std::optional<actor_binding_ref_t> actor_binding,
+                           std::shared_ptr<std::vector<std::uint64_t>> reply_hook_ids,
+                           std::function<void ()> *cancel_operation);
 result_t<packet_t> submit_wait (std::shared_ptr<void> state,
                                 std::string packet_name,
                                 std::function<bool (const packet_t &)> predicate,
@@ -264,6 +277,18 @@ class request_call_t
     /// Sends the request and invokes the callback with the decoded reply result.
     template <typename TReply> void submit (std::function<void (result_t<TReply>)> callback)
     {
+        submit_with_cancellation<TReply> (std::move (callback), nullptr);
+    }
+
+  private:
+    friend class connector_t;
+    friend class actor_t;
+    friend class zlink::stream_e2e_client::coroutine_request_call_t;
+
+    template <typename TReply>
+    void submit_with_cancellation (std::function<void (result_t<TReply>)> callback,
+                                   std::function<void ()> *cancel_operation)
+    {
         if (!_packet) {
             auto result =
               result_t<TReply>::failure (_packet.error ()->code, _packet.error ()->message);
@@ -305,12 +330,8 @@ class request_call_t
                   });
               }
           },
-          true, _actor_binding, reply_hook_ids);
+          true, _actor_binding, reply_hook_ids, cancel_operation);
     }
-
-  private:
-    friend class connector_t;
-    friend class actor_t;
 
     template <typename TReply>
     static reply_received_context_t reply_context (const std::string &request_name,

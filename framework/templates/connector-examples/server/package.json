@@ -1,0 +1,25 @@
+{
+  "name": "connector-example-server",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/generate-framework-json-schemas.mjs --project tsconfig.json --source messages.ts --out dist/.zlink-framework-json-schemas.cjs"
+  },
+  "dependencies": {
+    "@nestjs/common": "10.4.22",
+    "@nestjs/core": "10.4.22",
+    "@opentelemetry/api-logs": "0.221.0",
+    "@opentelemetry/sdk-logs": "0.221.0",
+    "@zlink-systems/framework": "0.34.0",
+    "@zlink-systems/nestjs": "0.34.0",
+    "@zlink-systems/zlink": "1.26.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.10",
+    "typescript": "5.9.3"
+  }
+}

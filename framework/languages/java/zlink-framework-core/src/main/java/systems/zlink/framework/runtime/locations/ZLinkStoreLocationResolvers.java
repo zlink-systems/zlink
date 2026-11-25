@@ -303,7 +303,33 @@ public final class ZLinkStoreLocationResolvers
             Set<ZLinkMeshNodeDescriptorKey> excluded,
             long deadline) {
         return selectPlacement(
-                meshName, kind, stableType, newActor, source, excluded, deadline, true);
+                meshName, kind, stableType, newActor, source, excluded, deadline, false);
+    }
+
+    public CompletionStage<ZLinkMeshNodeDescriptor> selectPlacement(
+            String meshName,
+            ZLinkPlacementObjectKind kind,
+            String stableType,
+            boolean newActor,
+            ZLinkInternalMeshNode source,
+            Set<ZLinkMeshNodeDescriptorKey> excluded,
+            long deadline,
+            boolean refreshCapacity) {
+        return selectPlacement(
+                meshName,
+                kind,
+                stableType,
+                newActor,
+                source,
+                excluded,
+                deadline,
+                refreshCapacity ? PlacementRefresh.REQUIRED : PlacementRefresh.AVAILABLE);
+    }
+
+    private enum PlacementRefresh {
+        AVAILABLE,
+        REQUIRED,
+        USED
     }
 
     private CompletionStage<ZLinkMeshNodeDescriptor> selectPlacement(
@@ -314,7 +340,7 @@ public final class ZLinkStoreLocationResolvers
             ZLinkInternalMeshNode source,
             Set<ZLinkMeshNodeDescriptorKey> excluded,
             long deadline,
-            boolean refreshAvailable) {
+            PlacementRefresh refresh) {
         PlacementObservation observation;
         synchronized (placement) {
             if (closed)
@@ -329,40 +355,36 @@ public final class ZLinkStoreLocationResolvers
                             ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                             "Placement deadline exceeded"));
         }
-        List<ZLinkMeshNodeDescriptor> live = observedLiveNodes(observation);
-        PlacementDecision decision =
-                observation.nodes() == null
-                        ? new PlacementDecision(List.of(), true)
-                        : classifyPlacement(live, kind, stableType, newActor, source, excluded);
-        boolean changed;
-        synchronized (placement) {
-            changed = closed || observation != placement.get(meshName);
-        }
-        if (changed)
-            return selectPlacement(
-                    meshName,
-                    kind,
-                    stableType,
-                    newActor,
-                    source,
-                    excluded,
-                    deadline,
-                    refreshAvailable);
-        if (!decision.candidates().isEmpty()) {
-            return CompletableFuture.completedFuture(weightedPlacement(decision.candidates()));
-        }
-        if (!decision.waitForDiscovery() && !refreshAvailable) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.UNAVAILABLE, "Placement is unavailable"));
+        boolean waitForDiscovery = false;
+        if (refresh != PlacementRefresh.REQUIRED) {
+            List<ZLinkMeshNodeDescriptor> live = observedLiveNodes(observation);
+            PlacementDecision decision =
+                    observation.nodes() == null
+                            ? new PlacementDecision(List.of(), true)
+                            : classifyPlacement(live, kind, stableType, newActor, source, excluded);
+            boolean changed;
+            synchronized (placement) {
+                changed = closed || observation != placement.get(meshName);
+            }
+            if (changed)
+                return selectPlacement(
+                        meshName, kind, stableType, newActor, source, excluded, deadline, refresh);
+            if (!decision.candidates().isEmpty()) {
+                return CompletableFuture.completedFuture(weightedPlacement(decision.candidates()));
+            }
+            waitForDiscovery = decision.waitForDiscovery();
+            if (!waitForDiscovery && refresh == PlacementRefresh.USED) {
+                return CompletableFuture.failedFuture(
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE, "Placement is unavailable"));
+            }
         }
 
-        CompletionStage<?> discovery;
-        if (decision.waitForDiscovery()) {
-            discovery = withinPlacementDeadline(observation.changed(), deadline);
-        } else {
-            discovery = refreshPlacement(meshName, observation, OptionalLong.of(deadline));
-        }
+        CompletionStage<?> discovery =
+                waitForDiscovery
+                        ? withinPlacementDeadline(observation.changed(), deadline)
+                        : refreshPlacement(meshName, observation, OptionalLong.of(deadline));
+        var nextRefresh = waitForDiscovery ? refresh : PlacementRefresh.USED;
         return discovery.thenCompose(
                 ignored ->
                         selectPlacement(
@@ -373,7 +395,7 @@ public final class ZLinkStoreLocationResolvers
                                 source,
                                 excluded,
                                 deadline,
-                                refreshAvailable && decision.waitForDiscovery()));
+                                nextRefresh));
     }
 
     private CompletionStage<List<ZLinkMeshNodeDescriptor>> refreshPlacement(

@@ -672,9 +672,7 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
                 descriptor.lifecycleGeneration(),
                 owner,
                 new byte[] {1},
-                ZLinkPlacementCapacityBundle.spot(ZLinkPlacementObjectKind.USER_SPOT, "room", 1),
-                new systems.zlink.framework.runtime.internal.configuration
-                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled());
+                ZLinkPlacementCapacityBundle.spot(ZLinkPlacementObjectKind.USER_SPOT, "room", 1));
     }
 
     private static ZLinkObjectReservationRequest actorRequest(
@@ -690,9 +688,7 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
                 descriptor.lifecycleGeneration(),
                 owner,
                 new byte[] {1},
-                ZLinkPlacementCapacityBundle.actor(1),
-                new systems.zlink.framework.runtime.internal.configuration
-                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled());
+                ZLinkPlacementCapacityBundle.actor(1));
     }
 
     private static LiveRepository liveRepository(String label) {

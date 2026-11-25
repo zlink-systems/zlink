@@ -36,6 +36,8 @@ internal static class ZlinkStreamConnectorOptionsValidator
             throw Validation("ConnectTimeout must be positive.");
         if (options.RequestTimeout <= TimeSpan.Zero)
             throw Validation("RequestTimeout must be positive.");
+        if (options.MaxAdmissionWait <= TimeSpan.Zero)
+            throw Validation("MaxAdmissionWait must be positive.");
         if (options.WaitTimeout <= TimeSpan.Zero)
             throw Validation("WaitTimeout must be positive.");
 

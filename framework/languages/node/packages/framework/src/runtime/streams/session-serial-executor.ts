@@ -18,11 +18,10 @@ export class ZLinkSessionSerialExecutor {
     async (record) => this.execute(record),
     {}
   );
-  private closed = false;
 
   shutdownSnapshot(): Record<string, unknown> {
     return {
-      serialClosed: this.closed,
+      serialClosed: this.scheduler.admissionClosed,
       serialActive: this.scheduler.diagnosticActive,
       serialActiveLifecycle: this.scheduler.activeLifecycle !== undefined
     };
@@ -45,7 +44,7 @@ export class ZLinkSessionSerialExecutor {
   }
 
   executeFinal(work: () => Promise<void>): Promise<void> {
-    if (this.closed) {
+    if (this.scheduler.admissionClosed) {
       return Promise.reject(
         createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
@@ -64,7 +63,7 @@ export class ZLinkSessionSerialExecutor {
     options: Omit<ZLinkSerialWorkOptions, 'lane'> = {},
     onRejected?: (error?: unknown) => void
   ): boolean {
-    if (this.closed) return false;
+    if (this.scheduler.admissionClosed) return false;
     const serialOptions = { ...options, lane };
     const submitted = hasApplicationJobPermit()
       ? this.scheduler.submitPreAdmitted(work, serialOptions)
@@ -73,9 +72,12 @@ export class ZLinkSessionSerialExecutor {
     return true;
   }
 
-  async dispose(): Promise<void> {
-    this.closed = true;
-    await this.scheduler.whenIdle();
+  dispose(): Promise<void> {
+    return this.scheduler.close();
+  }
+
+  discardPending(error: unknown): void {
+    this.scheduler.discardPending(error);
   }
 
   private async execute(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {

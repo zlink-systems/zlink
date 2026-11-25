@@ -25,7 +25,7 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/nod
 
 ## Project and development
 
-This Node.js 22 project uses TypeScript and NestJS to run an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, assigns a UUID Room ID, and waits for a dynamic Room's `RoomPrepared` reply before returning the Session endpoint. Public Framework and connector packages are pinned to `0.32.0` in `package.json`. The [README](README.md) owns execution, deployment, and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
+This Node.js 22 project uses TypeScript and NestJS to run an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, assigns a UUID Room ID, and waits for a dynamic Room's `RoomPrepared` reply before returning the Session endpoint. Public Framework and connector packages are pinned to `0.34.0` in `package.json`. The [README](README.md) owns execution, deployment, and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
 
 Run from this project root with Docker Compose v2 and Linux containers:
 

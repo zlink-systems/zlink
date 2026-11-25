@@ -13,7 +13,7 @@ struct session_liveness_t
 {
     using clock_t = std::chrono::steady_clock;
     clock_t::time_point last_application_inbound;
-    clock_t::time_point last_ping;
+    clock_t::time_point last_ping_phase;
     clock_t::time_point last_inbound;
     const detail::stream_liveness_options_t options;
 
@@ -26,7 +26,7 @@ struct session_liveness_t
                         clock_t::time_point application_initial,
                         detail::stream_liveness_options_t settings = {}) :
         last_application_inbound (application_initial),
-        last_ping (established),
+        last_ping_phase (established),
         last_inbound (established),
         options (settings)
     {
@@ -68,9 +68,11 @@ struct session_liveness_t
                  >= options.idle_timeout) {
             return decision_t::idle_timeout;
         }
-        if (std::chrono::duration_cast<std::chrono::milliseconds> (now - last_ping)
+        if (std::chrono::duration_cast<std::chrono::milliseconds> (now - last_ping_phase)
             >= options.heartbeat_interval) {
-            last_ping = now;
+            const auto interval =
+              std::chrono::duration_cast<clock_t::duration> (options.heartbeat_interval);
+            last_ping_phase = now - (now - last_ping_phase) % interval;
             return decision_t::send_heartbeat;
         }
         return decision_t::none;
@@ -85,7 +87,7 @@ struct session_liveness_t
               clock_t::time_point::max () - baseline);
             return timeout >= remaining ? clock_t::time_point::max () : baseline + timeout;
         };
-        const auto heartbeat_due = std::min (due_at (last_ping, options.heartbeat_interval),
+        const auto heartbeat_due = std::min (due_at (last_ping_phase, options.heartbeat_interval),
                                              due_at (last_inbound, options.heartbeat_timeout));
         return options.idle_timeout.count () > 0
                  ? std::min (heartbeat_due, due_at (last_application_inbound, options.idle_timeout))

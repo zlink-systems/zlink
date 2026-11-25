@@ -178,7 +178,10 @@ without sign or leading zero) and use only these two operations.
 - `Add(key, delta)` mutation: adds `delta` (may be negative) to the key's value and puts it. If a result
   is below `0`, the whole batch ends as `Corrupt` with zero mutations. `Corrupt` differs from `Conflict`
   and means Store data corruption (the negative-release rule of
-  [Location runtime §6.1](01-location-runtime.en.md)).
+  [Location runtime §6.1](01-location-runtime.en.md)). The whole batch is also `Corrupt` when a key value
+  these operations read isn't a canonical decimal (`0..2^63-1`) or an `Add` result exceeds `2^63-1`. The
+  Framework ends `Corrupt` as `DataLost`. Only an exhausted §8 ID counter row (`2^63-1`) is
+  `GenerationExhausted` rather than `Corrupt`.
 
 A dimension whose limit is `0` (no limit, [Location runtime §3.3](01-location-runtime.en.md)) gets no
 `SumAtMost`. The provider interprets only the keys these two operations name as numbers; every other key stays
@@ -187,6 +190,13 @@ and no condition does not conflict with other callers' `Add`. A Store that only 
 compares (the official etcd provider) reads, computes, and commits with a revision compare, and retries
 inside the provider if another caller changed the same key in between — the retry is not visible to
 the Framework as `Conflict`. Only a false `SumAtMost` is a `Conflict`.
+
+When a reservation batch carrying a finite-limit `SumAtMost` ends in `Conflict`, the Framework decides in
+this order. It first rereads that operation's authority conditions to confirm eligibility; if they changed,
+the operation's existing `Conflict` handling applies. If eligibility is unchanged, it rechecks with a batch
+that carries only the same `SumAtMost` conditions and no mutation. If that is false, the candidate MeshNode is
+judged out of capacity and placement's existing exhaustion handling applies (diagnostic reason
+`capacity_exceeded`); if true, the batch is rebuilt and resubmitted within the operation's deadline.
 
 The Framework keeps MeshNode capacity as one counter key per Mesh name, RID, dimension (Actor total,
 Spot total, per Spot kind and type) and state (`active`, `pending`). A reservation puts, per dimension,
@@ -376,15 +386,26 @@ reservation, commit, or release). Every write in the procedure is a [§4](#4-con
 conditional batch; if any condition is false, none of the batch applies. Running it from several
 nodes at once, or rerunning it after an interruption, gives the same result.
 
+0. If an unfinished v11 aggregate (an in-flight relocation record) remains, finish it with the v11 procedure
+   before converting. If a record that can't be finished remains, don't convert; stop with a startup
+   configuration error. Because every v11 node has stopped, the v11 staging retention (24 hours after
+   staging) doesn't apply. Abort Staging and Prepared aggregates (for Prepared, return the target v11 capacity
+   record's pending count in the same batch), and finish participant and inventory cleanup for Committed and
+   Aborted aggregates before deleting their root. If any aggregate's target owner lease is still live, a v11 node
+   may still be writing; change nothing and stop with a startup configuration error (starting again after that
+   lease expires proceeds).
 1. If `zlink:v12:generation-floor` is absent, Put the larger of `zlink:v11:object-counter` and
    `zlink:v11:authority-owner-counter` (or `1` when both are absent) under a `Missing` condition.
 2. For each remaining v11 MeshNode capacity record, one batch Puts its active and pending values into
    the §4.1 counter keys and Deletes the old record. Its conditions are `Value` on the old record (the
    bytes read) and `Missing` on every target counter key. On `Conflict` or a lost response, read that
    record and its counter keys again: if the old record is gone and the counter keys exist, it is done;
-   otherwise retry. A counter whose value is `0` isn't Put (an absent key is `0`). The RID string in the old
-   record's key maps to that RID's `routingIdHex` when exactly one current descriptor's RID renders as that
-   string, or, when none does, to the `routingIdHex` of the string parsed as a RoutingId. If two or more do, or
+   otherwise retry. A counter whose value is `0` isn't Put (an absent key is `0`). The RID part of the old
+   record's key is decoded to bytes and compared with both the raw RID bytes and the rendered string of each
+   current descriptor: when exactly one descriptor matches, it maps to that RID's `routingIdHex`; when none
+   does, to the `routingIdHex` of those bytes parsed literally as a RoutingId. The old record value is read in
+   both the nested form and the flat form (fields named per dimension and state, such as `actorsActive`). If
+   two or more match, or
    one batch would exceed the §4 key bound, the record isn't moved and startup stops with a configuration error.
 3. When a scan finds no old capacity record left, Put `zlink:v12:format` under a `Missing` condition.
 

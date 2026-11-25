@@ -244,7 +244,7 @@ final class ZLinkRelocatedTimerRebindTest {
                 assertSame(first, second);
                 assertFalse(first.isDisposed());
                 assertEquals(snapshot, registry.freeze());
-                assertTrue(scheduler.tasks.isEmpty(), "no scheduling before Ready");
+                assertTrue(scheduler.due.isEmpty(), "no scheduling before Ready");
             }
         }
     }
@@ -372,7 +372,7 @@ final class ZLinkRelocatedTimerRebindTest {
     }
 
     @Test
-    void newKeyRetainsGenerationReplacementAndWaitsForReady() {
+    void newKeyRetainsGenerationReplacementAndWaitsForReady() throws InterruptedException {
         try (var scheduler = new ManualScheduler();
                 var registry = registry(scheduler)) {
             registry.stageRestore(snapshot(false));
@@ -382,14 +382,14 @@ final class ZLinkRelocatedTimerRebindTest {
             assertTrue(registry.hasActiveTimers());
             assertTrue(first.isDisposed());
             assertFalse(second.isDisposed());
-            assertTrue(scheduler.tasks.isEmpty());
+            assertTrue(scheduler.due.isEmpty(), "no scheduling before Ready");
             registry.publishStagedRestore();
-            assertEquals(2, scheduler.tasks.size());
+            scheduler.assertScheduledTasks(2);
         }
     }
 
     @Test
-    void otherCallbackBeforeReadyUsesOrdinaryGenerationRule() {
+    void otherCallbackBeforeReadyUsesOrdinaryGenerationRule() throws InterruptedException {
         try (var scheduler = new ManualScheduler();
                 var registry = registry(scheduler)) {
             registry.stageRestore(snapshot(false));
@@ -401,17 +401,17 @@ final class ZLinkRelocatedTimerRebindTest {
             assertNotSame(restored, replaced);
             assertTrue(registry.hasActiveTimers());
             assertTrue(restored.isDisposed());
-            assertTrue(scheduler.tasks.isEmpty());
+            assertTrue(scheduler.due.isEmpty(), "no scheduling before Ready");
             registry.publishStagedRestore();
-            assertEquals(1, scheduler.tasks.size());
+            scheduler.assertScheduledTasks(1);
         }
     }
 
     @Test
-    void readyEndsReattachmentAndQueuedOldGenerationCannotRun() {
+    void readyEndsReattachmentAndQueuedOldGenerationCannotRun() throws InterruptedException {
         try (var scheduler = new ManualScheduler()) {
             var deliveries = new ArrayList<ZLinkTimerTick>();
-            var queued = new ArrayList<java.util.function.Supplier<CompletionStage<Void>>>();
+            var queued = new LinkedBlockingQueue<Supplier<CompletionStage<Void>>>();
             try (var registry =
                     new ZLinkSpotTimerRegistry(
                             "target",
@@ -425,16 +425,20 @@ final class ZLinkRelocatedTimerRebindTest {
                             })) {
                 registry.stageRestore(snapshot(true));
                 var restored = initializeAdd(registry, RESTORED_KEY, TickHandler.class);
+                assertTrue(queued.isEmpty(), "no dispatch before Ready");
                 registry.publishStagedRestore();
-                assertEquals(1, queued.size());
+                var oldCallback = queued.poll(3, TimeUnit.SECONDS);
+                assertNotNull(oldCallback, "restored pending tick must reach dispatch after Ready");
+                assertTrue(queued.isEmpty(), "only one pending tick may reach dispatch");
                 var replacement =
                         registry.add(RESTORED_KEY, PERIOD, TickHandler.class, OPTIONS)
                                 .toCompletableFuture()
                                 .join();
                 assertNotSame(restored, replacement);
-                assertTrue(restored.isDisposed());
-                queued.getFirst().get().toCompletableFuture().join();
+                // Exercise the queued tick before observing disposal on the old handle.
+                oldCallback.get().toCompletableFuture().join();
                 assertTrue(deliveries.isEmpty(), "old generation must not invoke handler");
+                assertTrue(restored.isDisposed());
                 var replaced = registry.freeze().timers().getFirst();
                 assertEquals(0, replaced.schedule().deliveryIndex());
                 assertEquals(0, replaced.schedule().lastScheduledIndex());
@@ -570,11 +574,17 @@ final class ZLinkRelocatedTimerRebindTest {
     }
 
     static final class ManualScheduler extends ScheduledThreadPoolExecutor {
-        private final List<ScheduledFuture<?>> tasks = new ArrayList<>();
         final LinkedBlockingQueue<Runnable> due = new LinkedBlockingQueue<>();
 
         ManualScheduler() {
             super(1);
+        }
+
+        void assertScheduledTasks(int expected) throws InterruptedException {
+            for (int index = 0; index < expected; index++) {
+                assertNotNull(due.poll(3, TimeUnit.SECONDS), "timer must be scheduled after Ready");
+            }
+            assertTrue(due.isEmpty(), "unexpected timer scheduled after Ready");
         }
 
         @Override
@@ -584,7 +594,6 @@ final class ZLinkRelocatedTimerRebindTest {
                 return super.schedule(command, delay, unit);
             }
             var task = new ManualFuture(command);
-            tasks.add(task);
             due.add(task);
             return task;
         }

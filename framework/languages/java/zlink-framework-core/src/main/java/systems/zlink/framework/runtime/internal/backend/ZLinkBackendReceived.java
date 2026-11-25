@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.backend;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRequestProgress;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -11,7 +12,7 @@ import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-public final class ZLinkBackendReceived implements AutoCloseable {
+public class ZLinkBackendReceived implements AutoCloseable {
     private final Instant receivedAt;
     private final ZLinkBackendRequestResult result;
     private final int failureCode;
@@ -159,6 +160,10 @@ public final class ZLinkBackendReceived implements AutoCloseable {
                 closeAction,
                 contentType,
                 Clock.systemUTC().instant());
+    }
+
+    public ZLinkServiceRequestProgress requestProgress() {
+        return ZLinkServiceRequestProgress.NONE;
     }
 
     public ZLinkBackendRequestResult result() {

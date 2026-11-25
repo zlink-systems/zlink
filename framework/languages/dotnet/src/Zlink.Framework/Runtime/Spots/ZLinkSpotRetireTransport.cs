@@ -1113,6 +1113,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
                     stage.SourceRecoveries[state.AuthorityKey].Span
                 );
+                // Commit the member's target owner identity while preserving its
+                // relocation phase until steady normalization.
                 return new ZLinkAggregateRelocationParticipant(
                     state with
                     {
@@ -1120,7 +1122,15 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     },
                     recovery.ExpectedStoreVersion,
                     ZLinkAuthorityGenerationTransition.NewOwner,
-                    recovery.AuthorityPayload,
+                    state.ObjectKind == ZLinkPlacementObjectKind.Actor
+                        ? BuildTargetReadyPayload(
+                            state.ObjectKind,
+                            recovery.AuthorityPayload,
+                            stage,
+                            targetOwner,
+                            ZLinkActorRelocationAuthorityPhase.Activated
+                        )
+                        : recovery.AuthorityPayload,
                     recovery.MembershipMutation
                 );
             })
@@ -1617,7 +1627,71 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         await runtime
             .CompleteInboundSpotAggregateReplayAsync(stage, cancellationToken)
             .ConfigureAwait(false);
-        await runtime.OpenInboundSpotAggregateAdmissionAsync(stage).ConfigureAwait(false);
+        await runtime
+            .OpenInboundSpotAggregateAdmissionAsync(
+                stage,
+                () => RecordDispatchOpeningAsync(stage, cancellationToken)
+            )
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask RecordDispatchOpeningAsync(
+        TargetStage stage,
+        CancellationToken cancellationToken
+    )
+    {
+        var store =
+            registration.Locations.ResolveStore()
+            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
+        var spot = stage.SpotParticipant;
+        var read = await store
+            .ReadAuthorityAsync(spot.AuthorityKey, cancellationToken)
+            .ConfigureAwait(false);
+        if (
+            read is not ZLinkAuthorityReadResult.Found found
+            || found.Snapshot.AuthorityOwnerGeneration != stage.TargetAuthorityOwnerGeneration
+            || !MatchesStageAuthority(
+                stage,
+                spot,
+                found.Snapshot,
+                StageOwner(stage),
+                Convert.ToHexString(stage.Envelope.InventoryDigest.Span).ToLowerInvariant()
+            )
+        )
+            throw new ZLinkRelocationDataLostException(
+                "SPOT authority changed before target dispatch opened."
+            );
+
+        var snapshot = found.Snapshot;
+        var relocation = snapshot.Relocation!;
+        if (relocation.Phase >= ServiceWireCodec.RelocationPhase.Activated)
+            return;
+
+        var result = await store
+            .CompareExchangeAuthorityAsync(
+                spot.AuthorityKey,
+                snapshot.StoreVersion,
+                new ZLinkAuthorityMutation.Put(
+                    snapshot.Payload,
+                    ZLinkAuthorityGenerationTransition.Preserve,
+                    TargetOwner: null,
+                    TargetAllocation: null
+                )
+                {
+                    Relocation = relocation with
+                    {
+                        Phase = ServiceWireCodec.RelocationPhase.Activated,
+                    },
+                },
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        if (result is not ZLinkAuthorityCompareExchangeResult.Stored)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"SPOT '{stage.Spot.Activation.SpotId}' dispatch phase update conflicted.",
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
     }
 
     private async ValueTask<Dictionary<
@@ -1980,7 +2054,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         ZLinkPlacementObjectKind kind,
         ReadOnlyMemory<byte> sourcePayload,
         TargetStage stage,
-        ZLinkLocationOwnerToken targetOwner
+        ZLinkLocationOwnerToken targetOwner,
+        ZLinkActorRelocationAuthorityPhase actorPhase = ZLinkActorRelocationAuthorityPhase.Steady
     ) =>
         BuildTargetReadyPayload(
             kind,
@@ -1988,7 +2063,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             stage.Node.Node.RoutingId,
             stage.Node.Node.MeshStatus().LifecycleGeneration,
             targetOwner,
-            stage.Envelope.AggregateId
+            stage.Envelope.AggregateId,
+            actorPhase
         );
 
     internal static ReadOnlyMemory<byte> BuildTargetReadyPayload(
@@ -1997,7 +2073,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         RoutingId targetNode,
         ulong targetNodeGeneration,
         ZLinkLocationOwnerToken targetOwner,
-        Guid relocationId
+        Guid relocationId,
+        ZLinkActorRelocationAuthorityPhase actorPhase = ZLinkActorRelocationAuthorityPhase.Steady
     )
     {
         var ownerGeneration = checked((ulong)targetOwner.LeaseGeneration);
@@ -2048,7 +2125,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             return ZLinkActorRelocationAuthorityPayloadCodec.Encode(
                 relocation with
                 {
-                    Phase = ZLinkActorRelocationAuthorityPhase.Steady,
+                    Phase = actorPhase,
                     ApplicationPayload = ZLinkActorAuthorityPayloadCodec.Encode(
                         actor with
                         {
@@ -2442,7 +2519,7 @@ internal sealed record TargetStage(
         ZLinkActorId,
         ulong
     > _preparedActorAuthorityOwnerGenerations = ActorTargetAuthorityOwnerGenerations;
-    private FrozenDictionary<ZLinkAuthorityKey, ulong>? _authorityPublication;
+    private FrozenDictionary<ZLinkAuthorityKey, ZLinkAuthoritySnapshot>? _authorityPublication;
     internal bool HasAuthorityPublication => _authorityPublication is not null;
 
     public ulong TargetAuthorityOwnerGeneration
@@ -2462,10 +2539,7 @@ internal sealed record TargetStage(
     {
         if (_authorityPublication is not null)
             return;
-        _authorityPublication = publication.ToFrozenDictionary(
-            static entry => entry.Key,
-            static entry => entry.Value.AuthorityOwnerGeneration
-        );
+        _authorityPublication = publication.ToFrozenDictionary();
         foreach (var actor in ActorStates)
             Node.Node.SetLocalActorAuthority(
                 actor.NativeActorRef!.Value,
@@ -2473,14 +2547,20 @@ internal sealed record TargetStage(
             );
     }
 
+    internal ZLinkAuthoritySnapshot GetPublishedActorAuthority(ZLinkActorId actorId) =>
+        GetPublishedAuthority(ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value));
+
+    private ZLinkAuthoritySnapshot GetPublishedAuthority(ZLinkAuthorityKey key) =>
+        _authorityPublication is { } published && published.TryGetValue(key, out var actual)
+            ? actual
+            : throw new ZLinkRelocationDataLostException(
+                "Published target authority is missing from its inventory."
+            );
+
     private ulong ResolveAuthorityOwnerGeneration(ZLinkAuthorityKey key)
     {
-        if (_authorityPublication is { } published)
-            return published.TryGetValue(key, out var actual)
-                ? actual
-                : throw new ZLinkRelocationDataLostException(
-                    "Published target authority is missing from its inventory."
-                );
+        if (HasAuthorityPublication)
+            return GetPublishedAuthority(key).AuthorityOwnerGeneration;
         if (key == SpotParticipant.AuthorityKey)
             return _preparedSpotAuthorityOwnerGeneration;
         if (

@@ -93,7 +93,6 @@ TEST (ZLinkFrameworkOpaqueStoreProviders,
     request.creating_payload = bytes ("creating");
     request.capacity_bundle = {
       0, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}};
-    request.relocation_policy = detail::factory_relocation_kind_t::disabled;
     const auto reserved =
       std::get<object_reserved_t> (repository.reserve (request).result ().value ());
     const auto ready = encode_user_spot_authority_payload (user_spot_authority_payload_t{

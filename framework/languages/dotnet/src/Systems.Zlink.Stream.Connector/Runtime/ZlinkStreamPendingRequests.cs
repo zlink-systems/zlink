@@ -4,7 +4,10 @@ namespace Systems.Zlink.Stream.Connector.Runtime;
 
 internal sealed class ZlinkStreamPendingRequests
 {
-    private readonly ConcurrentDictionary<ulong, PendingRequest> _pending = new();
+    private readonly ConcurrentDictionary<
+        ulong,
+        (PendingRequest Request, CancellationTokenSource Session)
+    > _pending = new();
     private long _nextRequestSeq;
 
     internal ZlinkStreamPendingRequests(ulong lastRequestSeq = 0)
@@ -12,17 +15,15 @@ internal sealed class ZlinkStreamPendingRequests
         _nextRequestSeq = unchecked((long)lastRequestSeq);
     }
 
-    public PendingRequest Create(string packetName)
+    public PendingRequest Create(string packetName) => new(NextRequestSeq(), packetName);
+
+    public void Register(PendingRequest request, CancellationTokenSource session)
     {
-        var requestSeq = NextRequestSeq();
-        var pending = new PendingRequest(requestSeq, packetName);
-        if (!_pending.TryAdd(requestSeq.Value, pending))
+        if (!_pending.TryAdd(request.RequestSeq.Value, (request, session)))
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ValidationFailed,
                 "Duplicate request sequence."
             );
-
-        return pending;
     }
 
     /// <summary>Takes the request answered by this reply before its payload is decoded.</summary>
@@ -39,7 +40,7 @@ internal sealed class ZlinkStreamPendingRequests
             return null;
 
         // Stream connector spec §5.2: request_seq alone matches a reply.
-        return pending;
+        return pending.Request;
     }
 
     public ValueTask<ZlinkStreamPendingCompletion> WaitAsync(
@@ -57,11 +58,14 @@ internal sealed class ZlinkStreamPendingRequests
         _pending.TryRemove(requestSeq.Value, out _);
     }
 
-    public void FailAll(ZlinkStreamError error)
+    public void FailAll(ZlinkStreamError error, CancellationTokenSource? session = null)
     {
         foreach (var (requestSeq, pending) in _pending)
-            if (_pending.TryRemove(requestSeq, out _))
-                pending.Fail(error);
+            if (
+                (session is null || ReferenceEquals(pending.Session, session))
+                && _pending.TryRemove(requestSeq, out _)
+            )
+                pending.Request.Fail(error);
     }
 
     private ZlinkStreamRequestSeq NextRequestSeq()
@@ -108,5 +112,7 @@ internal sealed class ZlinkStreamPendingRequests
 internal sealed record ZlinkStreamPendingCompletion(
     ZlinkStreamHeader Header,
     ZlinkStreamFrame Frame,
-    ZlinkStreamError? Error
+    ZlinkStreamError? Error,
+    TimeSpan ReceivedAt = default,
+    int? RetryAfterMs = null
 );

@@ -13,7 +13,6 @@
 #include <zlink/Contracts/Eventing/events.hpp>
 
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/steady_timer.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -21,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <stop_token>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -36,6 +36,8 @@ namespace zlink::framework::runtime
 {
 
 struct stream_host_service_test_access_t;
+class stream_host_ingress_t;
+class host_capacity_runtime_t;
 namespace host
 {
 class public_host_runtime_t;
@@ -70,7 +72,8 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
       std::shared_ptr<detail::mesh_node_runtime_t> mesh_node = nullptr,
       std::map<std::string, std::optional<std::string>> advertise_hosts = {},
       std::shared_ptr<listener_status_registry_t> listener_statuses = {},
-      std::shared_ptr<application_job_queue_t> application_jobs = {});
+      std::shared_ptr<application_job_queue_t> application_jobs = {},
+      std::shared_ptr<host_capacity_runtime_t> host_capacity = {});
     ~stream_host_service_t () override;
 
     task_t<void> start (service_provider_t &services) override;
@@ -84,6 +87,11 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     void bind_drain_flag (std::shared_ptr<std::atomic_bool> flag) noexcept
     {
         _drain_flag = std::move (flag);
+    }
+
+    void bind_shutdown_cancellation (std::stop_token cancellation) noexcept
+    {
+        _shutdown_cancellation = std::move (cancellation);
     }
 
     void bind_monitoring (
@@ -114,9 +122,9 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
   private:
     friend struct stream_host_service_test_access_t;
     class listener_t;
-    void refresh_heartbeat_deadline ();
 
     std::shared_ptr<std::atomic_bool> _drain_flag;
+    std::stop_token _shutdown_cancellation;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
     detail::stream_runtime_t _runtime;
     std::vector<stream_snapshot_t> _streams;
@@ -126,13 +134,13 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::shared_ptr<detail::mesh_node_runtime_t> _mesh_node;
     std::shared_ptr<application_job_queue_t> _application_jobs;
+    std::shared_ptr<stream_host_ingress_t> _ingress;
     detail::delay_owner_t *_delay_owner = nullptr;
     service_provider_t *_services = nullptr;
     std::atomic_bool _stop{false};
+    boost::asio::io_context _liveness_io;
     std::vector<std::shared_ptr<listener_t>> _listeners;
     std::vector<std::thread> _threads;
-    boost::asio::io_context _liveness_io;
-    boost::asio::steady_timer _heartbeat_deadline{_liveness_io};
     std::thread _liveness_thread;
 };
 

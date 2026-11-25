@@ -64,7 +64,9 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkObjectCreationDea
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectTypeMismatch;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCreation;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationFound;
@@ -1460,7 +1462,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         deadline,
                         effectiveTimeout,
                         getOrCreate,
-                        Set.of()),
+                        Set.of(),
+                        false),
                 deadline);
     }
 
@@ -1473,24 +1476,41 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             long deadline,
             Duration timeout,
             boolean getOrCreate,
-            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+            Set<ZLinkMeshNodeDescriptorKey> excludedTargets,
+            boolean refreshCapacity) {
+        Supplier<CompletionStage<ZLinkMeshNodeDescriptor>> selectTarget =
+                new Supplier<>() {
+                    private CompletionStage<ZLinkMeshNodeDescriptor> selection;
+
+                    @Override
+                    public CompletionStage<ZLinkMeshNodeDescriptor> get() {
+                        if (selection == null) {
+                            selection =
+                                    selectUserSpotTarget(
+                                            meshName,
+                                            stableType,
+                                            deadline,
+                                            excludedTargets,
+                                            refreshCapacity);
+                        }
+                        return selection;
+                    }
+                };
         return observeUserSpotAuthority(
                         locations,
-                        meshName,
                         spotId,
                         stableType,
                         envelope,
                         deadline,
-                        timeout,
                         getOrCreate,
-                        excludedTargets)
+                        selectTarget)
                 .thenCompose(
                         existing -> {
                             if (existing.isPresent()) {
                                 return CompletableFuture.completedFuture(existing.orElseThrow());
                             }
-                            return selectUserSpotTarget(
-                                            meshName, stableType, deadline, excludedTargets)
+                            return selectTarget
+                                    .get()
                                     .handle(
                                             (target, failure) -> {
                                                 if (failure == null) {
@@ -1540,7 +1560,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                 deadline,
                                                                                 timeout,
                                                                                 getOrCreate,
-                                                                                excludedTargets);
+                                                                                excludedTargets,
+                                                                                false);
                                                                     }
                                                                     return CompletableFuture
                                                                             .failedFuture(cause);
@@ -1552,56 +1573,84 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private CompletionStage<Optional<ZLinkSpotCreateResult>> observeUserSpotAuthority(
             ZLinkLocationRepository locations,
-            String meshName,
             String spotId,
             String stableType,
             byte[] envelope,
             long deadline,
-            Duration timeout,
             boolean getOrCreate,
-            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+            Supplier<CompletionStage<ZLinkMeshNodeDescriptor>> selectTarget) {
         String key = systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(spotId);
+        ZLinkStoreCancellation cancellation = () -> System.currentTimeMillis() >= deadline;
         return locations
-                .read(key, () -> System.currentTimeMillis() >= deadline)
+                .read(key, cancellation)
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
                                 return CompletableFuture.completedFuture(Optional.empty());
                             }
-                            if (!getOrCreate
-                                    && snapshot.allocation().state()
-                                            == systems.zlink.framework.runtime.internal.locations
-                                                    .ZLinkPlacementAllocationState.ACTIVE) {
+                            boolean active =
+                                    snapshot.allocation().state()
+                                            == ZLinkPlacementAllocationState.ACTIVE;
+                            if (!getOrCreate && active) {
                                 return CompletableFuture.failedFuture(
                                         new ZLinkFrameworkException(
                                                 ZLinkFrameworkErrorKind.ALREADY_EXISTS,
                                                 "User Spot already exists"));
                             }
                             var existing = existingResult(snapshot, spotId, stableType);
-                            var releaseRequest =
-                                    userSpotReservationRequest(
-                                            meshName,
-                                            spotId,
-                                            stableType,
-                                            envelope,
-                                            snapshot.allocation().descriptor(),
-                                            snapshot.allocation().descriptorLifecycleGeneration(),
-                                            new ZLinkLocationOwnerToken(
-                                                    snapshot.ownerId(),
-                                                    snapshot.ownerLeaseGeneration()),
-                                            snapshot.payload());
-                            return locations
-                                    .releaseEndedReservation(
-                                            releaseRequest,
-                                            snapshot.storeVersion(),
-                                            () -> System.currentTimeMillis() >= deadline)
-                                    .thenCompose(
-                                            ignored ->
-                                                    locations.read(
-                                                            key,
-                                                            () ->
-                                                                    System.currentTimeMillis()
-                                                                            >= deadline))
+                            CompletionStage<Boolean> release;
+                            if (active) {
+                                release =
+                                        locations
+                                                .readOwnerLease(snapshot.ownerId())
+                                                .thenCompose(
+                                                        owner ->
+                                                                owner
+                                                                                        instanceof
+                                                                                        ZLinkOwnerLeaseFound
+                                                                                                found
+                                                                                && found.isLiveFor(
+                                                                                        snapshot
+                                                                                                .ownerId(),
+                                                                                        snapshot
+                                                                                                .ownerLeaseGeneration())
+                                                                        ? CompletableFuture
+                                                                                .completedFuture(
+                                                                                        false)
+                                                                        : selectTarget
+                                                                                .get()
+                                                                                .thenCompose(
+                                                                                        target -> {
+                                                                                            var
+                                                                                                    request =
+                                                                                                            userSpotReservationRequest(
+                                                                                                                    spotId,
+                                                                                                                    stableType,
+                                                                                                                    envelope,
+                                                                                                                    descriptorKey(
+                                                                                                                            target),
+                                                                                                                    target
+                                                                                                                            .lifecycleGeneration(),
+                                                                                                                    new ZLinkLocationOwnerToken(
+                                                                                                                            target
+                                                                                                                                    .ownerId(),
+                                                                                                                            target
+                                                                                                                                    .leaseGeneration()),
+                                                                                                                    snapshot
+                                                                                                                            .payload());
+                                                                                            return locations
+                                                                                                    .releaseEndedReservation(
+                                                                                                            request,
+                                                                                                            snapshot
+                                                                                                                    .storeVersion(),
+                                                                                                            cancellation);
+                                                                                        }));
+                            } else {
+                                release =
+                                        locations.releaseEndedReservation(
+                                                key, snapshot.storeVersion(), cancellation);
+                            }
+                            return release.thenCompose(ignored -> locations.read(key, cancellation))
                                     .thenCompose(
                                             current -> {
                                                 if (!(current
@@ -1614,14 +1663,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         .equals(snapshot.storeVersion())) {
                                                     return observeUserSpotAuthority(
                                                             locations,
-                                                            meshName,
                                                             spotId,
                                                             stableType,
                                                             envelope,
                                                             deadline,
-                                                            timeout,
                                                             getOrCreate,
-                                                            excludedTargets);
+                                                            selectTarget);
                                                 }
                                                 if (existing.isPresent()) {
                                                     return userSpotLocationResolvers
@@ -1632,30 +1679,35 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                             throw new ZLinkFrameworkException(
                                                                                     ZLinkFrameworkErrorKind
                                                                                             .UNAVAILABLE,
-                                                                                    "User Spot"
-                                                                                            + " authority"
-                                                                                            + " is unavailable");
+                                                                                    "User Spot authority is unavailable");
                                                                         }
                                                                         return existing;
                                                                     });
                                                 }
-                                                return waitForUserSpotAuthority(
-                                                                locations,
-                                                                meshName,
-                                                                spotId,
-                                                                stableType,
-                                                                envelope,
-                                                                deadline,
-                                                                timeout,
-                                                                getOrCreate,
-                                                                excludedTargets)
-                                                        .thenApply(Optional::of);
+                                                if (cancellation.isCancellationRequested()) {
+                                                    return CompletableFuture.failedFuture(
+                                                            ZLinkObjectCreationDeadline.exceeded(
+                                                                    null));
+                                                }
+                                                return CompletableFuture.supplyAsync(
+                                                                () -> null,
+                                                                CompletableFuture.delayedExecutor(
+                                                                        10, TimeUnit.MILLISECONDS))
+                                                        .thenCompose(
+                                                                ignored ->
+                                                                        observeUserSpotAuthority(
+                                                                                locations,
+                                                                                spotId,
+                                                                                stableType,
+                                                                                envelope,
+                                                                                deadline,
+                                                                                getOrCreate,
+                                                                                selectTarget));
                                             });
                         });
     }
 
     private ZLinkObjectReservationRequest userSpotReservationRequest(
-            String meshName,
             String spotId,
             String stableType,
             byte[] envelope,
@@ -1675,37 +1727,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 owner,
                 creatingPayload,
                 ZLinkPlacementCapacityBundle.spot(
-                        ZLinkPlacementObjectKind.USER_SPOT, stableType, 1),
-                registeredSpotPolicy(meshName, stableType, ZLinkPlacementObjectKind.USER_SPOT));
-    }
-
-    private CompletionStage<ZLinkSpotCreateResult> waitForUserSpotAuthority(
-            ZLinkLocationRepository locations,
-            String meshName,
-            String spotId,
-            String stableType,
-            byte[] envelope,
-            long deadline,
-            Duration timeout,
-            boolean getOrCreate,
-            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
-        if (System.currentTimeMillis() >= deadline) {
-            return CompletableFuture.failedFuture(ZLinkObjectCreationDeadline.exceeded(null));
-        }
-        return CompletableFuture.supplyAsync(
-                        () -> null, CompletableFuture.delayedExecutor(10, TimeUnit.MILLISECONDS))
-                .thenCompose(
-                        ignored ->
-                                placeUserSpot(
-                                        locations,
-                                        meshName,
-                                        spotId,
-                                        stableType,
-                                        envelope,
-                                        deadline,
-                                        timeout,
-                                        getOrCreate,
-                                        excludedTargets));
+                        ZLinkPlacementObjectKind.USER_SPOT, stableType, 1));
     }
 
     private CompletionStage<ZLinkSpotCreateResult> reserveAndCreate(
@@ -1733,7 +1755,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         target.lifecycleGeneration());
         var reserve =
                 userSpotReservationRequest(
-                        meshName,
                         spotId,
                         stableType,
                         envelope,
@@ -1745,35 +1766,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .reserve(reserve, () -> System.currentTimeMillis() >= deadline)
                 .thenCompose(
                         result -> {
-                            if (result instanceof ZLinkPlacementCapacityExhausted) {
-                                return observeUserSpotAuthority(
-                                                locations,
-                                                meshName,
-                                                spotId,
-                                                stableType,
-                                                envelope,
-                                                deadline,
-                                                timeout,
-                                                getOrCreate,
-                                                excludedTargets)
-                                        .thenCompose(
-                                                existing ->
-                                                        existing.isPresent()
-                                                                ? CompletableFuture.completedFuture(
-                                                                        existing.orElseThrow())
-                                                                : placeUserSpot(
-                                                                        locations,
-                                                                        meshName,
-                                                                        spotId,
-                                                                        stableType,
-                                                                        envelope,
-                                                                        deadline,
-                                                                        timeout,
-                                                                        getOrCreate,
-                                                                        excluding(
-                                                                                excludedTargets,
-                                                                                target)));
-                            }
                             if (result instanceof ZLinkObjectConflict conflict
                                     && conflict.current() instanceof ZLinkAuthorityMissing) {
                                 return placeUserSpot(
@@ -1785,9 +1777,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         deadline,
                                         timeout,
                                         getOrCreate,
-                                        excluding(excludedTargets, target));
+                                        excluding(excludedTargets, target),
+                                        false);
                             }
-                            if (result instanceof ZLinkObjectAlreadyExists
+                            boolean refreshCapacity =
+                                    result instanceof ZLinkPlacementCapacityExhausted;
+                            if (refreshCapacity
+                                    || result instanceof ZLinkObjectAlreadyExists
                                     || result instanceof ZLinkObjectConflict
                                     || result instanceof ZLinkObjectTypeMismatch) {
                                 return placeUserSpot(
@@ -1799,7 +1795,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         deadline,
                                         timeout,
                                         getOrCreate,
-                                        excludedTargets);
+                                        excludedTargets,
+                                        refreshCapacity);
                             }
                             if (!(result instanceof ZLinkObjectReserved reserved)) {
                                 return CompletableFuture.failedFuture(
@@ -1943,7 +1940,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             String meshName,
             String stableType,
             long deadlineUnixMs,
-            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+            Set<ZLinkMeshNodeDescriptorKey> excludedTargets,
+            boolean refreshCapacity) {
         return userSpotLocationResolvers.selectPlacement(
                 meshName,
                 ZLinkPlacementObjectKind.USER_SPOT,
@@ -1951,7 +1949,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 false,
                 routeMeshNodesByName.get(meshName),
                 excludedTargets,
-                deadlineUnixMs);
+                deadlineUnixMs,
+                refreshCapacity);
     }
 
     private static ZLinkMeshNodeDescriptorKey descriptorKey(ZLinkMeshNodeDescriptor node) {
@@ -3004,30 +3003,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         target.stableType()));
     }
 
-    private systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration
-                    .RelocationPolicy
-            registeredSpotPolicy(
-                    String meshName, String stableType, ZLinkPlacementObjectKind kind) {
-        return frameworkRegistration.meshNodes().stream()
-                .filter(node -> node.meshName().equals(meshName))
-                .map(
-                        node ->
-                                kind == ZLinkPlacementObjectKind.USER_SPOT
-                                        ? Optional.ofNullable(
-                                                        node.relocatableSpotFactories()
-                                                                .get(stableType))
-                                                .map(factory -> factory.relocationPolicy())
-                                                .orElse(null)
-                                        : Optional.ofNullable(
-                                                        node.relocatableInstanceSpotFactories()
-                                                                .get(stableType))
-                                                .map(factory -> factory.relocationPolicy())
-                                                .orElse(null))
-                .filter(Objects::nonNull)
-                .findFirst()
-                .orElse(null);
-    }
-
     CompletionStage<String> resolveInstanceType(String meshName, String requestedType) {
         if (requestedType != null) {
             return CompletableFuture.completedFuture(requireStableType(requestedType));
@@ -3271,11 +3246,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 ZLinkPlacementCapacityBundle.spot(
                                                         ZLinkPlacementObjectKind.INSTANCE_SPOT,
                                                         envelope.stableType(),
-                                                        1),
-                                                registeredSpotPolicy(
-                                                        envelope.targetMeshName(),
-                                                        envelope.stableType(),
-                                                        ZLinkPlacementObjectKind.INSTANCE_SPOT));
+                                                        1));
                                 return store.releaseEndedReservation(
                                                 request, current.storeVersion(), cancellation)
                                         .thenCompose(
@@ -3431,14 +3402,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                             .INSTANCE_SPOT,
                                                                                                     envelope
                                                                                                             .stableType(),
-                                                                                                    1),
-                                                                                    registeredSpotPolicy(
-                                                                                            envelope
-                                                                                                    .targetMeshName(),
-                                                                                            envelope
-                                                                                                    .stableType(),
-                                                                                            ZLinkPlacementObjectKind
-                                                                                                    .INSTANCE_SPOT));
+                                                                                                    1));
                                                                     return store.reserve(
                                                                                     request,
                                                                                     cancellation)
@@ -4114,7 +4078,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     public CompletionStage<Void> claimEntrySpotLocations() {
-        return spotLocations.claimEntrySpotsAsync();
+        return spotLifecycle
+                .registerEntryExecutions(userSpotLocationRuntime)
+                .thenCompose(ignored -> spotLocations.claimEntrySpotsAsync());
     }
 
     public CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
@@ -5792,9 +5758,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         return dispatch.enqueue(
                                 timerName,
                                 () -> {
-                                    if (spotLifecycle.spotActivationFor(spotId) == null
-                                            && !instanceSpotActivations.containsKey(spotId))
-                                        ensureOwnerAdmissionOpen();
                                     //  Spec 27 §4: a timer callback starts a new flow at every
                                     //  diagnostics level except Off.
                                     if (!flowCaptureEnabled()) {
@@ -6614,7 +6577,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     CompletionStage<Void> dispatchQueuedInstanceMessage(
-            ZLinkInstanceSpotActivation previous, ZLinkBackendReceived received) {
+            ZLinkInstanceSpotActivation previous,
+            ZLinkBackendReceived received,
+            ZLinkFlowContext.State inboundFlow) {
         ZLinkInstanceSpotActivation fresh = instanceSpotActivations.get(previous.context.spotId());
         if (fresh == null) {
             ZLinkFrameworkErrorKind releaseFailure =
@@ -6627,7 +6592,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             received.close();
             return CompletableFuture.failedFuture(failure);
         }
-        return fresh.replayMessage(received);
+        return fresh.replayMessage(received, inboundFlow);
     }
 
     private ZLinkFrameworkErrorKind instanceCloseReleaseFailure() {

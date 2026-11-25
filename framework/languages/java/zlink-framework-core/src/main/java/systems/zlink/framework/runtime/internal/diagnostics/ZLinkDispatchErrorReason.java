@@ -13,7 +13,9 @@ public enum ZLinkDispatchErrorReason {
     TARGET_CLOSED(9, "target_closed"),
     LOCATION_UNAVAILABLE(10, "location_unavailable"),
     ACTIVATION_REJECTED(11, "activation_rejected"),
-    ACTIVATION_TIMEOUT(12, "activation_timeout");
+    ACTIVATION_TIMEOUT(12, "activation_timeout"),
+    PAYLOAD_ENCODE_FAILED(13, "encode_error"),
+    SESSION_CREATION_FAILED(14, "session_creation_failed");
 
     private final int value;
     private final String traceName;
