@@ -52,6 +52,7 @@ internal sealed class ZLinkSpotActorFrame(
     internal long? HandoffArrivalIndex { get; } = handoffArrivalIndex;
 
     internal ZLinkActorRuntimeState? AcceptedState { get; set; }
+    internal Task<bool>? TargetAdmission { get; set; }
 
     public ulong RelocationReplyRouteId { get; private set; }
 

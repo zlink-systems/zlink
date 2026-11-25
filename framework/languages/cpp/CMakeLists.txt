@@ -675,6 +675,10 @@ target_include_directories(zlink_framework_locations_redis PUBLIC
 target_link_libraries(zlink_framework_locations_redis PUBLIC
   zlink::framework_provider_abstractions
   zlink::framework)
+# redis.cpp hashes its Lua scripts with Beast's SHA-1 for EVALSHA (#5458). The
+# Framework targets keep their Boost tree to themselves in an installed archive,
+# so this target resolves the same Boost checkout through the shared helper.
+zlink_framework_cpp_add_boost_headers(zlink_framework_locations_redis)
 set(ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES "")
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS OFF)
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV OFF)
@@ -1927,6 +1931,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_spot_admission_rejection)
   target_include_directories(test_cpp_framework_spot_admission_rejection PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+
+  add_zlink_framework_test(test_cpp_framework_actor_join_relocation_policy
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_join_relocation_policy.cpp
+    "framework-unit;framework-contract;actor;relocation" contract)
+  target_use_zlink_gtest_main(test_cpp_framework_actor_join_relocation_policy)
+  target_sources(test_cpp_framework_actor_join_relocation_policy PRIVATE
+    tests/support/actor_maintenance_join_actors.cpp
+    tests/support/actor_maintenance_join_host_fixture.cpp
+    tests/support/actor_maintenance_join_placement.cpp)
+  target_include_directories(test_cpp_framework_actor_join_relocation_policy PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  set_property(TEST test_cpp_framework_actor_join_relocation_policy APPEND PROPERTY
+    ENVIRONMENT "ZLINK_CPP_MESH_TRACE=1")
+  set_tests_properties(test_cpp_framework_actor_join_relocation_policy PROPERTIES
+    RESOURCE_LOCK zlink_cpp_heavy_runtime)
 
   add_zlink_framework_test(test_cpp_framework_actor_late_result
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp

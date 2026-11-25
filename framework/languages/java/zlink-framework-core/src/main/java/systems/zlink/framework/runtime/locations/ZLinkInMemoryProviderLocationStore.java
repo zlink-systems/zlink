@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -70,13 +71,24 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         return stateLane.runNowOrQueue(
                 () -> {
                     Instant now = clock.instant();
-                    for (ZLinkStoreCondition condition : conditions) {
-                        if (!matches(condition, now)) {
-                            return new ZLinkStoreWriteConflict(now);
+                    var resolved = new ArrayList<ZLinkStoreMutation>(mutations.size());
+                    try {
+                        for (var condition : conditions) {
+                            if (!matches(condition, now)) {
+                                return new ZLinkStoreWriteConflict(now);
+                            }
                         }
+                        for (var mutation : mutations) {
+                            resolved.add(
+                                    mutation instanceof ZLinkStoreAdd add
+                                            ? add.resolve(counterBytes(add.key(), now))
+                                            : mutation);
+                        }
+                    } catch (ArithmeticException corrupt) {
+                        return new ZLinkStoreWriteCorrupt(now);
                     }
                     Map<ZLinkStoreKey, ZLinkStoreVersion> putVersions = new LinkedHashMap<>();
-                    for (ZLinkStoreMutation mutation : mutations) {
+                    for (ZLinkStoreMutation mutation : resolved) {
                         if (mutation instanceof ZLinkStoreDelete delete) {
                             rows.remove(requireKey(delete.key()));
                         } else if (mutation instanceof ZLinkStorePut put) {
@@ -198,7 +210,15 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         snapshots.entrySet().removeIf(entry -> !entry.getValue().expiresAt().isAfter(now));
     }
 
+    private byte[] counterBytes(ZLinkStoreKey key, Instant now) {
+        Entry entry = live(requireKey(key), now);
+        return entry == null ? null : entry.bytes();
+    }
+
     private boolean matches(ZLinkStoreCondition condition, Instant now) {
+        if (condition instanceof ZLinkStoreSumAtMostCondition sum) {
+            return sum.matches(key -> counterBytes(key, now));
+        }
         if (condition instanceof ZLinkStoreMissingCondition missing) {
             return live(requireKey(missing.key()), now) == null;
         }
@@ -227,27 +247,26 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         var mutationKeys = new HashSet<String>();
         long encodedBytes = 0;
         for (var condition : conditions) {
-            String key =
-                    requireKey(
-                            condition instanceof ZLinkStoreMissingCondition value
-                                    ? value.key()
-                                    : condition instanceof ZLinkStoreValueCondition value
-                                            ? value.key()
-                                            : ((ZLinkStoreVersionCondition) condition).key());
-            if (!conditionKeys.add(key)) {
-                throw new IllegalArgumentException("duplicate condition key");
+            for (var conditionKey : condition.keys()) {
+                String key = requireKey(conditionKey);
+                if (!conditionKeys.add(key)) {
+                    throw new IllegalArgumentException("duplicate condition key");
+                }
+                encodedBytes += key.getBytes(StandardCharsets.UTF_8).length;
             }
-            encodedBytes += key.getBytes(StandardCharsets.UTF_8).length;
+            if (condition instanceof ZLinkStoreSumAtMostCondition sum) {
+                encodedBytes +=
+                        Long.toString(sum.delta()).length() + Long.toString(sum.limit()).length();
+            }
             if (condition instanceof ZLinkStoreValueCondition value) {
                 encodedBytes += requireBytes(value.expected()).length;
             }
         }
         for (var mutation : mutations) {
-            String key =
-                    requireKey(
-                            mutation instanceof ZLinkStorePut value
-                                    ? value.key()
-                                    : ((ZLinkStoreDelete) mutation).key());
+            String key = requireKey(mutation.key());
+            if (mutation instanceof ZLinkStoreAdd add) {
+                encodedBytes += Long.toString(add.delta()).length();
+            }
             if (!mutationKeys.add(key)) {
                 throw new IllegalArgumentException("duplicate mutation key");
             }

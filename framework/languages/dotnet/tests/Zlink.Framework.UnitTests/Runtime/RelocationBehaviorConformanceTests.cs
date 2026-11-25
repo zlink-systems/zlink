@@ -1129,7 +1129,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             if (replaceRouteAt == 1)
             {
                 await prepareSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
-                await ReleaseAutomaticConnectionsAsync();
+                await ReplaceSelectedRouteAsync();
                 routeProxy!.Resume();
                 var failure = Assert.IsType<ZLinkFrameworkException>(
                     await cutover.PrepareFailure.Task.WaitAsync(TimeSpan.FromSeconds(3))
@@ -1185,7 +1185,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             if (replaceRouteAt == 2)
             {
                 await cutover.CutoverSendSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
-                await ReleaseAutomaticConnectionsAsync();
+                await ReplaceSelectedRouteAsync();
                 routeProxy!.Resume();
             }
             await cutover.CutoverSendSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -1280,7 +1280,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             }
         }
 
-        async Task ReleaseAutomaticConnectionsAsync()
+        async Task ReplaceSelectedRouteAsync()
         {
             var sourceNode = source
                 .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
@@ -1294,6 +1294,13 @@ public sealed partial class RelocationBehaviorConformanceTests
             targetRouteBefore = targetNode
                 .ObservePeerRoute(sourceNode.RoutingId)
                 .SelectedGeneration;
+            var targetEndpoint = target
+                .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+                .GetListenerStatus(ZLinkListenerKind.RouteMesh, RelocationBehaviorHost.MeshName)
+                .Endpoint;
+            // The test injects a reciprocal manual connection while the
+            // existing pipe holds a relocation record.
+            sourceNode.ConnectPeer(targetNode.RoutingId, targetEndpoint);
             automaticConnections.TrySetResult();
             while (true)
             {
@@ -3653,6 +3660,7 @@ internal sealed class CanonicalRelocationTransportProbe
     internal ZLinkRemoteSessionPushRelay? RemoteSessionPush;
     internal ZLinkServiceWireCodec.SessionRelocationRouteRecord? SessionRoute;
     internal int DataSendCount;
+    internal Action? OnCanonicalActorJoinSubmitted { get; init; }
     internal int TargetAbortCallCount => Volatile.Read(ref _targetAbortCallCount);
     internal Guid RelocationId =>
         ZLinkRelocationTransferPayload
@@ -4192,6 +4200,10 @@ internal interface IProbedBackendSpotNode
         IZLinkBackendBoundSessionReplacementNotifications,
         IZLinkBackendBoundSessionBind;
 
+internal interface IActorJoinProbedBackendSpotNode
+    : IProbedBackendSpotNode,
+        IZLinkBackendCanonicalActorJoin;
+
 internal class ProbedBackendSpotNode : DispatchProxy
 {
     private object _target = null!;
@@ -4206,7 +4218,9 @@ internal class ProbedBackendSpotNode : DispatchProxy
         RouteChangeProxy? routeProxy
     )
     {
-        var proxy = Create<IProbedBackendSpotNode, ProbedBackendSpotNode>();
+        var proxy = probe.OnCanonicalActorJoinSubmitted is null
+            ? Create<IProbedBackendSpotNode, ProbedBackendSpotNode>()
+            : Create<IActorJoinProbedBackendSpotNode, ProbedBackendSpotNode>();
         var state = (ProbedBackendSpotNode)(object)proxy;
         state._target = target;
         state._probe = probe;
@@ -4294,6 +4308,12 @@ internal class ProbedBackendSpotNode : DispatchProxy
         try
         {
             var result = targetMethod.Invoke(_target, args);
+            if (
+                targetMethod.Name
+                    == nameof(IZLinkBackendCanonicalActorJoin.RequestCanonicalActorJoin)
+                && result is true
+            )
+                _probe.OnCanonicalActorJoinSubmitted?.Invoke();
             // Publish the real proxy endpoint before startup claims the descriptor.
             if (targetMethod.Name == nameof(IZLinkBackendSpotNode.Start) && _routeProxy is not null)
             {
