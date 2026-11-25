@@ -2676,8 +2676,12 @@ mesh_node_runtime_t::deliver_actor_join (const actor_ref_t &actor,
                                          result_t<actor_join_reply_t> joined)
 {
     auto completion = [&] () -> ::zlink::framework::actor_join_completion_t {
-        if (!joined)
-            return actor_join_failed_t{operation.high, operation.low, joined.error_kind ()};
+        if (!joined) {
+            const auto *error = joined.error ();
+            return actor_join_failed_t{operation.high, operation.low,
+                                       error ? error->kind ()
+                                             : framework_error_kind_t::internal_failure};
+        }
         const auto &value = joined.value ();
         const auto reply = value.reply.is_empty ()
                              ? std::optional<message_t>{}
