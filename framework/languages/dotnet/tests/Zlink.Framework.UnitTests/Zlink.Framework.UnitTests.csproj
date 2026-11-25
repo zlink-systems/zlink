@@ -343,6 +343,8 @@
         <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationPrecommitTests.cs"/>
+        <Compile Include="Runtime/RelocationCompletionRecordTests.cs"/>
+        <Compile Include="Runtime/RelocationCompletionStoreTests.cs"/>
         <Compile Include="Runtime/AuthorityAggregateRelocationTests.cs"/>
         <Compile Include="Runtime/CanonicalActorAcceptedJournalTests.cs"/>
         <Compile Include="Runtime/CanonicalAuthorityAggregateGenerationTests.cs"/>
