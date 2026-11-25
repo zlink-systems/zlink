@@ -1,6 +1,6 @@
+using System.Text.Json;
 using MyGame.Shared;
 using MyGame.Zone;
-using System.Text.Json;
 
 namespace MyGame.E2E;
 
@@ -51,7 +51,9 @@ internal static class DomainChecks
     private static void RejectsNonFiniteMovement()
     {
         var domain = Create(out _);
-        foreach (var delta in new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+        foreach (
+            var delta in new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity }
+        )
             RequireRejected(domain, delta, 1, "non-finite");
     }
 
@@ -72,16 +74,24 @@ internal static class DomainChecks
     {
         var domain = Create(out var clock);
         var first = domain.Move("player", new MoveRequest(ZonePositionDomain.MaxStep, 1));
-        Require(first.Accepted && first.Position.X == 110, "The initial move must have MaxStep budget.");
+        Require(
+            first.Accepted && first.Position.X == 110,
+            "The initial move must have MaxStep budget."
+        );
         var before = domain.State("player");
         var rejected = domain.Move("player", new MoveRequest(ZonePositionDomain.MaxStep, 2));
-        var rejection = rejected.Rejection ?? throw new InvalidOperationException("Expected move-budget rejection.");
+        var rejection =
+            rejected.Rejection
+            ?? throw new InvalidOperationException("Expected move-budget rejection.");
         Require(rejection.Reason == "move-budget", "Expected move-budget rejection.");
         Require(rejection.RetryAfterMs > 0, "move-budget must report a positive retry delay.");
         Require(domain.State("player") == before, "A rejected move changed position or sequence.");
         clock.Advance(TimeSpan.FromMilliseconds(rejection.RetryAfterMs));
         var accepted = domain.Move("player", new MoveRequest(ZonePositionDomain.MaxStep, 2));
-        Require(accepted.Accepted && accepted.Position.X == 120, "The server retry delay was insufficient.");
+        Require(
+            accepted.Accepted && accepted.Position.X == 120,
+            "The server retry delay was insufficient."
+        );
     }
 
     private static void RejectsInvalidSequence()
@@ -89,12 +99,18 @@ internal static class DomainChecks
         var domain = Create(out _);
         RequireRejected(domain, 1, 0, "stale-sequence");
         RequireRejected(domain, 1, GameNames.MaxSafeInteger + 1, "integer-out-of-range");
-        Require(GameNames.MaxSafeInteger == 9_007_199_254_740_991,
-            "The contract integer limit changed.");
-        Require(GameNames.IsSafeInteger((ulong)GameNames.MaxSafeInteger),
-            "The maximum safe integer was rejected.");
-        Require(!GameNames.IsSafeInteger((ulong)GameNames.MaxSafeInteger + 1),
-            "An integer above the contract limit was accepted.");
+        Require(
+            GameNames.MaxSafeInteger == 9_007_199_254_740_991,
+            "The contract integer limit changed."
+        );
+        Require(
+            GameNames.IsSafeInteger((ulong)GameNames.MaxSafeInteger),
+            "The maximum safe integer was rejected."
+        );
+        Require(
+            !GameNames.IsSafeInteger((ulong)GameNames.MaxSafeInteger + 1),
+            "An integer above the contract limit was accepted."
+        );
 
         var gapDomain = Create(out _);
         var gap = gapDomain.Move("player", new MoveRequest(1, 2));
@@ -104,10 +120,7 @@ internal static class DomainChecks
         );
 
         var maxDomain = new ZonePositionDomain("zone-2", () => 0);
-        maxDomain.AddPlayer(
-            "last",
-            new EnterZone(new Position(100), GameNames.MaxSafeInteger, 0)
-        );
+        maxDomain.AddPlayer("last", new EnterZone(new Position(100), GameNames.MaxSafeInteger, 0));
         RequireRejected(maxDomain, 1, GameNames.MaxSafeInteger, "stale-sequence", "last");
         RequireRejected(maxDomain, 1, long.MaxValue, "integer-out-of-range", "last");
 
@@ -116,7 +129,8 @@ internal static class DomainChecks
             safeArrival.QueueArrival(
                 "safe",
                 new EnterZone(new Position(100), GameNames.MaxSafeInteger, 0)
-            ) is null,
+            )
+                is null,
             "The maximum safe sequence was rejected during Zone admission."
         );
         var unsafeArrival = new ZonePositionDomain("zone-2", () => 0);
@@ -134,14 +148,24 @@ internal static class DomainChecks
     private static void ResolvesInitialLocation()
     {
         var valid = ZonePositionDomain.ResolveLocation(299);
-        Require(valid.ZoneId == "zone-3" && valid.Rejection is null,
-            "An in-world initial position resolved to the wrong Zone.");
-        Require(ZonePositionDomain.ResolveLocation(double.NaN).Rejection?.Reason == "non-finite",
-            "A non-finite initial position was not rejected.");
-        Require(ZonePositionDomain.ResolveLocation(double.PositiveInfinity).Rejection?.Reason == "non-finite",
-            "An infinite initial position was not rejected.");
-        Require(ZonePositionDomain.ResolveLocation(GameNames.WorldWidth).Rejection?.Reason == "outside-world",
-            "An initial position at the world limit was not rejected.");
+        Require(
+            valid.ZoneId == "zone-3" && valid.Rejection is null,
+            "An in-world initial position resolved to the wrong Zone."
+        );
+        Require(
+            ZonePositionDomain.ResolveLocation(double.NaN).Rejection?.Reason == "non-finite",
+            "A non-finite initial position was not rejected."
+        );
+        Require(
+            ZonePositionDomain.ResolveLocation(double.PositiveInfinity).Rejection?.Reason
+                == "non-finite",
+            "An infinite initial position was not rejected."
+        );
+        Require(
+            ZonePositionDomain.ResolveLocation(GameNames.WorldWidth).Rejection?.Reason
+                == "outside-world",
+            "An initial position at the world limit was not rejected."
+        );
     }
 
     private static void RestoresRemainingBudget()
@@ -156,24 +180,38 @@ internal static class DomainChecks
         var destination = new ZonePositionDomain("zone-2", destinationClock.ReadMilliseconds);
         destination.Restore(snapshot);
         var rejected = destination.Move("player", new MoveRequest(5, 2));
-        var rejection = rejected.Rejection ?? throw new InvalidOperationException("Expected move-budget rejection.");
+        var rejection =
+            rejected.Rejection
+            ?? throw new InvalidOperationException("Expected move-budget rejection.");
         Require(rejection.Reason == "move-budget", "Relocation lost the remaining budget.");
-        Require(rejection.RetryAfterMs == 25, "Relocation did not preserve remaining milliseconds.");
+        Require(
+            rejection.RetryAfterMs == 25,
+            "Relocation did not preserve remaining milliseconds."
+        );
     }
 
     private static void TracksPresenceLifecycle()
     {
         var domain = Create(out _);
         domain.AddPlayer("observer", new EnterZone(new Position(101), 0, 0));
-        Require(domain.ConnectedPlayers().Count == 2, "Connected players were not tracked by the Zone.");
+        Require(
+            domain.ConnectedPlayers().Count == 2,
+            "Connected players were not tracked by the Zone."
+        );
         var before = domain.State("player");
         var disconnected = domain.SetConnected("player", false);
         Require(disconnected is { Connected: false }, "Disconnect did not end visibility.");
         Require(domain.ConnectedPlayers().Count == 1, "Disconnected players remained visible.");
-        Require(domain.State("player").Position == before.Position, "Disconnect erased the stored position.");
+        Require(
+            domain.State("player").Position == before.Position,
+            "Disconnect erased the stored position."
+        );
         var reconnected = domain.SetConnected("player", true);
         Require(reconnected is { Connected: true }, "Reconnect did not restore visibility.");
-        Require(domain.State("player").Position == before.Position, "Reconnect changed the stored position.");
+        Require(
+            domain.State("player").Position == before.Position,
+            "Reconnect changed the stored position."
+        );
         var left = domain.RemovePlayer("player");
         Require(left?.Position == before.Position, "Zone leave lost the last observed position.");
         Require(domain.ConnectedPlayers().Count == 1, "Zone leave retained the player.");
@@ -186,14 +224,18 @@ internal static class DomainChecks
             new PlayerLeft("player", PlayerLeftReason.LeftZone),
             options
         );
-        Require(left.Contains("\"reason\":\"left-zone\"", StringComparison.Ordinal),
-            "PlayerLeft reason was not serialized as its kebab-case name.");
+        Require(
+            left.Contains("\"reason\":\"left-zone\"", StringComparison.Ordinal),
+            "PlayerLeft reason was not serialized as its kebab-case name."
+        );
         var outOfRange = JsonSerializer.Serialize(
             new PlayerLeft("player", PlayerLeftReason.OutOfRange),
             options
         );
-        Require(outOfRange.Contains("\"reason\":\"out-of-range\"", StringComparison.Ordinal),
-            "OutOfRange reason was not serialized as its kebab-case name.");
+        Require(
+            outOfRange.Contains("\"reason\":\"out-of-range\"", StringComparison.Ordinal),
+            "OutOfRange reason was not serialized as its kebab-case name."
+        );
         var border = JsonSerializer.Serialize(
             new BorderPresence(
                 "zone-2",
@@ -205,15 +247,23 @@ internal static class DomainChecks
             ),
             options
         );
-        Require(border.Contains("\"kind\":\"moved\"", StringComparison.Ordinal),
-            "Border event kind was not serialized as its kebab-case name.");
-        Require(border.Contains("\"reason\":null", StringComparison.Ordinal),
-            "A nullable border reason was omitted instead of encoded as null.");
+        Require(
+            border.Contains("\"kind\":\"moved\"", StringComparison.Ordinal),
+            "Border event kind was not serialized as its kebab-case name."
+        );
+        Require(
+            border.Contains("\"reason\":null", StringComparison.Ordinal),
+            "A nullable border reason was omitted instead of encoded as null."
+        );
         var rejected = JsonSerializer.Serialize(new ActionRejected("outside-world", 0), options);
-        Require(rejected.Contains("\"reason\":\"outside-world\"", StringComparison.Ordinal),
-            "ActionRejected reason field name changed.");
-        Require(rejected.Contains("\"retryAfterMs\":0", StringComparison.Ordinal),
-            "ActionRejected retryAfterMs field name changed.");
+        Require(
+            rejected.Contains("\"reason\":\"outside-world\"", StringComparison.Ordinal),
+            "ActionRejected reason field name changed."
+        );
+        Require(
+            rejected.Contains("\"retryAfterMs\":0", StringComparison.Ordinal),
+            "ActionRejected retryAfterMs field name changed."
+        );
         Require(
             typeof(ActionRejected).GetProperty(nameof(ActionRejected.RetryAfterMs))?.PropertyType
                 == typeof(int),
@@ -225,36 +275,56 @@ internal static class DomainChecks
     {
         var entering = CreateAt(181);
         var entered = entering.Move("player", new MoveRequest(10, 1));
-        Require(entered.Accepted && entered.Position.X == 191,
-            "The move from outside into the border band was not accepted.");
-        Require(entered.BorderKind == BorderPresenceKind.Appeared,
-            "Entering the border band did not produce Appeared.");
+        Require(
+            entered.Accepted && entered.Position.X == 191,
+            "The move from outside into the border band was not accepted."
+        );
+        Require(
+            entered.BorderKind == BorderPresenceKind.Appeared,
+            "Entering the border band did not produce Appeared."
+        );
 
         var remaining = CreateAt(191);
         var remained = remaining.Move("player", new MoveRequest(1, 1));
-        Require(remained.BorderKind == BorderPresenceKind.Moved,
-            "Movement inside the border band did not produce Moved.");
+        Require(
+            remained.BorderKind == BorderPresenceKind.Moved,
+            "Movement inside the border band did not produce Moved."
+        );
 
         var leaving = CreateAt(191);
         var left = leaving.Move("player", new MoveRequest(-10, 1));
-        Require(left.Accepted && left.Position.X == 181,
-            "The move from the border band to the Zone interior was not accepted.");
-        Require(left.BorderKind == BorderPresenceKind.Left,
-            "Leaving the border band did not produce Left.");
+        Require(
+            left.Accepted && left.Position.X == 181,
+            "The move from the border band to the Zone interior was not accepted."
+        );
+        Require(
+            left.BorderKind == BorderPresenceKind.Left,
+            "Leaving the border band did not produce Left."
+        );
 
         var outside = CreateAt(181);
         var stayedOutside = outside.Move("player", new MoveRequest(1, 1));
-        Require(stayedOutside.BorderKind is null,
-            "Movement outside the border band produced a border publication.");
+        Require(
+            stayedOutside.BorderKind is null,
+            "Movement outside the border band produced a border publication."
+        );
 
-        Require(outside.IsInBorder(new Position(90)),
-            "The upper border boundary was excluded from the border band.");
-        Require(!outside.IsInBorder(new Position(89.9)),
-            "The coordinate before the upper border boundary was included.");
-        Require(!outside.IsInBorder(new Position(10)),
-            "The lower interior boundary was included in the border band.");
-        Require(outside.IsInBorder(new Position(9.9)),
-            "The coordinate before the lower interior boundary was excluded.");
+        Require(
+            outside.IsInBorder(new Position(90)),
+            "The upper border boundary was excluded from the border band."
+        );
+        Require(
+            !outside.IsInBorder(new Position(89.9)),
+            "The coordinate before the upper border boundary was included."
+        );
+        Require(
+            !outside.IsInBorder(new Position(10)),
+            "The lower interior boundary was included in the border band."
+        );
+        Require(
+            outside.IsInBorder(new Position(9.9)),
+            "The coordinate before the lower interior boundary was excluded."
+        );
     }
 
     private static ZonePositionDomain CreateAt(double x)
@@ -274,7 +344,9 @@ internal static class DomainChecks
     {
         var before = domain.State(playerId);
         var result = domain.Move(playerId, new MoveRequest(delta, sequence));
-        var rejection = result.Rejection ?? throw new InvalidOperationException($"Expected {reason} rejection.");
+        var rejection =
+            result.Rejection
+            ?? throw new InvalidOperationException($"Expected {reason} rejection.");
         Require(rejection.Reason == reason, $"Expected {reason}, received {rejection.Reason}.");
         Require(rejection.RetryAfterMs == 0, $"{reason} must not report a retry delay.");
         Require(domain.State(playerId) == before, $"Rejected {reason} changed domain state.");
@@ -283,7 +355,9 @@ internal static class DomainChecks
     private sealed class ManualClock(long initialMilliseconds = 0)
     {
         private long now = initialMilliseconds;
+
         public long ReadMilliseconds() => now;
+
         public void Advance(TimeSpan duration) => now += (long)duration.TotalMilliseconds;
     }
 }

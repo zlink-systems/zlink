@@ -9,6 +9,7 @@ arguments=()
 for argument in "$@"; do
   case "$argument" in
     --local) local_mode=true ;;
+    --attach) local_mode=true; arguments+=("$argument") ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
     *) arguments+=("$argument") ;;

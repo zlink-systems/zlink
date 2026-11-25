@@ -1,12 +1,17 @@
 using MyGame.Shared;
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Contracts.Streams;
 
 namespace MyGame.Session;
 
-public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManager actors)
-    : IZLinkSession
+public sealed class PlayerSession(
+    IZLinkSessionContext context,
+    IZLinkActorManager actors,
+    IZLinkActorClient actorClient,
+    IZLinkSpotManager spots
+) : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 
@@ -28,9 +33,20 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
         CancellationToken cancellationToken
     )
     {
-        if (dispatch.PacketName is not (nameof(JoinWorldRequest) or nameof(MoveRequest)
-            or nameof(CreatePartyRequest) or nameof(JoinPartyRequest) or nameof(EnterDungeonRequest)
-            or nameof(AdvanceRequest) or nameof(ViewRequest) or nameof(SessionInfoRequest)))
+        if (
+            dispatch.PacketName
+            is not (
+                nameof(JoinWorldRequest)
+                or nameof(MoveRequest)
+                or nameof(CreatePartyRequest)
+                or nameof(JoinPartyRequest)
+                or nameof(EnterDungeonRequest)
+                or nameof(AdvanceRequest)
+                or nameof(ViewRequest)
+                or nameof(LeaveDungeonRequest)
+                or nameof(SessionInfoRequest)
+            )
+        )
         {
             await Context.Client.Send(new ActionRejected("packet-not-allowed")).Async();
             return;
@@ -65,6 +81,22 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
                     new SessionInfo(Context.SessionId, actor.ActorId, actor.ObjectGeneration)
                 )
                 .Async();
+            return;
+        }
+
+        if (dispatch.PacketName == nameof(LeaveDungeonRequest))
+        {
+            var actor = Context.Actors.Bound.Single().Ref;
+            var left = await actorClient
+                .RequestToActor(actor.ActorId, new LeaveDungeonRequest())
+                .Async<DungeonLeft>(cancellationToken);
+
+            // Close outside the Dungeon turn, after its membership change completes.
+            var dungeon = await spots.FindAsync(left.DungeonId, cancellationToken);
+            if (dungeon is { } current && current.ObjectGeneration == left.ObjectGeneration)
+                await spots.CloseAsync(current, cancellationToken);
+
+            await Context.Client.Reply(left).Async();
             return;
         }
 

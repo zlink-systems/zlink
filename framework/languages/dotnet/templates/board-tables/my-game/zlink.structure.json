@@ -6,6 +6,7 @@
   "run": {
     "commands": {
       "sh": [
+        "./run-server.sh",
         "./run-e2e.sh --build-only",
         "./run-e2e.sh",
         "./run-e2e.sh --scenario table,reconnect,update"

@@ -69,23 +69,71 @@ public sealed class DungeonDelivery
     }
 }
 
-public sealed class RejectionDelivery : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, ActionRejected>
+public sealed class RejectionDelivery
+    : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, ActionRejected>
 {
-    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context, ActionRejected request, CancellationToken ct)
-        => actor.DeliverAsync(request);
+    public ValueTask HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        ActionRejected request,
+        CancellationToken ct
+    ) => actor.DeliverAsync(request);
 }
 
-public sealed class DungeonEnter : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, EnterDungeonRequest>
+public sealed class DungeonEnter
+    : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, EnterDungeonRequest>
 {
-    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context, EnterDungeonRequest request, CancellationToken ct) => spot.EnterAsync(actor);
+    public ValueTask HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        EnterDungeonRequest request,
+        CancellationToken ct
+    ) => spot.EnterAsync(actor);
 }
-public sealed class DungeonTravel : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, JoinDungeon>
+
+public sealed class DungeonTravel
+    : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, JoinDungeon>
 {
-    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context, JoinDungeon request, CancellationToken ct)
-    { actor.Context.JoinSpot(request.DungeonId, request).Defer(); return ValueTask.CompletedTask; }
+    public ValueTask HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        JoinDungeon request,
+        CancellationToken ct
+    )
+    {
+        actor.Context.JoinSpot(request.DungeonId, request).Defer();
+        return ValueTask.CompletedTask;
+    }
 }
+
 public sealed class PartyDelivery : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, PartyView>
 {
-    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context, PartyView request, CancellationToken ct)
-        => actor.DeliverAsync(request);
+    public ValueTask HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        PartyView request,
+        CancellationToken ct
+    ) => actor.DeliverAsync(request);
+}
+
+[ZLinkSpotActorRequestHandler(nameof(LeaveDungeonRequest))]
+public sealed class LeaveDungeon
+    : IZLinkSpotActorRequestHandler<DungeonSpot, PlayerActor, LeaveDungeonRequest, DungeonLeft>
+{
+    public async ValueTask<DungeonLeft> HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        LeaveDungeonRequest request,
+        CancellationToken ct
+    )
+    {
+        var dungeon = spot.Context;
+        await dungeon.LeaveActorAsync(actor, ct);
+        return new DungeonLeft(dungeon.SpotId, dungeon.ObjectGeneration);
+    }
 }

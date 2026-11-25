@@ -4,12 +4,12 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
+- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the lobby and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,17 +19,19 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/dotnet/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/dotnet/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This C#/.NET 8 project is a board table server example in which players sit at a shared Table and play hands against each other. It runs a Session node for connections, play nodes A and B (table), and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.34.1`.
+This C#/.NET 8 project is a board table server example in which players sit at a shared Table and play hands against each other. It runs a Session gateway for connections, Table hosts A and B, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.34.1`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
 > **Documentation and package versions.** The [ZLink documentation](https://docs.zlink.systems/), [.NET guide](https://docs.zlink.systems/dotnet/guide/server/), [API reference](https://docs.zlink.systems/dotnet/reference/), and [agent index](https://docs.zlink.systems/llms.txt) are the public documentation entry points. When a current guide describes a newer release, check its API against the package pinned in this project.
 
 ## Development commands
+
+Run one scenario with `./run-e2e.sh --scenario reconnect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
 
 Default builds and e2e run nodes and the client in Docker without a host SDK. Run these commands from this directory.
 
@@ -53,7 +55,7 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 
 ## Project layout and extension points
 
-### Session node
+### Session gateway
 
 `server/MyGame.Session/Program.cs` registers connection handling, and `server/MyGame.Session/PlayerSession.cs` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. Add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player.
 
@@ -79,7 +81,7 @@ A RouteMesh connects nodes that exchange messages between processes; this projec
 
 ### Spots and Actors
 
-`TableEntry` is the Entry Spot that receives the first packet, and `TableSpot` is a User Spot created on demand for each table ID. The [Spot guide](https://docs.zlink.systems/dotnet/guide/server/21-spot/) describes registration and calls for these objects. `PlayerActor` is requested by the Session node with `GetOrCreate`, hosted on a play node (table), and joins a table; the [Actor guide](https://docs.zlink.systems/dotnet/guide/server/22-actor/) describes Actor creation and calls.
+`TableEntry` is the Entry Spot that receives the first packet, and `TableSpot` is a User Spot created on demand for each table ID. The [Spot guide](https://docs.zlink.systems/dotnet/guide/server/21-spot/) describes registration and calls for these objects. `PlayerActor` is requested by the Session node with `GetOrCreate`, hosted on a Table node, and joins a table; the [Actor guide](https://docs.zlink.systems/dotnet/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -102,7 +104,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
 1. The client connects to the Session node over STREAM and sends the first packet, `JoinTableRequest`. `PlayerSession` checks the first packet type, calls `GetOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
-2. A new Actor starts in the Entry Spot `TableEntry`. `EnterTableHandler` checks the identity, calls `GetOrCreate` for the Table, and requests `JoinSpot(...).Defer()`.
+2. A new Actor starts in the Entry Spot `TableEntry`. `EnterTableHandler` checks the identity. For first entry, it calls `GetOrCreate` for the Table, and requests `JoinSpot(...).Defer()`. Entry rejects a reconnect with `not-seated`.
 3. `TableSpot.OnActorJoinAsync` assigns a seat or rejects a full table. `OnJoinedActorAsync` sends `TableView` to every seated player by player ID, and `TableViewDelivery` forwards it through each Actor's bound Session. A rejected join reaches the client as `ActionRejected` from `PlayerActor.OnJoinCompletedAsync`.
 4. `StartHandRequest` and `BetRequest` reach the Table's handlers (`StartHandler`, `BetHandler`). Rejections go through the requester's bound Session; deals, views, and the `HandResult` settlement go to each player by player ID and are forwarded by the delivery handlers.
 5. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `ReconnectHandler` checks the identity and resends the current table state and the player's own cards.
@@ -110,7 +112,7 @@ Requests in the example game follow this path. Reading the code along this path 
 
 ## Extend this template's domain
 
-Extend this template's domain to build a board-game application. These files own the current decisions and provide the extension points for new rules.
+Extend this template's domain to build a board-game server. These files own the current decisions and provide the extension points for new rules.
 
 ### Run the template first
 
@@ -119,6 +121,8 @@ Before adding a rule, run the build and e2e with the [Development commands](#dev
 ### Add a game rule
 
 1. Add typed request and result records in `server/MyGame.Shared/Contracts.cs`. Put shared integer limits and rejection reason strings there. Clients send requested actions; `TableSpot` validates them and calculates the resulting state.
+   - Use nullable reference types such as `string?` or nullable value types such as `long?`. To allow omission, declare a constructor parameter default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/#12-message-value-rules)
 2. Add domain state and its decisions in `server/MyGame.Table/TableSpot.cs`. `TableState` and `PlayerSeat` hold the table state, and `TableSpot` is the only decision location for seats, chips, cards, turns, and settlement. `TableRelocation` captures this state. If a new rule depends on time, use a monotonic clock owned by `TableSpot`, pass a test clock only through its constructor, and store remaining milliseconds in relocation state.
 3. Add a packet to the client allowlist in `server/MyGame.Session/PlayerSession.cs` only when clients are allowed to send it. The allowlist contains client-to-server requests; internal and server-originated packets receive `packet-not-allowed`.
 4. Add client-observable checks in `e2e/MyGame.E2E/Scenarios.cs`. Keep `table`, `reconnect`, and `update` behavior, and update the scenario table in the [README](README.md) and `run.scenarios` in `zlink.structure.json` together when adding a scenario ID.
@@ -142,6 +146,8 @@ Await public asynchronous calls as the template does, and avoid `.Wait()`, `.Res
 Create tables with `GetOrCreate` and move Actors with `JoinSpot(...).Defer()` and the public completion callback, and use relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion. `TableSpot` is an application-created User Spot; [Activation and lifetime](https://docs.zlink.systems/dotnet/guide/server/34-activation-lifetime/) explains creation and initialization. The runner sets `TableCapacity` through the public stable-type limit; a node with the limit reached accepts no further tables, so do not rely on a fixed table-to-node assignment.
 
 ### Reconnection and failure handling
+
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to table selection. Omit `reconnect` or send `false` for first entry.
 
 Reconnect with the same Actor ID and bind the new Session to continue using the existing seat and game state. Framework manages current placement, so do not add an application route cache or reset game state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/dotnet/guide/server/33-backpressure/).
 

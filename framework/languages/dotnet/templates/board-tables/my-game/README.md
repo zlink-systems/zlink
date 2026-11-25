@@ -40,6 +40,10 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 
 Scripts remove unique image tags after each invocation. Docker retains build layers for subsequent runs.
 
+## Foreground server
+
+Run `./run-server.sh` on Linux or WSL and use the WebSocket endpoint it prints. In a second terminal, attach the e2e client with `./run-e2e.sh --attach <endpoint>` to run `table` and `reconnect` against that server. The restart check and `update` run only in isolation. Press Ctrl+C in the server terminal to stop its nodes and Redis.
+
 ## Client connection
 
 ### Endpoint and first packet
@@ -47,6 +51,8 @@ Scripts remove unique image tags after each invocation. Docker retains build lay
 The Session `players` STREAM listener uses `StreamEndpoint` in `server/config/session.json`, defaulting to `ws://127.0.0.1:0`: loopback WebSocket, OS-assigned port, root path `/`. Read `StreamEndpoint` from the Session's `READY` JSON, as `e2e/MyGame.E2E/TableRun.cs` does. Table mesh listeners and Redis are internal endpoints.
 
 Send `JoinTableRequest(PlayerId, TableId)` first. The Session creates/binds the Actor; successful seating produces a `TableView` push, including the assigned seat and table state. `ActionRejected` reports rejected actions. Entry is send/push; `SessionInfoRequest` is request/reply after binding. This template does not authenticate the supplied player ID; validate identity before binding when adding authentication.
+
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to table selection. Omit `reconnect` or send `false` for first entry.
 
 ### Connector installation
 
@@ -154,7 +160,7 @@ The runner checks the structure, then starts Redis, play node A (table) and B, a
 | Scenario | Verified behavior |
 | --- | --- |
 | `table` | Seats and chips, private cards, rejection of server-originated packets, out-of-turn bets, over-limit values, and insufficient chips. Each rejection has `RetryAfterMs: 0` and leaves table state unchanged. Settlement reports every `cardCount` as zero; a private-hand query before the next hand returns no cards. |
-| `reconnect` | The sessionId in `SessionInfo` changes while the Actor ID and generation stay the same. Seat, chips, cards, and turn persist, and the hand settles after reconnecting with empty hands. |
+| `reconnect` | The sessionId in `SessionInfo` changes while the Actor ID and generation stay the same. Seat, chips, cards, and turn persist, and the hand settles after reconnecting with empty hands. In isolation, a fresh deployment rejects reconnecting to the original table ID with `not-seated`. |
 | `update` | Both clients keep their `SessionInfo` across drain, connection and game state persist, the hand settles on a different node with empty hands, and after the original node is replaced a new table plays one hand. |
 
 After the structure check, the runner executes the domain boundary checks and prints `Domain checks: 7/7`. It then starts the nodes and runs selected scenarios in the order shown above. Scenario results are printed with `✓`/`✗` and `Scenarios: N/M passed`. Failures and cleanup errors are reported with exit code 1. A rerun that passes without a known cause does not cancel an intermittent failure.
@@ -216,6 +222,8 @@ Node stderr records the message flow from the dispatch diagnostics `Normal` logg
 - **READY and Serving** — Framework nodes print `READY` after observing runtime `Serving`. [Guide](https://docs.zlink.systems/dotnet/guide/server/12-operations/#wait-for-serving). [server/MyGame.Shared/NodeControl.cs:19](server/MyGame.Shared/NodeControl.cs); [server/MyGame.Shared/NodeControl.cs:40](server/MyGame.Shared/NodeControl.cs).
 
 ## Known issues in the public package
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
 Validated against the published Framework 0.34.1 packages.
 

@@ -84,13 +84,31 @@ public sealed record AdvanceRequest;
 public sealed record ViewRequest;
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum RunPhase { Forming, Preparing, Entering, Active, Completed }
+public enum RunPhase
+{
+    Forming,
+    Preparing,
+    Entering,
+    Active,
+    Completed,
+}
 
-public sealed record PartyView(string PartyId, string[] Members, string LeaderId, RunPhase Phase, string? RunId);
+public sealed record PartyView(
+    string PartyId,
+    string[] Members,
+    string LeaderId,
+    RunPhase Phase,
+    string? RunId
+);
+
 public sealed record PartyCommand(string ActorId, bool Join = false, bool Enter = false);
+
 public sealed record PartyCommandResult(PartyView? View, ActionRejected? Rejection);
+
 public sealed record DungeonMemberEntered(string RunId, string ActorId);
+
 public sealed record RunStarted(string RunId);
+
 public sealed record RunCompleted(string RunId);
 
 public sealed record DungeonView(
@@ -105,11 +123,19 @@ public sealed record DungeonView(
 
 public sealed record PrepareDungeon(string RunId, string PartyId, string[] Members);
 
-public sealed record DungeonPrepared(string DungeonId, string RunId, ActionRejected? Rejection = null);
+public sealed record DungeonPrepared(
+    string DungeonId,
+    string RunId,
+    ActionRejected? Rejection = null
+);
 
 public sealed record JoinDungeon(string DungeonId, string RunId);
 
 public sealed record ActionRejected(string Reason, int RetryAfterMs = 0);
+
+public sealed record LeaveDungeonRequest;
+
+public sealed record DungeonLeft(string DungeonId, ulong ObjectGeneration);
 
 public sealed record SessionInfoRequest;
 

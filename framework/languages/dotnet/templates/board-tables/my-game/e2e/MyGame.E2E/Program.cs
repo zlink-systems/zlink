@@ -28,18 +28,22 @@ string? Option(string name)
     return args[index + 1];
 }
 
-TableRun? run = null;
+var outcome = new RunOutcome();
 Exception? scenarioFailure = null;
 var result = 0;
 try
 {
     result = await RunAsync();
 }
+catch (OperationCanceledException)
+    when (args.Contains("--serve") && cancellation.IsCancellationRequested)
+{
+}
 catch (Exception error)
 {
     scenarioFailure = error;
 }
-var failures = run?.Outcome.Failures ?? [];
+var failures = outcome.Failures;
 if (scenarioFailure is not null)
     failures.Insert(0, scenarioFailure);
 if (failures.Count > 0)
@@ -59,15 +63,35 @@ async Task<int> RunAsync()
         StructureCheck.Run(root, Option("--structure"));
         return 0;
     }
-    var selected = Scenarios.Select(Option("--scenario"));
     StructureCheck.Run(root, null);
-    await DomainChecks.RunAsync();
-    run = new TableRun(root, selected.Length);
-    await using var ownedRun = run;
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
     deadline.CancelAfter(TimeSpan.FromMinutes(3));
-    await run.StartAsync(deadline.Token);
-    await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
+    if (args.Contains("--serve"))
+    {
+        await using var server = new TableRun(root, 0, outcome);
+        await server.StartAsync(deadline.Token);
+        Console.WriteLine($"Server ready: {server.Endpoint}");
+        await server.WaitForExitAsync(cancellation.Token);
+        return 0;
+    }
+
+    var endpoint = Option("--attach");
+    var selected = Scenarios.Select(
+        Option("--scenario") ?? (endpoint is null ? null : "table,reconnect")
+    );
+    if (endpoint is not null)
+    {
+        if (selected.Contains("update"))
+            throw new ArgumentException("The update scenario requires an isolated run.");
+        await Scenarios.RunAsync(endpoint, null, outcome, selected, deadline.Token);
+    }
+    else
+    {
+        await DomainChecks.RunAsync();
+        await using var run = new TableRun(root, selected.Length, outcome);
+        await run.StartAsync(deadline.Token);
+        await Scenarios.RunAsync(run.Endpoint, run, outcome, selected, deadline.Token);
+    }
     Console.WriteLine("board-tables=completed");
     return 0;
 }
