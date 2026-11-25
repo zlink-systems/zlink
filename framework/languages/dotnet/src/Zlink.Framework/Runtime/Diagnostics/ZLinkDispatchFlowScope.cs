@@ -176,7 +176,7 @@ internal readonly struct ZLinkDispatchFlowScope(
             dispatchErrors,
             ZLinkDispatchErrorReason.PayloadDecodeFailed,
             action,
-            reportedException ?? exception
+            exception is System.Text.Json.JsonException ? exception : reportedException ?? exception
         );
     }
 

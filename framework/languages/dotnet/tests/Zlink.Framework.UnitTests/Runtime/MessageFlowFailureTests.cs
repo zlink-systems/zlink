@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Locations;
@@ -19,7 +20,9 @@ public sealed class MessageFlowFailureTests
         );
         var actorId = $"encode-failure-{Guid.NewGuid():N}";
         using var flow = new FlowObservation("actor_id", actorId, nameof(Snapshot));
+        using var stderr = new StderrObservation();
         var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddSingleton(stderr.Factory);
         builder.Services.AddSingleton(delivered);
         builder.Services.AddSingleton<SpotCloseProbeState>();
         builder.Services.AddZLinkFramework(options =>
@@ -55,7 +58,9 @@ public sealed class MessageFlowFailureTests
             var error = await Assert.ThrowsAsync<JsonException>(() =>
                 client.SendToActor(actorId, new Snapshot(null!)).Async().AsTask()
             );
-            Assert.Contains("winner", error.GetBaseException().Message);
+            Assert.Contains(nameof(Snapshot), error.Message);
+            Assert.Contains("winner", error.Message);
+            Assert.Contains("nullable", error.Message);
             MessageFlowDeliveryTests.WaitForDelivery();
             Assert.DoesNotContain(flow.Events, activity => Tag(activity, "phase") == "sent");
             var failed = Assert.Single(
@@ -63,7 +68,7 @@ public sealed class MessageFlowFailureTests
                 activity => Tag(activity, "outcome") == "failed"
             );
             AssertFailure(failed, "encode_error", "fail_caller");
-            Assert.Equal(error.GetBaseException().Message, Tag(failed, "error_message"));
+            Assert.Equal(error.Message, Tag(failed, "error_message"));
 
             await client.SendToActor(actorId, new Snapshot("valid")).Async();
             Assert.Equal("valid", await delivered.Task.WaitAsync(TimeSpan.FromSeconds(10)));
@@ -75,6 +80,7 @@ public sealed class MessageFlowFailureTests
         {
             await host.StopAsync();
         }
+        stderr.AssertFailure("encode_error", "fail_caller", "winner");
     }
 
     [Theory]
@@ -86,59 +92,111 @@ public sealed class MessageFlowFailureTests
         var spotId = $"handler-failure-{Guid.NewGuid():N}";
         using var flow = new FlowObservation("spot_id", spotId, nameof(ProbePacket));
         const string spotType = "message-flow-failure";
-        await using var owner = await SpotCloseHost.StartAsync(
-            registerInstanceFactory: false,
-            registerUserSpotFactory: false,
-            configureServer: (services, server) =>
+        using var stderr = new StderrObservation();
+        {
+            await using var owner = await SpotCloseHost.StartAsync(
+                registerInstanceFactory: false,
+                registerUserSpotFactory: false,
+                configureServer: (services, server) =>
+                {
+                    services.AddSingleton(probe);
+                    services.AddSingleton(stderr.Factory);
+                    server.AddSpotFactory<ProbeSpot>(
+                        spotType,
+                        factory => factory.DisableRelocation()
+                    );
+                }
+            );
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await owner
+                .Manager.GetOrCreate(spotId, spotType)
+                .InMesh(SpotCloseHost.MeshName)
+                .Async();
+            await using var peer = remote
+                ? await SpotCloseHost.StartAsync(owner.Store, clientOnly: true)
+                : null;
+            if (peer is not null)
+                await peer.WaitForPeerAsync(owner, cancellation.Token);
+            var client = (peer ?? owner).Runtime.Services.GetRequiredService<IZLinkSpotClient>();
+
+            await client.SendToSpot(spotId, new ProbePacket(true)).Async();
+            try
             {
-                services.AddSingleton(probe);
-                server.AddSpotFactory<ProbeSpot>(spotType, factory => factory.DisableRelocation());
+                await probe.Entered.Task.WaitAsync(cancellation.Token);
+                MessageFlowDeliveryTests.WaitForDelivery();
+                var received = Assert.Single(
+                    flow.Events,
+                    activity => Tag(activity, "phase") == "received"
+                );
+                var flowId = Assert.IsType<string>(received.GetTagItem("flow_id"));
+                Assert.NotEmpty(flowId);
+                var dispatched = Assert.Single(
+                    flow.Events,
+                    activity => Tag(activity, "phase") == "dispatched"
+                );
+                Assert.Equal(flowId, Tag(dispatched, "flow_id"));
+                Assert.DoesNotContain(
+                    flow.Events,
+                    activity => Tag(activity, "outcome") == "failed"
+                );
+
+                probe.Release.SetResult();
+                var failed = await flow.Failure.Task.WaitAsync(cancellation.Token);
+                AssertFailure(failed, "handler_exception", "drop");
+                Assert.Equal(flowId, Tag(failed, "flow_id"));
+                Assert.Equal(Tag(received, "flow_origin"), Tag(failed, "flow_origin"));
+                Assert.Equal(Tag(received, "correlation_id"), Tag(failed, "correlation_id"));
+                Assert.Equal("async handler failure", Tag(failed, "error_message"));
+
+                await client.SendToSpot(spotId, new ProbePacket(false)).Async();
+                await probe.Succeeded.Task.WaitAsync(cancellation.Token);
+                MessageFlowDeliveryTests.WaitForDelivery();
+                Assert.Equal(
+                    2,
+                    flow.Events.Count(activity => Tag(activity, "phase") == "dispatched")
+                );
+                Assert.Single(flow.Events, activity => Tag(activity, "outcome") == "failed");
             }
-        );
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await owner.Manager.GetOrCreate(spotId, spotType).InMesh(SpotCloseHost.MeshName).Async();
-        await using var peer = remote
-            ? await SpotCloseHost.StartAsync(owner.Store, clientOnly: true)
-            : null;
-        if (peer is not null)
-            await peer.WaitForPeerAsync(owner, cancellation.Token);
-        var client = (peer ?? owner).Runtime.Services.GetRequiredService<IZLinkSpotClient>();
-
-        await client.SendToSpot(spotId, new ProbePacket(true)).Async();
-        try
-        {
-            await probe.Entered.Task.WaitAsync(cancellation.Token);
-            MessageFlowDeliveryTests.WaitForDelivery();
-            var received = Assert.Single(
-                flow.Events,
-                activity => Tag(activity, "phase") == "received"
-            );
-            var flowId = Assert.IsType<string>(received.GetTagItem("flow_id"));
-            Assert.NotEmpty(flowId);
-            var dispatched = Assert.Single(
-                flow.Events,
-                activity => Tag(activity, "phase") == "dispatched"
-            );
-            Assert.Equal(flowId, Tag(dispatched, "flow_id"));
-            Assert.DoesNotContain(flow.Events, activity => Tag(activity, "outcome") == "failed");
-
-            probe.Release.SetResult();
-            var failed = await flow.Failure.Task.WaitAsync(cancellation.Token);
-            AssertFailure(failed, "handler_exception", "drop");
-            Assert.Equal(flowId, Tag(failed, "flow_id"));
-            Assert.Equal(Tag(received, "flow_origin"), Tag(failed, "flow_origin"));
-            Assert.Equal(Tag(received, "correlation_id"), Tag(failed, "correlation_id"));
-            Assert.Equal("async handler failure", Tag(failed, "error_message"));
-
-            await client.SendToSpot(spotId, new ProbePacket(false)).Async();
-            await probe.Succeeded.Task.WaitAsync(cancellation.Token);
-            MessageFlowDeliveryTests.WaitForDelivery();
-            Assert.Equal(2, flow.Events.Count(activity => Tag(activity, "phase") == "dispatched"));
-            Assert.Single(flow.Events, activity => Tag(activity, "outcome") == "failed");
+            finally
+            {
+                probe.Release.TrySetResult();
+            }
         }
-        finally
+        stderr.AssertFailure("handler_exception", "drop", "async handler failure");
+    }
+
+    private sealed class StderrObservation : IDisposable
+    {
+        private readonly TextWriter _original = Console.Error;
+        private readonly StringWriter _output = new();
+
+        public StderrObservation()
         {
-            probe.Release.TrySetResult();
+            Console.SetError(_output);
+            Factory = LoggerFactory.Create(logging =>
+                logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace)
+            );
+        }
+
+        public ILoggerFactory Factory { get; }
+
+        public void AssertFailure(string reason, string action, string cause)
+        {
+            Factory.Dispose();
+            var failure = Assert.Single(
+                _output.ToString().Split('\n'),
+                line => line.Contains("zlink.dispatch_error") && line.Contains($"reason={reason}")
+            );
+            Assert.Contains("outcome=failed", failure);
+            Assert.Contains($"action={action}", failure);
+            Assert.Contains(cause, failure);
+        }
+
+        public void Dispose()
+        {
+            Factory.Dispose();
+            Console.SetError(_original);
+            _output.Dispose();
         }
     }
 
