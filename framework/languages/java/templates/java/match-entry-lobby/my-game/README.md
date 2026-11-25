@@ -16,7 +16,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker Compose v2 with a running Docker daemon, and PowerShell 7 on Windows. The Gradle wrapper downloads Gradle. Public ZLink Framework 0.32.0 and binding 1.23.0 are centrally pinned in `build.gradle.kts`.
+Docker Compose v2 with a running Docker daemon, and PowerShell 7 on Windows. The Gradle wrapper downloads Gradle. Public ZLink Framework 0.34.2 and binding 1.26.0 are centrally pinned in `build.gradle.kts`.
 
 ## Build
 
@@ -154,7 +154,7 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.2 packages.
 
 ## Deployment sequence
 

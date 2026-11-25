@@ -675,6 +675,10 @@ target_include_directories(zlink_framework_locations_redis PUBLIC
 target_link_libraries(zlink_framework_locations_redis PUBLIC
   zlink::framework_provider_abstractions
   zlink::framework)
+# redis.cpp hashes its Lua scripts with Beast's SHA-1 for EVALSHA (#5458). The
+# Framework targets keep their Boost tree to themselves in an installed archive,
+# so this target resolves the same Boost checkout through the shared helper.
+zlink_framework_cpp_add_boost_headers(zlink_framework_locations_redis)
 set(ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES "")
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS OFF)
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV OFF)
@@ -3336,6 +3340,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_stream_framework PRIVATE
     opentelemetry-cpp::metrics
     zlink::stream_connector)
+  foreach(transport IN ITEMS tcp ws)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_stream_session_creation_failure_${transport}
+      COMMAND test_cpp_framework_stream_framework --session-creation-failure-${transport}
+      LABELS "framework-unit;framework-contract;stream;stream-session"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_stream_connection_registry_lifetime
     COMMAND test_cpp_framework_stream_framework --connection-registry-lifetime

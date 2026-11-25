@@ -661,23 +661,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                 "Actor relocation factory is not registered: "
                                                         + stableType));
                             }
-                            if (factory.relocationPolicy() instanceof RelocationPolicy.Disabled) {
-                                //  Spec 15 failure table: the Actor's relocation policy
-                                //  forbids cross-node movement — Rejected, not a generic
-                                //  failure. This is the sole, exhaustive gate for this
-                                //  condition in this builder: both prepare() (via
-                                //  selectTarget/hasCapability) and prepareDirectJoin() (via
-                                //  directTarget/hasCapabilityForType) always run this check
-                                //  first through readOwned(), so neither candidacy filter
-                                //  can ever see a Disabled-policy Actor to dissolve this
-                                //  fact into a generic Unavailable.
-                                return failed(
-                                        new ZLinkFrameworkException(
-                                                ZLinkFrameworkErrorKind.REJECTED,
-                                                "Actor relocation policy forbids cross-node "
-                                                        + "relocation: "
-                                                        + stableType));
-                            }
                             if (authority.state() != ZLinkActorAuthorityPayloadCodec.State.READY
                                     || requireEntryMembership && authority.currentSpotKind() != 1
                                     || !authority.actorId().equals(actorId)
@@ -770,7 +753,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
 
     private boolean hasCapabilityForType(String stableType, ZLinkMeshNodeDescriptor candidate) {
         var factory = factories.get(stableType);
-        if (factory == null || factory.relocationPolicy() instanceof RelocationPolicy.Disabled) {
+        if (factory == null) {
             return false;
         }
         ZLinkObjectMaintenancePolicyKind policy =
