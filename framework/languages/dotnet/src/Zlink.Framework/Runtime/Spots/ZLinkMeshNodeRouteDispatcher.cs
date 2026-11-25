@@ -636,40 +636,29 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
 
         if (!isRequest)
         {
-            await scope
-                .RunOneWayHandlerAsync(
-                    _dispatchErrors,
-                    (
-                        invoker: _routeInvoker,
-                        meshName: _meshName.Value,
-                        dispatchErrors: _dispatchErrors,
-                        scope,
+            try
+            {
+                await _routeInvoker
+                    .InvokeSendAsync(
                         descriptor,
+                        _meshName.Value,
                         sourceRid,
                         header,
                         parts,
                         payloadView,
                         actorRelay,
-                        received,
-                        cancellationToken
-                    ),
-                    static state =>
-                        state.invoker.InvokeSendAsync(
-                            state.descriptor,
-                            state.meshName,
-                            state.sourceRid,
-                            state.header,
-                            state.parts,
-                            state.payloadView,
-                            state.actorRelay,
-                            state.cancellationToken,
-                            state.received.Metadata,
-                            state.received.ReceivedAt,
-                            state.scope,
-                            state.dispatchErrors
-                        )
-                )
-                .ConfigureAwait(false);
+                        cancellationToken,
+                        received.Metadata,
+                        received.ReceivedAt,
+                        scope,
+                        _dispatchErrors
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                scope.DispatchFailure(_dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
+            }
 
             return;
         }

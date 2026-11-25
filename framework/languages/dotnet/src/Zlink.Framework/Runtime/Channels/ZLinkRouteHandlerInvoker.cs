@@ -5,7 +5,7 @@ internal sealed class ZLinkRouteHandlerInvoker(
     ZLinkCodecRegistryBuilder codecs
 )
 {
-    public async ValueTask<ZLinkHandlerDispatchResult> InvokeSendAsync(
+    public async ValueTask InvokeSendAsync(
         ZLinkRouteHandlerDescriptor descriptor,
         string routerChannelId,
         RoutingId sourceRid,
@@ -21,23 +21,32 @@ internal sealed class ZLinkRouteHandlerInvoker(
     )
     {
         // A relayed Actor frame arrives already decoded; it is not owned here.
-        var message =
-            decodedMessage
-            ?? (
-                payloadView is { } view
-                    ? ZLinkEnvelopeCodec.DecodeBody(
-                        view,
-                        descriptor.MessageType,
-                        header.ContentType,
-                        codecs
-                    )
-                    : ZLinkEnvelopeCodec.DecodeBody(
-                        parts,
-                        descriptor.MessageType,
-                        header.ContentType,
-                        codecs
-                    )
-            );
+        var message = decodedMessage;
+        if (message is null)
+        {
+            var decoded = payloadView is { } view
+                ? scope.TryDecode(
+                    view,
+                    descriptor.MessageType,
+                    header.ContentType,
+                    codecs,
+                    dispatchErrors,
+                    ZLinkDispatchErrorAction.Drop,
+                    out message
+                )
+                : scope.TryDecode(
+                    parts,
+                    descriptor.MessageType,
+                    header.ContentType,
+                    codecs,
+                    dispatchErrors,
+                    ZLinkDispatchErrorAction.Drop,
+                    out message
+                );
+            if (!decoded)
+                return;
+        }
+
         var ownedMessage =
             decodedMessage is null && payloadView is not null ? message as Message : null;
         try
@@ -52,7 +61,7 @@ internal sealed class ZLinkRouteHandlerInvoker(
                 header.CorrelationId,
                 receivedAt
             );
-            return await dispatcher
+            await dispatcher
                 .DispatchRouteAsync(
                     descriptor,
                     message,

@@ -10,7 +10,7 @@ using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class MessageFlowFailureTests
+public sealed partial class MessageFlowFailureTests
 {
     [Fact]
     public async Task Actor_send_reports_the_serializer_failure_without_sent()
