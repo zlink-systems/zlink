@@ -62,6 +62,8 @@ interface ZLinkRoutedSpotPacketContext {
   readonly workOptions?: ZLinkSerialWorkOptions;
   readonly admissionTimeoutMs?: number;
   readonly signal?: AbortSignal;
+  readonly relocationAdmission?: import('../foundation/service-stateful-runtime').ServiceSpotTargetAdmission;
+  readonly relocationDeadlineUnixMs?: number;
   /** Wait until a recovered activation has actually entered its first handler. */
   readonly awaitFirstHandlerTurn?: boolean;
   readonly onOneWayError?: (error: unknown) => void;
@@ -116,7 +118,8 @@ export class ZLinkRoutedSpotPacketDispatch {
     returnResponse: boolean
   ): Promise<unknown> {
     const receivedAt = new Date();
-    const activation = this.options.resolveActivation(spotId);
+    const activation =
+      context.relocationAdmission?.activation ?? this.options.resolveActivation(spotId);
     if (activation === undefined) {
       this.reportMissing(spotId, packetName, context, returnResponse);
       if (!returnResponse) {
@@ -178,8 +181,10 @@ export class ZLinkRoutedSpotPacketDispatch {
             );
           }
           if (
-            context.activationRecord?.deadlineUnixMs !== undefined &&
-            context.activationRecord.deadlineUnixMs < BigInt(Date.now())
+            (context.activationRecord?.deadlineUnixMs !== undefined &&
+              context.activationRecord.deadlineUnixMs < BigInt(Date.now())) ||
+            (context.relocationDeadlineUnixMs !== undefined &&
+              context.relocationDeadlineUnixMs <= Date.now())
           ) {
             throw createInternalFrameworkException(
               ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
@@ -284,16 +289,26 @@ export class ZLinkRoutedSpotPacketDispatch {
             `Spot '${spotId}' cannot await a request to its current serial turn.`
           );
         }
+        const workOptions = { ...context.workOptions, onAdmitted: context.onAdmitted };
         await runOutsideZLinkActorExecution(() =>
-          activation.serial.execute(
-            runHandler,
-            { ...context.workOptions, onAdmitted: context.onAdmitted },
-            instanceIntent ? runHandler : undefined
-          )
+          context.relocationAdmission === undefined
+            ? activation.serial.execute(
+                runHandler,
+                workOptions,
+                instanceIntent ? runHandler : undefined
+              )
+            : activation.serial.executeRelocationRequest(
+                runHandler,
+                workOptions,
+                context.relocationAdmission.confirmed
+              )
         );
       }
     } catch (error) {
-      if (context.activationRecord?.activationRecord === undefined)
+      if (
+        context.activationRecord?.activationRecord === undefined &&
+        (context.relocationAdmission === undefined || (await context.relocationAdmission.confirmed))
+      )
         this.reportFailure(spotId, packetName, context, returnResponse, error);
       throw error;
     } finally {

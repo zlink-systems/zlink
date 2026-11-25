@@ -554,8 +554,10 @@ public final class ZLinkJavaRequestCompletionCostTest {
             assertTrue(request.admission.isDone());
             assertFalse(request.completion.isDone());
             var callerTerminals = new AtomicInteger();
-            request.completion.whenComplete(
-                    (ignored, failure) -> callerTerminals.incrementAndGet());
+            // Cancellation completes on the registry lane; wait for this dependent itself.
+            var callerTerminal =
+                    request.completion.whenComplete(
+                            (ignored, failure) -> callerTerminals.incrementAndGet());
             assertTrue(request.completion.cancel(false));
             var cancellation =
                     request.completion
@@ -573,6 +575,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
                     request.completion
                             .handle((ignored, failure) -> failure)
                             .get(1, TimeUnit.SECONDS));
+            callerTerminal.handle((ignored, failure) -> null).get(1, TimeUnit.SECONDS);
             assertEquals(1, callerTerminals.get());
             assertEquals(1, fixture.submits.get());
             assertEquals(1, fixture.terminals.get());

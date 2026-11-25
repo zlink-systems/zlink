@@ -139,7 +139,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         var node = spotNode.get();
         var operations = Objects.requireNonNull(node.operationRegistry(), "Actor operation owner");
         var result =
-                ZLinkServiceOperationRegistry.<TReply, TReply>prepareOperation(
+                ZLinkServiceOperationRegistry.<TReply, TReply>prepareRequestOperation(
                         ZLinkServiceOperationIds.next(),
                         java.util.function.Function.identity(),
                         null,

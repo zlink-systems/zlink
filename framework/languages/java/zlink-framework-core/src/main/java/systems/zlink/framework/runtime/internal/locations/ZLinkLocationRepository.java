@@ -54,6 +54,11 @@ public interface ZLinkLocationRepository {
     CompletionStage<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>> listFanoutPublishers(
             String channelName, ZLinkPageRequest page);
 
+    /** Completes any persistent format conversion required before startup writes. */
+    default CompletionStage<Void> convertStoreFormat(ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.completedFuture(null);
+    }
+
     CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(String ownerId, Duration leaseTtl);
 
     CompletionStage<ZLinkOwnerLeaseReadResult> readOwnerLease(String ownerId);

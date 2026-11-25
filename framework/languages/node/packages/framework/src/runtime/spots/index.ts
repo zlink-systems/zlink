@@ -1889,12 +1889,19 @@ export class DefaultZLinkSpotManager {
         : { serializers: this.options.messageSerializers };
     const decodePayload = (messageType?: Type) =>
       decodeChannelPayload(envelope, codecs, messageType);
+    const relocationAdmission = record.spotTargetAdmission;
     const context = {
       channelName: envelope.header.channelName,
       contentType: header.contentType,
       correlationId: header.correlationId ?? undefined,
       inboundFlow,
       sourceRid: record.sourceNodeRid === null ? undefined : String(record.sourceNodeRid),
+      relocationAdmission,
+      ...(relocationAdmission !== undefined && envelope.header.deadline !== null
+        ? {
+            relocationDeadlineUnixMs: Date.parse(envelope.header.deadline)
+          }
+        : {}),
       metadata: envelope.header.metadata,
       workOptions: zlinkSerialWorkOptions(
         envelope.payload.byteLength,
@@ -1931,7 +1938,8 @@ export class DefaultZLinkSpotManager {
               `Unsupported MeshNode Spot record kind '${record.kind}'.`
             );
           }
-          await this.ensureInstanceApplicationActivation(meshName, spotId);
+          if (relocationAdmission === undefined)
+            await this.ensureInstanceApplicationActivation(meshName, spotId);
           const response = await this.routedSpotPackets.requestEncoded(
             spotId,
             packetName,
@@ -1945,6 +1953,7 @@ export class DefaultZLinkSpotManager {
       await (admit === undefined ? dispatch() : admit(dispatch));
     } catch (error) {
       if (record.kind !== ReceiveKind.SpotRequest) throw error;
+      if (relocationAdmission !== undefined && !(await relocationAdmission.confirmed)) return;
       requireMeshSpotReply(record.reply(encodeChannelErrorReplyParts(envelope.header, error)));
     }
   }
