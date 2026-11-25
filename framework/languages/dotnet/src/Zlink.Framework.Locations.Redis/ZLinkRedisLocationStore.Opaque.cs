@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using StackExchange.Redis;
+using Zlink.Framework.Internal;
 using static Zlink.Framework.Internal.ZLinkLocationStoreLimits;
 
 namespace Zlink.Framework.Locations.Redis;
@@ -25,7 +26,6 @@ public sealed partial class ZLinkRedisLocationStore
     private const int RecordVersionPosition = 3;
     private const int RecordExpiryPosition = 4;
     private const int RecordTombstonePosition = 5;
-    private const int WriteConditionStride = 2;
     private const int WriteMutationStride = 6;
     private const int ResultOutcomeIndex = 0;
     private const int ResultStoreNowIndex = 1;
@@ -49,6 +49,9 @@ public sealed partial class ZLinkRedisLocationStore
     private const string VersionToken = "version";
     private const string ValueToken = "value";
     private const string PutToken = "put";
+    private const string AddToken = "add";
+    private const string SumAtMostToken = "sum-at-most";
+    private const string CorruptToken = "corrupt";
     private const string DeleteToken = "delete";
     private const string ConflictToken = "conflict";
     private const string BacklogToken = "backlog";
@@ -194,31 +197,104 @@ public sealed partial class ZLinkRedisLocationStore
                 end
             end
 
+            local function readCurrent(keyIndex)
+                local members = redis.call('ZREVRANGE', KEYS[keyIndex], 0, 0)
+                if #members == 0 then return nil, nil, true end
+                local record = unpackTagged(members[1])
+                if not record then return nil, nil, false end
+                local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
+                if record[{{RecordTombstonePosition}}] == true
+                    or (expiresAt > 0 and expiresAt <= nowMs) then
+                    return nil, nil, true
+                end
+                return record[{{RecordVersionPosition}}], record[{{RecordValuePosition}}], true
+            end
+
+            local maxCounter = '9223372036854775807'
+            local function validCounter(value)
+                return string.match(value, '^%d+$') and (#value == 1 or value:sub(1, 1) ~= '0')
+                    and (#value < 19 or (#value == 19 and value <= maxCounter))
+            end
+
+            -- Redis Lua numbers cannot represent an arbitrary int64 exactly.
+            -- Three base-10^7 limbs keep even the sum of a full batch exact.
+            local counterBase = 10000000
+            local function accumulate(total, digits, sign)
+                if digits:sub(1, 1) == '-' then
+                    digits = digits:sub(2)
+                    sign = -sign
+                end
+                total[1] = total[1] + sign * (tonumber(digits:sub(-7)) or 0)
+                total[2] = total[2] + sign * (tonumber(digits:sub(-14, -8)) or 0)
+                total[3] = total[3] + sign * (tonumber(digits:sub(1, -15)) or 0)
+            end
+            local function normalize(total)
+                for i = 1, 2 do
+                    local carry = math.floor(total[i] / counterBase)
+                    total[i] = total[i] - carry * counterBase
+                    total[i + 1] = total[i + 1] + carry
+                end
+            end
+            local function readCounter(keyIndex)
+                local _, value, valid = readCurrent(keyIndex)
+                if not valid then return nil, '{{FormatErrorToken}}' end
+                if value == nil then return '0' end
+                if validCounter(value) then return value end
+                return nil, '{{CorruptToken}}'
+            end
+
             local arg = 3
             for i = 1, conditionCount do
                 local kind = ARGV[arg]
-                local expected = ARGV[arg + 1]
-                local members = redis.call('ZREVRANGE', KEYS[i], 0, 0)
-                local current = nil
-                local currentValue = nil
-                if #members > 0 then
-                    local record = unpackTagged(members[1])
-                    if not record then
-                        return { '{{FormatErrorToken}}', nowMs }
+                if kind == '{{SumAtMostToken}}' then
+                    local total = {0, 0, 0}
+                    accumulate(total, ARGV[arg + 1], 1)
+                    accumulate(total, ARGV[arg + 2], -1)
+                    local count = tonumber(ARGV[arg + 3])
+                    for offset = 0, count - 1 do
+                        local value, failure = readCounter(tonumber(ARGV[arg + 4 + offset]))
+                        if not value then return { failure, nowMs } end
+                        accumulate(total, value, 1)
                     end
-                    local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
-                    if record[{{RecordTombstonePosition}}] ~= true
-                        and (expiresAt == 0 or expiresAt > nowMs) then
-                        current = record[{{RecordVersionPosition}}]
-                        currentValue = record[{{RecordValuePosition}}]
+                    normalize(total)
+                    if total[3] > 0 or (total[3] == 0 and (total[2] > 0 or total[1] > 0)) then
+                        return { '{{ConflictToken}}', nowMs }
                     end
+                    arg = arg + 4 + count
+                else
+                    local keyIndex = tonumber(ARGV[arg + 1])
+                    local expected = ARGV[arg + 2]
+                    local current, currentValue, valid = readCurrent(keyIndex)
+                    if not valid then return { '{{FormatErrorToken}}', nowMs } end
+                    if (kind == '{{MissingToken}}' and current ~= nil)
+                        or (kind == '{{VersionToken}}' and current ~= expected)
+                        or (kind == '{{ValueToken}}' and (current == nil or currentValue ~= expected)) then
+                        return { '{{ConflictToken}}', nowMs }
+                    end
+                    arg = arg + 3
                 end
-                if (kind == '{{MissingToken}}' and current ~= nil)
-                    or (kind == '{{VersionToken}}' and current ~= expected)
-                    or (kind == '{{ValueToken}}' and (current == nil or currentValue ~= expected)) then
-                    return { '{{ConflictToken}}', nowMs }
+            end
+
+            if mutationCount == 0 then return { '{{AppliedToken}}', nowMs } end
+            local additions = nil
+            local counterArg = arg
+            for i = 1, mutationCount do
+                if ARGV[counterArg + 1] == '{{AddToken}}' then
+                    local current, failure = readCounter(tonumber(ARGV[counterArg]))
+                    if not current then return { failure, nowMs } end
+                    local total = {0, 0, 0}
+                    accumulate(total, current, 1)
+                    accumulate(total, ARGV[counterArg + 3], 1)
+                    normalize(total)
+                    if total[3] < 0 then return { '{{CorruptToken}}', nowMs } end
+                    local value = string.format('%d%07d%07d', total[3], total[2], total[1])
+                    value = value:gsub('^0+', '')
+                    if value == '' then value = '0' end
+                    if not validCounter(value) then return { '{{CorruptToken}}', nowMs } end
+                    additions = additions or {}
+                    additions[i] = value
                 end
-                arg = arg + {{WriteConditionStride}}
+                counterArg = counterArg + {{WriteMutationStride}}
             end
             local checkArg = arg
             for i = 1, mutationCount do
@@ -239,7 +315,8 @@ public sealed partial class ZLinkRedisLocationStore
                 local version = ARGV[arg + 4]
                 local retention = tonumber(ARGV[arg + 5])
                 local redisKey = KEYS[keyIndex]
-                if kind == '{{PutToken}}' then
+                if kind == '{{PutToken}}' or kind == '{{AddToken}}' then
+                    if kind == '{{AddToken}}' then value = additions[i] end
                     local expiresAt = 0
                     if retention >= 0 then expiresAt = nowMs + retention end
                     redis.call(
@@ -529,35 +606,7 @@ public sealed partial class ZLinkRedisLocationStore
     )
     {
         ArgumentNullException.ThrowIfNull(request);
-        ValidateWriteRequest(request);
-        var uniqueKeys = request
-            .Conditions.Select(static condition =>
-                condition switch
-                {
-                    ZLinkStoreCondition.Missing missing => missing.Key,
-                    ZLinkStoreCondition.Version version => version.Key,
-                    ZLinkStoreCondition.Value value => value.Key,
-                    _ => throw new ArgumentException(
-                        "Unknown Location Store condition.",
-                        nameof(request)
-                    ),
-                }
-            )
-            .Concat(
-                request.Mutations.Select(static mutation =>
-                    mutation switch
-                    {
-                        ZLinkStoreMutation.Put put => put.Key,
-                        ZLinkStoreMutation.Delete delete => delete.Key,
-                        _ => throw new ArgumentException(
-                            "Unknown Location Store mutation.",
-                            nameof(request)
-                        ),
-                    }
-                )
-            )
-            .Distinct()
-            .ToArray();
+        var uniqueKeys = ValidateWriteRequest(request);
         var keyIndex = uniqueKeys
             .Select((key, index) => (key, index: index + 1))
             .ToDictionary(static item => item.key, static item => item.index);
@@ -575,17 +624,28 @@ public sealed partial class ZLinkRedisLocationStore
         {
             switch (condition)
             {
-                case ZLinkStoreCondition.Missing:
+                case ZLinkStoreCondition.Missing missing:
                     args.Add(MissingToken);
+                    args.Add(keyIndex[missing.Key]);
                     args.Add(string.Empty);
                     break;
                 case ZLinkStoreCondition.Version version:
                     args.Add(VersionToken);
+                    args.Add(keyIndex[version.Key]);
                     args.Add(version.Expected.Value);
                     break;
                 case ZLinkStoreCondition.Value value:
                     args.Add(ValueToken);
+                    args.Add(keyIndex[value.Key]);
                     args.Add(value.Expected.ToArray());
+                    break;
+                case ZLinkStoreCondition.SumAtMost sum:
+                    args.Add(SumAtMostToken);
+                    args.Add(sum.Delta.ToString(CultureInfo.InvariantCulture));
+                    args.Add(sum.Limit.ToString(CultureInfo.InvariantCulture));
+                    args.Add(sum.Keys.Count);
+                    foreach (var key in sum.Keys)
+                        args.Add(keyIndex[key]);
                     break;
             }
         }
@@ -604,6 +664,14 @@ public sealed partial class ZLinkRedisLocationStore
                             ? Zlink.Framework.Internal.ZLinkStoreRetention.ToMilliseconds(retention)
                             : -1
                     );
+                    break;
+                case ZLinkStoreMutation.Add add:
+                    args.Add(keyIndex[add.Key]);
+                    args.Add(AddToken);
+                    args.Add(add.Key.Value);
+                    args.Add(add.Delta.ToString(CultureInfo.InvariantCulture));
+                    args.Add(Guid.NewGuid().ToString(UuidFormat));
+                    args.Add(-1);
                     break;
                 case ZLinkStoreMutation.Delete delete:
                     args.Add(keyIndex[delete.Key]);
@@ -638,6 +706,8 @@ public sealed partial class ZLinkRedisLocationStore
         var outcome = (string)result[ResultOutcomeIndex]!;
         if (outcome == ConflictToken)
             return new ZLinkStoreWriteResult.Conflict(storeNow);
+        if (outcome == CorruptToken)
+            return new ZLinkStoreWriteResult.Corrupt(storeNow);
         if (outcome == BacklogToken)
         {
             throw new IOException("The Redis Location Store version backlog is full.");
@@ -814,30 +884,13 @@ public sealed partial class ZLinkRedisLocationStore
             );
     }
 
-    private static void ValidateWriteRequest(ZLinkStoreWriteRequest request)
+    private static ZLinkStoreKey[] ValidateWriteRequest(ZLinkStoreWriteRequest request)
     {
         var encodedBytes = 0L;
         var conditionKeys = request
-            .Conditions.Select(static condition =>
-                condition switch
-                {
-                    ZLinkStoreCondition.Missing missing => missing.Key,
-                    ZLinkStoreCondition.Version version => version.Key,
-                    ZLinkStoreCondition.Value value => value.Key,
-                    _ => throw new ArgumentException("Unknown Location Store condition."),
-                }
-            )
+            .Conditions.SelectMany(ZLinkStoreBatchKeys.ForCondition)
             .ToArray();
-        var mutationKeys = request
-            .Mutations.Select(static mutation =>
-                mutation switch
-                {
-                    ZLinkStoreMutation.Put put => put.Key,
-                    ZLinkStoreMutation.Delete delete => delete.Key,
-                    _ => throw new ArgumentException("Unknown Location Store mutation."),
-                }
-            )
-            .ToArray();
+        var mutationKeys = request.Mutations.Select(ZLinkStoreBatchKeys.ForMutation).ToArray();
         if (
             conditionKeys.Distinct().Count() != conditionKeys.Length
             || mutationKeys.Distinct().Count() != mutationKeys.Length
@@ -848,24 +901,24 @@ public sealed partial class ZLinkRedisLocationStore
                 nameof(request)
             );
         }
-        if (conditionKeys.Concat(mutationKeys).Distinct().Count() > MaximumUniqueKeys)
+        var uniqueKeys = conditionKeys.Union(mutationKeys).ToArray();
+        if (uniqueKeys.Length > MaximumUniqueKeys)
         {
             throw new ArgumentException(
                 $"A conditional batch can reference at most {MaximumUniqueKeys} keys.",
                 nameof(request)
             );
         }
+        foreach (var key in conditionKeys.Concat(mutationKeys))
+        {
+            ValidateOpaqueKey(key, nameof(request));
+            encodedBytes += Encoding.UTF8.GetByteCount(key.Value);
+        }
         foreach (var condition in request.Conditions)
         {
             switch (condition)
             {
-                case ZLinkStoreCondition.Missing missing:
-                    ValidateOpaqueKey(missing.Key, nameof(request));
-                    encodedBytes += Encoding.UTF8.GetByteCount(missing.Key.Value);
-                    break;
                 case ZLinkStoreCondition.Version version:
-                    ValidateOpaqueKey(version.Key, nameof(request));
-                    encodedBytes += Encoding.UTF8.GetByteCount(version.Key.Value);
                     var length = Encoding.UTF8.GetByteCount(version.Expected.Value ?? string.Empty);
                     if (length is < 1 or > MaximumVersionBytes)
                         throw new ArgumentException(
@@ -875,14 +928,15 @@ public sealed partial class ZLinkRedisLocationStore
                     encodedBytes += length;
                     break;
                 case ZLinkStoreCondition.Value value:
-                    ValidateOpaqueKey(value.Key, nameof(request));
-                    encodedBytes += Encoding.UTF8.GetByteCount(value.Key.Value);
                     if (value.Expected.Length > MaximumValueBytes)
                         throw new ArgumentException(
                             "A Location Store value condition exceeds its value bound.",
                             nameof(request)
                         );
                     encodedBytes += value.Expected.Length;
+                    break;
+                case ZLinkStoreCondition.SumAtMost:
+                    encodedBytes += 16;
                     break;
             }
         }
@@ -891,8 +945,6 @@ public sealed partial class ZLinkRedisLocationStore
             switch (mutation)
             {
                 case ZLinkStoreMutation.Put put:
-                    ValidateOpaqueKey(put.Key, nameof(request));
-                    encodedBytes += Encoding.UTF8.GetByteCount(put.Key.Value);
                     if (put.Bytes.Length > MaximumValueBytes)
                         throw new ArgumentException(
                             $"A Location Store value can contain at most {MaximumValueBytes} bytes.",
@@ -902,9 +954,8 @@ public sealed partial class ZLinkRedisLocationStore
                         throw new ArgumentException("Retention must be positive.", nameof(request));
                     encodedBytes += put.Bytes.Length;
                     break;
-                case ZLinkStoreMutation.Delete delete:
-                    ValidateOpaqueKey(delete.Key, nameof(request));
-                    encodedBytes += Encoding.UTF8.GetByteCount(delete.Key.Value);
+                case ZLinkStoreMutation.Add:
+                    encodedBytes += 8;
                     break;
             }
         }
@@ -913,5 +964,6 @@ public sealed partial class ZLinkRedisLocationStore
                 $"The encoded Store batch exceeds {MaximumEncodedBatchBytes} bytes.",
                 nameof(request)
             );
+        return uniqueKeys;
     }
 }
