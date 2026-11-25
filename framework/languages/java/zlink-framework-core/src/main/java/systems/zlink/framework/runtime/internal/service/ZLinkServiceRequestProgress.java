@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /** Observes request progress without owning admission, dispatch or completion. */
 public class ZLinkServiceRequestProgress {
@@ -24,6 +25,9 @@ public class ZLinkServiceRequestProgress {
         }
     }
 
+    public void routeSelected(
+            String meshName, RoutingId target, long correlation, long generation, boolean local) {}
+
     public void peerAdmitted() {}
 
     public void bindingSubmitted() {}
@@ -31,6 +35,14 @@ public class ZLinkServiceRequestProgress {
     public void handlerStarted() {}
 
     public void replyReceived() {}
+
+    public <T> Function<List<Message>, T> replyDecoder(Function<List<Message>, T> decodeReply) {
+        return decodeReply;
+    }
+
+    public CompletableFuture<Void> localAdmission(CompletableFuture<Void> admission) {
+        return admission;
+    }
 
     public InstanceReply localReply(ZLinkServiceOperationRegistry registry, UUID id) {
         return parts -> completeLocal(registry, id, parts);
@@ -66,20 +78,21 @@ public class ZLinkServiceRequestProgress {
     }
 
     static final class Recording extends ZLinkServiceRequestProgress {
-        private final String meshName;
-        private final RoutingId target;
-        private final long correlation;
-        private final long generation;
-        private final boolean local;
+        private String meshName;
+        private RoutingId target;
+        private long correlation;
+        private long generation;
+        private boolean local;
         private final long started = System.nanoTime();
-        private final long routeSelected = elapsed();
+        private volatile long routeSelected;
         private volatile long peerAdmitted;
         private volatile long bindingSubmitted;
         private volatile long bindingAdmitted;
         private volatile long localDispatch;
         private volatile long replyReceived;
 
-        Recording(
+        @Override
+        public void routeSelected(
                 String meshName,
                 RoutingId target,
                 long correlation,
@@ -90,6 +103,7 @@ public class ZLinkServiceRequestProgress {
             this.correlation = correlation;
             this.generation = generation;
             this.local = local;
+            routeSelected = elapsed();
         }
 
         @Override
@@ -113,6 +127,19 @@ public class ZLinkServiceRequestProgress {
         }
 
         @Override
+        public <T> Function<List<Message>, T> replyDecoder(Function<List<Message>, T> decodeReply) {
+            return reply -> {
+                replyReceived();
+                return decodeReply.apply(reply);
+            };
+        }
+
+        @Override
+        public CompletableFuture<Void> localAdmission(CompletableFuture<Void> admission) {
+            return observeAdmission(admission, this::handlerStarted);
+        }
+
+        @Override
         public InstanceReply localReply(ZLinkServiceOperationRegistry registry, UUID id) {
             return new InstanceReply() {
                 @Override
@@ -130,11 +157,20 @@ public class ZLinkServiceRequestProgress {
 
         @Override
         public CompletableFuture<Void> bindingAdmission(CompletableFuture<Void> admission) {
+            return observeAdmission(admission, () -> bindingAdmitted = elapsed());
+        }
+
+        private static CompletableFuture<Void> observeAdmission(
+                CompletableFuture<Void> admission, Runnable admitted) {
             var observed = new CompletableFuture<Void>();
-            observed.thenRun(
-                    () -> {
-                        bindingAdmitted = elapsed();
-                        if (admission != null) admission.complete(null);
+            observed.whenComplete(
+                    (ignored, failure) -> {
+                        if (failure == null) {
+                            admitted.run();
+                            if (admission != null) admission.complete(null);
+                        } else if (admission != null) {
+                            admission.completeExceptionally(failure);
+                        }
                     });
             return observed;
         }
@@ -155,6 +191,7 @@ public class ZLinkServiceRequestProgress {
         }
 
         void report(long terminal) {
+            long selected = beforeTerminal(routeSelected, terminal);
             long peer = beforeTerminal(peerAdmitted, terminal);
             long submitted = beforeTerminal(bindingSubmitted, terminal);
             long admitted = beforeTerminal(bindingAdmitted, terminal);
@@ -185,13 +222,13 @@ public class ZLinkServiceRequestProgress {
                     }\
                     """
                             .formatted(
-                                    quoted(meshName),
-                                    quoted(target.toString()),
-                                    Long.toUnsignedString(correlation),
+                                    selected == 0 ? "undefined" : quoted(meshName),
+                                    selected == 0 ? "undefined" : quoted(target.toString()),
+                                    selected == 0 ? "0" : Long.toUnsignedString(correlation),
                                     stage,
-                                    Long.toUnsignedString(generation),
+                                    selected == 0 ? "0" : Long.toUnsignedString(generation),
                                     millis(terminal),
-                                    millis(routeSelected),
+                                    millis(selected),
                                     millis(peer),
                                     millis(submitted),
                                     millis(admitted),

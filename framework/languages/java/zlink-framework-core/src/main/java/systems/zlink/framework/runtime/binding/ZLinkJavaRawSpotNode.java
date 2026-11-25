@@ -843,6 +843,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return requestLocalActor(
                         (requestId, admission) ->
                                 dispatchLocalOrdinaryActor(target, retained, requestId, admission),
+                        target.targetNodeGeneration(),
                         timeout,
                         requestAdmission)
                 .whenComplete((reply, failure) -> Message.closeAll(retained));
@@ -871,6 +872,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     completion);
             return;
         }
+        owner.observeLocalActorRoute(completion, target.targetNodeGeneration());
         var retained = ZLinkJavaRawSpot.copy(parts);
         requestRegisteredLocalActor(
                         (requestId, admission) ->
@@ -901,6 +903,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return requestLocalActor(
                         (requestId, admission) ->
                                 dispatchLocalActor(actor, retained, requestId, 1, admission),
+                        owner.lifecycleGeneration(),
                         timeout,
                         requestAdmission)
                 .whenComplete((reply, failure) -> Message.closeAll(retained));
@@ -908,12 +911,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     private CompletionStage<List<Message>> requestLocalActor(
             BiFunction<Long, CompletableFuture<Void>, CompletionStage<Void>> dispatch,
+            long targetNodeGeneration,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
         var completion =
-                ZLinkServiceOperationRegistry.<List<Message>>prepareOperation(
+                ZLinkServiceOperationRegistry.<List<Message>>prepareRequestOperation(
                         systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
                                 .next());
+        owner.observeLocalActorRoute(completion, targetNodeGeneration);
         operationRegistry()
                 .<List<Message>>submitTerminal(
                         completion.id(),
@@ -940,6 +945,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             Consumer<T> discardReply,
             Function<Throwable, Throwable> mapFailure,
             ZLinkServiceOperationRegistry.Operation<T> completion) {
+        var decoder = completion.requestProgress().replyDecoder(decodeReply);
         return operationRegistry()
                 .<T>submitRegistered(
                         completion.id(),
@@ -953,7 +959,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                             terminal.accept(null, mapFailure.apply(failure));
                                         else {
                                             try {
-                                                terminal.accept(decodeReply.apply(messages), null);
+                                                terminal.accept(decoder.apply(messages), null);
                                             } catch (RuntimeException | Error error) {
                                                 terminal.accept(null, mapFailure.apply(error));
                                             }
@@ -973,7 +979,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         actorRequests.put(requestId, completion);
         CompletionStage<Void> dispatched;
         try {
-            dispatched = actorDispatchResult(dispatch.apply(requestId, requestAdmission));
+            dispatched =
+                    actorDispatchResult(
+                            dispatch.apply(
+                                    requestId,
+                                    logical.requestProgress().localAdmission(requestAdmission)));
         } catch (RuntimeException | Error failure) {
             actorRequests.remove(requestId, completion);
             throw failure;
