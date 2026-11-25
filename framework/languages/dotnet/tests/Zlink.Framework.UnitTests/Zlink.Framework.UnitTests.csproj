@@ -91,6 +91,7 @@
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberOwnershipTests.cs"/>
+        <Compile Include="Runtime/SpotWideFindReadinessTests.cs"/>
         <Compile Include="Runtime/SpotTargetRelocationReleaseTests.cs"/>
         <Compile Include="Runtime/SpotActorDispatchErrorReasonTests.cs"/>
         <Compile Include="TestCompletionPollerDriver.cs"/>

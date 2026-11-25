@@ -22,7 +22,7 @@ flowchart LR
 
 ## Prerequisites
 
-Install Docker with Compose v2 and PowerShell 7 on Windows. Local debugging also requires Node.js 22 or later and npm. The project pins public ZLink packages to 0.32.0. No repository source or local package feed is required by this template.
+Install Docker with Compose v2 and PowerShell 7 on Windows. Local debugging also requires Node.js 22 or later and npm. The project pins public ZLink packages to 0.34.0. No repository source or local package feed is required by this template.
 
 ## Build
 
@@ -140,7 +140,7 @@ For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -Fil
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.0 packages.
 
 Node typed handlers receive fields without the declared DTO class (#1731, scheduled for 0.32.0); the template reconstructs declared packet classes before forwarding through typed APIs.
 

@@ -28,6 +28,7 @@ enum class placement_object_kind_t
 
 enum class maintenance_policy_kind_t : std::uint8_t
 {
+    unspecified = 0,
     disabled = 1,
     recreate = 2,
     snapshot = 3

@@ -320,6 +320,11 @@ Location Store를 공유하는 모든 node는 같은 형식을 쓴다 — v11 no
 
 0. 완료되지 않은 v11 aggregate(이동 중 record)가 남아 있으면 전환 전에 v11 절차로 종결한다. 종결할 수 없는
    record가 남으면 전환하지 않고 startup configuration error로 멈춘다.
+   v11 node가 모두 멈췄다는 전제이므로 v11의 staging 보존 기간(staging 뒤 24시간)은 적용하지 않는다.
+   Staging·Prepared aggregate는 abort하고(Prepared면 대상 v11 수용 공간 record의 pending을 같은 batch로
+   되돌린다), Committed·Aborted aggregate는 participant·inventory 정리를 마친 뒤 root를 지운다. 대상 owner
+   lease가 아직 살아 있는 aggregate가 하나라도 있으면 v11 node가 아직 쓰고 있는 것으로 보고, 아무것도 바꾸지
+   않은 채 startup configuration error로 멈춘다(그 lease가 만료된 뒤 다시 시작하면 진행된다).
 1. `zlink:v12:generation-floor`가 없으면 `zlink:v11:object-counter`와 `zlink:v11:authority-owner-counter` 중 큰
    값(둘 다 없으면 `1`)을 `Missing` 조건으로 Put한다.
 2. 남은 v11 MeshNode 수용 공간 record마다 batch 하나로 그 record의 active·pending 값을 §4.1 counter key에 Put하고

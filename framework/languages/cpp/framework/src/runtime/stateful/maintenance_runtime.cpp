@@ -579,15 +579,17 @@ bool maintenance_runtime_t::register_terminal_source (
 }
 
 task_t<stateful_error_t> maintenance_runtime_t::abort_relocation_before_cutover (
-  std::shared_ptr<relocation_terminal_state_t> state)
+  std::shared_ptr<relocation_terminal_state_t> state, std::span<const object_ref_t> before_capture)
 {
     if (!_authority->cancel_source_capture (source_fence (*state))) {
-        std::vector<object_ref_t> participants;
+        std::vector<object_ref_t> participants (before_capture.begin (), before_capture.end ());
         for (const auto &sealed : state->seal_attempt.seal.participants)
             participants.push_back (sealed.owner);
         const auto settlement = co_await settle_relocation (state, std::move (participants), true);
-        if (settlement.outcome != relocation_authority_t::source_preserved)
+        if (settlement.outcome != relocation_authority_t::source_preserved) {
+            state->metric->complete (settlement.outcome);
             co_return stateful_error_t::generation_stale;
+        }
     }
     const auto aborted =
       co_await _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
@@ -830,7 +832,9 @@ maintenance_runtime_t::source_fence (const relocation_terminal_state_t &state)
             state.context.relocation,
             coordinator.node_routing_id,
             coordinator.node_generation,
-            state.context.target_attempt_generation};
+            state.context.target_attempt_generation,
+            state.context.target_node_routing_id,
+            state.context.target_node_generation};
 }
 
 task_t<source_relocation_settlement_t>
@@ -1001,11 +1005,8 @@ maintenance_runtime_t::relocate_prepare_ready (std::shared_ptr<relocation_termin
             state->budget_reserved = 0;
         }
     };
-    if (!co_await relocate_seal (state)) {
-        release_reservation ();
-        co_return relocation_preparation_t{std::move (*state->result)};
-    }
-    if (!co_await relocate_encode (state)) {
+    const std::vector<object_ref_t> participants{state->source};
+    if (!co_await relocate_capture (state, participants)) {
         release_reservation ();
         co_return relocation_preparation_t{std::move (*state->result)};
     }
@@ -1062,19 +1063,40 @@ task_t<bool> maintenance_runtime_t::capture_relocation_session_bindings (
 }
 
 task_t<bool>
-maintenance_runtime_t::relocate_seal (std::shared_ptr<relocation_terminal_state_t> state)
+maintenance_runtime_t::relocate_capture (std::shared_ptr<relocation_terminal_state_t> state,
+                                         const std::vector<object_ref_t> &participants)
 {
-    std::vector<object_ref_t> participants{state->source};
-    std::function<task_t<bool> ()> before_capture = [this, state] {
+    const auto seal_sessions = [this, state] {
         return capture_relocation_session_bindings (state->context);
     };
-    auto seal_task =
-      _objects.try_seal_relocation_aggregate (participants, state->cancellation, before_capture);
-    auto seal_attempt = co_await seal_task;
-    state->seal_attempt = std::move (seal_attempt);
-    if (state->seal_attempt.error != stateful_error_t::none
-        || state->seal_attempt.seal.participants.size () != 1) {
-        state->metric->complete (std::nullopt);
+    std::optional<std::string> preparing_version;
+    const auto begin_capture = [] (maintenance_runtime_t &runtime,
+                                   relocation_terminal_state_t &source_state,
+                                   const std::vector<object_ref_t> &sealed,
+                                   std::optional<std::string> &version) -> task_t<bool> {
+        source_state.sealed_at = std::chrono::steady_clock::now ();
+        source_state.pending_unit_token = runtime.begin_pending_relocation_unit ();
+        version = co_await runtime._authority->begin_source_capture (
+          sealed, source_fence (source_state), source_state.target_node_id,
+          source_state.context.target_node_generation, source_state.context.application_version);
+        co_return version.has_value ();
+    };
+    state->seal_attempt = co_await _objects.try_seal_relocation_aggregate (
+      participants, state->cancellation, seal_sessions, [&, this] (const auto &sealed) {
+          return begin_capture (*this, *state, sealed, preparing_version);
+      });
+    if (state->seal_attempt.error != stateful_error_t::none) {
+        const bool preparing_attempted = state->seal_attempt.seal.token != 0;
+        if (preparing_attempted)
+            (void) co_await abort_relocation_before_cutover (state, participants);
+        else
+            state->metric->complete (std::nullopt);
+        if (preparing_attempted && !preparing_version) {
+            state->result.emplace (
+              finish ({relocation_terminal_t::store_failed, relocation_reason_t::store_write_failed,
+                       std::nullopt}));
+            co_return false;
+        }
         state->result.emplace (finish ({relocation_terminal_t::blocked,
                                         state->seal_attempt.error == stateful_error_t::backpressured
                                           ? relocation_reason_t::turn_active
@@ -1082,13 +1104,12 @@ maintenance_runtime_t::relocate_seal (std::shared_ptr<relocation_terminal_state_
                                         std::nullopt}));
         co_return false;
     }
-    state->sealed_at = std::chrono::steady_clock::now ();
-    state->pending_unit_token = begin_pending_relocation_unit ();
-    co_return true;
+    co_return co_await relocate_encode (state, *preparing_version);
 }
 
 task_t<bool>
-maintenance_runtime_t::relocate_encode (std::shared_ptr<relocation_terminal_state_t> state)
+maintenance_runtime_t::relocate_encode (std::shared_ptr<relocation_terminal_state_t> state,
+                                        const std::string &preparing_version)
 {
     /* The captured payload stays only in source memory: it is chunked onto
      * the wire and retained until authority settles. Nothing is
@@ -1118,12 +1139,7 @@ maintenance_runtime_t::relocate_encode (std::shared_ptr<relocation_terminal_stat
         failed.emplace (relocation_terminal_t::blocked,
                         relocation_reason_t::payload_bound_exceeded);
     if (!failed) {
-        std::vector<object_ref_t> participants;
-        for (const auto &sealed : state->seal_attempt.seal.participants)
-            participants.push_back (sealed.owner);
-        if (_authority->capture_source (participants, source_fence (*state), state->target_node_id,
-                                        state->context.target_node_generation,
-                                        state->context.application_version)) {
+        if (co_await _authority->capture_source (state->source, preparing_version)) {
             state->metric->record_bytes (state->payload.size ());
             co_return true;
         }
@@ -1342,7 +1358,6 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         co_return aggregate_relocation_result_t{
           relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
     }
-    auto persisted_context = *canonical_wire;
     auto permit = std::make_shared<permit_t> (try_acquire ());
     if (!*permit) {
         co_return aggregate_relocation_result_t{
@@ -1353,18 +1368,9 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     state->target_node_id = target_node_id;
     state->target_owner = target_owner;
     state->encoded_upper_bound = encoded_upper_bound;
-    state->metric.emplace (persisted_context, state->source.kind, state->source.key);
-    const auto seal_attempt = co_await _objects.try_seal_relocation_aggregate (
-      sources, cancellation, [this, &persisted_context] {
-          return capture_relocation_session_bindings (persisted_context);
-      });
-    const auto seal_error = seal_attempt.error;
-    const auto &seal = seal_attempt.seal;
-    if (seal_error != stateful_error_t::none) {
-        co_return aggregate_relocation_result_t{
-          relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
-    }
-    state->context = persisted_context;
+    state->context = *canonical_wire;
+    state->cancellation = cancellation;
+    state->metric.emplace (state->context, state->source.kind, state->source.key);
     state->advertised_receive_chunk_limit_bytes = advertised_receive_chunk_limit_bytes;
     state->effective_chunk_limit =
       std::min<std::uint64_t> (_limits.payload_chunk_limit_bytes ? _limits.payload_chunk_limit_bytes
@@ -1372,15 +1378,13 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
                                protocol::relocationChunkBytes);
     state->effective_chunk_limit = apply_advertised_receive_chunk_limit (
       state->effective_chunk_limit, state->advertised_receive_chunk_limit_bytes);
-    state->seal_attempt = seal_attempt;
-    state->sealed_at = std::chrono::steady_clock::now ();
-    state->pending_unit_token = begin_pending_relocation_unit ();
-    if (!co_await relocate_encode (state))
+    if (!co_await relocate_capture (state, sources))
         co_return aggregate_relocation_result_t{state->result->terminal, state->result->reason, {}};
+    const auto &seal = state->seal_attempt.seal;
     state->budget_reserved = std::min (state->effective_chunk_limit, effective_in_flight_budget ());
     co_await acquire_transfer_budget (state->budget_reserved);
     auto prepared = std::make_shared<task_t<relocation_reason_t>> (
-      prepare_target (persisted_context, state->seal_attempt.seal.participants, state->manifest));
+      prepare_target (state->context, state->seal_attempt.seal.participants, state->manifest));
     const auto chunks_sent = co_await relocate_send_state_chunks (state, [prepared] {
         if (!prepared->await_ready ())
             return false;
@@ -1408,8 +1412,8 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
                                     state->manifest};
     const auto [boundary_error, batch] = _objects.begin_relocation_boundary (
       seal.token,
-      [forward = canonical_wire->send_application] (const object_ref_t &owner,
-                                                    const turn_record_t &record) {
+      [forward = state->context.send_application] (const object_ref_t &owner,
+                                                   const turn_record_t &record) {
           if (forward)
               forward (owner, record, owner.authority_owner_generation);
       },
@@ -1418,17 +1422,17 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     auto failure = relocation_reason_t::restore_failed;
     const auto records =
       boundary_error == stateful_error_t::none
-        ? build_boundary_records (seal.participants, *canonical_wire, batch, failure)
+        ? build_boundary_records (seal.participants, state->context, batch, failure)
         : std::nullopt;
-    if (canonical_wire->target_route) {
-        const auto route = canonical_wire->target_route ();
+    if (state->context.target_route) {
+        const auto route = state->context.target_route ();
         state->submitted_route_generation = route.second ? route.first : 0;
     }
     bool records_sent = false;
     if (records)
-        records_sent = co_await send_boundary_records (*canonical_wire, *records, batch);
+        records_sent = co_await send_boundary_records (state->context, *records, batch);
     if (!records_sent) {
-        if (abort_target_before_cutover (*canonical_wire))
+        if (abort_target_before_cutover (state->context))
             (void) co_await abort_relocation_before_cutover (state);
         co_return aggregate_relocation_result_t{
           relocation_terminal_t::recovery_required,
@@ -1460,15 +1464,15 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     const auto &root =
       principal != seal.participants.end () ? *principal : seal.participants.front ();
     auto cutover = protocol::relocation_cutover_t{
-      canonical_wire->relocation,
-      canonical_wire->target_attempt_generation,
-      canonical_wire->coordinator,
+      state->context.relocation,
+      state->context.target_attempt_generation,
+      state->context.coordinator,
       protocol::relocation_role_t::source,
       {to_wire_object_kind (root.owner.kind), root.stable_type, root.owner.key,
        root.owner.object_generation, root.owner.authority_owner_generation}};
     cutover.boundary_record_count = records->size ();
     cutover.boundary_checksum_crc32c = boundary_batch_checksum (*records);
-    const auto cutover_result = co_await await_result (submit_cutover (*canonical_wire, cutover));
+    const auto cutover_result = co_await await_result (submit_cutover (state->context, cutover));
     state->cutover_terminal_at = std::chrono::steady_clock::now ();
     if (_metrics)
         _metrics->interruption (

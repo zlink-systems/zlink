@@ -156,7 +156,7 @@ Run the structure checker alone with `./run-e2e.sh --check-structure` or `pwsh -
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.2 packages.
 
 ## Deployment sequence
 

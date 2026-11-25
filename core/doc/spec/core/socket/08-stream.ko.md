@@ -251,6 +251,8 @@ low water mark와 transport backpressure는 그대로 유지된다. STREAM socke
 STREAM의 public routing ID는 Core가 연결별로 부여한 4 byte connection id다. `zlink_bind()`로
 받아들인 연결마다 자기 socket이 id를 부여한다.
 `zlink_disconnect_rid()`에 이 id를 전달하면 해당 연결에 종료 요청을 넣는다.
+종료 요청은 그 연결에 이미 수락된 송신 frame 뒤에 놓인다. Core는 그 frame을 종료보다 먼저 쓰고, 종료 요청 때문에
+버리지 않는다. 성공 반환은 peer가 그 frame을 받았다는 뜻이 아니다.
 4 byte가 아닌 rid는 잘못된 인자로 실패한다. `zlink_disconnect_rid()` 함수 자체의
 계약은 [소켓 공통](README.ko.md)이 소유하며, id를 내부에서 찾는 방법은
 [§10 내부 구조](#10-내부-구조)가 설명한다.
