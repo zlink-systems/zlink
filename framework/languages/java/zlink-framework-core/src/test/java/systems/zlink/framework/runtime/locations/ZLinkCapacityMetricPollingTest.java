@@ -34,28 +34,29 @@ final class ZLinkCapacityMetricPollingTest {
             Map.of("mesh_name", MESH, "capacity_scope", "spot");
     private static final String RESERVED = "zlink.object.capacity.reserved";
     private static final String ACTIVE = "zlink.object.capacity.active";
+    private static final String CAPACITY_PREFIX = "zlink:v12:capacity\0";
 
     @Test
     void descriptorProjectionReadsCapacityButCollectionDoesNot() throws Exception {
         try (var fixture = new Fixture(false, false)) {
-            int reads = fixture.store.reads.get();
+            int reads = fixture.store.capacityReads.get();
             for (int i = 0; i < 3; i++) fixture.descriptor();
-            assertEquals(reads + 3, fixture.store.reads.get());
-            int afterProjection = fixture.store.reads.get();
+            assertEquals(reads + 3, fixture.store.capacityReads.get());
+            int afterProjection = fixture.store.capacityReads.get();
             for (int i = 0; i < 3; i++) fixture.metrics.observable(RESERVED, TAGS);
-            assertEquals(afterProjection, fixture.store.reads.get());
+            assertEquals(afterProjection, fixture.store.capacityReads.get());
         }
     }
 
     @Test
     void discoveryTickProjectsCapacityAndRunsLocalPollingWithoutCollectionReads() throws Exception {
         try (var fixture = new Fixture(false, false)) {
-            int reads = fixture.store.reads.get();
+            int reads = fixture.store.capacityReads.get();
             fixture.discoveryTick();
-            assertEquals(reads + 2, fixture.store.reads.get());
-            int afterTick = fixture.store.reads.get();
+            assertEquals(reads + 2, fixture.store.capacityReads.get());
+            int afterTick = fixture.store.capacityReads.get();
             assertEquals(0, fixture.metrics.observable(RESERVED, TAGS));
-            assertEquals(afterTick, fixture.store.reads.get());
+            assertEquals(afterTick, fixture.store.capacityReads.get());
         }
     }
 
@@ -114,14 +115,14 @@ final class ZLinkCapacityMetricPollingTest {
                     .toCompletableFuture()
                     .get();
             repository.refreshCapacityMetrics(key).toCompletableFuture().get();
-            assertEquals(1, store.reads.get());
+            assertEquals(1, store.capacityReads.get());
             assertFalse(metrics.hasObservable(RESERVED, TAGS));
             assertFalse(metrics.hasObservable(ACTIVE, TAGS));
             assertFalse(metrics.hasObservable("zlink.object.capacity.limit", TAGS));
             assertReadError(metrics, 1);
             store.fail = false;
             repository.refreshCapacityMetrics(key).toCompletableFuture().get();
-            assertEquals(2, store.reads.get());
+            assertEquals(2, store.capacityReads.get());
             assertTrue(metrics.hasObservable(RESERVED, TAGS));
             assertEquals(0, metrics.observable(RESERVED, TAGS));
         }
@@ -132,31 +133,34 @@ final class ZLinkCapacityMetricPollingTest {
         try (var fixture = new Fixture(false, false, true)) {
             assertEquals(2, fixture.loops.size());
             for (var loop : fixture.loops) {
-                int reads = fixture.store.reads.get();
+                int reads = fixture.store.capacityReads.get();
                 fixture.poll(loop);
-                assertEquals(reads + 1, fixture.store.reads.get());
+                assertEquals(reads + 1, fixture.store.capacityReads.get());
             }
         }
     }
 
     @Test
-    void remoteReserveAppearsAtNextPollAndProviderCommitAppearsImmediately() throws Exception {
+    void pollingConfirmsRemoteReservationAndLocalCommitWithoutApplicationReads() throws Exception {
         try (var fixture = new Fixture(false, false)) {
             var descriptor = fixture.descriptor();
             var otherHost = new ZLinkProviderLocationRepository(fixture.store.delegate);
             var reservation = reserve(otherHost, descriptor, "remote");
             assertEquals(0, fixture.metrics.observable(RESERVED, TAGS));
-            int reads = fixture.store.reads.get();
+            int reads = fixture.store.capacityReads.get();
             fixture.poll();
-            assertEquals(reads + 1, fixture.store.reads.get());
+            assertEquals(reads + 1, fixture.store.capacityReads.get());
             assertEquals(1, fixture.metrics.observable(RESERVED, TAGS));
             assertEquals(0, fixture.metrics.observable(ACTIVE, TAGS));
+            int beforeCommit = fixture.store.capacityReads.get();
             assertEquals(
                     ZLinkObjectCommitResult.COMMITTED,
                     fixture.repository
                             .commit(reservation, new byte[] {1}, null, () -> false)
                             .toCompletableFuture()
                             .get(10, TimeUnit.SECONDS));
+            assertEquals(beforeCommit, fixture.store.capacityReads.get());
+            fixture.poll();
             assertEquals(0, fixture.metrics.observable(RESERVED, TAGS));
             assertEquals(1, fixture.metrics.observable(ACTIVE, TAGS));
         }
@@ -168,12 +172,13 @@ final class ZLinkCapacityMetricPollingTest {
             throws Exception {
         try (var fixture = new Fixture(false, synchronous)) {
             reserve(fixture.repository, fixture.descriptor(), "local");
+            fixture.poll();
             assertEquals(1, fixture.metrics.observable(RESERVED, TAGS));
             fixture.store.fail = true;
             try {
-                int reads = fixture.store.reads.get();
+                int reads = fixture.store.capacityReads.get();
                 fixture.poll();
-                assertEquals(reads + 1, fixture.store.reads.get());
+                assertEquals(reads + 1, fixture.store.capacityReads.get());
                 assertEquals(1, fixture.metrics.observable(RESERVED, TAGS));
                 assertReadError(fixture.metrics, 1);
             } finally {
@@ -302,7 +307,7 @@ final class ZLinkCapacityMetricPollingTest {
     private static final class CountingStore {
         final ZLinkInMemoryProviderLocationStore delegate =
                 new ZLinkInMemoryProviderLocationStore();
-        final AtomicInteger reads = new AtomicInteger();
+        final AtomicInteger capacityReads = new AtomicInteger();
         volatile boolean fail;
         final boolean synchronous;
 
@@ -317,11 +322,15 @@ final class ZLinkCapacityMetricPollingTest {
                             ZLinkLocationStore.class.getClassLoader(),
                             new Class<?>[] {ZLinkLocationStore.class},
                             (proxy, method, args) -> {
-                                if (method.getName().equals("read")
-                                        && ((ZLinkStoreKey) args[0])
-                                                .value()
-                                                .startsWith("zlink:v11:capacity:")) {
-                                    reads.incrementAndGet();
+                                String prefix =
+                                        switch (method.getName()) {
+                                            case "scan" ->
+                                                    ((ZLinkStoreScanRequest) args[0]).prefix();
+                                            case "read" -> ((ZLinkStoreKey) args[0]).value();
+                                            default -> "";
+                                        };
+                                if (prefix.startsWith(CAPACITY_PREFIX)) {
+                                    capacityReads.incrementAndGet();
                                     if (fail) {
                                         var failure =
                                                 new IllegalStateException("capacity-read-failure");
