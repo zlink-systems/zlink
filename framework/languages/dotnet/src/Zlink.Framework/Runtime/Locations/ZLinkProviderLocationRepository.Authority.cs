@@ -2707,21 +2707,24 @@ internal sealed partial class ZLinkProviderLocationRepository
                         $"Aggregate durable root '{pair.Key.Value}' has a mismatched identity."
                     );
 
-                if (aggregate.Status is AggregateStatus.Committed or AggregateStatus.Aborted)
-                {
-                    if (aggregate.ParticipantsCleaned)
-                        continue;
-                }
-                else if (
-                    aggregate.StagedAt > pair.Value.StoreNow - AggregateStagingRetention
-                    || await ReadLiveOwnerAsync(aggregate.Header.TargetOwner, cancellationToken)
-                        .ConfigureAwait(false)
-                        is not null
+                var terminal =
+                    aggregate.Status is AggregateStatus.Committed or AggregateStatus.Aborted;
+                if (
+                    (beforeConversion || !terminal)
+                    && (
+                        (
+                            !beforeConversion
+                            && aggregate.StagedAt > pair.Value.StoreNow - AggregateStagingRetention
+                        )
+                        || await ReadLiveOwnerAsync(aggregate.Header.TargetOwner, cancellationToken)
+                            .ConfigureAwait(false)
+                            is not null
+                    )
                 )
                 {
                     if (beforeConversion)
                     {
-                        // A concurrent converter can enable v12 traffic after our first marker read.
+                        // Another converter can enable v12 traffic after our first marker read.
                         if (
                             await _provider
                                 .ReadAsync(FormatKey, cancellationToken)
@@ -2729,11 +2732,13 @@ internal sealed partial class ZLinkProviderLocationRepository
                         )
                             return;
                         throw new ZLinkConfigurationException(
-                            $"v11 aggregate '{pair.Key.Value}' is still eligible to relocate."
+                            $"v11 aggregate '{pair.Key.Value}' has a live target owner."
                         );
                     }
                     continue;
                 }
+                if (!beforeConversion && terminal && aggregate.ParticipantsCleaned)
+                    continue;
 
                 recovery.Add((fence, new(aggregate, pair.Value.Version, pair.Value.StoreNow)));
             }
@@ -2752,7 +2757,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 return;
 
             // Verify the durable inputs before issuing any recovery writes.
-            for (var index = 0; index < recovery.Count; index++)
+            for (var index = recovery.Count - 1; index >= 0; index--)
             {
                 var (fence, stored) = recovery[index];
                 if (
@@ -2778,12 +2783,24 @@ internal sealed partial class ZLinkProviderLocationRepository
                 }
                 catch (ZLinkRelocationDataLostException)
                 {
-                    var completed = await ReadLegacyTerminalWithoutParticipantsAsync(
-                            fence,
+                    var completed = await ReadRecordAsync<AggregateRecord>(
+                            AggregateKey(fence),
                             cancellationToken
                         )
                         .ConfigureAwait(false);
                     if (completed is null)
+                    {
+                        recovery.RemoveAt(index);
+                        continue;
+                    }
+                    if (
+                        !await CanFinishLegacyTerminalAsync(
+                                fence,
+                                completed.Record,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false)
+                    )
                         throw;
                     recovery[index] = (fence, completed);
                     withoutParticipants.Add(fence);
@@ -2822,12 +2839,17 @@ internal sealed partial class ZLinkProviderLocationRepository
             }
             catch (ZLinkRelocationDataLostException) when (beforeConversion)
             {
-                var completed = await ReadLegacyTerminalWithoutParticipantsAsync(
-                        fence,
+                var completed = await ReadRecordAsync<AggregateRecord>(
+                        AggregateKey(fence),
                         cancellationToken
                     )
                     .ConfigureAwait(false);
                 if (completed is null)
+                    continue;
+                if (
+                    !await CanFinishLegacyTerminalAsync(fence, completed.Record, cancellationToken)
+                        .ConfigureAwait(false)
+                )
                     throw;
                 await FinishLegacyWithoutParticipantsAsync(fence, completed, cancellationToken)
                     .ConfigureAwait(false);
@@ -2835,21 +2857,34 @@ internal sealed partial class ZLinkProviderLocationRepository
 
             if (!beforeConversion)
                 continue;
-            var settled = await ReadRecordAsync<AggregateRecord>(
-                    AggregateKey(fence),
+            var key = AggregateKey(fence);
+            var settled = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
+                .ConfigureAwait(false);
+            if (settled is null)
+                continue;
+            if (
+                settled.Record.Status is not (AggregateStatus.Aborted or AggregateStatus.Committed)
+                || !settled.Record.ParticipantsCleaned
+            )
+                throw new ZLinkConfigurationException(
+                    $"v11 aggregate '{fence.AggregateId:N}' could not be settled."
+                );
+
+            var removed = await WriteMigrationBatchAsync(
+                    new(
+                        [new ZLinkStoreCondition.Version(key, settled.Version)],
+                        [new ZLinkStoreMutation.Delete(key)]
+                    ),
                     cancellationToken
                 )
                 .ConfigureAwait(false);
             if (
-                settled is not null
-                && (
-                    settled.Record.Status
-                        is not (AggregateStatus.Aborted or AggregateStatus.Committed)
-                    || !settled.Record.ParticipantsCleaned
-                )
+                !removed
+                && await _provider.ReadAsync(key, cancellationToken).ConfigureAwait(false)
+                    is not ZLinkStoreReadResult.Missing
             )
                 throw new ZLinkConfigurationException(
-                    $"v11 aggregate '{fence.AggregateId:N}' could not be settled."
+                    $"v11 aggregate '{fence.AggregateId:N}' could not be removed."
                 );
         }
     }

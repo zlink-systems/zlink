@@ -462,6 +462,8 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken
     )
     {
+        if (aggregate.ParticipantsCleaned)
+            return true;
         if (
             aggregate.Status == AggregateStatus.Prepared
             || (aggregate.Status == AggregateStatus.Committed && !aggregate.ParticipantsNormalized)
@@ -474,27 +476,14 @@ internal sealed partial class ZLinkProviderLocationRepository
         return scan is ZLinkStoreScanResult.Page { Value: { Items.Count: 0, NextCursor: null } };
     }
 
-    private async ValueTask<StoredRecord<AggregateRecord>?> ReadLegacyTerminalWithoutParticipantsAsync(
+    private async ValueTask<bool> CanFinishLegacyTerminalAsync(
         ZLinkAggregateFence fence,
+        AggregateRecord aggregate,
         CancellationToken cancellationToken
-    )
-    {
-        // A competing startup may have removed the inventory after a scan snapshot.
-        var current = await ReadRecordAsync<AggregateRecord>(AggregateKey(fence), cancellationToken)
+    ) =>
+        aggregate.Status is AggregateStatus.Aborted or AggregateStatus.Committed
+        && await CanFinishLegacyWithoutParticipantsAsync(fence, aggregate, cancellationToken)
             .ConfigureAwait(false);
-        if (current?.Record.Status is not (AggregateStatus.Aborted or AggregateStatus.Committed))
-            return null;
-        return
-            current.Record.ParticipantsCleaned
-            || await CanFinishLegacyWithoutParticipantsAsync(
-                    fence,
-                    current.Record,
-                    cancellationToken
-                )
-                .ConfigureAwait(false)
-            ? current
-            : null;
-    }
 
     private async ValueTask FinishLegacyWithoutParticipantsAsync(
         ZLinkAggregateFence fence,
