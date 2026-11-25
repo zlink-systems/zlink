@@ -216,6 +216,21 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         return preparation.Execution;
     }
 
+    internal async Task FinishPublishedUserPreparationAsync()
+    {
+        try
+        {
+            await FinishActivationPreparation().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException cancellation)
+            when (cancellation.CancellationToken == _stopToken && _stopToken.IsCancellationRequested
+            )
+        {
+            // Initialization and publication have committed. Shutdown owns
+            // the closing callback and finalization of the published Spot.
+        }
+    }
+
     internal Task RecordActivationTerminalAsync(Func<CancellationToken, ValueTask> terminal)
     {
         if (Volatile.Read(ref _preparation) is not { } preparation)
