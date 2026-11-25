@@ -59,6 +59,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -102,11 +103,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private static final int EXECUTOR_TERMINATION_ATTEMPTS = 2;
+    private static final int RETIRED_SESSION_ADMISSION_LIMIT = 4096;
     private static final long EXECUTOR_TERMINATION_WAIT_SECONDS = 5;
     private static final Duration PHYSICAL_DISCONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final Logger LOGGER = Logger.getLogger(ZLinkStreamRuntime.class.getName());
     private static final ZLinkStreamHeader SESSION_CLOSING_HEADER =
             ZLinkStreamHeader.control(ZLinkSessionClosingControl.NAME);
+    private static final String SESSION_CREATION_FAILED = "STREAM session creation failed";
 
     private static final Duration BOUND_SESSION_REPLACEMENT_CLOSE_DELAY = Duration.ofMillis(100);
     private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
@@ -139,6 +142,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final AtomicLong sessionBindingGenerations = new AtomicLong();
     private final Map<String, ZLinkInternalSpotNode> streamSessionRelaySpotNodes = new HashMap<>();
     final Map<String, Map<RoutingId, SessionState>> sessions;
+    private final Map<String, SessionAdmissionLedger> sessionAdmissions = new HashMap<>();
     private final Map<SealRecordKey, AbsentSealRecord> absentSealRecords = new HashMap<>();
     private final ZLinkStateLane stateLane;
     private final ScheduledExecutorService livenessExecutor;
@@ -624,7 +628,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                         new ZLinkConfigurationException(
                                                 "stream node is not configured: "
                                                         + streamNodeName));
-        var state = getOrCreateSessionState(streamNode, stream, sessionRid);
+        var state = getOrCreateSessionState(streamNode, stream, sessionRid, null);
         if (state == null) {
             throw shutdownFailure();
         }
@@ -1257,14 +1261,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             receiveExecutor.execute(() -> runTurn(null));
         }
 
-        private StreamNodeRegistration streamNode() {
-            return streamNode;
-        }
-
-        private void removePeer(RoutingId routingId) {
-            // PACKET mode has no per-peer partial assembler state.
-        }
-
         @Override
         public void close() {
             closed = true;
@@ -1531,7 +1527,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             SessionState state =
                     receivedState != null
                             ? receivedState
-                            : getOrCreateSessionState(streamNode, stream, routingId);
+                            : getOrCreateSessionState(
+                                    streamNode, stream, routingId, dispatchHeader);
             if (state == null) {
                 if (lease != null) {
                     lease.finish(ZLinkTerminalWinner.Cause.CANCELLATION);
@@ -1703,7 +1700,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             if (payload.size() != 0) {
                 logIgnoredControl(packetName, payload.size(), routingId);
             }
-            sendControlAsync(
+            sendStreamFrameAsync(
                     stream,
                     routingId,
                     ZLinkStreamHeader.HEARTBEAT_PONG,
@@ -1764,14 +1761,17 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             String message) {
         if (forcedStop.isDone()) return;
         if (event == MonitorEventType.CONNECTION_READY) {
-            getOrCreateSessionState(streamNode, streamsByName.get(streamNode.name()), routingId);
+            getOrCreateSessionState(
+                    streamNode, streamsByName.get(streamNode.name()), routingId, null);
             return;
         }
-        receiveLoops.stream()
-                .filter(loop -> loop.streamNode().equals(streamNode))
-                .findFirst()
-                .ifPresent(loop -> loop.removePeer(routingId));
-        SessionState state = sealSessionAdmission(streamNode, routingId);
+        SessionState state =
+                inStateLane(
+                        () -> {
+                            var ledger = sessionAdmissions.get(streamNode.name());
+                            if (ledger != null) ledger.disconnect(routingId);
+                            return sealSessionAdmissionOnLane(streamNode, routingId);
+                        });
         if (state == null) {
             return;
         }
@@ -1794,19 +1794,57 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         disconnectSession(state, () -> transportErrorDisconnectSessionStage(state, error));
     }
 
-    /** Constructs outside the state lane and publishes one Session per peer in one lane turn. */
+    /** Constructs outside the state lane. Only one admission result can be published per peer. */
     private SessionState getOrCreateSessionState(
             StreamNodeRegistration streamNode,
             ZLinkBackendStreamSocket stream,
-            RoutingId routingId) {
-        SessionState existing = inStateLane(() -> findSessionState(streamNode.name(), routingId));
-        if (existing != null || draining) {
-            return existing;
+            RoutingId routingId,
+            ZLinkStreamHeader initiatingPacket) {
+        var creation =
+                inStateLane(
+                        () -> {
+                            SessionState existing = findSessionState(streamNode.name(), routingId);
+                            if (existing != null || draining) {
+                                return new SessionCreation(existing, null);
+                            }
+                            var ledger =
+                                    sessionAdmissions.computeIfAbsent(
+                                            streamNode.name(),
+                                            ignored -> new SessionAdmissionLedger());
+                            return new SessionCreation(null, ledger.begin(routingId));
+                        });
+        var admission = creation.admission();
+        if (admission == null) return creation.existing();
+
+        SessionState state;
+        try {
+            state = createSessionState(streamNode, stream, routingId);
+        } catch (RuntimeException | Error failure) {
+            var result =
+                    inStateLane(
+                            () -> {
+                                var existing = findSessionState(streamNode.name(), routingId);
+                                var ledger = sessionAdmissions.get(streamNode.name());
+                                boolean publishFailure =
+                                        existing == null && ledger.isCurrent(routingId, admission);
+                                if (publishFailure) admission.state = AdmissionState.REJECTING;
+                                ledger.finish(routingId, admission);
+                                return new SessionCreation(
+                                        existing, publishFailure ? admission : null);
+                            });
+            if (result.admission() != null) {
+                closeFailedSessionCreation(
+                        streamNode, stream, routingId, admission, initiatingPacket, failure);
+            }
+            return result.existing();
         }
-        SessionState state = createSessionState(streamNode, stream, routingId);
         SessionState published =
                 inStateLane(
                         () -> {
+                            var ledger = sessionAdmissions.get(streamNode.name());
+                            boolean currentAdmission = ledger.isCurrent(routingId, admission);
+                            ledger.finish(routingId, admission);
+                            if (!currentAdmission) return null;
                             if (draining) return findSessionState(streamNode.name(), routingId);
                             SessionState current =
                                     sessions.computeIfAbsent(
@@ -1832,6 +1870,172 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             state.context().closeReplyRetries();
         }
         return published;
+    }
+
+    private record SessionCreation(SessionState existing, SessionAdmission admission) {}
+
+    private enum AdmissionState {
+        CREATING,
+        REJECTING,
+        RETIRED
+    }
+
+    private static final class SessionAdmission {
+        int creating;
+        AdmissionState state = AdmissionState.CREATING;
+
+        boolean evictable() {
+            return state == AdmissionState.RETIRED && creating == 0;
+        }
+    }
+
+    private static final class SessionAdmissionLedger {
+        private final LinkedHashMap<RoutingId, SessionAdmission> peers = new LinkedHashMap<>();
+        private int retired;
+
+        SessionAdmission begin(RoutingId routingId) {
+            var admission = peers.computeIfAbsent(routingId, ignored -> new SessionAdmission());
+            if (admission.state != AdmissionState.CREATING) return null;
+            admission.creating++;
+            return admission;
+        }
+
+        boolean isCurrent(RoutingId routingId, SessionAdmission admission) {
+            return peers.get(routingId) == admission && admission.state == AdmissionState.CREATING;
+        }
+
+        void finish(RoutingId routingId, SessionAdmission admission) {
+            if (--admission.creating != 0) return;
+            switch (admission.state) {
+                case CREATING -> peers.remove(routingId, admission);
+                case REJECTING -> {}
+                case RETIRED -> retain(routingId, admission);
+            }
+        }
+
+        void disconnect(RoutingId routingId) {
+            var admission = peers.get(routingId);
+            if (admission == null) return;
+            if (admission.state == AdmissionState.CREATING) {
+                peers.remove(routingId);
+            } else {
+                retireRejection(routingId, admission);
+            }
+        }
+
+        void retireRejection(RoutingId routingId, SessionAdmission admission) {
+            if (peers.get(routingId) != admission || admission.state != AdmissionState.REJECTING) {
+                return;
+            }
+            admission.state = AdmissionState.RETIRED;
+            if (admission.evictable()) retain(routingId, admission);
+        }
+
+        private void retain(RoutingId routingId, SessionAdmission admission) {
+            // Complete packets already accepted by Core can arrive after the disconnect event.
+            peers.putLast(routingId, admission);
+            if (++retired <= RETIRED_SESSION_ADMISSION_LIMIT) return;
+            var entries = peers.values().iterator();
+            while (entries.hasNext()) {
+                if (entries.next().evictable()) {
+                    entries.remove();
+                    retired--;
+                    return;
+                }
+            }
+        }
+    }
+
+    private void closeFailedSessionCreation(
+            StreamNodeRegistration streamNode,
+            ZLinkBackendStreamSocket stream,
+            RoutingId routingId,
+            SessionAdmission admission,
+            ZLinkStreamHeader packet,
+            Throwable failure) {
+        CompletableFuture.completedFuture(null)
+                .thenCompose(
+                        ignored ->
+                                reportFailedSessionCreation(
+                                        streamNode, stream, routingId, packet, failure))
+                .whenComplete(
+                        (ignored, reportFailure) -> {
+                            if (reportFailure != null) {
+                                LOGGER.log(
+                                        Level.FINE,
+                                        "STREAM session creation reporting failed",
+                                        reportFailure);
+                            }
+                        })
+                .handle(
+                        (ignored, reportFailure) ->
+                                sendSessionClosing(
+                                        stream,
+                                        routingId,
+                                        ZLinkSessionClosingControl.TRANSPORT_ERROR,
+                                        SESSION_CREATION_FAILED))
+                .thenCompose(Function.identity())
+                .whenComplete(
+                        (ignored, closeFailure) -> {
+                            try {
+                                stream.disconnectPeer(routingId);
+                            } catch (RuntimeException disconnectFailure) {
+                                LOGGER.log(
+                                        Level.FINE,
+                                        "STREAM session creation disconnect failed: " + routingId,
+                                        disconnectFailure);
+                                return;
+                            }
+                            if (!forcedStop.isDone()) {
+                                inStateLane(
+                                        () -> {
+                                            sessionAdmissions
+                                                    .get(streamNode.name())
+                                                    .retireRejection(routingId, admission);
+                                            return null;
+                                        });
+                            }
+                        });
+    }
+
+    private CompletionStage<Void> reportFailedSessionCreation(
+            StreamNodeRegistration streamNode,
+            ZLinkBackendStreamSocket stream,
+            RoutingId routingId,
+            ZLinkStreamHeader packet,
+            Throwable failure) {
+        Throwable applicationFailure = ZLinkHandlerActivator.constructionCause(failure);
+        LOGGER.log(
+                Level.SEVERE,
+                SESSION_CREATION_FAILED
+                        + " node="
+                        + streamNode.name()
+                        + " type="
+                        + streamNode.sessionType().getName()
+                        + " peer="
+                        + routingId
+                        + " exception="
+                        + applicationFailure,
+                failure);
+
+        if (packet == null) return CompletableFuture.completedFuture(null);
+        ZLinkStreamSessionContextState.traceDispatchError(
+                flow,
+                routingId,
+                packet,
+                applicationFailure,
+                ZLinkDispatchErrorReason.SESSION_CREATION_FAILED);
+        if (packet.requestSequence().isEmpty()) return CompletableFuture.completedFuture(null);
+        return sendStreamFrameAsync(
+                stream,
+                routingId,
+                ZLinkStreamHeader.createErrorResponse(packet, packet.packetName()),
+                Message.from(
+                        ZLinkStreamErrorPayload.encode(
+                                ZLinkFrameworkErrorOrigin.framework(
+                                        ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                                        SESSION_CREATION_FAILED))),
+                "STREAM session creation error reply failed: ");
     }
 
     private static void recordSessionClosed(SessionState state, String reason) {
@@ -2145,7 +2349,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     private static CompletionStage<Void> sendSessionClosing(
             ZLinkBackendStreamSocket stream, RoutingId routingId, int reason, String diagnostic) {
-        return sendControlAsync(
+        return sendStreamFrameAsync(
                 stream,
                 routingId,
                 SESSION_CLOSING_HEADER,
@@ -2222,7 +2426,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private static void sendHeartbeatPing(SessionState state) {
-        sendControlAsync(
+        sendStreamFrameAsync(
                 state.stream(),
                 state.routingId(),
                 ZLinkStreamHeader.HEARTBEAT_PING,
@@ -2230,7 +2434,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 "STREAM heartbeat ping failed during transport teardown: ");
     }
 
-    private static CompletionStage<Void> sendControlAsync(
+    private static CompletionStage<Void> sendStreamFrameAsync(
             ZLinkBackendStreamSocket stream,
             RoutingId routingId,
             ZLinkStreamHeader header,
@@ -2238,7 +2442,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             String failureMessage) {
         CompletionStage<Void> submission;
         try {
-            submission = stream.sendAsync(routingId, header, List.of(payload));
+            submission =
+                    header.kind() == ZLinkStreamMessageKind.ERROR
+                            ? stream.replyAsync(routingId, header, List.of(payload))
+                            : stream.sendAsync(routingId, header, List.of(payload));
         } catch (RuntimeException failure) {
             payload.close();
             LOGGER.log(Level.FINE, failureMessage + routingId, failure);

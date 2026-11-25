@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.handlers;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Modifier;
 import java.util.ArrayDeque;
 import java.util.Arrays;
@@ -21,6 +22,22 @@ import java.util.function.BiPredicate;
 @FunctionalInterface
 public interface ZLinkHandlerActivator {
     Object create(Class<?> handlerType);
+
+    final class ConstructionException extends IllegalStateException {
+        public ConstructionException(String message, Throwable cause) {
+            super(message, Objects.requireNonNull(cause, "construction failure"));
+        }
+    }
+
+    static Throwable constructionCause(Throwable failure) {
+        if (failure instanceof ConstructionException) return failure.getCause();
+        if (failure instanceof ZLinkConfigurationException
+                && failure.getCause() instanceof InvocationTargetException invocation
+                && invocation.getCause() != null) {
+            return invocation.getCause();
+        }
+        return failure;
+    }
 
     default systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.Host messageFlowHost() {
         return null;
