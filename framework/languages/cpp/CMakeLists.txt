@@ -1961,6 +1961,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_spot_admission_rejection PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
 
+  add_zlink_framework_test(test_cpp_framework_spotwide_target_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spotwide_target_admission.cpp
+    "framework-unit;relocation;admission" unit)
+  target_use_zlink_gtest_main(test_cpp_framework_spotwide_target_admission)
+  target_include_directories(test_cpp_framework_spotwide_target_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+
   add_zlink_framework_test(test_cpp_framework_actor_join_relocation_policy
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_join_relocation_policy.cpp
     "framework-unit;framework-contract;actor;relocation" contract)

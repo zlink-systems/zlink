@@ -449,7 +449,11 @@ internal abstract record ZLinkRelocationReadResult
 {
     private protected ZLinkRelocationReadResult() { }
 
-    public sealed record Found(ReadOnlyMemory<byte> Payload) : ZLinkRelocationReadResult;
+    public sealed record Found(
+        ReadOnlyMemory<byte> Payload,
+        DateTimeOffset ExpiresAt = default,
+        DateTimeOffset StoreNow = default
+    ) : ZLinkRelocationReadResult;
 
     public sealed record Missing : ZLinkRelocationReadResult;
 }
