@@ -30,7 +30,7 @@ flowchart LR
 
 - Compose v2가 포함된 Docker. Windows에서는 PowerShell 7도 필요합니다.
 - Maven Central과 Redis 컨테이너 레지스트리에 대한 네트워크 접근.
-- 게시된 ZLink Framework 0.34.0, STREAM connector 0.34.0, binding 1.26.0. 버전은 `build.gradle.kts`에서 관리합니다.
+- 게시된 ZLink Framework 0.34.2, STREAM connector 0.34.2, binding 1.26.0. 버전은 `build.gradle.kts`에서 관리합니다.
 
 Gradle wrapper와 모든 서버 모듈이 포함되어 있습니다. 이 디렉터리를 복사해 독립적으로 빌드할 수 있습니다. Windows에서는 PowerShell 7에서 명령을 실행합니다. 실행 스크립트는 Gradle이 선택한 JDK를 사용하고 native access를 활성화합니다. Windows에서는 `run-server.cmd`와 `run-e2e.cmd`를 사용합니다. Windows는 기본 실행 정책에서 내려받은 ZIP의 스크립트를 막으므로, 이 파일들이 그 프로세스에만 `-ExecutionPolicy Bypass`를 적용해 PowerShell 스크립트를 실행하고 실행 동안 콘솔을 UTF-8로 바꿉니다.
 

@@ -173,7 +173,7 @@ public final class ConnectOnce {
 
 ## 릴리스와 진단
 
-Framework 0.34.0과 binding 1.26.0을 사용합니다. 실패하면 첫 노드 stderr와 message-flow 기록을 보존합니다.
+Framework 0.34.2와 binding 1.26.0을 사용합니다. 실패하면 첫 노드 stderr와 message-flow 기록을 보존합니다.
 
 ## 배포 순서
 

@@ -174,7 +174,7 @@ Region이 참가자 명단과 위치를 저장합니다. 정원 초과 시 Entry
 
 ## 릴리스와 진단
 
-Framework 0.34.0과 binding 1.26.0을 사용합니다. 실패하면 첫 노드 stderr와 message-flow 기록을 보존합니다.
+Framework 0.34.2와 binding 1.26.0을 사용합니다. 실패하면 첫 노드 stderr와 message-flow 기록을 보존합니다.
 
 ## 배포 순서
 

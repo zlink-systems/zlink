@@ -168,7 +168,7 @@ public final class ConnectOnce {
 
 ## 릴리스와 진단
 
-Framework 0.34.0과 binding 1.26.0을 사용합니다. 실패하면 첫 노드 stderr와 message-flow 기록을 보존합니다.
+Framework 0.34.2와 binding 1.26.0을 사용합니다. 실패하면 첫 노드 stderr와 message-flow 기록을 보존합니다.
 
 Message Follow는 30초입니다. `SAFE_TO_SHUTDOWN` 관찰 예산은 Message Follow와 기존 호스트 재배치 예산을 합한 값입니다. 패킷과 재배치 작업 자체의 기한은 그대로입니다.
 
