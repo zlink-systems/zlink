@@ -41,24 +41,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             relocateSpots: true,
             configureServices: services => services.AddTransient<LeaveRelocatedSpotHandler>()
         );
-        _ = await source
-            .Services.GetRequiredService<IZLinkSpotManager>()
-            .GetOrCreate(spotId, RelocationBehaviorHost.SpotType)
-            .InMesh(RelocationBehaviorHost.MeshName)
-            .Timeout(timeout)
-            .Async();
-        _ = await source
-            .Services.GetRequiredService<IZLinkActorManager>()
-            .Create(actorId, RelocationBehaviorHost.ActorType)
-            .InMesh(RelocationBehaviorHost.MeshName)
-            .Request(new BehaviorCreate(7))
-            .Timeout(timeout)
-            .Async();
-        _ = await source
-            .Services.GetRequiredService<IZLinkActorClient>()
-            .RequestToActor(actorId, new BeginBehaviorJoin(spotId))
-            .Timeout(timeout)
-            .Async<BehaviorAck>();
+        await CreateAndJoinSpotWideMemberAsync(source, spotId, actorId, timeout);
         await trace.WaitAsync("publicJoinCompleted");
 
         await using var target = await RelocationBehaviorHost.StartAsync(
@@ -137,6 +120,33 @@ public sealed partial class RelocationBehaviorConformanceTests
         await normalization.Settled.Task.WaitAsync(timeout);
         Assert.True(await spots.CloseAsync(relocatedSpot));
         Assert.Null(await spots.FindAsync(spotId));
+    }
+
+    private static async Task CreateAndJoinSpotWideMemberAsync(
+        RelocationBehaviorHost source,
+        string spotId,
+        string actorId,
+        TimeSpan timeout
+    )
+    {
+        _ = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate(spotId, RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Timeout(timeout)
+            .Async();
+        _ = await source
+            .Services.GetRequiredService<IZLinkActorManager>()
+            .Create(actorId, RelocationBehaviorHost.ActorType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Request(new BehaviorCreate(7))
+            .Timeout(timeout)
+            .Async();
+        _ = await source
+            .Services.GetRequiredService<IZLinkActorClient>()
+            .RequestToActor(actorId, new BeginBehaviorJoin(spotId))
+            .Timeout(timeout)
+            .Async<BehaviorAck>();
     }
 
     private sealed record LeaveRelocatedSpot;
