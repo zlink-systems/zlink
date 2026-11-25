@@ -70,9 +70,7 @@ public final class Scenarios {
             check(
                     seat.seat() == i && hand.seat() == i && seat.playerId().equals(hand.playerId()),
                     "Settlement identity mismatch");
-            check(
-                    seat.chips() == expected && seat.acted(),
-                    "Settlement seat differs");
+            check(seat.chips() == expected && seat.acted(), "Settlement seat differs");
         }
         check(
                 result.seats().stream().allMatch(seat -> seat.cardCount() == 0),
@@ -89,8 +87,7 @@ public final class Scenarios {
                 if (message instanceof HandDealt dealt) {
                     if (!dealt.cards().isEmpty())
                         check(dealt.equals(own), "Foreign private hand received");
-                }
-                else if (message instanceof TableView table)
+                } else if (message instanceof TableView table)
                     check(
                             table.seats().stream()
                                     .allMatch(
@@ -106,25 +103,91 @@ public final class Scenarios {
         }
     }
 
-    static void run(Scenario id, Nodes nodes) throws Exception {
-        run(id, nodes, null);
+    static void run(Scenario id, ServerControl.Connection server) throws Exception {
+        run(id, server, null);
     }
 
-    private static void run(Scenario id, Nodes nodes, String expectedNode) throws Exception {
+    private static TableView matchedView(Client client, MatchFound found) throws Exception {
+        var view = client.next(TableView.class);
+        check(
+                view.tableId().equals(found.roomId()) && view.yourSeat() == found.seat(),
+                "TableView differs from MatchFound");
+        synchronized (client.history) {
+            check(
+                    client.history.indexOf(found) < client.history.indexOf(view),
+                    "TableView arrived before MatchFound");
+        }
+        return view;
+    }
+
+    private static void cancelMatch(String endpoint) throws Exception {
+        var suffix = UUID.randomUUID().toString();
+        try (var client = new Client(endpoint, "p0-" + suffix, "table-" + suffix)) {
+            client.sendJoin(true);
+            check(client.next(ActionRejected.class).equals(new ActionRejected(Rules.NOT_SEATED, 0)),
+                    "An unseated player was allowed to reconnect");
+            client.send(new FindMatch());
+            var queued = client.next(MatchQueued.class);
+            client.send(new CancelMatch(queued.ticketId()));
+            var cancelled = client.next(MatchCancelled.class);
+            check(
+                    cancelled.equals(new MatchCancelled(queued.ticketId(), "cancelled")),
+                    "CancelMatch did not cancel the queued ticket");
+        }
+    }
+
+    private static void run(Scenario id, ServerControl.Connection server, String expectedNode)
+            throws Exception {
         String suffix = UUID.randomUUID().toString(), tableId = "table-" + suffix;
-        var p1 = new Client(nodes.endpoint, "p1-" + suffix, tableId);
-        var p2 = new Client(nodes.endpoint, "p2-" + suffix, tableId);
+        var p1 = new Client(server.endpoint(), "p1-" + suffix, tableId);
+        var p2 = new Client(server.endpoint(), "p2-" + suffix, tableId);
         Throwable primary = null;
+        SeatView persisted = null;
         try {
-            var first = p1.connect();
-            var second = p2.connect();
+            boolean matching = id == Scenario.MATCH || id == Scenario.MATCH_CANCEL;
+            TableView first;
+            TableView second;
+            if (matching) {
+                if (id == Scenario.MATCH_CANCEL) cancelMatch(server.endpoint());
+                var queued1 = p1.findMatch();
+                p1.send(new FindMatch());
+                check(
+                        p1.next(MatchQueued.class).equals(queued1),
+                        "FindMatch changed the active ticket");
+                var queued2 = p2.findMatch();
+                var found1 = p1.next(MatchFound.class);
+                var found2 = p2.next(MatchFound.class);
+                check(
+                        found1.ticketId().equals(queued1.ticketId())
+                                && found2.ticketId().equals(queued2.ticketId())
+                                && !found1.ticketId().equals(found2.ticketId())
+                                && found1.roomId().equals(found2.roomId())
+                                && found1.roomId().startsWith("room-")
+                                && found1.seat() != found2.seat(),
+                        "Matched players did not receive distinct seats in the same room");
+                first = matchedView(p1, found1);
+                second = matchedView(p2, found2);
+                if (found1.seat() > found2.seat()) {
+                    var swapClient = p1;
+                    p1 = p2;
+                    p2 = swapClient;
+                    var swapView = first;
+                    first = second;
+                    second = swapView;
+                }
+                p1.history.clear();
+                p2.history.clear();
+            } else {
+                first = p1.connect();
+                second = p2.connect();
+            }
             if (expectedNode != null)
                 check(
                         first.nodeId().equals(expectedNode) && second.nodeId().equals(expectedNode),
                         "Replacement node did not host new work");
             check(
                     first.yourSeat() == 0
-                            && first.seats().size() == 1
+                            && first.seats().size() == (matching ? Rules.MIN_PLAYERS : 1)
                             && first.seats().getFirst().chips() == Rules.INITIAL_CHIPS,
                     "First seat differs");
             check(
@@ -137,8 +200,9 @@ public final class Scenarios {
             var session1 = p1.sessionInfo();
             var session2 = p2.sessionInfo();
             check(
-                    session1.actorId().equals(p1.playerId)
-                            && session2.actorId().equals(p2.playerId),
+                    session1.actorId().equals(first.seats().get(first.yourSeat()).playerId())
+                            && session2.actorId()
+                                    .equals(second.seats().get(second.yourSeat()).playerId()),
                     "Actor identity differs from player");
             p2.clear();
             p2.send(new HandResult(0L, 0L, List.of(), List.of(), List.of()));
@@ -148,9 +212,7 @@ public final class Scenarios {
                             && packetRejection.retryAfterMs() == 0,
                     "Internal packet was not rejected");
             same(second, view(p2));
-            check(
-                    p2.next(HandDealt.class).cards().isEmpty(),
-                    "Idle table returned private cards");
+            check(p2.next(HandDealt.class).cards().isEmpty(), "Idle table returned private cards");
             p1.clear();
             p2.clear();
             p1.send(new StartHandRequest());
@@ -187,9 +249,7 @@ public final class Scenarios {
                 same(beforeLimit, view(p1));
 
                 var beforeAmount = view(p1);
-                p1.send(
-                        new BetRequest(
-                                cards1.handNumber(), Rules.INITIAL_CHIPS + 1L));
+                p1.send(new BetRequest(cards1.handNumber(), Rules.INITIAL_CHIPS + 1L));
                 var invalidAmount = p1.next(ActionRejected.class);
                 check(
                         invalidAmount.reason().equals(Rules.INVALID_AMOUNT)
@@ -205,8 +265,8 @@ public final class Scenarios {
             switch (id) {
                 case RECONNECT -> {
                     p2.close();
-                    p2 = new Client(nodes.endpoint, p2.playerId, tableId);
-                    var rejoined = p2.connect();
+                    p2 = new Client(server.endpoint(), p2.playerId, tableId);
+                    var rejoined = p2.connect(true);
                     var session = p2.sessionInfo();
                     check(
                             !session.sessionId().equals(session2.sessionId())
@@ -222,7 +282,7 @@ public final class Scenarios {
                             "Connection continuity failed");
                 }
                 case UPDATE -> {
-                    nodes.drain(before1.nodeId());
+                    server.control().drain(before1.nodeId());
                     var after1 = view(p1);
                     var after2 = view(p2);
                     check(
@@ -265,9 +325,12 @@ public final class Scenarios {
                                 && emptyHand.cards().isEmpty(),
                         "Settlement did not clear every private hand");
             }
+            if (id == Scenario.PERSIST) {
+                persisted = result1.seats().get(first.yourSeat());
+            }
             if (id == Scenario.UPDATE) {
-                nodes.replace(before1.nodeId());
-                run(Scenario.TABLE, nodes, before1.nodeId());
+                server.control().replace(before1.nodeId());
+                run(Scenario.TABLE, server, before1.nodeId());
             }
         } catch (Exception | Error failure) {
             primary = failure;
@@ -284,6 +347,34 @@ public final class Scenarios {
             if (cleanup != null) {
                 if (primary != null) primary.addSuppressed(cleanup);
                 else throw cleanup;
+            }
+        }
+        if (id == Scenario.PERSIST) verifyReload(server, tableId, persisted);
+    }
+
+    private static void verifyReload(ServerControl.Connection server, String tableId, SeatView balance)
+            throws Exception {
+        check(balance.chips() != Rules.INITIAL_CHIPS, "Test round did not change the balance");
+        try (var host = new ServerHost(server.root(), 0, false)) {
+            var fresh = host.startPersistenceProbe(server.endpoints());
+            try (var stale = new Client(fresh.endpoint(), balance.playerId(), tableId)) {
+                stale.sendJoin(true);
+                check(
+                        stale.next(ActionRejected.class).equals(new ActionRejected(Rules.NOT_SEATED, 0)),
+                        "Reconnect accepted a seat lost on restart");
+            }
+            try (var reconnected =
+                    new Client(
+                            fresh.endpoint(), balance.playerId(), tableId)) {
+                var view = reconnected.connect();
+                check(
+                        reconnected.sessionInfo().actorId().equals(balance.playerId()),
+                        "New Actor has the wrong player ID");
+                var seat = view.seats().get(view.yourSeat());
+                check(
+                        seat.playerId().equals(balance.playerId()),
+                        "Reloaded seat has the wrong player ID");
+                check(seat.chips() == balance.chips(), "New Actor did not load the settled chips");
             }
         }
     }

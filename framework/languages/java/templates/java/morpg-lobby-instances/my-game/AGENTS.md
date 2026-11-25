@@ -2,7 +2,11 @@
 
 ## Client connection
 
-Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. TCP listeners cannot serve browser, WebGL or Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. Use the published WebSocket endpoint for browser, WebGL and Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+
+## Use this template as a reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
 
 ## Rules for AI
 
@@ -25,6 +29,14 @@ Every server process in this project is a stateful ZLink node. Before writing co
 
 Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/java/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
+## Local server and E2E
+
+Run one scenario with `./run-e2e.sh --scenario party`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
+Start the server with `./run-server.sh` or `.\run-server.cmd` on Windows. Use its reported `ws://` endpoint and press Ctrl+C in its terminal to stop the nodes and Redis.
+
+Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner attaches using `.logs/server.json` while the server is running and otherwise starts an isolated Docker stack. The [README](README.md#local-server) describes the checks that require isolation. Use `.logs/run-<id>/` for stdout, stderr, Framework message-flow logs and failure details. Docker build and cleanup output is under `.logs/docker-*/`.
+
 ## Project overview
 
 This Java 25 project is a MORPG example without a town in which players form a party in a lobby and enter a private dungeon directly. It runs a Session node for connections, a play node (party lobby) with the Entry Spot and Party Spots, play nodes A and B (dungeon) that create Dungeons on demand, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.34.2` and the binding to `1.26.0`.
@@ -38,10 +50,10 @@ The project layout below describes where to add gameplay, and "Developing from t
 Default builds and e2e run nodes and the client in Docker, so they need Docker with Compose v2 and no host JDK. Run these commands from this directory.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario party,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario party,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 Bash provides the same workflow:
@@ -70,6 +82,8 @@ An Actor is a game state object addressed by ID; `Player` in `server/shared/src/
 ### Dungeons
 
 `server/instance/src/main/java/MyGame/instance/Program.java` registers the Dungeon factory (`dungeonCapacity` from `server/config/instanceA.json`) and the Entry Spot. `Dungeon` in `server/instance/src/main/java/MyGame/instance/Dungeon.java` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract; it owns the party roster and the stage (`DungeonState`). `server/instance/src/main/java/MyGame/instance/Prepare.java` answers the party's preparation request, and `server/instance/src/main/java/MyGame/instance/DungeonActions.java` holds the handlers for login, views, and stage advance. Add encounters, rewards, and Dungeon lifecycle behavior in this project.
+
+`LeaveDungeonRequest` runs in the Dungeon Actor handler, which awaits the public membership leave. The Session then attempts to close the same Spot generation through the public Spot manager, outside the Dungeon turn. Close preserves the Spot while members remain and releases its capacity after the last Actor leaves. The Session sends `DungeonLeft` after the close attempt. Disconnect preserves Dungeon membership for reconnect.
 
 ### Shared contracts and hosting
 
@@ -116,12 +130,16 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 ## Extending the MORPG domain
 
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Mark a nullable record component with `@Nullable`. Use `@ZLinkJsonOptional` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/java/guide/server/20-channel-messaging/#12-message-value-rules)
+
 Extend this template's domain to build a MORPG server. Run the build, domain tests and e2e before changing gameplay.
 
 - Extend party decisions in `server/lobby/src/main/java/MyGame/lobby/PartyState.java` and dungeon decisions in `server/instance/src/main/java/MyGame/instance/DungeonState.java`. Party Spot retains Members, Ready, Phase and RunId while Actors are in a dungeon. Dungeon state owns arrivals and Stage.
 - Add shared contracts and constants in `server/shared/src/main/java/MyGame/`. The server issues UUID party and run IDs. Use the default Framework serializer: enum values are names and absent RunId is JSON null. Integers are bounded by 9,007,199,254,740,991.
 - Add client packet names to the Session allowlist in `server/session/src/main/java/MyGame/session/GameSession.java` and register their destination handlers. Keep preparation, travel and run notifications outside this allowlist.
-- Add observations to `e2e/src/main/java/MyGame/e2e/Scenarios.java` and boundaries to `server/lobby/src/test/java/MyGame/lobby/PartyStateTest.java`. Run `./gradlew --no-daemon :server:lobby:test` for domain tests. Keep scenario IDs synchronized with README and `zlink.structure.json`.
+- Add observations to `e2e/src/main/java/MyGame/e2e/Scenarios.java` and boundaries to `server/lobby/src/test/java/MyGame/lobby/PartyStateTest.java`. Run `./gradlew --no-daemon --max-workers=4 :server:lobby:test` for domain tests. Keep scenario IDs synchronized with README and `zlink.structure.json`.
 
 Clients request actions; domains decide outcomes. Rejections leave state unchanged and return `ActionRejected(Reason, RetryAfterMs)`. This structure has no time restrictions, so RetryAfterMs is a 32-bit zero. Relocation snapshots preserve Phase, RunId, Members, Ready, arrivals and Stage, with no timestamps. Keep Framework execution ownership and do not add a second lock or queue over serialized state.
 

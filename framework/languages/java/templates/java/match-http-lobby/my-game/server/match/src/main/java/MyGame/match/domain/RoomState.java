@@ -52,9 +52,10 @@ public final class RoomState {
         if (players.stream().anyMatch(player -> player.playerId.equals(id))) return true;
         if (players.size() >= Rules.PLAYERS) return false;
 
-        var spawn = players.isEmpty()
-                ? new double[] {Rules.SPAWN_AX, Rules.SPAWN_AY}
-                : new double[] {Rules.SPAWN_BX, Rules.SPAWN_BY};
+        var spawn =
+                players.isEmpty()
+                        ? new double[] {Rules.SPAWN_AX, Rules.SPAWN_AY}
+                        : new double[] {Rules.SPAWN_BX, Rules.SPAWN_BY};
         players.add(new Combatant(id, spawn[0], spawn[1]));
         return true;
     }
@@ -92,8 +93,7 @@ public final class RoomState {
         if (targetX < Rules.MAP_MIN
                 || targetX > Rules.MAP_MAX
                 || targetY < Rules.MAP_MIN
-                || targetY > Rules.MAP_MAX)
-            return new ActionRejected(Rules.OUTSIDE_MAP);
+                || targetY > Rules.MAP_MAX) return new ActionRejected(Rules.OUTSIDE_MAP);
 
         if (Rules.WALLS.stream()
                 .anyMatch(wall -> intersectsWall(player.x, player.y, targetX, targetY, wall)))
@@ -105,9 +105,15 @@ public final class RoomState {
             var budget = Math.min(Rules.MAX_STEP, Rules.MOVE_SPEED * elapsedMs / 1000.0);
             if (distance > budget) {
                 var remainingDistance = distance - budget;
-                var retryAfterMs = Math.toIntExact(Math.max(
-                        1L,
-                        (long) Math.ceil(remainingDistance * 1000.0 / Rules.MOVE_SPEED)));
+                var retryAfterMs =
+                        Math.toIntExact(
+                                Math.max(
+                                        1L,
+                                        (long)
+                                                Math.ceil(
+                                                        remainingDistance
+                                                                * 1000.0
+                                                                / Rules.MOVE_SPEED)));
                 return new ActionRejected(Rules.MOVE_BUDGET, retryAfterMs);
             }
         }
@@ -124,12 +130,15 @@ public final class RoomState {
         var rejection = validate(shooter, shot.sequence());
         if (rejection != null) return rejection;
 
-        var target = players.stream()
-                .filter(player -> player.playerId.equals(shot.targetId())
-                        && !player.playerId.equals(id)
-                        && player.hp > 0)
-                .findFirst()
-                .orElse(null);
+        var target =
+                players.stream()
+                        .filter(
+                                player ->
+                                        player.playerId.equals(shot.targetId())
+                                                && !player.playerId.equals(id)
+                                                && player.hp > 0)
+                        .findFirst()
+                        .orElse(null);
         if (target == null) return new ActionRejected(Rules.NO_TARGET);
 
         var dx = target.x - shooter.x;
@@ -142,8 +151,8 @@ public final class RoomState {
 
         var now = monotonicClock.getAsLong();
         if (shooter.lastShotTimestamp != null) {
-            var remainingMs = Rules.FIRE_INTERVAL_MS
-                    - elapsedMilliseconds(shooter.lastShotTimestamp, now);
+            var remainingMs =
+                    Rules.FIRE_INTERVAL_MS - elapsedMilliseconds(shooter.lastShotTimestamp, now);
             if (remainingMs > 0) {
                 var retryAfterMs = Math.toIntExact((long) Math.ceil(remainingMs));
                 return new ActionRejected(Rules.FIRE_TOO_SOON, retryAfterMs);
@@ -175,8 +184,14 @@ public final class RoomState {
 
     public List<PlayerView> view() {
         return players.stream()
-                .map(player -> new PlayerView(
-                        player.playerId, player.x, player.y, player.hp, player.lastSequence))
+                .map(
+                        player ->
+                                new PlayerView(
+                                        player.playerId,
+                                        player.x,
+                                        player.y,
+                                        player.hp,
+                                        player.lastSequence))
                 .toList();
     }
 
@@ -194,28 +209,33 @@ public final class RoomState {
 
     public RoomSnapshot capture() {
         var now = monotonicClock.getAsLong();
-        var snapshots = players.stream()
-                .map(player -> new CombatantSnapshot(
-                        player.playerId,
-                        player.x,
-                        player.y,
-                        player.hp,
-                        player.lastSequence,
-                        remainingMilliseconds(player.lastMoveTimestamp, MOVE_BUDGET_MS, now),
-                        remainingMilliseconds(
-                                player.lastShotTimestamp, Rules.FIRE_INTERVAL_MS, now)))
-                .toList();
+        var snapshots =
+                players.stream()
+                        .map(
+                                player ->
+                                        new CombatantSnapshot(
+                                                player.playerId,
+                                                player.x,
+                                                player.y,
+                                                player.hp,
+                                                player.lastSequence,
+                                                remainingMilliseconds(
+                                                        player.lastMoveTimestamp,
+                                                        MOVE_BUDGET_MS,
+                                                        now),
+                                                remainingMilliseconds(
+                                                        player.lastShotTimestamp,
+                                                        Rules.FIRE_INTERVAL_MS,
+                                                        now)))
+                        .toList();
         return new RoomSnapshot(phase(), winner, List.copyOf(snapshots));
     }
 
     public void restore(RoomSnapshot snapshot) {
         if (snapshot == null || snapshot.players() == null)
             throw new IllegalArgumentException("Missing room state snapshot");
-        var expectedPhase = snapshot.winner() == null
-                ? Rules.PLAYING
-                : Rules.FINISHED_PHASE;
-        if (!expectedPhase.equals(snapshot.phase())
-                || snapshot.players().size() > Rules.PLAYERS)
+        var expectedPhase = snapshot.winner() == null ? Rules.PLAYING : Rules.FINISHED_PHASE;
+        if (!expectedPhase.equals(snapshot.phase()) || snapshot.players().size() > Rules.PLAYERS)
             throw new IllegalArgumentException("Invalid room state snapshot");
 
         var now = monotonicClock.getAsLong();
@@ -224,10 +244,10 @@ public final class RoomState {
             var restored = new Combatant(player.playerId(), player.x(), player.y());
             restored.hp = player.hp();
             restored.lastSequence = player.lastSequence();
-            restored.lastMoveTimestamp = restoreTimestamp(
-                    player.moveBudgetRemainingMs(), MOVE_BUDGET_MS, now);
-            restored.lastShotTimestamp = restoreTimestamp(
-                    player.fireCooldownRemainingMs(), Rules.FIRE_INTERVAL_MS, now);
+            restored.lastMoveTimestamp =
+                    restoreTimestamp(player.moveBudgetRemainingMs(), MOVE_BUDGET_MS, now);
+            restored.lastShotTimestamp =
+                    restoreTimestamp(player.fireCooldownRemainingMs(), Rules.FIRE_INTERVAL_MS, now);
             players.add(restored);
         }
         winner = snapshot.winner();
@@ -235,9 +255,7 @@ public final class RoomState {
 
     private static Long remainingMilliseconds(Long lastTimestamp, long durationMs, long now) {
         if (lastTimestamp == null) return null;
-        return Math.max(
-                0,
-                (long) Math.ceil(durationMs - elapsedMilliseconds(lastTimestamp, now)));
+        return Math.max(0, (long) Math.ceil(durationMs - elapsedMilliseconds(lastTimestamp, now)));
     }
 
     private static Long restoreTimestamp(Long remainingMilliseconds, long durationMs, long now) {

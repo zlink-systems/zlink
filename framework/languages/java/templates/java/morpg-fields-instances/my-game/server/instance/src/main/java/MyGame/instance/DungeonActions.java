@@ -9,6 +9,15 @@ import java.util.concurrent.*;
 
 @ZLinkHandlerGroup(Names.PLAYER)
 public final class DungeonActions {
+    @ZLinkSpotActorRequest
+    public CompletionStage<DungeonLeft> leave(
+            Dungeon spot, Player actor, ZLinkMessageContext context, LeaveDungeonRequest request) {
+        var dungeon = spot.context();
+        return dungeon.leaveActor(actor)
+                .thenApply(
+                        ignored -> new DungeonLeft(dungeon.spotId(), dungeon.objectGeneration()));
+    }
+
     @ZLinkSpotActorSend
     public CompletionStage<Void> reconnect(
             Dungeon spot, Player actor, ZLinkMessageContext dispatch, JoinWorldRequest request) {
@@ -67,7 +76,8 @@ public final class DungeonActions {
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationBorderVisible(Dungeon spot, Player actor, ZLinkMessageContext context, BorderVisible message) {
+    public CompletionStage<Void> notificationBorderVisible(
+            Dungeon spot, Player actor, ZLinkMessageContext context, BorderVisible message) {
         return actor.deliver(message);
     }
 }

@@ -11,12 +11,21 @@ public final class Scenarios {
         Structure.require(Objects.equals(a, b), "Expected " + a + ", got " + b);
     }
 
+    private static void leaveDungeon(Client leader, Client member, DungeonView dungeon) {
+        var leaderLeft = leader.leaveDungeon();
+        var memberLeft = member.leaveDungeon();
+        Structure.require(
+                leaderLeft.dungeonId().equals(dungeon.dungeonId()) && leaderLeft.equals(memberLeft),
+                "Dungeon departure identified a different Spot");
+    }
+
     private static void sameState(DungeonView a, DungeonView b) {
         equal(a.dungeonId(), b.dungeonId());
         equal(a.partyId(), b.partyId());
         equal(a.members(), b.members());
         equal(a.stage(), b.stage());
-        equal(a.phase(), b.phase()); equal(a.runId(), b.runId());
+        equal(a.phase(), b.phase());
+        equal(a.runId(), b.runId());
     }
 
     private static DungeonView enter(Client a, Client b) throws Exception {
@@ -26,22 +35,37 @@ public final class Scenarios {
         b.next(LobbyView.class);
         a.clear();
         b.clear();
-        a.send(new JoinPartyRequest(Names.newPartyId())); equal(new ActionRejected(Rules.INVALID_PARTY), a.next(ActionRejected.class));
+        a.send(new JoinPartyRequest(Names.newPartyId()));
+        equal(new ActionRejected(Rules.INVALID_PARTY), a.next(ActionRejected.class));
         a.send(new CreatePartyRequest());
-        var created = a.next(PartyView.class); String party = created.partyId();
+        var created = a.next(PartyView.class);
+        String party = created.partyId();
         Structure.require(party.matches("party-[0-9a-f]{32}"), "Party ID");
-        equal(new PartyView(party, List.of(a.playerId), List.of(false), RunPhase.Forming, null), created);
+        equal(
+                new PartyView(party, List.of(a.playerId), List.of(false), RunPhase.Forming, null),
+                created);
         a.clear();
         b.send(new JoinPartyRequest(party));
         var joined = a.next(PartyView.class);
         equal(joined, b.next(PartyView.class));
-        equal(new PartyView(party, List.of(a.playerId, b.playerId), List.of(false, false), RunPhase.Forming, null), joined);
+        equal(
+                new PartyView(
+                        party,
+                        List.of(a.playerId, b.playerId),
+                        List.of(false, false),
+                        RunPhase.Forming,
+                        null),
+                joined);
         a.send(new EnterDungeonRequest());
         equal(new ActionRejected(Rules.NOT_READY), a.next(ActionRejected.class));
-        a.send(new ViewRequest()); equal(joined, a.next(PartyView.class));
-        b.send(new EnterDungeonRequest()); equal(new ActionRejected(Rules.NOT_LEADER), b.next(ActionRejected.class));
-        b.send(new ViewRequest()); equal(joined, b.next(PartyView.class));
-        b.send(new JoinDungeon("dungeon-forged", "run-forged")); equal(new ActionRejected(Rules.PACKET_NOT_ALLOWED), b.next(ActionRejected.class));
+        a.send(new ViewRequest());
+        equal(joined, a.next(PartyView.class));
+        b.send(new EnterDungeonRequest());
+        equal(new ActionRejected(Rules.NOT_LEADER), b.next(ActionRejected.class));
+        b.send(new ViewRequest());
+        equal(joined, b.next(PartyView.class));
+        b.send(new JoinDungeon("dungeon-forged", "run-forged"));
+        equal(new ActionRejected(Rules.PACKET_NOT_ALLOWED), b.next(ActionRejected.class));
         a.clear();
         b.clear();
         a.send(new ReadyRequest());
@@ -81,10 +105,13 @@ public final class Scenarios {
     }
 
     private static void complete(Client a, Client b) throws Exception {
-        var done = advance(a, b, Rules.FINAL_STAGE); equal(RunPhase.Completed, done.phase());
-        a.send(new AdvanceRequest()); equal(new ActionRejected(Rules.RUN_NOT_ACTIVE), a.next(ActionRejected.class));
+        var done = advance(a, b, Rules.FINAL_STAGE);
+        equal(RunPhase.Completed, done.phase());
+        a.send(new AdvanceRequest());
+        equal(new ActionRejected(Rules.RUN_NOT_ACTIVE), a.next(ActionRejected.class));
         sameState(done, a.view());
     }
+
     public static void run(Scenario scenario, Nodes nodes) throws Exception {
         String id = UUID.randomUUID().toString();
         try (var a = new Client(nodes.endpoint, id + "-p1");
@@ -96,19 +123,30 @@ public final class Scenarios {
             equal(b.playerId, sb.actorId());
             var before = advance(a, b, 1);
             a.send(new EnterDungeonRequest());
-            var activeParty = a.next(PartyView.class, view -> view.partyId().equals(initial.partyId())
-                    && Objects.equals(view.runId(), initial.runId()) && view.phase() == RunPhase.Active);
+            var activeParty =
+                    a.next(
+                            PartyView.class,
+                            view ->
+                                    view.partyId().equals(initial.partyId())
+                                            && Objects.equals(view.runId(), initial.runId())
+                                            && view.phase() == RunPhase.Active);
             equal(initial.members(), activeParty.members());
             equal(initial.nodeId(), before.nodeId());
             equal(sa, a.sessionInfo());
             equal(sb, b.sessionInfo());
             switch (scenario) {
                 case PARTY -> {
-                    try (var c = new Client(nodes.endpoint, id + "-second1"); var d = new Client(nodes.endpoint, id + "-second2")) {
+                    try (var c = new Client(nodes.endpoint, id + "-second1");
+                            var d = new Client(nodes.endpoint, id + "-second2")) {
                         var separate = enter(c, d);
-                        Structure.require(!separate.dungeonId().equals(initial.dungeonId()) && !separate.runId().equals(initial.runId()), "Two parties shared run");
+                        Structure.require(
+                                !separate.dungeonId().equals(initial.dungeonId())
+                                        && !separate.runId().equals(initial.runId()),
+                                "Two parties shared run");
+                        leaveDungeon(c, d, separate);
                     }
-                    advance(a, b, 2); complete(a, b);
+                    advance(a, b, 2);
+                    complete(a, b);
                 }
                 case RECONNECT -> {
                     b.close();
@@ -123,7 +161,9 @@ public final class Scenarios {
                         Structure.require(
                                 !sb.sessionId().equals(identity.sessionId()),
                                 "Reconnect reused Session");
-                        advance(a, again, 2); complete(a, again);
+                        advance(a, again, 2);
+                        complete(a, again);
+                        leaveDungeon(a, again, initial);
                         equal(0, again.disconnects.get());
                     }
                 }
@@ -142,15 +182,23 @@ public final class Scenarios {
                         var fresh = enter(c, d);
                         equal(before.nodeId(), fresh.nodeId());
                         advance(c, d, 1);
-                        Structure.require(!fresh.dungeonId().equals(initial.dungeonId()) && !fresh.runId().equals(initial.runId()), "Two parties shared run");
+                        Structure.require(
+                                !fresh.dungeonId().equals(initial.dungeonId())
+                                        && !fresh.runId().equals(initial.runId()),
+                                "Two parties shared run");
+                        leaveDungeon(c, d, fresh);
                     }
-                    advance(a, b, 2); complete(a, b);
+                    advance(a, b, 2);
+                    complete(a, b);
                     equal(sa, a.sessionInfo());
                     equal(sb, b.sessionInfo());
                 }
             }
             equal(0, a.disconnects.get());
-            if (scenario != Scenario.RECONNECT) equal(0, b.disconnects.get());
+            if (scenario != Scenario.RECONNECT) {
+                leaveDungeon(a, b, initial);
+                equal(0, b.disconnects.get());
+            }
         }
     }
 }

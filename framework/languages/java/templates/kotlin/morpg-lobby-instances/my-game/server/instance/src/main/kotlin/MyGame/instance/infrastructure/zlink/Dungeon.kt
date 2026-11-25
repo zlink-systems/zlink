@@ -17,7 +17,11 @@ class Dungeon(
     var state = DungeonState()
 
     fun prepare(request: PrepareDungeon): DungeonPrepared {
-        require(Names.dungeonId(request.runId) == context.spotId() && state.prepare(request) == null) { Rules.RUN_MISMATCH }
+        require(
+            Names.dungeonId(request.runId) == context.spotId() && state.prepare(request) == null
+        ) {
+            Rules.RUN_MISMATCH
+        }
         return DungeonPrepared(context.spotId(), request.runId)
     }
 
@@ -25,35 +29,76 @@ class Dungeon(
         actorId: String,
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
-        return if (state.admit(actorId, request.decode<JoinDungeon>(), context.spotId())) ZLinkSpotActorJoinResult.accept() else ZLinkSpotActorJoinResult.reject()
+        return if (state.admit(actorId, request.decode<JoinDungeon>(), context.spotId()))
+            ZLinkSpotActorJoinResult.accept()
+        else ZLinkSpotActorJoinResult.reject()
     }
+
     override suspend fun onJoinedActorSuspending(actor: Player) {
+        println("EVENT Dungeon joined: ${context.spotId()}")
         val started = state.join(actor.context.actorId())
-        context.outbound().kotlin().sendToSpot(state.partyId, DungeonMemberEntered(requireNotNull(state.runId), actor.context.actorId())).await()
-        if (started) context.outbound().kotlin().sendToSpot(state.partyId, RunStarted(requireNotNull(state.runId))).await()
+        context
+            .outbound()
+            .kotlin()
+            .sendToSpot(
+                state.partyId,
+                DungeonMemberEntered(requireNotNull(state.runId), actor.context.actorId()),
+            )
+            .await()
+        if (started)
+            context
+                .outbound()
+                .kotlin()
+                .sendToSpot(state.partyId, RunStarted(requireNotNull(state.runId)))
+                .await()
         broadcast()
     }
 
     override suspend fun onLeaveActorSuspending(actor: Player) {}
 
     private fun view() =
-        DungeonView(context.spotId(), config.id, state.partyId, state.members, state.stage, state.runId, state.phase)
+        DungeonView(
+            context.spotId(),
+            config.id,
+            state.partyId,
+            state.members,
+            state.stage,
+            state.runId,
+            state.phase,
+        )
 
     suspend fun show(actor: Player) {
         actor.context.boundSession().kotlin().send(view()).await()
     }
 
-    suspend fun enter(actor: Player) { context.outbound().kotlin().sendToSpot(state.partyId, EnterPartyRun(actor.context.actorId())).await() }
+    suspend fun enter(actor: Player) {
+        context
+            .outbound()
+            .kotlin()
+            .sendToSpot(state.partyId, EnterPartyRun(actor.context.actorId()))
+            .await()
+    }
+
     suspend fun advance(actor: Player) {
-        state.advance()?.let { actor.context.boundSession().kotlin().send(ActionRejected(it)).await(); return }
-        if (state.phase == RunPhase.Completed) context.outbound().kotlin().sendToSpot(state.partyId, RunCompleted(requireNotNull(state.runId))).await()
+        state.advance()?.let {
+            actor.context.boundSession().kotlin().send(ActionRejected(it)).await()
+            return
+        }
+        if (state.phase == RunPhase.Completed) {
+            println("EVENT Dungeon completed: ${context.spotId()}")
+            context
+                .outbound()
+                .kotlin()
+                .sendToSpot(state.partyId, RunCompleted(requireNotNull(state.runId)))
+                .await()
+        }
         broadcast()
     }
+
     private suspend fun broadcast() {
         val view = view()
         for (id in state.joined) actors.kotlin().sendToActor(id, view).await()
     }
-
 }
 
 class DungeonTransfer : ZLinkSpotRelocationAdapter<Dungeon> {

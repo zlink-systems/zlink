@@ -9,6 +9,15 @@ import java.util.concurrent.*;
 
 @ZLinkHandlerGroup(Names.PLAYER)
 public final class DungeonActions {
+    @ZLinkSpotActorRequest
+    public CompletionStage<DungeonLeft> leave(
+            Dungeon spot, Player actor, ZLinkMessageContext context, LeaveDungeonRequest request) {
+        var dungeon = spot.context();
+        return dungeon.leaveActor(actor)
+                .thenApply(
+                        ignored -> new DungeonLeft(dungeon.spotId(), dungeon.objectGeneration()));
+    }
+
     @ZLinkSpotActorSend
     public CompletionStage<Void> login(
             Dungeon spot, Player actor, ZLinkMessageContext context, JoinLobbyRequest request) {
@@ -33,16 +42,29 @@ public final class DungeonActions {
             Dungeon spot, Player actor, ZLinkMessageContext context, DungeonView request) {
         return actor.deliver(request);
     }
+
     @ZLinkSpotActorSend
-    public CompletionStage<Void> reject(Dungeon spot, Player actor, ZLinkMessageContext context, ActionRejected r) {
+    public CompletionStage<Void> reject(
+            Dungeon spot, Player actor, ZLinkMessageContext context, ActionRejected r) {
         return actor.deliver(r);
     }
+
     @ZLinkSpotActorSend
-    public CompletionStage<Void> enter(Dungeon spot, Player actor, ZLinkMessageContext context, EnterDungeonRequest r) { return spot.enter(actor); }
+    public CompletionStage<Void> enter(
+            Dungeon spot, Player actor, ZLinkMessageContext context, EnterDungeonRequest r) {
+        return spot.enter(actor);
+    }
+
     @ZLinkSpotActorSend
-    public CompletionStage<Void> travel(Dungeon spot, Player actor, ZLinkMessageContext context, JoinDungeon r) { actor.context().joinSpot(r.dungeonId(), r).defer(); return CompletableFuture.completedFuture(null); }
+    public CompletionStage<Void> travel(
+            Dungeon spot, Player actor, ZLinkMessageContext context, JoinDungeon r) {
+        actor.context().joinSpot(r.dungeonId(), r).defer();
+        return CompletableFuture.completedFuture(null);
+    }
+
     @ZLinkSpotActorSend
-    public CompletionStage<Void> party(Dungeon spot, Player actor, ZLinkMessageContext context, PartyView r) {
+    public CompletionStage<Void> party(
+            Dungeon spot, Player actor, ZLinkMessageContext context, PartyView r) {
         return actor.deliver(r);
     }
 }
