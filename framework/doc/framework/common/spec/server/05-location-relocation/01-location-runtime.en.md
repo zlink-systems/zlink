@@ -955,7 +955,7 @@ retention does not shorten §6.1's release wait.
   token-replacement CAS. Only normal expiry requires a new claim issuing a new `LeaseGeneration`
   and per-object token-replacement CAS. After a successful new claim, recompute the admission
   deadline as for the first renewal under §5, then republish the descriptor with the new
-  `LeaseGeneration` under §5's publication rules (`Renew` intent) before submitting per-object
+  `LeaseGeneration` under §4's Revision increment and §5's publication rules (`Renew` intent) before submitting per-object
   replacement CAS. Receive confirmation that publication has taken effect in the Store through
   the existing asynchronous continuation. Recheck an uncertain publication result under §10.
   Replacement CAS does not wait for publication confirmation, but gate reopening requires it.
@@ -1036,6 +1036,26 @@ retention does not shorten §6.1's release wait.
   existing renew interval and resubmit the needed request. Finish cleanup on confirmed deletion
   or release, or a confirmed change to another owner or incarnation. Never reopen the discarded
   incarnation's gate or delete another owner's or incarnation's record.
+
+**Owner lease reclaim by the same process.** When the host confirms that its owner lease expired
+normally, the same process may request a new claim with the same `OwnerId`. This holds even when the host
+is not recovering from a Store outage. After the new claim succeeds, descriptor republication, the
+per-object token replacement CAS, gate reopening and discard follow the single recovery rule above.
+Retained objects are those that were steady `Ready` before the host first observed a Store communication
+failure, so after an expiry without an outage there is no replacement CAS target and the pre-expiry objects
+are cleaned up under the existing discard and cleanup rule. If the reclaim path existed only for outage
+recovery, the host would have no way to regain the owner role.
+
+- **Ordinary new work is accepted only after the republication is confirmed.** After the new claim the
+  host republishes the descriptor that records the new `LeaseGeneration` and does not accept the rest of
+  the work in the §5 blocking table until it confirms that the publication is reflected in the Store.
+  Opening admission on claim success alone would start work under the new token while other hosts still
+  read the old descriptor.
+- **Reclaim does not wait for old handlers and timers to finish.** On confirming normal expiry the host
+  first closes the existing gates and fences and then requests the new claim. A callback that already
+  started can run to completion within the limit below; the Store changes it makes carry the old token,
+  so a CAS that validates the new token rejects them. Making completion a precondition of the claim would
+  let one long-running callback block the whole host from rejoining.
 
 A resumed process performs the same checks at the next turn gate. However, a monotonic clock that
 stops during host suspend cannot reveal actual elapsed time. Nor can the gate prevent a process
@@ -1893,10 +1913,13 @@ and applying the Session Actor command 44 route update don't block target applic
 message processing. The running source and target runtime each continue this follow-up
 work independently.
 
-The resolver doesn't return a moving object as `Ready` until all the `Ready` conditions
-above are met. Keeping the completion-record payload location — for reply delivery
-through the previous owner and the `Completed` record after target dispatch switchover —
-doesn't block `Ready`.
+Once the owner change commits, the resolver returns the target as the object's route. A target that
+hasn't yet met all the `Ready` conditions above doesn't reject a message arriving on that route
+(with `NotFound` or otherwise); it accepts it into the temporary queue from this section's first
+paragraph and runs it in order when it opens application dispatch. A caller's first request sent
+between the commit and the dispatch opening is therefore handled without failing. Keeping the
+completion-record payload location — for reply delivery through the previous owner and the
+`Completed` record after target dispatch switchover — doesn't block `Ready`. (#5576)
 
 A `PerActor` User Spot's target shell becomes Ready for `ToSpot`, Create, and Join once
 the Spot authority CAS, source Spot queue relay, and target Spot admission preparation
@@ -2159,6 +2182,12 @@ store record golden fixture. Each item maps to one test.
   `StoreOutageRetention` defaults to `false`; `T` is not an independent setting. Domain-wide
   margin equality is an operational prerequisite, not a Framework validation item. With the same
   margin, different host TTLs must not permit release before the old owner's `T`.
+- A host whose owner lease expired normally without an outage claims again with the same `OwnerId` and
+  republishes a descriptor with the new `LeaseGeneration`. Until that publication is reflected in the
+  Store, new Actor and Spot creation and message admission are rejected, and the pre-expiry objects are
+  cleaned up without reopening.
+- A Store change that a callback running at reclaim time submits with the old token after it finishes is
+  rejected, and the reclaim proceeds without waiting for that callback to finish.
 - Recovery before expiry reopens the gate with the same token after validation and renewal;
   replacement CAS is only for normal expiry. Its request start plus renew timeout must not
   exceed the original `T`. A new claim recomputes the admission deadline. Gate reopening requires

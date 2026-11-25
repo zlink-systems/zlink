@@ -7,11 +7,21 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
 import java.util.WeakHashMap;
+import java.util.function.Consumer;
 
 final class ZLinkSessionRelayHeaders {
+    private Consumer<ZLinkStreamHeader> replyAccepted = ignored -> {};
     private final ThreadLocal<ZLinkStreamHeader> current = new ThreadLocal<>();
     private final Map<ZLinkSessionDispatchContext, ZLinkStreamHeader> byDispatch =
             Collections.synchronizedMap(new WeakHashMap<>());
+
+    void observeReplyAcceptance(Consumer<ZLinkStreamHeader> observer) {
+        replyAccepted = observer;
+    }
+
+    void replyAccepted(ZLinkStreamHeader header) {
+        replyAccepted.accept(header);
+    }
 
     void enter(ZLinkStreamHeader header) {
         current.set(header);

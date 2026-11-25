@@ -46,6 +46,10 @@ final class ZLinkSessionSerialExecutor {
         return queue.enqueueBarrierNext(operation, null);
     }
 
+    void discardPending() {
+        queue.discardApplications();
+    }
+
     CompletionStage<Void> awaitQuiescence() {
         return queue.awaitQuiescence();
     }

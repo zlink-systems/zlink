@@ -382,7 +382,6 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                         actors,
                         serializer,
                         new ZLinkActivationAdmission(1),
-                        ignored -> null,
                         stableType -> true);
         return new Fixture(coordinator, discovery);
     }

@@ -22,7 +22,7 @@ flowchart LR
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-Install Docker with Compose v2 (Linux containers) and Bash or PowerShell 7. Dependencies are pinned in `Directory.Packages.props`: Framework and STREAM connector 0.32.0 and binding 1.23.0. The template uses NuGet.org; it has no repository or local-feed dependency.
+Install Docker with Compose v2 (Linux containers) and Bash or PowerShell 7. Dependencies are pinned in `Directory.Packages.props`: Framework and STREAM connector 0.34.1 and binding 1.26.0. The template uses NuGet.org; it has no repository or local-feed dependency.
 
 ## Build
 
@@ -198,7 +198,7 @@ Integer contract values use the common maximum `9,007,199,254,740,991`; requests
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

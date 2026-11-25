@@ -16,7 +16,7 @@ function scenario(t, ownerUsable) {
   let dispatched = 0;
   const wakes = new Set();
   host.locationOwner.runtime = {
-    get ownerLeaseUsable() { ownerReads++; return ownerUsable; },
+    get ownerAdmissionOpen() { ownerReads++; return ownerUsable; },
     get boundExecutionUsable() { return ownerUsable; },
     executionAllowed() { ownerReads++; return ownerUsable; },
     executionDecision(_owner, wake) {

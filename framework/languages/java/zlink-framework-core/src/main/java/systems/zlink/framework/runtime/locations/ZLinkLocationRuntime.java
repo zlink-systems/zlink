@@ -357,7 +357,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         private volatile String key;
         private final Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply;
         private Supplier<String> parent;
-        private ZLinkAuthoritySnapshot confirmed;
+        private volatile ZLinkAuthoritySnapshot confirmed;
         private CompletionStage<Void> operation;
         private volatile Runnable resume;
 
@@ -410,7 +410,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             StoreOutage episode = outage;
             if (!started || cleanup.get() == null) return false;
             if (episode == null || !episode.records.containsKey(this))
-                return !executionOpen && !isOwnerAdmissionOpenCore();
+                return !canStartOnOpenLease() && !isOwnerAdmissionOpenCore();
             return recoveringCore(episode);
         }
 
@@ -428,7 +428,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         public void check(boolean application) {
             StoreOutage episode = outage;
             boolean retained = episode != null && episode.records.containsKey(this);
-            if (executionOpen && !retained && cleanup.get() != null) return;
+            if (!retained && cleanup.get() != null && canStartOnOpenLease()) return;
             if (!started)
                 throw systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin.framework(
                         ZLinkFrameworkErrorKind.SHUTTING_DOWN, "Location runtime is stopped.");
@@ -445,6 +445,19 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             if (episode != null && episode.records.containsKey(this) && storeOutageRetention)
                 return;
             throw new OwnerLeaseAdmissionClosedException();
+        }
+
+        private boolean canStartOnOpenLease() {
+            if (!executionOpen) return false;
+            if (!ownerAdmissionRevoked) return true;
+            var snapshot = confirmed;
+            var active = ownerToken;
+            return recoveryPreviousOwnerToken != null
+                    && snapshot != null
+                    && active != null
+                    && snapshot.ownerLeaseGeneration() == active.leaseGeneration()
+                    && snapshot.ownerId().equals(active.ownerId())
+                    && active == ownerToken;
         }
 
         /** Definitive stale/fence results and the outage latch share this terminal path. */
@@ -662,7 +675,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         StoreOutage episode = outage;
         if (episode != null) latchOutageCore(episode);
         // The deadline only closes admission; reopening belongs to a successful lease.
-        else if (!isOwnerAdmissionOpenCore()) executionOpen = false;
+        if (!ownerLeaseWithinDeadlineCore()) executionOpen = false;
         scheduleOwnerDeadlinesCore();
     }
 
@@ -675,7 +688,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             discardOutageCore(episode);
         }
         if (episode.discarded) {
-            executionOpen = isOwnerAdmissionOpenCore();
+            executionOpen = ownerLeaseWithinDeadlineCore();
             scheduleOwnerDeadlinesCore();
         }
         return episode.discarded;
@@ -722,7 +735,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             if (!outage.records.isEmpty()) return;
             outage = null;
         }
-        executionOpen = isOwnerAdmissionOpenCore();
+        executionOpen = ownerLeaseWithinDeadlineCore();
         scheduleOwnerDeadlinesCore();
     }
 
@@ -764,6 +777,15 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     public ZLinkLocationOwnerToken currentOwnerToken() {
         return ownerTokenSnapshot();
+    }
+
+    public ZLinkLocationOwnerToken descriptorPublicationOwnerToken() {
+        return inStateLane(
+                () -> {
+                    if (!ownerLeaseWithinDeadlineCore())
+                        throw new OwnerLeaseAdmissionClosedException();
+                    return ownerToken;
+                });
     }
 
     /**
@@ -1582,6 +1604,13 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                 if (snapshot != null)
                                                     record.execution.confirmed = snapshot;
                                                 episode.records.remove(record.execution, record);
+                                                if (!executionOpen && ownerAdmissionRevoked) {
+                                                    executionOpen = ownerLeaseWithinDeadlineCore();
+                                                    if (executionOpen
+                                                            && ownerAdmissionDeadlineNanos
+                                                                    < episode.cutoffNanos)
+                                                        scheduleOwnerDeadlinesCore();
+                                                }
                                                 record.resumed.complete(null);
                                                 finishRecoveryCore(episode);
                                                 return (Runnable) record.execution::resumeCore;
@@ -1599,7 +1628,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 || !episode.records.isEmpty()
                 || cutoffReached(episode)) return;
         outage = null;
-        executionOpen = isOwnerAdmissionOpenCore();
+        executionOpen = ownerLeaseWithinDeadlineCore();
         scheduleOwnerDeadlinesCore();
     }
 
@@ -1998,6 +2027,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private void installOwnerLeaseCore(ZLinkOwnerLeaseClaimed claimed, long operationStartedNanos) {
         recoveryPreviousOwnerToken = ownerToken;
         ownerToken = claimed.token();
+        ownerAdmissionRevoked =
+                recoveryPreviousOwnerToken != null && ownerLeaseRecoveryListener != null;
         recordSuccessfulRenewalCore(
                 claimed.leaseExpiresAt(), claimed.storeNow(), operationStartedNanos);
         observeSuccessfulLeaseCore(operationStartedNanos, false, null);
@@ -2206,6 +2237,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                     ownerLeaseRecoveryOperation = operation;
                                     var listener = ownerLeaseRecoveryListener;
                                     StoreOutage recoveryEpisode = outage;
+                                    var publishingOwner = ownerToken;
                                     return () -> {
                                         CompletableFuture.allOf(previousDrain, drained)
                                                 .thenCompose(
@@ -2249,11 +2281,27 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                         (ignored, failure) ->
                                                                 stateLane.runAsync(
                                                                         () -> {
-                                                                            if (failure != null
-                                                                                    && started
+                                                                            if (started
                                                                                     && ownsStartupCore(
-                                                                                            lifecycle)) {
-                                                                                if (recoveryEpisode
+                                                                                            lifecycle)
+                                                                                    && Objects
+                                                                                            .equals(
+                                                                                                    publishingOwner,
+                                                                                                    ownerToken)) {
+                                                                                if (failure
+                                                                                        == null) {
+                                                                                    if (ownerAdmissionRevoked) {
+                                                                                        ownerAdmissionRevoked =
+                                                                                                false;
+                                                                                        if (outage
+                                                                                                        == null
+                                                                                                || outage.discarded) {
+                                                                                            executionOpen =
+                                                                                                    isOwnerAdmissionOpenCore();
+                                                                                            scheduleOwnerDeadlinesCore();
+                                                                                        }
+                                                                                    }
+                                                                                } else if (recoveryEpisode
                                                                                         == null) {
                                                                                     executionOpen =
                                                                                             false;
@@ -2261,9 +2309,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                                             true;
                                                                                 } else {
                                                                                     executionOpen =
-                                                                                            outage
-                                                                                                            == null
-                                                                                                    && isOwnerAdmissionOpenCore();
+                                                                                            executionOpen
+                                                                                                    && ownerLeaseWithinDeadlineCore();
                                                                                     scheduleOwnerDeadlinesCore();
                                                                                 }
                                                                             }
@@ -2568,7 +2615,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         }
         ownerAdmissionDeadlineNanos =
                 saturatingAdd(operationStartedNanos, admissionLifetime.toNanos());
-        ownerAdmissionRevoked = false;
+        if (ownerLeaseRecoveryListener == null) ownerAdmissionRevoked = false;
         ownerLeaseRenewedAt = storeNow;
         lastError = null;
     }
@@ -2656,8 +2703,11 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     private boolean isOwnerAdmissionOpenCore() {
+        return !ownerAdmissionRevoked && ownerLeaseWithinDeadlineCore();
+    }
+
+    private boolean ownerLeaseWithinDeadlineCore() {
         return ownerToken != null
-                && !ownerAdmissionRevoked
                 && ownerAdmissionDeadlineNanos != 0L
                 && monotonicNow.getAsLong() - ownerAdmissionDeadlineNanos < 0L;
     }
@@ -2673,6 +2723,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     /** The runtime takes no new admission once the owner lease deadline passes (ShuttingDown). */
+    public static boolean isExecutionPaused(Throwable failure) {
+        return unwrap(failure) instanceof OwnerLeaseAdmissionClosedException;
+    }
+
     private static final class OwnerLeaseAdmissionClosedException extends ZLinkFrameworkException
             implements ZLinkLocationStoreFailure {
         private OwnerLeaseAdmissionClosedException() {

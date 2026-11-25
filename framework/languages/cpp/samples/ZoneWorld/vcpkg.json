@@ -1,6 +1,6 @@
 {
   "name": "zlink-sample-zoneworld",
-  "version-string": "0.34.0",
+  "version-string": "0.34.1",
   "dependencies": [
     "zlink",
     "zlink-framework"

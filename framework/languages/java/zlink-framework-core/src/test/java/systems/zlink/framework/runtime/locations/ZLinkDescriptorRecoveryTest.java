@@ -172,6 +172,7 @@ final class ZLinkDescriptorRecoveryTest {
                     backend.resume.complete(null);
 
                     assertFalse(await(recovery));
+                    await(first.shutdown());
                     assertEquals(competing, backend.descriptor());
                     assertEquals(List.of(ZLinkLocationWriteIntent.RENEW), backend.intents);
                 }

@@ -34,8 +34,10 @@ import java.util.function.Predicate;
 final class ZLinkRelocationObservationPublicTest {
     private static final String MESH = "observation";
     private static final String RELOCATION_FLOW = "01900000-0000-7000-8000-000000001882";
+    private static final String RECREATED_ACTOR_ID = "player-recreated-after-join";
     static final Duration WAIT = Duration.ofSeconds(15);
     private static CompletableFuture<ZLinkActorJoinCompletion> joined;
+    private static CompletableFuture<Void> sourceLeft;
     private static CompletableFuture<ZLinkSessionContext> connected;
     private static CompletableFuture<String> relayed;
 
@@ -456,11 +458,101 @@ final class ZLinkRelocationObservationPublicTest {
         }
     }
 
+    @Test
+    void actorCanBeRecreatedOnTheJoinSourceAfterTargetShutdown() throws Exception {
+        joined = new CompletableFuture<>();
+        sourceLeft = new CompletableFuture<>();
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        var sourceOptions = options("recreate-source", locations, relocations, null, false);
+        sourceOptions.configureLocations().setMessageFollowDuration(Duration.ofSeconds(30));
+        try (var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions);
+                var sourceServing = observe(source.observe(), status -> status.isReady())) {
+            await(sourceServing.result);
+            var original =
+                    assertInstanceOf(
+                                    ZLinkActorCreateResult.Created.class,
+                                    await(
+                                            source.actorManager()
+                                                    .create(RECREATED_ACTOR_ID, "player")
+                                                    .submit()))
+                            .actor();
+            var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            try (var target =
+                            ZLinkFrameworkRuntimeTestAccess.start(
+                                    options("recreate-target", locations, relocations, endpoint));
+                    var targetServing = observe(target.observe(), status -> status.isReady());
+                    var sourcePeer =
+                            observe(
+                                    source.routeMeshRuntime().observe(MESH, 8),
+                                    status -> status.isReady() && status.readyPeerCount() > 0);
+                    var targetPeer =
+                            observe(
+                                    target.routeMeshRuntime().observe(MESH, 8),
+                                    status -> status.isReady() && status.readyPeerCount() > 0)) {
+                await(targetServing.result);
+                await(sourcePeer.result);
+                await(targetPeer.result);
+                var room =
+                        await(target.spotManager().getOrCreate("recreate-room", "room").submit())
+                                .spot();
+                assertNotEquals(original.nodeRid(), room.nodeRid());
+                assertEquals(
+                        "scheduled",
+                        await(
+                                source.actorClient()
+                                        .requestToActor(original.actorId(), new Join(room.spotId()))
+                                        .timeout(WAIT)
+                                        .submit(String.class)));
+                assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, await(joined));
+                await(sourceLeft);
+                var moved = await(source.actorManager().find(original.actorId())).orElseThrow();
+                assertEquals(room.nodeRid(), moved.nodeRid());
+                assertEquals(original.objectGeneration(), moved.objectGeneration());
+                assertEquals(
+                        ZLinkFrameworkTerminationOutcome.STOPPED,
+                        await(target.shutdown()).outcome());
+            }
+
+            assertTrue(await(source.actorManager().find(original.actorId())).isEmpty());
+            var recreated =
+                    assertInstanceOf(
+                                    ZLinkActorCreateResult.Created.class,
+                                    await(
+                                            source.actorManager()
+                                                    .getOrCreate(original.actorId(), "player")
+                                                    .submit()))
+                            .actor();
+            assertEquals(original.nodeRid(), recreated.nodeRid());
+            assertTrue(recreated.objectGeneration() > original.objectGeneration());
+            assertEquals(
+                    Long.valueOf(recreated.objectGeneration()),
+                    await(
+                            source.actorClient()
+                                    .requestToActor(recreated.actorId(), new ReadGeneration())
+                                    .timeout(WAIT)
+                                    .submit(Long.class)));
+        }
+    }
+
+    private static <T> T await(CompletionStage<T> stage) throws Exception {
+        return stage.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
+    }
+
     private static DefaultZLinkFrameworkOptions options(
             String rid,
             ZLinkInMemoryLocationStore locations,
             InMemoryRelocationStore relocations,
             String peer) {
+        return options(rid, locations, relocations, peer, true);
+    }
+
+    private static DefaultZLinkFrameworkOptions options(
+            String rid,
+            ZLinkInMemoryLocationStore locations,
+            InMemoryRelocationStore relocations,
+            String peer,
+            boolean hostsRooms) {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
@@ -480,7 +572,7 @@ final class ZLinkRelocationObservationPublicTest {
                 Player.class,
                 PlayerFactory.class,
                 f -> f.preserveStateWith(PlayerState.class));
-        objects.addSpotFactory("room", Room.class, f -> f.recreateOnRelocation());
+        if (hostsRooms) objects.addSpotFactory("room", Room.class, f -> f.recreateOnRelocation());
         return options;
     }
 
@@ -540,6 +632,8 @@ final class ZLinkRelocationObservationPublicTest {
 
     public record Leave() {}
 
+    public record ReadGeneration() {}
+
     public record Player(ZLinkActorContext context) implements ZLinkActor {
         @Override
         public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
@@ -577,12 +671,14 @@ final class ZLinkRelocationObservationPublicTest {
 
         @Override
         public CompletionStage<Void> onLeaveActor(Player actor) {
+            if (RECREATED_ACTOR_ID.equals(actor.context().actorId())) sourceLeft.complete(null);
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public void configure() {
             context.handlers().addHandler(JoinHandler.class);
+            context.handlers().addHandler(ReadGenerationHandler.class);
         }
     }
 
@@ -627,6 +723,15 @@ final class ZLinkRelocationObservationPublicTest {
                 Room spot, Player actor, ZLinkMessageContext context, Leave request) {
             actor.context().joinEntrySpot().defer();
             return CompletableFuture.completedFuture("scheduled");
+        }
+    }
+
+    public static final class ReadGenerationHandler
+            implements ZLinkEntrySpotActorRequestHandler<Lobby, Player, ReadGeneration, Long> {
+        @Override
+        public CompletionStage<Long> handle(
+                Lobby spot, Player actor, ZLinkMessageContext context, ReadGeneration request) {
+            return CompletableFuture.completedFuture(actor.context().objectGeneration());
         }
     }
 }
