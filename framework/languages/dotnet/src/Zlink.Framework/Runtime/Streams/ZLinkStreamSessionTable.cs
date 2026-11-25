@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Messaging;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Streams;
@@ -17,12 +19,15 @@ internal sealed class ZLinkStreamSessionTable(
     ZLinkStreamNodeRegistration? livenessOptions = null
 )
 {
+    private const int RejectedCreationLimit = 4096;
     private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<RoutingId, ZLinkStreamSessionRuntime> _sessions = [];
     private readonly Dictionary<
         RoutingId,
         TaskCompletionSource<ZLinkStreamSessionRuntime?>
     > _sessionCreations = [];
+    private readonly HashSet<RoutingId> _rejectedCreations = [];
+    private readonly Queue<RoutingId> _rejectedCreationOrder = [];
     private CancellationToken? _rejectionCancellationToken;
     private bool _stopping;
 
@@ -47,7 +52,8 @@ internal sealed class ZLinkStreamSessionTable(
 
     public async ValueTask<ZLinkStreamSessionRuntime?> GetOrCreateAsync(
         RoutingId routingId,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZlinkStreamHeader? firstPacket = null
     )
     {
         var admission = await _lane
@@ -68,20 +74,13 @@ internal sealed class ZLinkStreamSessionTable(
         {
             try
             {
-                var created = await ZLinkStreamSessionRuntime
-                    .CreateAsync(
-                        services,
-                        socket,
-                        routingId,
-                        headerSessionType,
-                        Remove,
-                        transport,
-                        timeProvider,
-                        actorDispatchEnabled,
-                        requireConnectionReady: true,
-                        livenessOptions: livenessOptions
-                    )
+                var created = await TryCreateSessionAsync(routingId, firstPacket, cancellationToken)
                     .ConfigureAwait(false);
+                if (created is null)
+                {
+                    admission.Creation!.TrySetResult(null);
+                    return null;
+                }
                 var completion = await _lane
                     .RunAsync(() => CompleteCreation(routingId, created, cancellationToken))
                     .ConfigureAwait(false);
@@ -103,6 +102,131 @@ internal sealed class ZLinkStreamSessionTable(
         }
 
         return await admission.Creation!.Task.ConfigureAwait(false);
+    }
+
+    private async ValueTask<ZLinkStreamSessionRuntime?> TryCreateSessionAsync(
+        RoutingId routingId,
+        ZlinkStreamHeader? firstPacket,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            return await ZLinkStreamSessionRuntime
+                .CreateAsync(
+                    services,
+                    socket,
+                    routingId,
+                    headerSessionType,
+                    Remove,
+                    transport,
+                    timeProvider,
+                    actorDispatchEnabled,
+                    requireConnectionReady: true,
+                    livenessOptions: livenessOptions
+                )
+                .ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            await _lane.RunAsync(() => _rejectedCreations.Add(routingId)).ConfigureAwait(false);
+            try
+            {
+                await RejectFailedCreationAsync(routingId, firstPacket, failure, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                await _lane
+                    .RunAsync(() =>
+                    {
+                        // Keep rejected admissions through close and subsequent queued ingress.
+                        if (_rejectedCreationOrder.Count == RejectedCreationLimit)
+                            _rejectedCreations.Remove(_rejectedCreationOrder.Dequeue());
+                        _rejectedCreationOrder.Enqueue(routingId);
+                        _sessionCreations.Remove(routingId);
+                    })
+                    .ConfigureAwait(false);
+            }
+            return null;
+        }
+    }
+
+    private async ValueTask RejectFailedCreationAsync(
+        RoutingId routingId,
+        ZlinkStreamHeader? firstPacket,
+        Exception failure,
+        CancellationToken cancellationToken
+    )
+    {
+        const string diagnostic = "STREAM session creation failed.";
+        var logger = ZLinkMessageFlowTracer.GetLogger(services);
+        try
+        {
+            logger.LogError(
+                failure,
+                "STREAM session creation failed for node {NodeName}, session type {SessionType}, peer {PeerRoutingId}.",
+                livenessOptions?.StreamNodeName,
+                headerSessionType?.FullName,
+                routingId
+            );
+            if (firstPacket is { } packet)
+            {
+                var flow = services.GetRequiredService<ZLinkFrameworkRuntime>().Flow;
+                using var scope = ZLinkFlowContext.Enter(
+                    packet.FlowId,
+                    packet.FlowOrigin is { } origin
+                        ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(origin)
+                        : null,
+                    flow.CaptureEnabled,
+                    ZLinkFlowOrigin.Inbound
+                );
+                if (flow.DispatchErrorsEnabled)
+                    flow.TraceDispatchError(
+                        new ZLinkDispatchFailure(
+                            ZLinkDispatchErrorSurface.StreamSession,
+                            packet.RequestSeq.HasValue
+                                ? ZLinkDispatchMessageKind.Request
+                                : ZLinkDispatchMessageKind.Send,
+                            ZLinkDispatchErrorReason.SessionCreationFailed,
+                            packet.RequestSeq.HasValue
+                                ? ZLinkDispatchErrorAction.ReplyError
+                                : ZLinkDispatchErrorAction.Drop,
+                            packet.Name,
+                            CorrelationId: packet.CorrelationId,
+                            Exception: failure,
+                            StreamSessionId: routingId.ToHex()
+                        )
+                    );
+                if (packet.RequestSeq.HasValue)
+                {
+                    var reply = ZLinkActorReply.FromError(
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.InternalFailure,
+                            diagnostic
+                        )
+                    );
+                    await socket
+                        .SendAsync(
+                            routingId,
+                            Message.From(reply.ToFrame(packet)),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception replyFailure)
+        {
+            errorSink.ReportRuntimeTaskException(nameof(RejectFailedCreationAsync), replyFailure);
+        }
+
+        await CloseRejectedSessionAsync(
+                routingId,
+                ZlinkStreamSessionClosingCodec.EncodeTransportError(diagnostic),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
     }
 
     public ValueTask<ZLinkStreamSessionRuntime?> TryGetAsync(RoutingId routingId) =>
@@ -195,7 +319,7 @@ internal sealed class ZLinkStreamSessionTable(
         CancellationToken cancellationToken
     )
     {
-        if (_stopping)
+        if (_stopping || _rejectedCreations.Contains(routingId))
             return new(null, null, false, false, true, cancellationToken);
 
         if (_sessions.TryGetValue(routingId, out var existing))
@@ -257,14 +381,24 @@ internal sealed class ZLinkStreamSessionTable(
         CancellationToken RejectionCancellationToken
     );
 
-    private async ValueTask RejectNewSessionAsync(
+    private ValueTask RejectNewSessionAsync(
         RoutingId routingId,
+        CancellationToken cancellationToken
+    ) =>
+        CloseRejectedSessionAsync(
+            routingId,
+            ZlinkStreamSessionClosingCodec.EncodeServerDrain(),
+            cancellationToken
+        );
+
+    private async ValueTask CloseRejectedSessionAsync(
+        RoutingId routingId,
+        byte[] payload,
         CancellationToken cancellationToken
     )
     {
         try
         {
-            var payload = ZlinkStreamSessionClosingCodec.EncodeServerDrain();
             await ZLinkStreamFrameWriter
                 .WriteAsync(
                     (message, token) => socket.SendAsync(routingId, message, token),
@@ -276,7 +410,7 @@ internal sealed class ZLinkStreamSessionTable(
         }
         catch (Exception failure)
         {
-            errorSink.ReportRuntimeTaskException(nameof(RejectNewSessionAsync), failure);
+            errorSink.ReportRuntimeTaskException(nameof(CloseRejectedSessionAsync), failure);
         }
         finally
         {

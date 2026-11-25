@@ -21,7 +21,7 @@ flowchart LR
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-Docker with Compose v2 (Linux containers), and PowerShell 7 or Bash. `Directory.Packages.props` pins public ZLink Framework and Stream Connector 0.32.0 and the 1.23.0 binding. The project uses NuGet.org and requires no repository checkout.
+Docker with Compose v2 (Linux containers), and PowerShell 7 or Bash. `Directory.Packages.props` pins public ZLink Framework and Stream Connector 0.34.1 and the 1.26.0 binding. The project uses NuGet.org and requires no repository checkout.
 
 ## Build
 
@@ -173,7 +173,7 @@ Each run owns a unique Compose project, Redis key prefix and `.logs/run-<id>/` d
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

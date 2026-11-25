@@ -321,6 +321,7 @@ export class ZLinkStreamRuntimeManager {
       const readablePoller = streamAdapter.createReadablePoller(socket);
       const runtime = new ZLinkStreamSessionNodeRuntimeCore({
         nodeName,
+        sessionTypeName: sessionType.name,
         heartbeatIntervalMs: streamNode.heartbeatIntervalMs,
         heartbeatTimeoutMs: streamNode.heartbeatTimeoutMs,
         idleTimeoutMs: streamNode.idleTimeoutMs,

@@ -10,7 +10,11 @@ import { resolveActorIngress } from '../../packages/framework/src/runtime/spots/
 import { ZLinkActorRuntimeState } from '../../packages/framework/src/runtime/actors/actor-runtime-state';
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
 import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
-import { ZLinkUserSpotExecutionMode } from '../../packages/framework/src/contracts';
+import {
+  ZLinkFrameworkRuntimeState,
+  ZLinkObjectRole,
+  ZLinkUserSpotExecutionMode
+} from '../../packages/framework/src/contracts';
 import { inspectRuntime } from '../../packages/framework/src/runtime/internal-observation';
 import { ZLinkSpotActorPacketDispatch } from '../../packages/framework/src/runtime/spots/spot-actor-packet-dispatch';
 import {
@@ -73,7 +77,10 @@ import {
   attachActorMessageFollowContext,
   createInitialActorMessageFollowContext
 } from '../../packages/framework/src/runtime/actors/actor-message-follow-context';
-import { ReceiveKind } from '../../packages/framework/src/runtime/foundation/service-runtime-contracts';
+import {
+  MeshPeerRuntimeState,
+  ReceiveKind
+} from '../../packages/framework/src/runtime/foundation/service-runtime-contracts';
 import {
   ServiceStatefulRuntime,
   type ServiceStatefulMailboxData
@@ -1348,6 +1355,200 @@ test('host relocation reports units settled on both sides as an authority error,
   );
   await run(new Set(['actor-a', 'actor-b']));
 });
+
+function createHostRelocationBatchHarness() {
+  class Room {}
+  const spotId = 'spot-wide';
+  const events: string[] = [];
+  const prepares: ServiceMaintenanceRelocationPrepare[] = [];
+  const actorBarriers = new Map(
+    ['entry-a', 'entry-b'].map((actorId) => {
+      let resolve!: () => void;
+      let reject!: (error: Error) => void;
+      const promise = new Promise<void>((complete, fail) => {
+        resolve = complete;
+        reject = fail;
+      });
+      return [actorId, { promise, resolve, reject }];
+    })
+  );
+  const actorStates = Array.from(actorBarriers.keys(), (actorId) => ({
+    actorId,
+    actor: {},
+    meshName: 'mesh-a',
+    spotId: 'source-entry'
+  }));
+  const activation = {
+    spotId,
+    spot: new Room(),
+    spotType: Room,
+    domain: { kind: 'user' },
+    executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+    serial: { executeControlLifecycleOperation: (run: () => Promise<void>) => run() },
+    captureRelocation: async () => ({ timers: [] }),
+    abortRelocation: () => true
+  };
+  const location = actorJoinLocationStore(
+    {
+      kind: 'snapshot',
+      storeVersion: { value: 'source-v1' } as never,
+      payload: Buffer.alloc(0),
+      objectGeneration: 5n,
+      authorityOwnerGeneration: 11n,
+      ownerId: coordinator.ownerId,
+      ownerLeaseGeneration: coordinator.leaseGeneration,
+      allocation: {
+        state: 'active',
+        objectKind: 'user_spot',
+        stableType: 'Room',
+        descriptor: { meshName: 'mesh-a', rid: coordinator.nodeRid },
+        descriptorLifecycleGeneration: coordinator.nodeGeneration,
+        capacity: { actors: 0, spots: 1 }
+      },
+      storeNow: new Date()
+    },
+    events
+  );
+  const capacity = { limit: 0, active: 0, reserved: 0 };
+  const roomType = { objectKind: 'user_spot', stableType: 'Room' };
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime(),
+    registration: {
+      spotNodes: new Map([
+        [
+          'mesh-a',
+          {
+            spotFactoryRegistrations: {
+              Room: { implementation: Room, relocation: { kind: 'recreate' } }
+            }
+          }
+        ]
+      ])
+    },
+    spotManager: () => ({
+      relocationActivations: () => [activation],
+      isSpotClosing: () => false,
+      pendingSpotCloseDecision: () => undefined
+    }),
+    actorManager: () => ({ snapshotStates: () => actorStates }),
+    locationStore: () => location,
+    liveDescriptors: async () => [
+      {
+        rid: target.nodeRid,
+        lifecycleGeneration: target.nodeGeneration,
+        ownerId: target.ownerId,
+        leaseGeneration: target.ownerLeaseGeneration,
+        applicationVersion: 4n,
+        state: ZLinkFrameworkRuntimeState.Serving,
+        objectRole: ZLinkObjectRole.Server,
+        placementWeight: 1,
+        activationConcurrency: capacity,
+        populationCapacity: {
+          actors: capacity,
+          spots: capacity,
+          spotTypes: [{ ...roomType, ...capacity }]
+        },
+        objectCapabilities: [{ ...roomType, policy: 'recreate' }]
+      }
+    ],
+    meshNode: () => ({
+      status: () => ({
+        routingId: coordinator.nodeRid,
+        lifecycleGeneration: coordinator.nodeGeneration
+      }),
+      peers: () => [
+        {
+          routingId: target.nodeRid,
+          lifecycleGeneration: target.nodeGeneration,
+          state: MeshPeerRuntimeState.Serving
+        }
+      ],
+      async requestInfrastructureControlFrames(_rid: string, frames: readonly Uint8Array[]) {
+        const prepare = decodeServiceRelocationControlRequest(Buffer.from(frames[0]!));
+        assert.equal(prepare?.kind, 'prepare');
+        assert.equal(prepare.object.kind, 'userSpot');
+        assert.equal(prepare.object.spotId, spotId);
+        prepares.push(prepare);
+        events.push('spot-wide:prepare');
+        // An explicit target rejection finishes the Spot unit without a second runtime.
+        return [
+          encodeServiceRelocationControlResponse({
+            ...prepare,
+            kind: 'failed',
+            senderRole: 'target',
+            failureCode: 17
+          })
+        ];
+      }
+    })
+  } as never);
+  runtime.relocateStandaloneActor = async (_mesh, { actorId }) => {
+    events.push(`${actorId}:started`);
+    try {
+      await actorBarriers.get(actorId)!.promise;
+    } finally {
+      events.push(`${actorId}:terminal`);
+    }
+  };
+  return { runtime, actorBarriers, events, prepares };
+}
+
+for (const scenario of ['held', 'rejected', 'successful'] as const) {
+  test(`host relocation batch 2 ${scenario} before SpotWide PREPARE`, async () => {
+    const { runtime, actorBarriers, events, prepares } = createHostRelocationBatchHarness();
+    let hostTerminal = false;
+    const operation = runtime.relocateMesh('mesh-a').finally(() => {
+      hostTerminal = true;
+    });
+    const outcome = operation.catch((error: unknown) => error);
+    const actorA = actorBarriers.get('entry-a')!;
+    const actorB = actorBarriers.get('entry-b')!;
+    try {
+      await waitUntil(
+        () => events.includes('entry-a:started') && events.includes('entry-b:started')
+      );
+      if (scenario === 'held') {
+        await turn();
+        assert.equal(prepares.length, 0, 'both independent Actors are still in flight');
+        return;
+      }
+      if (scenario === 'rejected') {
+        const rejection = new Error('Entry Actor relocation rejected.');
+        actorA.reject(rejection);
+        await turn();
+        assert.ok(events.includes('entry-a:terminal'));
+        assert.equal(hostTerminal, false, 'the already-started Actor must settle');
+        assert.equal(prepares.length, 0, 'a rejected Actor prevents SpotWide PREPARE');
+        actorB.resolve();
+        const failure = await outcome;
+        assert(failure instanceof Error);
+        assert.equal(failure.name, 'ServiceRelocationAuthorityError');
+        assert.equal(failure.cause, rejection);
+        assert.ok(events.includes('entry-b:terminal'));
+        assert.equal(prepares.length, 0, 'the failed batch cannot start SpotWide PREPARE');
+        return;
+      }
+
+      actorA.resolve();
+      await turn();
+      assert.ok(events.includes('entry-a:terminal'));
+      actorB.resolve();
+      const failure = await outcome;
+      assert(failure instanceof Error);
+      assert.equal(failure.name, 'ServiceRelocationAuthorityError');
+      assert.equal(prepares.length, 1, String(failure.cause));
+      assert.deepEqual(
+        events.filter((event) => event.endsWith(':terminal') || event === 'spot-wide:prepare'),
+        ['entry-a:terminal', 'entry-b:terminal', 'spot-wide:prepare']
+      );
+    } finally {
+      actorA.resolve();
+      actorB.resolve();
+      await outcome;
+      await runtime.dispose();
+    }
+  });
+}
 
 test('target-ready application authority contains no relocation publication', () => {
   const runtime = new ZLinkHostServiceRelocationRuntime({

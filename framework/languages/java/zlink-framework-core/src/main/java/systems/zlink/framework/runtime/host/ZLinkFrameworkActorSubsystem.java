@@ -145,6 +145,9 @@ final class ZLinkFrameworkActorSubsystem {
                                 : null;
         if (actors != null) {
             actors.setMeshName(actorNodeName);
+            if (legacyActorNode == null && meshActorNode != null) {
+                actors.setActorRelocationPolicy(meshActorNode::isActorRelocationDisabled);
+            }
             actors.setMetadataPolicy(
                     registration.metadataPolicy().sessionToActorKeys(),
                     registration.metadataPolicy().actorToSessionKeys());
