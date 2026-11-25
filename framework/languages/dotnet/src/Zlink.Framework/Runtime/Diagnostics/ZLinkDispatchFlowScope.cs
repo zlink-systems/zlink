@@ -176,8 +176,30 @@ internal readonly struct ZLinkDispatchFlowScope(
             dispatchErrors,
             ZLinkDispatchErrorReason.PayloadDecodeFailed,
             action,
-            reportedException ?? exception
+            exception is System.Text.Json.JsonException ? exception : reportedException ?? exception
         );
+    }
+
+    public Action CreateHandlerStartTrace(ZLinkDispatchErrorReporter dispatchErrors)
+    {
+        var scope = this;
+        return () => scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
+    }
+
+    public async ValueTask RunOneWayHandlerAsync<TState, TResult>(
+        ZLinkDispatchErrorReporter dispatchErrors,
+        TState state,
+        Func<TState, ValueTask<TResult>> invoke
+    )
+    {
+        try
+        {
+            await invoke(state).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            HandlerException(dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
+        }
     }
 
     public void HandlerException(

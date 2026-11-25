@@ -61,6 +61,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLaneTestAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe;
@@ -133,9 +134,27 @@ final class ZLinkStreamRuntimeIngressTest {
     void distinctBinaryRoutingIdsWithTheSameDisplayKeepSeparateSessions(boolean connectionReady)
             throws Exception {
         var stream = new FakeStream();
-        var runtime = startDeterministic(stream, new java.util.concurrent.atomic.AtomicLong());
         var binary = RoutingId.fromHex("0000007b");
         var text = RoutingId.from("123");
+        var binaryRemoved = new CompletableFuture<Void>();
+        var peerSessions =
+                new HashMap<RoutingId, ZLinkStreamRuntime.SessionState>() {
+                    @Override
+                    public boolean remove(Object routingId, Object state) {
+                        boolean removed = super.remove(routingId, state);
+                        if (removed && binary.equals(routingId)) {
+                            binaryRemoved.complete(null);
+                        }
+                        return removed;
+                    }
+                };
+        var runtime =
+                startDeterministic(
+                        stream,
+                        new java.util.concurrent.atomic.AtomicLong(),
+                        ignored -> {},
+                        new ZLinkStateLane(),
+                        new HashMap<>(Map.of("stream", peerSessions)));
         assertEquals(binary.toString(), text.toString());
         if (connectionReady) {
             stream.errorHandler.handle(binary, MonitorEventType.CONNECTION_READY, 0, "ready");
@@ -158,7 +177,8 @@ final class ZLinkStreamRuntimeIngressTest {
 
         stream.errorHandler.handle(
                 RoutingId.fromHex("0000007b"), MonitorEventType.DISCONNECTED, 0, "closed");
-        binarySession.transportClosed.get(5, TimeUnit.SECONDS);
+        binaryRemoved.get(5, TimeUnit.SECONDS);
+        assertTrue(binarySession.transportClosed.isDone());
         dispatchDeterministic(runtime, RoutingId.from("123"), "surviving", false);
         dispatchDeterministic(runtime, RoutingId.fromHex("0000007b"), "reconnected", false);
 

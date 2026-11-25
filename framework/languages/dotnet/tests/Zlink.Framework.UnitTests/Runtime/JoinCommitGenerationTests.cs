@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
 using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
@@ -186,6 +187,22 @@ public sealed class JoinCommitGenerationTests(ITestOutputHelper output)
             registerTargetSpot: !crossNode
         );
         var actorId = $"deferred-generation-{Guid.NewGuid():N}";
+        // Model a prior incarnation of this Actor so its generation and the
+        // newly created Spot's generation are distinguishable in this test.
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [],
+                    [
+                        new ZLinkStoreMutation.Put(
+                            new ZLinkStoreKey($"zlink:v12:object-counter\0actor\0{actorId}"),
+                            "2"u8.ToArray(),
+                            null
+                        ),
+                    ]
+                )
+            )
+        );
         _ = await source
             .Services.GetRequiredService<IZLinkActorManager>()
             .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)

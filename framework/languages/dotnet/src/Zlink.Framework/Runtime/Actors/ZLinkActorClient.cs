@@ -76,6 +76,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             );
         EnsureRouteAvailable(nodeRuntime, actor);
         var parts = CreatePacketParts(
+            actor.ActorId,
             ZlinkStreamMessageKind.Send,
             null,
             packetName,
@@ -202,6 +203,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             pending.Token.ThrowIfCancellationRequested();
             var remainingTimeout = owner.RemainingTimeout(pending);
             var parts = CreatePacketParts(
+                actor.ActorId,
                 ZlinkStreamMessageKind.Request,
                 new ZlinkStreamRequestSeq(1),
                 packetName,
@@ -417,7 +419,8 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         );
     }
 
-    private static IReadOnlyList<Message> CreatePacketParts<TMessage>(
+    private IReadOnlyList<Message> CreatePacketParts<TMessage>(
+        string actorId,
         ZlinkStreamMessageKind kind,
         ZlinkStreamRequestSeq? requestSeq,
         string packetName,
@@ -440,10 +443,32 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             metadata,
             ZlinkStreamCorrelation.Next()
         );
-        var payload = ZLinkEnvelopeCodec.EncodeJsonBytes(
-            message,
-            message?.GetType() ?? typeof(TMessage)
-        );
+        byte[] payload;
+        try
+        {
+            payload = ZLinkEnvelopeCodec.EncodeJsonBytes(
+                message,
+                message?.GetType() ?? typeof(TMessage)
+            );
+        }
+        catch (Exception failure) when (runtime.Flow.DispatchErrorsEnabled)
+        {
+            runtime.Flow.TraceDispatchError(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.SpotActor,
+                    kind == ZlinkStreamMessageKind.Send
+                        ? ZLinkDispatchMessageKind.ActorSend
+                        : ZLinkDispatchMessageKind.ActorRequest,
+                    ZLinkDispatchErrorReason.PayloadEncodeFailed,
+                    ZLinkDispatchErrorAction.FailCaller,
+                    packetName,
+                    ActorId: actorId,
+                    CorrelationId: header.CorrelationId,
+                    Exception: failure.GetBaseException()
+                )
+            );
+            throw;
+        }
         return
         [
             Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),

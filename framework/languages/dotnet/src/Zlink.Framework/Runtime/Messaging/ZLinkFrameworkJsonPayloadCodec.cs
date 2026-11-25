@@ -13,26 +13,61 @@ internal static class ZLinkFrameworkJsonPayloadCodec
     {
         var type =
             (JsonTypeInfo<T>)ZLinkJsonSerializerOptions.FrameworkPayload.GetTypeInfo(typeof(T));
-        ZLinkFrameworkJsonDocument.ValidateDocument(payload, type);
-        return JsonSerializer.Deserialize(payload, type);
+        try
+        {
+            ZLinkFrameworkJsonDocument.ValidateDocument(payload, type);
+            return JsonSerializer.Deserialize(payload, type);
+        }
+        catch (JsonException error) when (IsProfileFailure(error))
+        {
+            throw DescribeDecodeFailure(type.Type, error, payload);
+        }
     }
 
     internal static object? Deserialize(ReadOnlySpan<byte> payload, Type type)
     {
         var typeInfo = ZLinkJsonSerializerOptions.FrameworkPayload.GetTypeInfo(type);
-        ZLinkFrameworkJsonDocument.ValidateDocument(payload, typeInfo);
-        return JsonSerializer.Deserialize(payload, typeInfo);
+        try
+        {
+            ZLinkFrameworkJsonDocument.ValidateDocument(payload, typeInfo);
+            return JsonSerializer.Deserialize(payload, typeInfo);
+        }
+        catch (JsonException error) when (IsProfileFailure(error))
+        {
+            throw DescribeDecodeFailure(type, error, payload);
+        }
     }
 
-    internal static byte[] Serialize<T>(T value) =>
-        JsonSerializer.SerializeToUtf8Bytes(value, ZLinkJsonSerializerOptions.FrameworkPayload);
+    internal static byte[] Serialize<T>(T value)
+    {
+        try
+        {
+            return JsonSerializer.SerializeToUtf8Bytes(
+                value,
+                ZLinkJsonSerializerOptions.FrameworkPayload
+            );
+        }
+        catch (JsonException error) when (IsProfileFailure(error))
+        {
+            throw DescribeFailure(typeof(T), error);
+        }
+    }
 
-    internal static byte[] Serialize(object? value, Type type) =>
-        JsonSerializer.SerializeToUtf8Bytes(
-            value,
-            type,
-            ZLinkJsonSerializerOptions.FrameworkPayload
-        );
+    internal static byte[] Serialize(object? value, Type type)
+    {
+        try
+        {
+            return JsonSerializer.SerializeToUtf8Bytes(
+                value,
+                type,
+                ZLinkJsonSerializerOptions.FrameworkPayload
+            );
+        }
+        catch (JsonException error) when (IsProfileFailure(error))
+        {
+            throw DescribeFailure(type, error);
+        }
+    }
 
     internal static Message SerializePart(object? value, Type type)
     {
@@ -60,12 +95,47 @@ internal static class ZLinkFrameworkJsonPayloadCodec
             writer.Flush();
             return buffer;
         }
+        catch (JsonException error) when (IsProfileFailure(error))
+        {
+            buffer.Dispose();
+            throw DescribeFailure(type, error);
+        }
         catch
         {
             buffer.Dispose();
             throw;
         }
     }
+
+    private static bool IsProfileFailure(JsonException error) =>
+        error.Data.Contains(ZLinkJsonSerializerOptions.DiagnosticTokenOffset);
+
+    private static JsonException DescribeDecodeFailure(
+        Type type,
+        JsonException error,
+        ReadOnlySpan<byte> payload
+    ) =>
+        DescribeFailure(
+            type,
+            error,
+            error.Data[ZLinkJsonSerializerOptions.DiagnosticTokenOffset] is long tokenOffset
+            && tokenOffset >= 0
+                ? ZLinkFrameworkJsonDocument.PropertyPathAt(payload, tokenOffset)
+                : null
+        );
+
+    private static JsonException DescribeFailure(
+        Type type,
+        JsonException error,
+        string? path = null
+    ) =>
+        new(
+            $"Message '{type.Name}' ({path ?? error.Path ?? "$"}): {error.Message}",
+            path ?? error.Path,
+            error.LineNumber,
+            error.BytePositionInLine,
+            error.InnerException
+        );
 
     internal sealed class PooledJsonBufferWriter : IBufferWriter<byte>, IDisposable
     {

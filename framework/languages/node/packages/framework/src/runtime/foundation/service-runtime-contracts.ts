@@ -259,6 +259,7 @@ export interface ReceiveRecord {
     this: ReceiveRecord,
     signal: AbortSignal
   ) => boolean | Promise<boolean>;
+  readonly spotTargetAdmission?: import('./service-stateful-runtime').ServiceSpotTargetAdmission;
   readonly statefulMailboxRecord?: import('./service-mailbox').ServiceMailboxRecord;
   readonly requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly kind: number;

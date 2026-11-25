@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
+#include "runtime/dispatch/completion_turn.hpp"
 #include "runtime/execution/task_result.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 #include <zlink/framework/detail/deadline_scheduler.hpp>
@@ -78,6 +79,12 @@ class location_runtime_t
         bool pending_peer_reconcile = false;
         std::shared_ptr<heartbeat_attempt_t> current;
         task_completion_source_t<void> discovery_changed;
+
+        bool request_stop ()
+        {
+            std::lock_guard lock (gate);
+            return !stop.exchange (true, std::memory_order_acq_rel);
+        }
 
         void notify (bool reconcile = false)
         {
@@ -424,10 +431,24 @@ class location_runtime_t
 
     ~location_runtime_t ()
     {
-        stop ();
+        // Standalone callers finish or cancel their Store work before closing the completion owner.
+        const bool cleanup_only =
+          _lifecycle.load (std::memory_order_acquire) == lifecycle_t::needs_drain
+          && !detail::try_borrow_completion_dispatcher ();
+        if (cleanup_only)
+            std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire)
+              ->request_stop ();
+        else
+            stop ();
         _store->configure_access ({});
         // Borrowed lane handles can outlive the Runtime; callbacks using its fields cannot.
         _lane->close ();
+        if (cleanup_only) {
+            const auto lease =
+              std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
+            lease->deadlines->cancel ();
+            _repository_operations->clear ();
+        }
     }
 
     location_runtime_t (const location_runtime_t &) = delete;
@@ -2086,13 +2107,8 @@ class location_runtime_t
     void stop_heartbeat () noexcept
     {
         auto heartbeat = std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire);
-        if (!heartbeat)
+        if (!heartbeat || !heartbeat->request_stop ())
             return;
-        {
-            std::lock_guard lock (heartbeat->gate);
-            if (heartbeat->stop.exchange (true, std::memory_order_acq_rel))
-                return;
-        }
         infrastructure_result ([this] {
             return _lane->run_task ([this] {
                 const auto lease =

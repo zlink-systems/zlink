@@ -1682,10 +1682,9 @@ final class ZLinkCanonicalRelocationStateMachine
                                             instanceof
                                             ZLinkAggregateRelocationCoordinator
                                                     .AuthorityConflictException
-                                    || cause
-                                            instanceof
-                                            ZLinkAggregateRelocationCoordinator
-                                                    .RelocationDataLostException) {
+                                    || cause instanceof ZLinkFrameworkException framework
+                                            && framework.kind()
+                                                    == ZLinkFrameworkErrorKind.DATA_LOST) {
                                 result.completeExceptionally(cause);
                                 return;
                             }

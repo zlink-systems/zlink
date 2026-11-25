@@ -485,13 +485,25 @@ final class ZLinkAuthorityRecoveryContractTest {
         if (provider) {
             assertEquals(1, f.probe.writes.size());
             var batch = f.probe.writes.getFirst();
-            assertEquals(4, batch.conditions().size());
-            assertEquals(2, batch.mutations().size());
+            assertEquals(3, batch.conditions().size());
+            var authorityKey = ZLinkProviderAuthorityRepositoryTestAccess.authorityKey(key);
+            var capacityKey =
+                    new ZLinkStoreKey(
+                            "zlink:v12:capacity\0"
+                                    + f.node.meshName()
+                                    + '\0'
+                                    + f.node.rid().toHex()
+                                    + "\0actors\0active");
+            assertTrue(
+                    batch.conditions()
+                            .contains(
+                                    new ZLinkStoreVersionCondition(
+                                            authorityKey,
+                                            new ZLinkStoreVersion(updated.storeVersion()))));
             assertEquals(
-                    List.of(
-                            new ZLinkStoreDelete(
-                                    ZLinkProviderAuthorityRepositoryTestAccess.authorityKey(key))),
-                    batch.mutations().stream().filter(ZLinkStoreDelete.class::isInstance).toList());
+                    Set.of(new ZLinkStoreDelete(authorityKey), new ZLinkStoreAdd(capacityKey, -1)),
+                    Set.copyOf(batch.mutations()));
+            assertEquals(2, batch.mutations().size());
         }
     }
 
