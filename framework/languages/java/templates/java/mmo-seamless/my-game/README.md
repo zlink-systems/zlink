@@ -1,6 +1,6 @@
 # my-game
 
-A Java seamless MMORPG template using public ZLink Framework 0.32.0 packages. Session processes bind players to Actors; Zone processes host a six-zone world; Instance processes create Dungeon User Spots on demand. Player Actors retain movement state across cross-node joins and planned host relocation.
+A Java seamless MMORPG template using public ZLink Framework 0.34.2 packages. Session processes bind players to Actors; Zone processes host a six-zone world; Instance processes create Dungeon User Spots on demand. Player Actors retain movement state across cross-node joins and planned host relocation.
 
 ```mermaid
 flowchart LR
@@ -148,7 +148,7 @@ Structure-only validation: `./run-e2e.sh --check-structure` or `pwsh -NoProfile 
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.2 packages.
 
 Preserve the first node stderr and message-flow records when a scenario fails; do not alter join timing or assertions.
 
