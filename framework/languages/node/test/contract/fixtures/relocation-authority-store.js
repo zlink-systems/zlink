@@ -3,10 +3,21 @@ const {
   encodeAuthorityAggregate
 } = require('../../../packages/framework/dist/runtime/locations/authority-relocation-record');
 
+const { ZLinkInMemoryLocationStore } = require('../../../packages/framework/dist/internal');
+
+function relocationInventoryStore() {
+  const store = new ZLinkInMemoryLocationStore();
+  return {
+    storeAggregateInventory: store.storeAggregateInventory.bind(store),
+    readAggregateInventory: store.readAggregateInventory.bind(store)
+  };
+}
+
 // A domain-store fixture retains the same authority snapshot across progress CAS operations.
 function relocationAuthorityStore(readInitial) {
   const rows = new Map();
   const store = {
+    ...relocationInventoryStore(),
     async readAuthority(key) {
       if (!rows.has(key.value)) rows.set(key.value, await readInitial(key));
       return rows.get(key.value);
@@ -33,4 +44,4 @@ function relocationAuthorityStore(readInitial) {
   };
   return () => store;
 }
-module.exports = { relocationAuthorityStore };
+module.exports = { relocationAuthorityStore, relocationInventoryStore };

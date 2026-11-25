@@ -4,7 +4,6 @@ import {
 } from '../framework-errors-internal';
 import { encodeActorReply } from '../actors/actor-reply';
 import { ZLinkStreamMessageKind } from '../streams/protocol';
-import { createHash } from 'node:crypto';
 import {
   type ActorRef,
   type RoutingId,
@@ -1146,7 +1145,6 @@ export class ZLinkActorTransferRuntime {
           membershipMutation
         }
       ],
-      inventoryDigest: createHash('sha256').update(membershipMutation).digest(),
       targetDescriptor: {
         meshName: actor.context.meshName,
         rid: local.routingId

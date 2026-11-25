@@ -1,4 +1,7 @@
-const { relocationAuthorityStore } = require('./fixtures/relocation-authority-store');
+const {
+  relocationAuthorityStore,
+  relocationInventoryStore
+} = require('./fixtures/relocation-authority-store');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
@@ -189,6 +192,7 @@ for (const failedPhase of ['preparing', 'captured']) {
       }),
       meshNode: () => ({ status: () => ({ routingId: 'source', lifecycleGeneration: 1n }) }),
       locationStore: () => ({
+        ...relocationInventoryStore(),
         async readAuthority() {
           return current;
         },

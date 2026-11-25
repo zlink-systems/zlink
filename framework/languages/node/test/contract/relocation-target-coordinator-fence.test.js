@@ -163,8 +163,17 @@ for (const phase of ['steady', 'captured', 'legacy captured']) {
         ],
         memberships: []
       };
+      const entries = [
+        {
+          authorityKey: key,
+          ownerTransition: 'newOwner',
+          authorityPayload: payload,
+          membershipMutation: Buffer.from('[]')
+        }
+      ];
+      const digest = '0'.repeat(64);
       if (changed === 'none') {
-        await runtime.reserveTargetForPrepare('mesh', prepare, envelope);
+        await runtime.reserveTargetForPrepare('mesh', prepare, envelope, entries, digest);
         assert.deepEqual(events, ['aggregate']);
         assert.equal(
           aggregateRequest.participants[0].expectedStoreVersion.value,
@@ -176,7 +185,7 @@ for (const phase of ['steady', 'captured', 'legacy captured']) {
         });
       } else {
         await assert.rejects(
-          runtime.reserveTargetForPrepare('mesh', prepare, envelope),
+          runtime.reserveTargetForPrepare('mesh', prepare, envelope, entries, digest),
           /coordinator.*fence|authority changed/
         );
         assert.deepEqual(
