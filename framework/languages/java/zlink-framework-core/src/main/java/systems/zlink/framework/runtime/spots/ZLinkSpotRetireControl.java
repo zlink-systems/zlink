@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator.TargetIngressAuthority;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
 import java.io.ByteArrayInputStream;
@@ -288,6 +289,11 @@ final class ZLinkSpotRetireControl {
         }
 
         CompletionStage<Void> stage(StageRequest request);
+
+        default CompletionStage<Void> stage(
+                StageRequest request, TargetIngressAuthority authority) {
+            return stage(request);
+        }
 
         CompletionStage<Void> publish(StageRequest request);
 
