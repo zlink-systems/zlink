@@ -675,6 +675,10 @@ target_include_directories(zlink_framework_locations_redis PUBLIC
 target_link_libraries(zlink_framework_locations_redis PUBLIC
   zlink::framework_provider_abstractions
   zlink::framework)
+# redis.cpp hashes its Lua scripts with Beast's SHA-1 for EVALSHA (#5458). The
+# Framework targets keep their Boost tree to themselves in an installed archive,
+# so this target resolves the same Boost checkout through the shared helper.
+zlink_framework_cpp_add_boost_headers(zlink_framework_locations_redis)
 set(ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES "")
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS OFF)
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV OFF)
