@@ -50,6 +50,11 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
         this(socket, ownsCompletionQueue, false);
     }
 
+    static ZLinkJavaSocketReceivePoller wakeable(Socket socket) {
+        return new ZLinkJavaSocketReceivePoller(
+                socket, true, false, Zlink::createPoller, Zlink::createTimer);
+    }
+
     /**
      * {@code observesRoutes} also waits for ROUTER {@code POLLROUTE}. That readiness stays set
      * until a routes snapshot succeeds (Core ROUTER §10.1), so only the socket's one route observer
@@ -175,9 +180,9 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
     // The port's existing state lane and close claim serialize producers with disposal.
     // Do not acquire this monitor: the receive owner holds it during native wait.
     void signal() {
-        if (!closed && wakeTimer != null) {
-            wakeTimer.start(WAKE_INTERVAL, WAKE_FIRE_COUNT);
+        if (!closed && wakeTimer != null && scheduledManagementDeadline != null) {
             scheduledManagementDeadline = null;
+            wakeTimer.start(WAKE_INTERVAL, WAKE_FIRE_COUNT);
         }
     }
 
