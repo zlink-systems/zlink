@@ -542,12 +542,10 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return Optional.of(admission);
     }
 
-    ZLinkSpotRetireControl.TargetProfile applyTargetProfile(
-            ZLinkSpotRetireControl.StageRequest request, long defaultActorSpotGeneration) {
+    Optional<ZLinkSpotRetireControl.TargetProfile> admittedTargetProfile(
+            ZLinkSpotRetireControl.StageRequest request) {
         Admission admission = admissions.get(request.fence().aggregateId());
-        if (admission == null) {
-            return new ZLinkSpotRetireControl.TargetProfile(request, defaultActorSpotGeneration, 1);
-        }
+        if (admission == null) return Optional.empty();
         if (!admission.actorId().equals(request.participants().getFirst().objectId())) {
             throw new IllegalStateException(
                     "canonical Actor Join target admission fence conflicts");
@@ -573,8 +571,9 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                         request.sessionRoutes());
         SpotDispatchLine target =
                 Objects.requireNonNull(SpotDispatchLine.from(admission.targetSpot()));
-        return new ZLinkSpotRetireControl.TargetProfile(
-                profiled, target.objectGeneration(), target.spotKind());
+        return Optional.of(
+                new ZLinkSpotRetireControl.TargetProfile(
+                        profiled, target.objectGeneration(), target.spotKind()));
     }
 
     CompletionStage<Void> notifyTargetJoined(

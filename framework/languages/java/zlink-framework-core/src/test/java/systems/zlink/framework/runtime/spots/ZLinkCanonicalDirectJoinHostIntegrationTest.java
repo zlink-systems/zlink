@@ -528,19 +528,27 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         }
 
                         @Override
-                        public ZLinkSpotRetireControl.TargetProfile applyTargetProfile(
-                                ZLinkSpotRetireControl.StageRequest request,
-                                long defaultActorSpotGeneration) {
+                        public CompletionStage<ZLinkSpotRetireControl.TargetProfile>
+                                applyTargetProfile(
+                                        ZLinkSpotRetireControl.TargetProfile targetProfile,
+                                        java.util.function.Supplier<CompletionStage<Void>>
+                                                awaitShell) {
                             try {
-                                var profile =
-                                        endpoint.applyTargetProfile(
-                                                request, defaultActorSpotGeneration);
-                                EVENTS.add(
-                                        "target.profile:"
-                                                + profile.actorSpotGeneration()
-                                                + ":"
-                                                + profile.actorSpotKind());
-                                return profile;
+                                return endpoint.applyTargetProfile(targetProfile, awaitShell)
+                                        .whenComplete(
+                                                (profile, failure) -> {
+                                                    if (failure == null) {
+                                                        EVENTS.add(
+                                                                "target.profile:"
+                                                                        + profile
+                                                                                .actorSpotGeneration()
+                                                                        + ":"
+                                                                        + profile.actorSpotKind());
+                                                    } else {
+                                                        EVENTS.add(
+                                                                "target.profile.failed:" + failure);
+                                                    }
+                                                });
                             } catch (RuntimeException failure) {
                                 EVENTS.add("target.profile.failed:" + failure);
                                 throw failure;
@@ -2153,7 +2161,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             actors.publishRelocatedActor(
                     (ZLinkActorRuntime.PreparedTransferredActor) actor,
                     request.targetSpotId(),
-                    targetOwnerGeneration);
+                    targetOwnerGeneration,
+                    null);
         }
 
         @Override

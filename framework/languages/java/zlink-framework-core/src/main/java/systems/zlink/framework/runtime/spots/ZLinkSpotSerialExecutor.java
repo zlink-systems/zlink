@@ -760,11 +760,15 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                 () -> {
                     LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes = new LinkedHashMap<>();
                     lanes.put("spot", spotQueue);
-                    timerQueues.entrySet().stream()
-                            .sorted(Map.Entry.comparingByKey())
-                            .forEach(
-                                    entry ->
-                                            lanes.put("timer:" + entry.getKey(), entry.getValue()));
+                    if (sharedSpotGate) {
+                        timerQueues.entrySet().stream()
+                                .sorted(Map.Entry.comparingByKey())
+                                .forEach(
+                                        entry ->
+                                                lanes.put(
+                                                        "timer:" + entry.getKey(),
+                                                        entry.getValue()));
+                    }
                     for (String actorId : participantActorIds) {
                         if (lanes.putIfAbsent(
                                         "actor:" + actorId,
