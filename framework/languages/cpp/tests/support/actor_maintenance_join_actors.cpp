@@ -208,6 +208,7 @@ const fw::spot_context_t &room_t::context () const noexcept
 void room_t::configure ()
 {
     _context.handlers ().add_actor_send<&room_t::move> ();
+    _context.handlers ().add_actor_request<&room_t::join_entry> ();
     _context.handlers ().add_actor_request<&room_t::probe> ();
     _context.handlers ().add_actor_request<&room_t::close_session> ();
     _context.handlers ().add_actor_send<&room_t::push> ();
@@ -255,6 +256,15 @@ fw::task_t<void> room_t::ready (const ready_t &)
 {
     _context.relocation_ready ().defer ();
     co_return;
+}
+
+probe_t room_t::join_entry (actor_t &actor, fw::message_context_t &, const entry_join_t &request)
+{
+    actor.context ()
+      .join_entry_spot ()
+      .timeout (std::chrono::milliseconds (request.timeout_ms))
+      .defer ();
+    return probe_t{actor.instance};
 }
 
 void room_t::move (actor_t &actor, fw::message_context_t &, const move_t &request)

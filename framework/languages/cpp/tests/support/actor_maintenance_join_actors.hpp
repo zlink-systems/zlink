@@ -80,6 +80,7 @@ class room_t final : public fw::spot_t<actor_t>
     fw::task_t<probe_t> ordinary_probe (const probe_t &request);
     fw::task_t<void> ready (const ready_t &);
     void move (actor_t &actor, fw::message_context_t &, const move_t &request);
+    probe_t join_entry (actor_t &actor, fw::message_context_t &, const entry_join_t &request);
     fw::task_t<void> push (actor_t &actor, fw::message_context_t &, const probe_t &message);
     probe_t probe (actor_t &actor, fw::message_context_t &, const probe_t &request);
     fw::task_t<fw::spot_actor_join_result_t> on_actor_join (std::string_view joining_actor,

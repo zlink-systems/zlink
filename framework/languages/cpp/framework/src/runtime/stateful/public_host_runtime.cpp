@@ -1122,6 +1122,10 @@ actor_handle_t::join_entry_spot (const zlink::routing_id_t &target_node_rid,
     if (!_host) {
         co_return zlink::submit_result_t::invalid_handle;
     }
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+    ::zlink::framework::detail::test_creation_probe::local_entry_join_submissions.fetch_add (
+      1, std::memory_order_relaxed);
+#endif
     const auto entry = co_await _host->get_or_create_spot_async (_host->_entry_spot_id);
     co_return co_await join_spot (target_node_rid, entry.spot_id (),
                                   entry.status ().lifecycle_generation (), parts, operation,

@@ -14,6 +14,12 @@ struct move_t
     std::string target;
 };
 
+struct entry_join_t
+{
+    static constexpr const char *packet_name = "maintenance-join-entry";
+    int timeout_ms{};
+};
+
 struct probe_t
 {
     static constexpr const char *packet_name = "maintenance-join-probe";
@@ -55,6 +61,13 @@ template <> struct zlink::json::dto_traits<zlink::framework::test::actor_mainten
 {
     static constexpr auto fields = std::tuple{zlink::json::field (
       "target", &zlink::framework::test::actor_maintenance_join::move_t::target)};
+};
+
+template <>
+struct zlink::json::dto_traits<zlink::framework::test::actor_maintenance_join::entry_join_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "timeout_ms", &zlink::framework::test::actor_maintenance_join::entry_join_t::timeout_ms)};
 };
 
 template <> struct zlink::json::dto_traits<zlink::framework::test::actor_maintenance_join::probe_t>

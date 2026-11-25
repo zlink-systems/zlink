@@ -357,18 +357,17 @@ class mesh_node_runtime_t
                                                         std::uint64_t authority_owner_generation);
     task_t<actor_join_reply_t> join_application_actor_to_entry_spot (
       actor_ref_t actor,
-      mesh_node_descriptor_t target,
       zlink::message_t request,
       std::chrono::milliseconds timeout,
-      std::optional<zlink::routing_id_t> bound_session_node_rid = {},
-      std::optional<zlink::routing_id_t> bound_session_rid = {});
+      const actor_gateway_runtime_t &gateway,
+      std::function<task_t<mesh_node_descriptor_t> (actor_ref_t)> select_target);
     task_t<result_t<void>>
     submit_application_actor_entry_spot_join (actor_ref_t actor,
                                               node_rid_t target_node,
                                               zlink::message_t request,
                                               std::chrono::milliseconds timeout,
                                               host::pending_operation_t &operation,
-                                              actor_join_completion_t completion);
+                                              actor_join_completion_t completion = {});
 
     void settle_application_actor_creation (const actor_ref_t &actor, bool ready);
 
@@ -577,11 +576,16 @@ class mesh_node_runtime_t
     task_t<void>
     finalize_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state,
                                             actor_ref_t target_actor);
-    task_t<result_t<void>> deliver_actor_join (actor_ref_t actor,
-                                               std::optional<spot_id_t> source_spot,
-                                               std::uint64_t operation_high,
-                                               std::uint64_t operation_low,
-                                               const result_t<actor_join_reply_t> &joined);
+    task_t<actor_join_reply_t>
+    join_local_application_actor_to_entry_spot (const actor_ref_t &actor,
+                                                const mesh_node_descriptor_t &target,
+                                                const zlink::message_t &request,
+                                                std::chrono::milliseconds timeout);
+    runtime::protocol::wire_operation_id_t next_actor_join_completion_id ();
+    task_t<actor_join_reply_t> deliver_actor_join (const actor_ref_t &actor,
+                                                   std::optional<spot_id_t> source_spot,
+                                                   runtime::protocol::wire_operation_id_t operation,
+                                                   result_t<actor_join_reply_t> joined);
     task_t<actor_join_reply_t> fail_remote_actor_join (const remote_actor_join_state_t &state,
                                                        const result_t<actor_join_reply_t> &failed,
                                                        std::string message);

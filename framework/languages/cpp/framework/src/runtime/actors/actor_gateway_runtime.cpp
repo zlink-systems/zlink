@@ -1309,26 +1309,10 @@ actor_join_call_t actor_context_t::join_entry_spot_payload (const zlink::message
     auto context = std::shared_ptr<actor_context_t> (
       new actor_context_t (_state, *_actor_ref, _source_binding_generation, _mesh_name));
     context->_actor_ref = _actor_ref;
-    // The deferred join completes when the entry Spot join operation does; the
-    // barrier turn continues from that completion instead of waiting for it.
     return actor_join_call_t (
       actor_join_call_t::async_deferred_fn_t{
-        [context, request] (std::chrono::milliseconds timeout) mutable -> task_t<void> {
-            auto completed = std::make_shared<task_completion_source_t<void>> ();
-            auto result = completed->task ();
-            auto joining = join_entry_spot_erased (context, request, timeout);
-            detail::observe_task_completion (
-              joining, [completed] (const result_t<detail::actor_join_reply_t> &joined) mutable {
-                  if (!joined) {
-                      const auto *error = joined.error ();
-                      completed->complete (result_t<void>::failure (
-                        joined.error_kind (),
-                        error != nullptr ? error->what () : "actor join entry spot failed"));
-                      return;
-                  }
-                  completed->complete (result_t<void>::success ());
-              });
-            return result;
+        [context, request] (std::chrono::milliseconds timeout) -> task_t<void> {
+            (void) co_await join_entry_spot_erased (context, request, timeout);
         }},
       [context] { return context->reserve_join_barrier (); });
 }

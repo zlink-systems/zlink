@@ -12,6 +12,7 @@ inline std::atomic_size_t shared_states{0};
 inline std::atomic_size_t coroutine_states{0};
 inline std::atomic_size_t payload_copies{0};
 inline std::atomic_size_t request_deliveries{0};
+inline std::atomic_size_t local_entry_join_submissions{0};
 inline std::atomic_size_t request_capture_bytes{0};
 inline std::atomic_size_t request_capture_value_bytes{0};
 inline std::atomic_size_t request_block_bytes{0};
