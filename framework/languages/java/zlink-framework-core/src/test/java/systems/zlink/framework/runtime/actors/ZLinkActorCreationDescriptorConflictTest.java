@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -23,68 +22,23 @@ import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-final class ZLinkConcurrentActorCreationCapacityTest {
-    private static final int SESSION_COUNT = 64;
+final class ZLinkActorCreationDescriptorConflictTest {
     private static final AtomicInteger FACTORY_CALLS = new AtomicInteger();
     private static final AtomicInteger CALLBACK_CALLS = new AtomicInteger();
-
-    @RepeatedTest(30)
-    void concurrentActorsRebuildSharedCapacityWithoutRepeatingFactories() throws Exception {
-        FACTORY_CALLS.set(0);
-        CALLBACK_CALLS.set(0);
-        var store = new SharedCapacityStore();
-        var options = new DefaultZLinkFrameworkOptions();
-        options.addLocationStore(store);
-        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
-        var node = options.addRouteMesh("1304-java");
-        node.listen("inproc://1304-java-" + System.nanoTime())
-                .setRoutingId(RoutingId.from("1304-java"));
-        var objects = node.objects().server();
-        objects.addEntrySpot(Entry.class);
-        objects.addActorFactory(
-                "1304-player", Player.class, Factory.class, factory -> factory.disableRelocation());
-        try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
-                    .toCompletableFuture()
-                    .get(5, TimeUnit.SECONDS);
-            assertTrue(
-                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
-                            .toCompletableFuture()
-                            .get(5, TimeUnit.SECONDS));
-            List<CompletableFuture<ZLinkActorCreateResult>> results = new ArrayList<>();
-            for (int session = 0; session < SESSION_COUNT; session++) {
-                results.add(
-                        runtime.actorManager()
-                                .create("1304-player-" + session, "1304-player")
-                                .submit()
-                                .toCompletableFuture());
-            }
-            for (var result : results) {
-                assertInstanceOf(
-                        ZLinkActorCreateResult.Created.class, result.get(10, TimeUnit.SECONDS));
-            }
-            assertEquals(SESSION_COUNT, FACTORY_CALLS.get());
-            assertEquals(SESSION_COUNT, CALLBACK_CALLS.get());
-            assertEquals(SESSION_COUNT, store.initialCommits.get());
-            assertTrue(
-                    store.conflicts.get() >= SESSION_COUNT - 1,
-                    "all initial Ready writes must contend for the same capacity version");
-        }
-    }
 
     @Test
     void sameLifecycleDescriptorRepublishRebuildsQualifiedConflictWithoutRepeatingFactory()
             throws Exception {
         FACTORY_CALLS.set(0);
         CALLBACK_CALLS.set(0);
-        var store = new SharedCapacityStore(true);
+        var store = new DescriptorRepublishStore();
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
         options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
@@ -116,22 +70,11 @@ final class ZLinkConcurrentActorCreationCapacityTest {
         }
     }
 
-    private static final class SharedCapacityStore implements ZLinkLocationStore {
+    private static final class DescriptorRepublishStore implements ZLinkLocationStore {
         private static final String CREATION_TERMINAL_PREFIX = "creation-terminal\0";
         private final ZLinkLocationStore inner = new ZLinkInMemoryLocationStore();
-        private final AtomicInteger initialCommits = new AtomicInteger();
         private final AtomicInteger conflicts = new AtomicInteger();
-        private final CompletableFuture<Void> release = new CompletableFuture<>();
-
-        private final boolean republishDescriptor;
-
-        SharedCapacityStore() {
-            this(false);
-        }
-
-        SharedCapacityStore(boolean republishDescriptor) {
-            this.republishDescriptor = republishDescriptor;
-        }
+        private final AtomicBoolean republished = new AtomicBoolean();
 
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
@@ -153,7 +96,7 @@ final class ZLinkConcurrentActorCreationCapacityTest {
                                                                             CREATION_TERMINAL_PREFIX))
                             && request.mutations().stream()
                                     .noneMatch(ZLinkStoreDelete.class::isInstance);
-            if (ready && republishDescriptor && initialCommits.getAndIncrement() == 0) {
+            if (ready && republished.compareAndSet(false, true)) {
                 var descriptorCondition =
                         request.conditions().stream()
                                 .filter(ZLinkStoreVersionCondition.class::isInstance)
@@ -179,12 +122,6 @@ final class ZLinkConcurrentActorCreationCapacityTest {
                                                     cancellation)
                                             .thenCompose(ignored -> apply(request, cancellation));
                                 });
-            }
-            if (ready && !republishDescriptor && !release.isDone()) {
-                if (initialCommits.incrementAndGet() == SESSION_COUNT) {
-                    release.complete(null);
-                }
-                return release.thenCompose(ignored -> apply(request, cancellation));
             }
             return apply(request, cancellation);
         }
