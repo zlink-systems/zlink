@@ -33,10 +33,10 @@ public sealed partial class RelocationBehaviorConformanceTests
             is { } flowPath
             ? new TestHostMessageFlowListener(flowPath)
             : null;
-        var store = new ActorAuthorityCountingStore(
+        var store = new PreflightAuthorityCountingStore(
             new ZLinkInMemoryProviderLocationStore(),
-            actorId,
-            steadyActorIds
+            steadyActorIds.Append(actorId).Select(ZLinkActorAuthorityPayloadCodec.AuthorityKey),
+            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId)
         );
         var relocationStore = new SynchronizedRelocationStore();
         await using var source = await RelocationBehaviorHost.StartAsync(
@@ -128,19 +128,16 @@ public sealed partial class RelocationBehaviorConformanceTests
         );
     }
 
-    private sealed class ActorAuthorityCountingStore(
+    private sealed class PreflightAuthorityCountingStore(
         IZLinkLocationStore inner,
-        string incomingActorId,
-        string[] steadyActorIds
+        IEnumerable<ZLinkAuthorityKey> authorityKeys,
+        ZLinkAuthorityKey? heldActorKey = null
     ) : IZLinkLocationStore
     {
-        private readonly ZLinkStoreKey _incomingAuthorityKey =
-            ZLinkProviderLocationRepository.AuthorityMetaKey(
-                ZLinkActorAuthorityPayloadCodec.AuthorityKey(incomingActorId)
-            );
-        private readonly HashSet<ZLinkStoreKey> _actorAuthorityKeys = steadyActorIds
-            .Append(incomingActorId)
-            .Select(ZLinkActorAuthorityPayloadCodec.AuthorityKey)
+        private readonly ZLinkStoreKey? _heldActorMetaKey = heldActorKey is { } key
+            ? ZLinkProviderLocationRepository.AuthorityMetaKey(key)
+            : null;
+        private readonly HashSet<ZLinkStoreKey> _authorityMetaKeys = authorityKeys
             .Select(ZLinkProviderLocationRepository.AuthorityMetaKey)
             .ToHashSet();
         private readonly AsyncLocal<ReadCount?> _current = new();
@@ -172,7 +169,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             CancellationToken cancellationToken = default
         )
         {
-            if (_current.Value is { } count && _actorAuthorityKeys.Contains(key))
+            if (_current.Value is { } count && _authorityMetaKeys.Contains(key))
                 Interlocked.Increment(ref count.Value);
             return inner.ReadAsync(key, cancellationToken);
         }
@@ -186,7 +183,7 @@ public sealed partial class RelocationBehaviorConformanceTests
                 HoldSteadyWriteOnNode is { } targetRid
                 && request
                     .Mutations.OfType<ZLinkStoreMutation.Put>()
-                    .SingleOrDefault(put => put.Key == _incomingAuthorityKey)
+                    .SingleOrDefault(put => put.Key == _heldActorMetaKey)
                     is { } mutation
             )
             {

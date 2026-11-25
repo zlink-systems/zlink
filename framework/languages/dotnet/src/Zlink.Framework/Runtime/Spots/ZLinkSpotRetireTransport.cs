@@ -2491,6 +2491,38 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         _ = TryCompleteStage(fence, stage, outcome);
     }
 
+    internal async ValueTask<bool> HasFinishingSpotTargetAsync(CancellationToken cancellationToken)
+    {
+        if (registration.Locations.ResolveStore() is not { } store)
+            return false;
+
+        // The Spot root and its members commit and normalize as one aggregate.
+        // Recheck only local target stages because the Store can settle first.
+        var stagesByRoot = _staged
+            .Select(static entry => entry.Value)
+            .OfType<TargetStage>()
+            .GroupBy(static stage => stage.SpotParticipant.AuthorityKey);
+        foreach (var candidates in stagesByRoot)
+        {
+            var read = await store
+                .ReadAuthorityAsync(candidates.Key, cancellationToken)
+                .ConfigureAwait(false);
+            if (
+                read is ZLinkAuthorityReadResult.Found found
+                && candidates.Any(stage =>
+                    found.Snapshot.ObjectGeneration == stage.SpotParticipant.ObjectGeneration
+                    && ZLinkAuthorityRelocation.MatchesCommittedTarget(
+                        found.Snapshot,
+                        stage.Envelope.AggregateId,
+                        stage.TargetAttemptGeneration
+                    )
+                )
+            )
+                return true;
+        }
+        return false;
+    }
+
     internal Task? FindTargetTerminal(
         ZLinkCanonicalRelocationAuthorityState previous,
         ZLinkAuthorityKey key,

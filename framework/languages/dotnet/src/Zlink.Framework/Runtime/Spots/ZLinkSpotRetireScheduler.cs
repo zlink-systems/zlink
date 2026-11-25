@@ -198,27 +198,6 @@ internal sealed class ZLinkSpotRetireScheduler(
         foreach (var unit in units)
         {
             var inventory = CreateInventory(unit.Activation, unit.Instance);
-            var spotKey = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(unit.Activation.SpotId);
-            var spot = await authorityStore
-                .ReadAuthorityAsync(spotKey, cancellationToken)
-                .ConfigureAwait(false);
-            if (
-                spot is ZLinkAuthorityReadResult.Found found
-                && ZLinkActorRemoteJoiner.FinishingTarget(found.Snapshot) is not null
-            )
-                return ZLinkFrameworkRelocationReason.OperationInProgress;
-            foreach (var actorId in inventory.ActorIds)
-            {
-                var actorKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
-                var actor = await authorityStore
-                    .ReadAuthorityAsync(actorKey, cancellationToken)
-                    .ConfigureAwait(false);
-                if (
-                    actor is ZLinkAuthorityReadResult.Found member
-                    && ZLinkActorRemoteJoiner.FinishingTarget(member.Snapshot) is not null
-                )
-                    return ZLinkFrameworkRelocationReason.OperationInProgress;
-            }
             if (
                 inventory.RequiredCapabilities.Any(static capability =>
                     capability.Policy == ZLinkObjectMaintenancePolicyKind.Disabled
