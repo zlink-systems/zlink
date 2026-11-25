@@ -1914,12 +1914,17 @@ public sealed partial class RelocationRuntimeTests
 
         // Target publication re-enters admission idempotently: racing an
         // already-open admission never re-opens the seal.
-        await runtime.OpenInboundSpotAggregateAdmissionAsync(stage);
+        await runtime.OpenInboundSpotAggregateAdmissionAsync(stage, UnexpectedOpening);
         var drain = Assert.IsAssignableFrom<Task>(stage.AdmissionDrainTask);
-        await runtime.OpenInboundSpotAggregateAdmissionAsync(stage);
+        await runtime.OpenInboundSpotAggregateAdmissionAsync(stage, UnexpectedOpening);
 
         Assert.Same(drain, stage.AdmissionDrainTask);
         Assert.Equal(1, Volatile.Read(ref stage.AdmissionOpened));
+
+        static ValueTask UnexpectedOpening() =>
+            throw new InvalidOperationException(
+                "Already-open admission cannot record another opening."
+            );
     }
 
     private static ServiceProvider CreateRuntimeServices()

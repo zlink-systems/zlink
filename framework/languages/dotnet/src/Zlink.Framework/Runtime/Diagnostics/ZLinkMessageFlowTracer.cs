@@ -458,6 +458,7 @@ internal static class ZLinkTraceFormat
             ZLinkDispatchErrorReason.Backpressure => "backpressure",
             ZLinkDispatchErrorReason.StaleTarget => "stale_target",
             ZLinkDispatchErrorReason.Shutdown => "shutdown",
+            ZLinkDispatchErrorReason.SessionCreationFailed => "session_creation_failed",
             _ => throw new ArgumentOutOfRangeException(nameof(reason)),
         };
 

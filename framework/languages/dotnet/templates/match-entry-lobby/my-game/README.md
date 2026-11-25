@@ -19,7 +19,7 @@ flowchart LR
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-Docker with Compose v2 (Linux containers), and PowerShell 7 on Windows or Bash on Linux. Public ZLink packages are pinned centrally to 0.32.0. No repository checkout is required.
+Docker with Compose v2 (Linux containers), and PowerShell 7 on Windows or Bash on Linux. Public ZLink packages are pinned centrally to 0.34.1. No repository checkout is required.
 
 ## Build
 
@@ -179,7 +179,7 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

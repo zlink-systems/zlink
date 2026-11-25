@@ -64,15 +64,6 @@ class ActiveActorReclaimTest : public ::testing::TestWithParam<std::tuple<bool, 
 {
 };
 
-class reclaim_registration_factory_t : public actor_factory_t<actor_t>
-{
-  public:
-    task_t<std::shared_ptr<actor_t>> create (actor_context_t, std::stop_token) override
-    {
-        co_return std::shared_ptr<actor_t>{};
-    }
-};
-
 TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
 {
     reclaim_scan_store_t opaque;
@@ -107,8 +98,14 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
         descriptor.security_identity = rid;
         descriptor.entry_spot_id = "reclaim-entry-" + rid;
         descriptor.activation_concurrency.limit = 1;
-        descriptor.object_capabilities.push_back ({placement_object_kind_t::actor, "player",
-                                                   maintenance_policy_kind_t::disabled, false, 0});
+        const bool recreate = owner.owner_id == new_owner.owner_id
+                              && (scenario == "recreate" || scenario == "relocationRecreate");
+        descriptor.object_capabilities.push_back (
+          {placement_object_kind_t::actor, "player",
+           recreate ? maintenance_policy_kind_t::recreate : maintenance_policy_kind_t::disabled,
+           false, 0});
+        if (owner.owner_id == new_owner.owner_id && scenario == "unspecified")
+            descriptor.object_capabilities.front ().policy = maintenance_policy_kind_t::unspecified;
         descriptor.capacity.actors.limit = 1;
         EXPECT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
                      .result ()
@@ -128,7 +125,7 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
             .result ()
             .value ());
     const auto old_descriptor = publish ("reclaim-source", old_owner);
-    publish ("reclaim-target", new_owner);
+    auto target_descriptor = publish ("reclaim-target", new_owner);
     repository.configure_reclaim_margin (5s);
     object_reserve_request_t request;
     request.key = {placement_object_kind_t::actor, "reclaim-actor"};
@@ -136,12 +133,6 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
     request.target = {"reclaim-mesh", node_rid_t::from_string ("reclaim-source"), 1, old_owner};
     request.creating_payload = bytes ("creating");
     request.capacity_bundle.actor_slots = 1;
-    detail::mesh_node_builder_state_t registration ("reclaim-source");
-    registration.spot_builder.add_actor_factory<actor_t, reclaim_registration_factory_t> (
-      "player", std::make_shared<reclaim_registration_factory_t> (),
-      [] (auto &factory) { factory.disable_relocation (); });
-    request.relocation_policy =
-      registration.spot_state->actor_factories.at ("player").relocation.kind;
     task_completion_source_t<void> missing_read_held;
     task_completion_source_t<void> release_missing_read;
     std::optional<task_t<authority_read_result_t>> older_missing;
@@ -232,6 +223,57 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
     if (scenario != "live" && scenario != "liveDescriptorGone")
         repository.release_owner_lease (old_owner).result ().value ();
     request.target = {"reclaim-mesh", node_rid_t::from_string ("reclaim-target"), 1, new_owner};
+    if (scenario == "targetPolicyChanged") {
+        const auto authority_key = actor_authority_key (request.key.global_id);
+        const auto &snapshot = std::get<authority_snapshot_t> (committed);
+        const auto waiting =
+          repository.release_ended_reservation (authority_key, snapshot.store_version, {}, request)
+            .result ();
+        ASSERT_FALSE (waiting);
+        ASSERT_EQ (waiting.error_kind (), framework_error_kind_t::unavailable);
+        ASSERT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
+        clock.advance (15s);
+        const auto active_source_slots = [&] {
+            const auto nodes =
+              repository.list_mesh_nodes (old_descriptor.mesh_name).result ().value ().items;
+            const auto source = std::find_if (nodes.begin (), nodes.end (), [&] (const auto &node) {
+                return node.rid == old_descriptor.rid;
+            });
+            EXPECT_NE (source, nodes.end ());
+            return source == nodes.end () ? 0u : source->capacity.actors.active;
+        };
+        ASSERT_EQ (active_source_slots (), 1u);
+        auto change_policy = [&] () -> task_t<void> {
+            const mesh_node_descriptor_key_t key{target_descriptor.mesh_name,
+                                                 target_descriptor.rid};
+            const auto removed = co_await repository.remove_mesh_node (key, new_owner);
+            EXPECT_EQ (removed, location_write_status_t::stored);
+            ++target_descriptor.lifecycle_generation;
+            target_descriptor.object_capabilities.front ().policy =
+              maintenance_policy_kind_t::recreate;
+            const auto updated = co_await repository.update_mesh_node (
+              target_descriptor, location_write_intent_t::new_claim);
+            EXPECT_EQ (updated.status, location_write_status_t::stored);
+        };
+        if (std::get<0> (GetParam ()))
+            opaque.before_write = change_policy;
+        else
+            change_policy ().result ().value ();
+        const auto released =
+          repository.release_ended_reservation (authority_key, snapshot.store_version, {}, request)
+            .result ();
+        if (released)
+            EXPECT_FALSE (released.value ());
+        else
+            EXPECT_EQ (released.error_kind (), framework_error_kind_t::unavailable);
+        const auto retained = repository.read_authority (authority_key).result ().value ();
+        const auto *current = std::get_if<authority_snapshot_t> (&retained);
+        ASSERT_NE (current, nullptr);
+        EXPECT_EQ (current->store_version, snapshot.store_version);
+        EXPECT_EQ (current->payload, snapshot.payload);
+        EXPECT_EQ (active_source_slots (), 1u);
+        return;
+    }
     if (scenario == "concurrentReclaimDelete") {
         EXPECT_FALSE (repository.reserve (request).result ());
         EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
@@ -349,12 +391,10 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
         }
         return;
     }
-    if (scenario == "recreate" || scenario == "relocationRecreate")
-        request.relocation_policy = detail::factory_relocation_kind_t::recreate;
     if (scenario == "typeMismatch")
         request.intent.stable_type = "different";
     if (scenario == "recreate" || scenario == "relocation" || scenario == "relocationRecreate"
-        || scenario == "notReady") {
+        || scenario == "notReady" || scenario == "unspecified") {
         const auto waiting = repository.reserve (request).result ();
         ASSERT_FALSE (waiting);
         EXPECT_EQ (waiting.error_kind (), framework_error_kind_t::unavailable);
@@ -448,7 +488,7 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
         return;
     }
     if (scenario == "recreate" || scenario == "relocation" || scenario == "relocationRecreate"
-        || scenario == "notReady") {
+        || scenario == "notReady" || scenario == "unspecified") {
         const auto before = std::get<authority_snapshot_t> (
           repository.read_authority (actor_authority_key (request.key.global_id))
             .result ()
@@ -494,6 +534,12 @@ INSTANTIATE_TEST_SUITE_P (RepositoryImplementations,
                                                                  "relocationRecreate",
                                                                  "notReady",
                                                                  "delete")));
+
+INSTANTIATE_TEST_SUITE_P (TargetDescriptorFence,
+                          ActiveActorReclaimTest,
+                          ::testing::Combine (::testing::Bool (),
+                                              ::testing::Values ("targetPolicyChanged",
+                                                                 "unspecified")));
 
 INSTANTIATE_TEST_SUITE_P (ProviderReadOrder,
                           ActiveActorReclaimTest,
@@ -547,8 +593,13 @@ TEST_P (EndedSpotReclaimTest, NewIncarnationRequiresEndedOwnerAndDisabledRegistr
         descriptor.entry_spot_id = "entry-" + rid;
         descriptor.object_capabilities.push_back ({placement_object_kind_t::actor, "player",
                                                    maintenance_policy_kind_t::disabled, false, 0});
-        descriptor.object_capabilities.push_back (
-          {kind, "room", maintenance_policy_kind_t::disabled, false, 0});
+        const bool target = owner.owner_id == new_owner.owner_id;
+        if (!target || scenario != "unregistered")
+            descriptor.object_capabilities.push_back ({kind, "room",
+                                                       target && scenario == "recreate"
+                                                         ? maintenance_policy_kind_t::recreate
+                                                         : maintenance_policy_kind_t::disabled,
+                                                       false, 0});
         descriptor.capacity.actors.limit = 2;
         descriptor.capacity.spots.limit = 1;
         descriptor.capacity.spot_types.push_back ({kind, "room", {1, 0, 0}});
@@ -568,7 +619,6 @@ TEST_P (EndedSpotReclaimTest, NewIncarnationRequiresEndedOwnerAndDisabledRegistr
                       old_owner};
     request.creating_payload = bytes ("creating");
     request.capacity_bundle = {0, 1, spot_type_capacity_delta_t{kind, "room", 1}};
-    request.relocation_policy = detail::factory_relocation_kind_t::disabled;
     const auto first =
       std::get<object_reserved_t> (repository.reserve (request).result ().value ());
     const auto ready =
@@ -699,10 +749,6 @@ TEST_P (EndedSpotReclaimTest, NewIncarnationRequiresEndedOwnerAndDisabledRegistr
         repository.release_owner_lease (old_owner).result ().value ();
     request.target = {"ended-spot-mesh", node_rid_t::from_string ("ended-spot-target"), 1,
                       new_owner};
-    if (scenario == "recreate")
-        request.relocation_policy = detail::factory_relocation_kind_t::recreate;
-    if (scenario == "unregistered")
-        request.relocation_policy.reset ();
     if (scenario == "lateJoinCommit" || scenario == "lateJoinVersion") {
         opaque.before_member_write = [&] () -> task_t<void> {
             if (scenario == "lateJoinCommit")
@@ -960,7 +1006,6 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
     request.creating_payload = bytes ("creating");
     request.capacity_bundle = {
       0, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}};
-    request.relocation_policy = detail::factory_relocation_kind_t::disabled;
     const auto first =
       std::get<object_reserved_t> (repository.reserve (request).result ().value ());
     ASSERT_TRUE (std::holds_alternative<object_committed_t> (
@@ -1143,7 +1188,6 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
             concurrent.target = target;
             concurrent.creating_payload = bytes ("creating");
             concurrent.capacity_bundle.actor_slots = 1;
-            concurrent.relocation_policy = detail::factory_relocation_kind_t::disabled;
             independently_recreated =
               std::get<object_reserved_t> (co_await repository.reserve (concurrent));
         };

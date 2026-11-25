@@ -25,7 +25,7 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/dot
 
 ## Project and development
 
-Extend this template's domain to build an FPS server. This .NET 8 project runs an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, assigns a GUID Room ID and prepares the member list of a dynamic Room User Spot. Players connect to Session over STREAM and join the assigned Room. Public Framework and connector packages are pinned to 0.32.0 in `Directory.Packages.props`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
+Extend this template's domain to build an FPS server. This .NET 8 project runs an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, assigns a GUID Room ID and prepares the member list of a dynamic Room User Spot. Players connect to Session over STREAM and join the assigned Room. Public Framework and connector packages are pinned to 0.34.1 in `Directory.Packages.props`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
 
 Run from this project root with Docker Compose v2 and Linux containers:
 

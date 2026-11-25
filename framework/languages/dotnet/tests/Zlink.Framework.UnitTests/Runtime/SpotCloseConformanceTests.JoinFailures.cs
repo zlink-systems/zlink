@@ -25,10 +25,11 @@ public sealed partial class SpotCloseConformanceTests
         var snapshot = new JoinSnapshotStore();
         await using var source = await SpotCloseHost.StartAsync(
             new SpotCloseFaultStore(snapshot),
-            registerUserSpotFactory: false
+            registerUserSpotFactory: false,
+            actorRelocationEnabled: true
         );
         var actorId = await source.CreateActorAsync();
-        await using var owner = await StartPeerAsync(source);
+        await using var owner = await StartPeerAsync(source, actorRelocationEnabled: true);
         var spot = await owner.CreateSpotAsync();
         snapshot.SpotId = spot.SpotId;
         var rows = source.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();

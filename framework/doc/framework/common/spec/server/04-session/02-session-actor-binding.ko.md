@@ -387,6 +387,10 @@ connection close를 시작한다. 이 순서를 위한 별도 timer·ack·재전
 command 54의 기존 deadline으로 끝난다. Core에 수락된 write의 완료는
 [STREAM session §4.1](01-stream-session.ko.md#41-transport-종료-경계)이 소유한다.
 
+앞 turn의 handler가 반환한 reply는 그 Actor의 다음 turn이 열리기 전에 이 순서에 등록된다. 그래서 다음 turn에서
+요청한 close도 앞 turn의 reply 뒤에 Core에 제출된다. 이 순서는 Core 제출 순서이며, client가 reply를 받아 처리했다는
+확인이 아니다. 그런 확인이 필요하면 application protocol로 한다. (#4889)
+
 Close reply는 transport close terminal을 전달하며, 이 close가 일으킨 §7의 disconnect callback·tombstone·local cleanup
 완료를 기다리지 않는다. Binding 정리와 Actor 통지는 §7이 한 번 수행하며, close 요청 경로는 binding을 따로 해제하지
 않는다. Command 54의 request/reply는 기존 correlation·deadline·취소·오류 terminal 계약을 따른다.

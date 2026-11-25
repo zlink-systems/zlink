@@ -111,7 +111,8 @@ internal enum ZLinkDispatchErrorReason
     Backpressure = 6,
     StaleTarget = 7,
     Shutdown = 8,
-    PayloadEncodeFailed = 9,
+    SessionCreationFailed = 9,
+    PayloadEncodeFailed = 10,
 }
 
 internal enum ZLinkDispatchErrorAction

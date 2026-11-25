@@ -216,7 +216,7 @@ final class BoundSessionRelayOrderTest {
             var topology = new ZLinkServiceTopologyRegistry(local);
             assertEquals(
                     ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                    topology.admit(descriptor(source), "0", ServiceWireConstants.COMMAND_HELLO));
+                    topology.admit(descriptor(source), "0", ServiceWireConstants.COMMAND_ADMIT));
             node =
                     ZLinkJavaRawMeshNodeTesting.create(
                             "relay", port, router, local, topology, Map.of(), this::execute);
