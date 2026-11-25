@@ -145,6 +145,9 @@ final class ZLinkFrameworkActorSubsystem {
                                 : null;
         if (actors != null) {
             actors.setMeshName(actorNodeName);
+            if (legacyActorNode == null && meshActorNode != null) {
+                actors.setActorRelocationPolicy(meshActorNode::isActorRelocationDisabled);
+            }
             actors.setMetadataPolicy(
                     registration.metadataPolicy().sessionToActorKeys(),
                     registration.metadataPolicy().actorToSessionKeys());
@@ -276,6 +279,12 @@ final class ZLinkFrameworkActorSubsystem {
                                         @Override
                                         public boolean hasSource(String actorId) {
                                             return actors.hasMessageFollowSource(actorId);
+                                        }
+
+                                        @Override
+                                        public ZLinkServiceM6BWireCodec.ActorRouteFence sourceFence(
+                                                ZLinkBackendActorRef actor) {
+                                            return actors.messageFollowSourceFence(actor);
                                         }
 
                                         @Override

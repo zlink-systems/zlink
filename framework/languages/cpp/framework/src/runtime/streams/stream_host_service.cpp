@@ -79,6 +79,8 @@ using detail::stream_header_flags_t;
 using detail::stream_header_t;
 using detail::stream_message_kind_t;
 
+constexpr char session_creation_failed_diagnostic[] = "STREAM session creation failed";
+
 stream_host_core_test_faults_t &stream_host_core_test_faults () noexcept
 {
     static stream_host_core_test_faults_t faults;
@@ -1181,15 +1183,17 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     /* flow-correlation §4.3: session dispatch failures surface as error
      * events carrying the inbound flow pair, so one grep catches the
      * healthy and failing lines of the same flow. */
-    void report_packet_dispatch_error (const detail::stream_header_t &header,
-                                       const result_t<void> &dispatched) const
+    template <typename FailureFactory>
+    void report_packet_failure (const stream_header_t &header,
+                                const FailureFactory &failure_factory) const
     {
         detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
+            auto [reason, exception] = failure_factory ();
             message_dispatch_error_event_t event{
               dispatch_error_surface_t::stream_session,
               header.kind () == stream_message_kind_t::request ? dispatch_message_kind_t::request
                                                                : dispatch_message_kind_t::send,
-              detail::dispatch_reason_from_error (dispatched.error ()),
+              reason,
               header.kind () == stream_message_kind_t::request
                 ? dispatch_error_action_t::reply_error
                 : dispatch_error_action_t::drop,
@@ -1202,14 +1206,57 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
               header.correlation_id ()
                 ? std::make_optional (std::string (*header.correlation_id ()))
                 : std::nullopt,
-              dispatched.error () != nullptr ? std::make_exception_ptr (*dispatched.error ())
-                                             : std::exception_ptr{}};
+              std::move (exception)};
             if (auto flow = header.flow_id ()) {
                 event.flow_id = std::string (*flow);
                 event.flow_origin = header.flow_origin ();
             }
             return event;
         });
+    }
+
+    void report_packet_dispatch_error (const stream_header_t &header,
+                                       const result_t<void> &dispatched) const
+    {
+        report_packet_failure (header, [&] {
+            return std::pair{detail::dispatch_reason_from_error (dispatched.error ()),
+                             dispatched.error () ? std::make_exception_ptr (*dispatched.error ())
+                                                 : std::exception_ptr{}};
+        });
+    }
+
+    packet_stream_session_t *create_session (service_provider_t &services,
+                                             const stream_header_t *first_packet = nullptr)
+    {
+        try {
+            return &_session_factory (services);
+        }
+        catch (...) {
+            auto exception = std::current_exception ();
+            if (_monitoring && _monitoring->diagnostics_logger.is_enabled (log_level_t::error)) {
+                auto summary = detail::diagnostic_event_sink_t::exception_summary (exception);
+                detail::diagnostic_event_sink_t::log_if_configured (
+                  _monitoring->diagnostics_logger, log_level_t::error,
+                  session_creation_failed_diagnostic,
+                  {{"stream_node", _stream.name},
+                   {"session_type", _stream.packet_session_name},
+                   {"error_type", std::move (summary.type)},
+                   {"error_message", std::move (summary.message)}});
+            }
+            if (first_packet) {
+                const auto mode = detail::dispatch_options_access_t::effective_message_flow (
+                  _runtime.dispatch_options_ref ());
+                auto flow_scope = flow_context_t::enter (
+                  flow_context_t::tracing (mode) && first_packet->flow_id ()
+                    ? std::optional<std::string> (*first_packet->flow_id ())
+                    : std::nullopt,
+                  first_packet->flow_origin (), mode, flow_origin_t::inbound, std::nullopt);
+                report_packet_failure (*first_packet, [&] {
+                    return std::pair{dispatch_error_reason_t::session_creation_failed, exception};
+                });
+            }
+            return nullptr;
+        }
     }
 
     template <typename ExceptionFactory>
@@ -1396,6 +1443,12 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
     };
 
+    struct core_admission_t
+    {
+        std::shared_ptr<core_session_t> session;
+        std::optional<std::uint64_t> rejection_retirement;
+    };
+
 
     struct core_close_intent_t
     {
@@ -1522,13 +1575,13 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                 const stream_t &stream,
                                 const stream_header_t &request_header,
                                 const result_t<void> &error,
-                                std::function<void ()> completed = {},
+                                std::function<void (bool)> completed = {},
                                 detail::stream_metadata_t admission_metadata = {}) noexcept
     {
         if (request_header.kind () != stream_message_kind_t::request
             || !request_header.request_seq ()) {
             if (completed) {
-                completed ();
+                completed (true);
             }
             return;
         }
@@ -1542,21 +1595,41 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
           });
         detail::observe_task_completion (
           send, [this, rid, completed = std::move (completed)] (const result_t<void> &result) {
-              if (!result) {
+              if (completed) {
+                  completed (static_cast<bool> (result));
+              } else if (!result) {
                   /* This observer runs inline in the submitting context when
                    * send_core_frame throws before its first suspension (the
                    * task completes eagerly). That context may hold a session
                    * gate, and cpp-internals forbids completing work under a
                    * session mutex, so only the close intent is recorded here.
-                   * The Core loop drains it with no session lock held;
-                   * begin_core_session_close is idempotent, so a duplicate
-                   * request is a no-op. */
+                   * The Core loop drains it with no session lock held. */
                   request_core_peer_disconnect (rid, "transport_error");
               }
-              if (completed) {
-                  completed ();
-              }
           });
+    }
+
+    void reject_core_session (const zlink::routing_id_t &rid, const stream_header_t *first_packet)
+    {
+        stream_t transport;
+        _runtime.attach_transport_writer (
+          transport, [this, rid] (const stream_header_t &header, const zlink::message_t &payload) {
+              return send_core_frame (rid, header, payload);
+          });
+        auto notify = [self = shared_from_this (), rid, transport] (bool) mutable {
+            self->_runtime.send_session_closing (
+              transport, stream_close_reason_t::transport_error, session_creation_failed_diagnostic,
+              [self, rid] { self->request_core_peer_disconnect (rid, "transport_error"); });
+        };
+        if (first_packet) {
+            send_core_error_frame (
+              rid, transport, *first_packet,
+              result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                       session_creation_failed_diagnostic),
+              std::move (notify));
+        } else {
+            notify (true);
+        }
     }
 
     void run_core_stream ()
@@ -2169,16 +2242,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 get_or_create_core_session (*monitor_event.routing_id);
             }
             catch (const std::exception &) {
-                detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
-                  .report_lazy ([] {
-                      message_dispatch_error_event_t error{};
-                      error.surface = dispatch_error_surface_t::stream_session;
-                      error.message_kind = dispatch_message_kind_t::control;
-                      error.reason = dispatch_error_reason_t::handler_exception;
-                      error.action = dispatch_error_action_t::drop;
-                      error.exception = std::current_exception ();
-                      return error;
-                  });
+                report_control_failure ([] { return std::current_exception (); });
                 disconnect_core_peer (*monitor_event.routing_id, "transport_error");
             }
         }
@@ -2190,13 +2254,14 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
 
     std::shared_ptr<core_session_t> get_or_create_core_session (
       const zlink::routing_id_t &rid,
-      session_liveness_t::clock_t::time_point established = session_liveness_t::clock_t::now ())
+      session_liveness_t::clock_t::time_point established = session_liveness_t::clock_t::now (),
+      const stream_header_t *first_packet = nullptr)
     {
         const auto key = runtime::stateful::stream_session_registry_t::connection_key (rid);
         {
             const std::lock_guard lock (_core_sessions_mutex);
             if (const auto found = _core_sessions.find (key); found != _core_sessions.end ())
-                return found->second;
+                return found->second.session;
         }
 
         const auto reject_if_draining = [this] {
@@ -2210,7 +2275,15 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         // its ingress loop, so only one factory can run for this RID.
         auto scope = detail::service_scope_t::create (*_services,
                                                       detail::service_scope_kind_t::stream_session);
-        auto &session = _session_factory (scope.provider ());
+        auto *session = create_session (scope.provider (), first_packet);
+        if (!session) {
+            {
+                const std::lock_guard lock (_core_sessions_mutex);
+                _core_sessions.emplace (key, core_admission_t{});
+            }
+            reject_core_session (rid, first_packet);
+            return {};
+        }
         auto &actors = scope.provider ().get_required<session_actor_manager_t> ();
         auto stream = _runtime.open_session (_stream.name);
         _runtime.set_session_identity (stream, rid);
@@ -2221,14 +2294,14 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             return send_core_frame (rid, header, payload, admission_reply);
         });
         auto created =
-          std::make_shared<core_session_t> (std::move (scope), session, actors, std::move (stream),
+          std::make_shared<core_session_t> (std::move (scope), *session, actors, std::move (stream),
                                             established, _stream.liveness, _liveness_io);
         {
             const std::lock_guard lock (_core_sessions_mutex);
             reject_if_draining ();
             // Publish the accepted stream before drain can take its snapshot.
             // Its close intent will run on this ingress after setup finishes.
-            _core_sessions.emplace (key, created);
+            _core_sessions.emplace (key, core_admission_t{created, std::nullopt});
             register_active_stream (
               created->stream, [this, rid] (stream_close_reason_t reason, std::string diagnostic) {
                   request_core_peer_disconnect (rid, liveness_close_label (reason), reason,
@@ -2282,6 +2355,24 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         return created;
     }
 
+    void retire_core_rejection_locked (core_admission_t &admission)
+    {
+        if (admission.rejection_retirement)
+            return;
+        const auto retired_at = ++_core_rejection_retirement;
+        admission.rejection_retirement = retired_at;
+        // Core can still yield queued packets after DISCONNECTED. Keep the
+        // latest rejected admissions in the session index, including on a
+        // continuously busy listener where a no-data boundary may never occur.
+        constexpr std::uint64_t retirement_batch = 2048;
+        if (retired_at % retirement_batch == 0) {
+            std::erase_if (_core_sessions, [retired_at] (const auto &entry) {
+                return entry.second.rejection_retirement
+                       && retired_at - *entry.second.rejection_retirement >= retirement_batch;
+            });
+        }
+    }
+
     void close_core_session (const zlink::routing_id_t &rid,
                              const char *close_reason,
                              disconnect_reason_t disconnect_reason) noexcept
@@ -2294,16 +2385,16 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             const auto found = _core_sessions.find (key);
             if (found == _core_sessions.end ())
                 return;
-            current = std::move (found->second);
-            if (current) {
-                retirement_id = current->stream.session_id ();
+            if (!found->second.session) {
+                retire_core_rejection_locked (found->second);
+                return;
             }
+            current = std::move (found->second.session);
+            retirement_id = current->stream.session_id ();
             _core_sessions.erase (found);
             ++_core_sessions_revision;
         }
         _core_sessions_changed.notify_all ();
-        if (!current)
-            return;
         begin_core_session_close (std::move (retirement_id), std::move (current), close_reason,
                                   std::nullopt, {}, disconnect_reason);
     }
@@ -2457,17 +2548,26 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     {
         try {
             std::shared_ptr<core_session_t> current;
+            bool rejected = false;
+            const auto key = runtime::stateful::stream_session_registry_t::connection_key (rid);
             {
                 const std::lock_guard lock (_core_sessions_mutex);
-                const auto found = _core_sessions.find (
-                  runtime::stateful::stream_session_registry_t::connection_key (rid));
-                if (found != _core_sessions.end ())
-                    current = found->second;
+                const auto found = _core_sessions.find (key);
+                if (found != _core_sessions.end ()) {
+                    current = found->second.session;
+                    rejected = !current;
+                }
             }
             if (current)
                 begin_core_session_close (current->stream.session_id (), current, close_reason);
             if (_core_socket) {
                 disconnect_rid_if_present ([this, &rid] { _core_socket->disconnect_rid (rid); });
+                if (rejected) {
+                    const std::lock_guard lock (_core_sessions_mutex);
+                    if (const auto found = _core_sessions.find (key);
+                        found != _core_sessions.end ())
+                        retire_core_rejection_locked (found->second);
+                }
             }
         }
         catch (...) {
@@ -2534,7 +2634,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                     const auto found = _core_sessions.find (
                       runtime::stateful::stream_session_registry_t::connection_key (intent.rid));
                     if (found != _core_sessions.end ())
-                        current = found->second;
+                        current = found->second.session;
                 }
                 if (current)
                     terminate_session (
@@ -2564,8 +2664,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 const std::lock_guard lock (_core_sessions_mutex);
                 const auto found = _core_sessions.find (
                   runtime::stateful::stream_session_registry_t::connection_key (rid));
-                if (found != _core_sessions.end ())
-                    current = found->second;
+                if (found != _core_sessions.end ()) {
+                    current = found->second.session;
+                    if (!current)
+                        return false;
+                }
             }
             if (current)
                 current->liveness->record_inbound (received_at, false);
@@ -2585,13 +2688,15 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
         std::shared_ptr<core_session_t> current;
         try {
-            current = get_or_create_core_session (rid, received_at);
+            current = get_or_create_core_session (rid, received_at, &header);
         }
         catch (...) {
             report_control_failure ([] { return std::current_exception (); });
             disconnect_core_peer (rid, "protocol_error");
             return false;
         }
+        if (!current)
+            return false;
 
         current->liveness->record_inbound (received_at, true);
         std::optional<result_t<void>> rejected;
@@ -2656,9 +2761,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
              * executes it outside every session lock, and
              * begin_core_session_close keeps the duplicate a no-op. */
             if (rejected->error_kind () == framework_error_kind_t::protocol_error) {
-                send_core_error_frame (rid, current->stream, header, *rejected, [this, rid] {
-                    request_core_peer_disconnect (rid, "protocol_error");
-                });
+                send_core_error_frame (rid, current->stream, header, *rejected,
+                                       [this, rid] (bool sent) {
+                                           request_core_peer_disconnect (
+                                             rid, sent ? "protocol_error" : "transport_error");
+                                       });
                 return false;
             }
             send_core_error_frame (
@@ -2705,7 +2812,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         {
             std::lock_guard lock (_core_sessions_mutex);
             sessions.reserve (_core_sessions.size ());
-            for (auto &[key, current] : _core_sessions) {
+            for (auto &[key, admission] : _core_sessions) {
+                auto &current = admission.session;
                 if (!current) {
                     continue;
                 }
@@ -3337,39 +3445,28 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
               const std::lock_guard<std::mutex> lock (_sockets_mutex);
               _sockets.erase (socket);
           });
+        auto write = [this, owner, connection] (const stream_header_t &header,
+                                                const zlink::message_t &payload) {
+            return submit_frame (owner, connection, header, payload);
+        };
+        const auto close_before_admission = [&] (stream_close_reason_t reason,
+                                                 std::string_view diagnostic) {
+            stream_t transport;
+            _runtime.attach_transport_writer (transport, write);
+            auto deferred_cleanup = std::make_shared<decltype (cleanup)> (std::move (cleanup));
+            _runtime.send_session_closing (
+              transport, reason, diagnostic,
+              [this, owner, connection, deferred_cleanup, work = asio::make_work_guard (_io)] {
+                  asio::post (_io, [owner, connection, deferred_cleanup, work] {
+                      owner->request_close ();
+                      close_stream (*connection);
+                  });
+              });
+        };
         const auto close_draining_connection = [&] {
             /* graceful-drain-handoff §5: brand-new connections on a draining
              * node receive session-closing(server_drain) and are closed. */
-            detail::stream_header_t closing (stream_message_kind_t::control, stream_codec_t::raw,
-                                             stream_header_flags_t::none, std::nullopt,
-                                             "session-closing", {});
-            try {
-                const auto payload_bytes =
-                  detail::stream_runtime_t::encode_session_closing_payload (
-                    stream_close_reason_t::server_drain, "node is draining");
-                const auto closing_payload = zlink::message_t::from (
-                  std::string (payload_bytes.begin (), payload_bytes.end ()));
-                auto pending = std::make_shared<task_t<void>> (
-                  submit_frame (owner, connection, closing, closing_payload));
-                auto deferred_cleanup = std::make_shared<decltype (cleanup)> (std::move (cleanup));
-                detail::observe_task_completion (
-                  *pending,
-                  [this, pending, owner, connection, closing, deferred_cleanup,
-                   work = asio::make_work_guard (_io)] (const result_t<void> &result) mutable {
-                      asio::post (_io, [this, owner, connection, closing, result,
-                                        deferred_cleanup = std::move (deferred_cleanup),
-                                        work = std::move (work)] () mutable {
-                          if (!result)
-                              report_packet_dispatch_error (closing, result);
-                          close_stream (*connection);
-                          deferred_cleanup.reset ();
-                      });
-                  });
-            }
-            catch (...) {
-                report_packet_dispatch_error (closing, detail::current_exception_result<void> ());
-                asio::post (_io, [connection] { close_stream (*connection); });
-            }
+            close_before_admission (stream_close_reason_t::server_drain, "node is draining");
         };
         if (draining ()) {
             close_draining_connection ();
@@ -3377,7 +3474,13 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
         auto scope = detail::service_scope_t::create (*_services,
                                                       detail::service_scope_kind_t::stream_session);
-        auto &session = _session_factory (scope.provider ());
+        auto *created = create_session (scope.provider ());
+        if (!created) {
+            close_before_admission (stream_close_reason_t::transport_error,
+                                    session_creation_failed_diagnostic);
+            return;
+        }
+        auto &session = *created;
         auto stream_instance = _runtime.open_session (_stream.name, _shutdown_cancellation);
         const auto session_rid = zlink::routing_id_t::from (stream_instance.session_id ());
         _runtime.set_session_identity (stream_instance, session_rid,
@@ -3798,7 +3901,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     std::mutex _core_pending_work_mutex;
     std::vector<core_work_t> _core_pending_work;
     std::mutex _core_sessions_mutex;
-    std::map<std::string, std::shared_ptr<core_session_t>> _core_sessions;
+    std::map<std::string, core_admission_t> _core_sessions;
+    std::uint64_t _core_rejection_retirement = 0;
     /* Sessions whose retirement has not completed, Core and TLS/WebSocket
      * alike. stop () waits until this is empty (wait_for_retiring_sessions). */
     struct retiring_session_t
@@ -3836,7 +3940,8 @@ stream_host_service_test_access_t::probe_core_session_gate (stream_host_service_
     auto &listener = *service._listeners.at (0);
     const std::lock_guard lock (listener._core_sessions_mutex);
     auto session =
-      listener._core_sessions.at (stateful::stream_session_registry_t::connection_key (rid));
+      listener._core_sessions.at (stateful::stream_session_registry_t::connection_key (rid))
+        .session;
     return [session = std::move (session)] {
         const std::unique_lock lock (session->gate, std::try_to_lock);
         return lock.owns_lock ();

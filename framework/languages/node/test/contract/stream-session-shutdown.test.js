@@ -1,8 +1,14 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { EventEmitter, once } = require('node:events');
+const { appendFileSync } = require('node:fs');
 const { setImmediate: nextTurn } = require('node:timers/promises');
 const test = require('node:test');
+const { BroadcastChannel } = require('node:worker_threads');
+const binding = require('@zlink-systems/zlink');
+const { logs, SeverityNumber } = require('@opentelemetry/api-logs');
+const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const {
@@ -20,6 +26,186 @@ function deferred() {
   });
   return { promise, resolve };
 }
+
+test(
+  'STREAM session factory failure replies, logs, and closes only its connection',
+  { timeout: 15000 },
+  async (t) => {
+    const nodeName = 'creation-failure';
+    const packetName = 'FirstRequest';
+    const exception = new TypeError('session factory refused this connection');
+    const diagnostics = [];
+    const flowEvents = [];
+    const telemetryReady = deferred();
+    const telemetry = new EventEmitter();
+    const channelName = `zlink-session-creation-${process.pid}`;
+    const previousOptions = process.env.NODE_OPTIONS;
+    const previousChannel = process.env.ZLINK_TEST_MESSAGE_FLOW_CHANNEL;
+    const preload = require.resolve('./fixtures/message-flow-provider.cjs').replace(/\\/g, '/');
+    process.env.NODE_OPTIONS = `${previousOptions ?? ''} --require "${preload}"`;
+    process.env.ZLINK_TEST_MESSAGE_FLOW_CHANNEL = channelName;
+    const channel = new BroadcastChannel(channelName);
+    channel.onmessage = ({ data }) => {
+      if (data.kind === 'ready') telemetryReady.resolve();
+      if (data.kind === 'log' && data.record.attributes.packet_name === packetName) {
+        flowEvents.push(data.record.attributes);
+        if (data.record.attributes.outcome === 'failed') telemetry.emit('failed');
+      }
+    };
+    const logger = new LoggerProvider({
+      processors: [{
+        onEmit(record) {
+          diagnostics.push(record);
+          if (process.env.ZLINK_TEST_SESSION_CREATION_LOG) {
+            const { eventName, severityNumber, body, attributes } = record;
+            appendFileSync(process.env.ZLINK_TEST_SESSION_CREATION_LOG,
+              `${JSON.stringify({ eventName, severityNumber, body, attributes })}\n`);
+          }
+        },
+        forceFlush() { return Promise.resolve(); },
+        shutdown() { return Promise.resolve(); }
+      }]
+    });
+    logs.setGlobalLoggerProvider(logger);
+    t.after(async () => {
+      channel.close();
+      logs.disable();
+      await logger.shutdown();
+      if (previousOptions === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = previousOptions;
+      if (previousChannel === undefined) delete process.env.ZLINK_TEST_MESSAGE_FLOW_CHANNEL;
+      else process.env.ZLINK_TEST_MESSAGE_FLOW_CHANNEL = previousChannel;
+    });
+
+    const factoryAttempts = [];
+    const disconnects = [];
+    let monitorPaused = false;
+    const createStreamSocket = binding.createStreamSocket;
+    let monitorCount = 0;
+    // Defer observation through the server's existing public binding monitor.
+    // The native socket queues the original events in their original order.
+    t.mock.method(binding, 'createStreamSocket', function (...args) {
+      const socket = createStreamSocket.apply(this, args);
+      const monitorOpen = socket.monitorOpen;
+      t.mock.method(socket, 'monitorOpen', function (...openArgs) {
+        const monitor = monitorOpen.apply(this, openArgs);
+        const recv = monitor.recv;
+        monitorCount++;
+        t.mock.method(monitor, 'recv', function (...recvArgs) {
+          if (monitorPaused) return null;
+          const event = recv.apply(this, recvArgs);
+          if (
+            event?.event === binding.MonitorEventType.ConnectionReady &&
+            (event.flags & binding.MonitorEventFlag.ConnectionReadyEdge) !== 0 &&
+            event.routingId?.toHex() === factoryAttempts[1]
+          ) {
+            telemetry.emit('failedPeerReady');
+          }
+          return event;
+        });
+        return monitor;
+      });
+      return socket;
+    });
+    class SessionFactory {
+      async create(context) {
+        factoryAttempts.push(context.sessionId);
+        if (factoryAttempts.length === 2) throw exception;
+        return {
+          context,
+          async onDispatch({ packetName: name }) {
+            assert.equal(name, 'Echo');
+            await context.client.reply({ ok: true }).submit();
+          },
+          onDisconnected() {
+            disconnects.push(context.sessionId);
+          }
+        };
+      }
+    }
+
+    const builder = nest.zlinkFramework();
+    builder.configureDispatch().messageFlow('normal');
+    builder.addStreamNode(nodeName).bind('ws://127.0.0.1:*').registerSession(SessionFactory);
+    class AppModule {}
+    Module({ imports: [nest.ZLinkModule.forRoot(builder.build())] })(AppModule);
+    const app = await NestFactory.createApplicationContext(AppModule, {
+      logger: false,
+      abortOnError: false
+    });
+    const host = app.get(nest.ZLINK_FRAMEWORK_RUNTIME);
+    const endpoint = host.getListenerStatus('stream', nodeName).endpoint;
+    const clients = [];
+    t.after(async () => {
+      monitorPaused = false;
+      try {
+        for (const client of clients) await client.close();
+      } finally {
+        await app.close();
+      }
+    });
+    async function connect() {
+      const client = connector.zlinkStreamConnectorFactory.create({
+        endpoint,
+        dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
+        heartbeat: { enabled: false },
+        reconnect: { enabled: false }
+      });
+      clients.push(client);
+      await client.connect();
+      return client;
+    }
+    const echo = (client) => client.request({}).packetName('Echo').timeout(2000).submit();
+    const existing = await connect();
+    assert.deepEqual(await echo(existing), { ok: true });
+    await telemetryReady.promise;
+    assert.equal(monitorCount, 1);
+
+    monitorPaused = true;
+    const failing = await connect();
+    failing.onDisconnected(() => telemetry.emit('disconnected'));
+    const deadline = AbortSignal.timeout(2000);
+    const observedFailure = Promise.allSettled([
+      once(telemetry, 'disconnected', { signal: deadline }),
+      once(telemetry, 'failed', { signal: deadline }),
+      assert.rejects(failing.request({}).packetName(packetName).timeout(2000).submit(),
+        (error) => error.error?.code === connector.ZlinkStreamErrorCode.RemoteError &&
+          error.error.cause?.code === 'internal_failure')
+    ]);
+    const outcomes = await observedFailure;
+    const failures = [];
+    for (const [index, step] of ['disconnect', 'flow outcome', 'InternalFailure reply'].entries()) {
+      if (outcomes[index].status === 'rejected') failures.push(`${step}: ${outcomes[index].reason}`);
+    }
+    assert.deepEqual(failures, [], JSON.stringify(flowEvents));
+    assert.equal(failing.closeReason, 'TransportError');
+    assert.equal(failing.isConnected, false);
+    const lateReady = once(telemetry, 'failedPeerReady', { signal: deadline });
+    monitorPaused = false;
+    await lateReady;
+    assert.deepEqual(flowEvents.filter((event) => event.outcome === 'failed').map((event) => ({
+      surface: event.surface,
+      reason: event.reason,
+      errorType: event.error_type,
+      errorMessage: event.error_message
+    })), [{
+      surface: 'stream',
+      reason: 'session_creation_failed',
+      errorType: exception.name,
+      errorMessage: exception.message
+    }]);
+
+    const errors = diagnostics.filter((record) =>
+      record.severityNumber >= SeverityNumber.ERROR &&
+      JSON.stringify([record.body, record.attributes]).includes(exception.message));
+    assert.equal(errors.length, 1);
+    assert.match(JSON.stringify([errors[0].body, errors[0].attributes]), /creation-failure/);
+    assert.match(JSON.stringify([errors[0].body, errors[0].attributes]), /SessionFactory/);
+    assert.deepEqual(await echo(existing), { ok: true });
+    assert.deepEqual(await echo(await connect()), { ok: true });
+    assert.equal(factoryAttempts.length, 3, JSON.stringify({ factoryAttempts, disconnects }));
+  }
+);
 
 async function connectSession(t) {
   const entered = deferred();

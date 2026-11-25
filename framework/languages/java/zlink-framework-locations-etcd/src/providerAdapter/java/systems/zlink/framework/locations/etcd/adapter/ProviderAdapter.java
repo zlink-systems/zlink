@@ -81,6 +81,9 @@ public final class ProviderAdapter {
             case ZLinkStoreReadMissing missing ->
                     kind("missing")
                             .put("storeNowMs", Long.toString(missing.storeNow().toEpochMilli()));
+            case ZLinkStoreWriteCorrupt corrupt ->
+                    kind("corrupt")
+                            .put("storeNowMs", Long.toString(corrupt.storeNow().toEpochMilli()));
             case ZLinkStoreWriteConflict conflict ->
                     kind("conflict")
                             .put("storeNowMs", Long.toString(conflict.storeNow().toEpochMilli()));

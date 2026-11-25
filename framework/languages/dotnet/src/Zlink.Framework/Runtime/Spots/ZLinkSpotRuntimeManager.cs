@@ -670,23 +670,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                 cancellationToken
             )
             .ConfigureAwait(false);
-        if (
-            read is not ZLinkAuthorityReadResult.Found found
-            || found.Snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
-            || found.Snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
-            || !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
-                found.Snapshot.Payload.Span,
-                out var authority
-            )
-            || authority.State != ZLinkUserSpotAuthorityState.Ready
-        )
-            return null;
-        return new SpotRef(
-            spotId,
-            found.Snapshot.ObjectGeneration,
-            authority.MeshName,
-            authority.NodeRid
-        );
+        return ZLinkStoreLocationResolvers.ProjectReadyUserSpot(spotId, read);
     }
 
     public async ValueTask<IReadOnlyList<ZLinkSpotInfo>> ListAsync(

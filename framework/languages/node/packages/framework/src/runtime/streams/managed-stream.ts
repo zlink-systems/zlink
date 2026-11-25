@@ -230,22 +230,7 @@ export class ZLinkManagedStream implements ZLinkStream {
         }
       } finally {
         closing.close();
-      }
-
-      if (this.isShutdownForced()) return;
-      relocationDebug('closeForDrain.disconnectPeer.start', { sessionId: this.sessionId });
-      let failure: { error: unknown } | undefined;
-      try {
-        this.socket.disconnectPeer(this.backendRoutingId());
-      } catch (error) {
-        failure = { error };
-        throw error;
-      } finally {
-        relocationDebugTerminal(
-          'closeForDrain.disconnectPeer.terminal',
-          { sessionId: this.sessionId },
-          failure
-        );
+        await this.close();
       }
     } catch (error) {
       failure = { error };

@@ -841,7 +841,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
     }
 
-    internal async ValueTask OpenInboundSpotAggregateAdmissionAsync(TargetStage stage)
+    internal async ValueTask OpenInboundSpotAggregateAdmissionAsync(
+        TargetStage stage,
+        Func<ValueTask> recordDispatchOpening
+    )
     {
         ArgumentNullException.ThrowIfNull(stage);
         if (stage.AdmissionDrainTask is { } existing)
@@ -968,7 +971,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 actorDrains.Add(drain);
                                 drainStart.TrySetResult();
                             }
-                        }
+                        },
+                        recordDispatchOpening
                     )
             )
             .ConfigureAwait(false);

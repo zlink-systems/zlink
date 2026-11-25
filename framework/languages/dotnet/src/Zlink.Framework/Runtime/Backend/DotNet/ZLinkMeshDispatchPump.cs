@@ -526,6 +526,15 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     ZLinkServiceWireCodec.RequestSourceFence? requestSource;
                     try
                     {
+                        if (
+                            current.SpotTargetAdmission is { } target
+                            && !await target.Confirm().ConfigureAwait(false)
+                        )
+                        {
+                            target.Reject();
+                            receiveBatch.TakePayloadOwner(record)?.Dispose();
+                            continue;
+                        }
                         requestSource = AcceptsRequestSource(current.Kind)
                             ? await AcceptRequestSourceAsync(
                                     current.SourceNodeRid,
@@ -539,7 +548,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     {
                         // Spec 04: authority failure belongs to this record;
                         // the rest of the claim still performs its own acceptance.
-                        if (
+                        if (current.SpotTargetAdmission is { } target)
+                            target.Reject();
+                        else if (
                             current.Kind
                             is MeshRecordKind.SpotRequest
                                 or MeshRecordKind.ActorRequest
@@ -552,6 +563,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                         pending.Add(Task.FromException(error));
                         continue;
                     }
+                    current.SpotTargetAdmission?.Admission?.Complete();
                     DispatchRecord(
                         receiveBatch,
                         record,
