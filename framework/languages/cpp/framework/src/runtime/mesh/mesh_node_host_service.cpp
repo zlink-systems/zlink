@@ -1225,7 +1225,14 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                           framework_error_kind_t::unavailable,
                           "Actor placement target is not RouteMesh-admitted");
                     std::tie (target, target_runtime, target_peer_epoch, reserve) =
-                      co_await select_target ();
+                      if (!placement_target)
+                    {
+                        placement_target = co_await select_user_spot_target_t::run (
+                          this, selected_mesh, stable_type, source, deadline, excluded_targets,
+                          *spot_id);
+                        if (placement_target)
+                            use_target ();
+                    }
                     continue;
                 }
                 const auto source_status = (*source_runtime)->native_node ().status ();
@@ -1791,24 +1798,36 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
     reserve_request.creating_payload = creating_payload;
     reserve_request.capacity_bundle = {
       0, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, stable_type, 1}};
-    const auto select_target = [&] () -> task_t<void> {
-        if (placement_target)
-            co_return;
-        const auto candidates = co_await placement_candidates (
-          _services->get_required<live_location_reader_t> (), selected_mesh,
-          placement_object_kind_t::user_spot, stable_type, source, deadline,
-          [&] (const auto &candidate) {
-              return excluded_targets.contains (
-                {candidate.rid.to_hex (), candidate.lifecycle_generation});
-          });
-        if (!candidates.empty ()) {
-            placement_target = choose_placement_target (candidates, *spot_id);
-            reserve_request.target = {
-              placement_target->mesh_name,
-              node_rid_t::from_string (placement_target->rid.to_string ()),
-              placement_target->lifecycle_generation,
-              {placement_target->owner_id, placement_target->lease_generation}};
+    // Static coroutine with by-value inputs: a capturing coroutine lambda would read
+    // its captures after suspension (CP.51).
+    struct select_user_spot_target_t
+    {
+        static task_t<std::optional<mesh_node_descriptor_t>>
+        run (mesh_node_host_service_t *self,
+             std::string mesh,
+             std::string type,
+             std::shared_ptr<detail::mesh_node_runtime_t> origin,
+             std::chrono::steady_clock::time_point until,
+             std::set<std::pair<std::string, std::uint64_t>> excluded,
+             spot_id_t id)
+        {
+            const auto candidates = co_await placement_candidates (
+              self->_services->get_required<live_location_reader_t> (), mesh,
+              placement_object_kind_t::user_spot, type, origin, until,
+              [&excluded] (const auto &candidate) {
+                  return excluded.contains (
+                    {candidate.rid.to_hex (), candidate.lifecycle_generation});
+              });
+            if (candidates.empty ())
+                co_return std::nullopt;
+            co_return choose_placement_target (candidates, id);
         }
+    };
+    const auto use_target = [&] {
+        reserve_request.target = {placement_target->mesh_name,
+                                  node_rid_t::from_string (placement_target->rid.to_string ()),
+                                  placement_target->lifecycle_generation,
+                                  {placement_target->owner_id, placement_target->lease_generation}};
     };
     object_reserve_result_t reserved;
     live_location_reader_t authority_reader (*_location_store);
@@ -1838,7 +1857,13 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
             }
             if (reservation_pending || owner_unavailable) {
                 if (current->allocation.state == placement_allocation_state_t::active) {
-                    co_await select_target ();
+                    if (!placement_target) {
+                        placement_target = co_await select_user_spot_target_t::run (
+                          this, selected_mesh, stable_type, source, deadline, excluded_targets,
+                          *spot_id);
+                        if (placement_target)
+                            use_target ();
+                    }
                     if (!placement_target)
                         co_return result_t<spot_create_result_t>::failure (
                           framework_error_kind_t::unavailable,
