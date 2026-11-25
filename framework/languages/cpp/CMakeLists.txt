@@ -3544,6 +3544,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       "LINKER:--wrap=_ZN5zlink9framework7runtime4mesh21raw_mesh_node_owner_t5replyENS2_28service_mailbox_reply_view_tERKNS1_8protocol21application_payload_tE")
   endif()
   add_zlink_framework_test(
+    test_cpp_framework_ended_route_claim
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_ended_route_claim.cpp
+    "framework-unit;framework-regression;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_ended_route_claim)
+  target_include_directories(test_cpp_framework_ended_route_claim PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_receive_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_allocations.cpp
     "framework-unit;framework-regression;messaging")
