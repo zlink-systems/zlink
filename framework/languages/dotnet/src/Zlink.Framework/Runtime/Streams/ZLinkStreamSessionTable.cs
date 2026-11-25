@@ -234,6 +234,9 @@ internal sealed class ZLinkStreamSessionTable(
     public ValueTask<ZLinkStreamSessionRuntime?> TryGetAsync(RoutingId routingId) =>
         _lane.RunAsync(() => _sessions.GetValueOrDefault(routingId));
 
+    public ValueTask<ZLinkStreamSessionRuntime[]> SnapshotAsync() =>
+        _lane.RunAsync(() => _sessions.Values.ToArray());
+
     public async ValueTask<bool> DrainSessionsAsync(CancellationToken cancellationToken)
     {
         var sessions = await _lane

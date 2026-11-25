@@ -18,7 +18,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private readonly ZLinkMessageFlowTracer _flow;
     private readonly ILogger _logger;
     private readonly ZLinkStreamSessionLiveness _liveness;
-    private ITimer? _livenessTimer;
     private readonly ZLinkScopedHandlerInstanceOwner _handlerInstances;
     private IZLinkSession _handler = null!;
     private readonly Action<string> _removeSession;
@@ -284,19 +283,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 (localAddr, remoteAddr, connectedAt ?? _timeProvider.GetTimestamp())
             )
         )
-        {
-            var timer = CreateLivenessTimer();
-            AwaitStateLane(
-                _lane.RunAsync(() =>
-                {
-                    if (IsClosing)
-                        timer.Dispose();
-                    else
-                        _livenessTimer = timer;
-                })
-            );
-            CheckLiveness();
-        }
+            _liveness.WakeReader();
         return _serial.ExecuteControl(cancellationToken =>
             MarkConnectedAsync(localAddr, remoteAddr, cancellationToken)
         );
@@ -432,59 +419,25 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         }
     }
 
-    private ITimer CreateLivenessTimer()
+    internal async ValueTask<TimeSpan> AdvanceLivenessAsync(long timestamp, bool confirmExpiry)
     {
-        if (ExecutionContext.IsFlowSuppressed())
-            return CreateTimer();
-
-        using (ExecutionContext.SuppressFlow())
-            return CreateTimer();
-
-        ITimer CreateTimer() =>
-            _timeProvider.CreateTimer(
-                static state => ((ZLinkStreamSessionRuntime)state!).OnLivenessTimer(),
-                this,
-                Timeout.InfiniteTimeSpan,
-                Timeout.InfiniteTimeSpan
-            );
-    }
-
-    private void OnLivenessTimer()
-    {
-        try
-        {
-            CheckLiveness();
-        }
-        catch (Exception exception)
-        {
-            _runtime.ErrorSink.ReportRuntimeTaskException(
-                $"stream-liveness:{Stream.SessionId}",
-                exception
-            );
-        }
-    }
-
-    private void CheckLiveness()
-    {
-        var decision = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (IsClosing || _livenessTimer is not { } timer)
-                    return ZLinkStreamLivenessDecision.None;
-                var (next, delay) = _liveness.Evaluate(_connectionReady.Task.Result.ConnectedAt);
-                if (delay != Timeout.InfiniteTimeSpan)
-                {
-                    // System.Threading.Timer accepts millisecond deadlines up to uint.MaxValue - 1.
-                    var due = Math.Min(Math.Ceiling(delay.TotalMilliseconds), uint.MaxValue - 1);
-                    timer.Change(TimeSpan.FromMilliseconds(due), Timeout.InfiniteTimeSpan);
-                }
-                return next;
-            })
-        );
+        var (decision, delay) = await _lane
+            .RunAsync(() =>
+                IsClosing
+                || !_connectionReady.Task.IsCompletedSuccessfully
+                || _connectionReady.Task.Result.ConnectedAt > timestamp
+                    ? (ZLinkStreamLivenessDecision.None, Timeout.InfiniteTimeSpan)
+                    : _liveness.Evaluate(
+                        _connectionReady.Task.Result.ConnectedAt,
+                        timestamp,
+                        confirmExpiry
+                    )
+            )
+            .ConfigureAwait(false);
         switch (decision)
         {
             case ZLinkStreamLivenessDecision.None:
-                return;
+                break;
             case ZLinkStreamLivenessDecision.SendHeartbeat:
                 try
                 {
@@ -497,7 +450,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                         () => CloseForTransportErrorAsync(error)
                     );
                 }
-                return;
+                break;
             case ZLinkStreamLivenessDecision.IdleTimeout:
                 TryScheduleTerminal(
                     ZlinkStreamCloseReason.IdleTimeout,
@@ -506,7 +459,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                             ZlinkStreamSessionClosingCodec.EncodeIdleTimeout()
                         )
                 );
-                return;
+                break;
             case ZLinkStreamLivenessDecision.HeartbeatTimeout:
                 TryScheduleTerminal(
                     ZlinkStreamCloseReason.HeartbeatTimeout,
@@ -515,10 +468,11 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                             ZlinkStreamSessionClosingCodec.EncodeHeartbeatTimeout()
                         )
                 );
-                return;
+                break;
             default:
                 throw new InvalidOperationException("Unknown STREAM liveness decision.");
         }
+        return delay;
     }
 
     public void EnqueueDisconnected(ZLinkStreamError error)
@@ -1049,8 +1003,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private void SetTerminalClose(ZlinkStreamCloseReason reason, bool disposeOwnsClose)
     {
         _terminalClose = new TerminalClose(reason, disposeOwnsClose);
-        _livenessTimer?.Dispose();
-        _livenessTimer = null;
     }
 
     private bool EnqueueTerminalOutsideStateLane(Func<ValueTask> finalWork)

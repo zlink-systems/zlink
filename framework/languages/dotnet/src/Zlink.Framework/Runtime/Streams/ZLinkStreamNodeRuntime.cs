@@ -68,7 +68,10 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 )
             );
         _timeProvider = timeProvider ?? TimeProvider.System;
-        _readerLiveness = new ZLinkStreamSessionLiveness.Reader(_timeProvider);
+        _readerLiveness = new ZLinkStreamSessionLiveness.Reader(
+            _timeProvider,
+            () => _receivePoller!.Wake()
+        );
         _transport = transport;
         _maxMessageSize = maxMessageSize;
         var runtime = services.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -262,37 +265,163 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             _stopSource.Token,
             runtimeToken
         );
+        var poller = _receivePoller!;
+        using var timer = CreateLivenessTimer();
         var failureBackoff = new ZLinkPollingBackoff();
         try
         {
             while (!stop.IsCancellationRequested)
             {
-                // A failed wait or resume ends this logical source. Recovery
-                // below applies only after admission, while processing a record.
-                var readiness = await _receivePoller!
-                    .WaitAsync(Timeout.InfiniteTimeSpan, stop.Token)
+                // A failed wait or resume ends this logical source.
+                var readiness = await poller
+                    .WaitAsync(
+                        _readerLiveness.WakeRequested ? TimeSpan.Zero : Timeout.InfiniteTimeSpan,
+                        stop.Token
+                    )
                     .ConfigureAwait(false);
+                if (!CanReceive(readiness))
+                {
+                    if (!_readerLiveness.WakeRequested)
+                        continue;
+
+                    // A wake can follow the native poll snapshot. Take a fresh snapshot before
+                    // treating a wake without readiness as an empty receive round.
+                    readiness = await poller
+                        .WaitAsync(TimeSpan.Zero, stop.Token)
+                        .ConfigureAwait(false);
+                }
                 if (
-                    (
-                        readiness
-                        & (
-                            ZLinkBackendSocketReadiness.Readable
-                            | ZLinkBackendSocketReadiness.Error
-                            | ZLinkBackendSocketReadiness.Priority
-                        )
-                    ) == 0
+                    CanReceive(readiness)
+                    && !await ReceivePacketsAsync(stop.Token, failureBackoff, timer)
+                        .ConfigureAwait(false)
                 )
-                    continue;
-                if (!await ReceivePacketsAsync(stop.Token, failureBackoff).ConfigureAwait(false))
                     return;
+                if (stop.IsCancellationRequested)
+                    return;
+                if (_readerLiveness.TakeWake())
+                    await AdvanceLivenessAsync(timer, confirmExpiry: true).ConfigureAwait(false);
             }
         }
         catch (Exception) when (stop.IsCancellationRequested) { }
+        finally
+        {
+            await stop.CancelAsync().ConfigureAwait(false);
+        }
+    }
+
+    private static bool CanReceive(ZLinkBackendSocketReadiness readiness) =>
+        (
+            readiness
+            & (
+                ZLinkBackendSocketReadiness.Readable
+                | ZLinkBackendSocketReadiness.Error
+                | ZLinkBackendSocketReadiness.Priority
+            )
+        ) != 0;
+
+    private ITimer CreateLivenessTimer()
+    {
+        if (ExecutionContext.IsFlowSuppressed())
+            return CreateTimer();
+
+        using (ExecutionContext.SuppressFlow())
+            return CreateTimer();
+
+        ITimer CreateTimer() =>
+            _timeProvider.CreateTimer(
+                static state => ((ZLinkStreamSessionLiveness.Reader)state!).Wake(),
+                _readerLiveness,
+                Timeout.InfiniteTimeSpan,
+                Timeout.InfiniteTimeSpan
+            );
+    }
+
+    private async ValueTask AdvanceLivenessAsync(ITimer timer, bool confirmExpiry)
+    {
+        var sessions = await _sessions.SnapshotAsync().ConfigureAwait(false);
+        var timestamp = _timeProvider.GetTimestamp();
+        var next = TimeSpan.MaxValue;
+        foreach (var session in sessions)
+        {
+            try
+            {
+                var delay = await session
+                    .AdvanceLivenessAsync(timestamp, confirmExpiry)
+                    .ConfigureAwait(false);
+                if (delay != Timeout.InfiniteTimeSpan && delay < next)
+                    next = delay;
+            }
+            catch (Exception exception)
+            {
+                _runtime.ErrorSink.ReportRuntimeTaskException(
+                    $"stream-liveness:{session.Stream.SessionId}",
+                    exception
+                );
+            }
+        }
+
+        if (next == TimeSpan.MaxValue)
+        {
+            timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            return;
+        }
+
+        // System.Threading.Timer accepts millisecond deadlines up to uint.MaxValue - 1.
+        var remaining = next - _timeProvider.GetElapsedTime(timestamp);
+        var due = Math.Clamp(Math.Ceiling(remaining.TotalMilliseconds), 0, uint.MaxValue - 1);
+        timer.Change(TimeSpan.FromMilliseconds(due), Timeout.InfiniteTimeSpan);
+    }
+
+    private async ValueTask<ZLinkApplicationJobQueueLease> WaitForPermitAsync(
+        ValueTask<ZLinkApplicationJobQueueLease> permit,
+        ITimer timer,
+        CancellationToken stopToken
+    )
+    {
+        var pending = _readerLiveness.WaitForPermitAsync(permit).AsTask();
+        var poller = _receivePoller!;
+        try
+        {
+            if (!pending.IsCompleted)
+                pending.ConfigureAwait(false).GetAwaiter().UnsafeOnCompleted(poller.Wake);
+
+            while (!pending.IsCompleted && !stopToken.IsCancellationRequested)
+            {
+                if (_readerLiveness.TakeWake())
+                    await AdvanceLivenessAsync(timer, confirmExpiry: false).ConfigureAwait(false);
+                if (!pending.IsCompleted)
+                    await poller.WaitForWakeAsync(stopToken).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            ZLinkUnawaitedSubmit.Observe(
+                ReleasePendingPermitAsync(),
+                $"stream-permit:{NodeName}",
+                _runtime.ErrorSink
+            );
+            throw;
+        }
+
+        var lease = await pending.ConfigureAwait(false);
+        // Permit grant restarts both receive deadlines for every session on this reader.
+        _readerLiveness.Wake();
+        return lease;
+
+        async ValueTask ReleasePendingPermitAsync()
+        {
+            try
+            {
+                (await pending.ConfigureAwait(false)).Dispose();
+            }
+            catch (OperationCanceledException) when (stopToken.IsCancellationRequested) { }
+        }
     }
 
     private async ValueTask<bool> ReceivePacketsAsync(
         CancellationToken stopToken,
-        ZLinkPollingBackoff failureBackoff
+        ZLinkPollingBackoff failureBackoff,
+        ITimer timer
     )
     {
         var batchStartedAt = Stopwatch.GetTimestamp();
@@ -313,7 +442,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 ZLinkApplicationJobOrigin.Remote
             );
             if (!permit.IsCompleted)
-                permit = _readerLiveness.WaitForPermitAsync(permit);
+                permit = WaitForPermitAsync(permit, timer, stopToken);
             ZLinkApplicationJobQueueLease? admission = await permit.ConfigureAwait(false);
             try
             {
