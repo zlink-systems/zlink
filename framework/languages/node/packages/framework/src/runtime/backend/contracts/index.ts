@@ -347,6 +347,9 @@ export interface ZLinkBackendMeshNode {
   setActorJoinIngressRouter?(
     route: import('../../foundation/service-stateful-runtime').ZLinkActorJoinIngressRouter
   ): void;
+  setRelocationRequestAdmission?(
+    resolve: import('../../foundation/service-stateful-runtime').ServiceRelocationRequestAdmissionResolver
+  ): void;
   setActorMessageFollowResolver?(
     resolver: (
       fence: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence

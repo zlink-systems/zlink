@@ -1,3 +1,5 @@
+import { awaitWithAbort } from '../abort';
+import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
 import {
   bindLifecycleCallerSpotTurn,
   captureZLinkSpotSerialTurn,
@@ -28,6 +30,7 @@ export type ZLinkSpotApplicationTurnContext = ZLinkExecutionBarrierClaim & {
 };
 import {
   bindApplicationJobPermit,
+  currentApplicationJobPermit,
   hasApplicationJobPermit
 } from '../application-jobs/application-job-queue-scope';
 
@@ -156,6 +159,15 @@ export class ZLinkSpotSerialTurnExecutor {
       );
     }
     return this.enqueueApplicationTurn(operation, workOptions, replay);
+  }
+
+  /** Reserves the ordinary Spot FIFO while target preparation still holds its gate. */
+  executeRelocationRequest<T>(
+    operation: () => Promise<T> | T,
+    workOptions: ZLinkSerialWorkOptions | undefined,
+    confirm: Promise<boolean>
+  ): Promise<T> {
+    return this.enqueueApplicationTurn(operation, workOptions, undefined, true, confirm);
   }
 
   /**
@@ -295,7 +307,8 @@ export class ZLinkSpotSerialTurnExecutor {
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions,
     replay?: (failure?: unknown) => Promise<T>,
-    retainWhilePreparing = false
+    retainWhilePreparing = false,
+    confirm?: Promise<boolean>
   ): Promise<T> {
     this.lastActivityAtMs = performance.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
@@ -307,7 +320,7 @@ export class ZLinkSpotSerialTurnExecutor {
         this.scheduler.retainsApplicationForLifecycle
       ) {
         try {
-          return await this.submitQueuedTurn(operation, workOptions, entry);
+          return await this.submitQueuedTurn(operation, workOptions, entry, confirm);
         } catch (error) {
           (await entry).release();
           throw error;
@@ -319,7 +332,7 @@ export class ZLinkSpotSerialTurnExecutor {
       if (barrierClaim !== undefined && replay !== undefined) {
         Object.assign(barrierClaim, { replay: bindApplicationJobPermit(replay) });
       }
-      return await this.submitQueuedTurn(operation, workOptions, barrierClaim);
+      return await this.submitQueuedTurn(operation, workOptions, barrierClaim, confirm);
     } catch (error) {
       barrierClaim?.release();
       throw error;
@@ -350,26 +363,50 @@ export class ZLinkSpotSerialTurnExecutor {
   private submitQueuedTurn<T>(
     operation: () => Promise<T> | T,
     workOptions: ZLinkSerialWorkOptions | undefined,
-    barrierClaim?: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim>
+    barrierClaim?: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim>,
+    confirm?: Promise<boolean>
   ): Promise<T> {
-    if (barrierClaim instanceof Promise) {
+    if (barrierClaim instanceof Promise || confirm !== undefined) {
       const context: Partial<ZLinkExecutionBarrierClaim> = {};
-      return this.scheduler.admitDurablePrefix(
-        bindApplicationJobPermit(operation),
+      const permit = confirm === undefined ? undefined : currentApplicationJobPermit();
+      let prepared: ApplicationJobPermitPort | undefined;
+      const queued = this.scheduler.admitDurablePrefix(
+        bindApplicationJobPermit(
+          operation,
+          permit === undefined ? undefined : () => prepared ?? permit
+        ),
         workOptions,
         context,
         {
           prepare: async (signal) => {
             const claim = await barrierClaim;
-            if (signal.aborted) {
-              claim.release();
-              throw signal.reason;
+            try {
+              if (confirm !== undefined && !(await awaitWithAbort(confirm, signal))) {
+                throw createInternalFrameworkException(
+                  ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
+                  'The relocation target rejected the Spot request.'
+                );
+              }
+              if (permit?.reacquire !== undefined) {
+                prepared = await permit.reacquire(signal);
+                prepared.markApplicationQueued();
+              }
+              signal.throwIfAborted();
+              if (claim !== undefined)
+                Object.defineProperties(context, Object.getOwnPropertyDescriptors(claim));
+            } catch (error) {
+              claim?.release();
+              throw error;
             }
-            Object.defineProperties(context, Object.getOwnPropertyDescriptors(claim));
           },
-          cancel: () => {}
+          cancel: () => {
+            prepared?.releaseAfterInternalProcessing();
+            prepared = undefined;
+          }
         }
       );
+      if (permit?.reacquire !== undefined) permit.releaseAfterInternalProcessing();
+      return queued;
     }
     return hasApplicationJobPermit()
       ? this.scheduler.submitPreAdmitted(operation, workOptions, barrierClaim)
