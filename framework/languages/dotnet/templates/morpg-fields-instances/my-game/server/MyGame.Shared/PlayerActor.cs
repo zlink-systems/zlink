@@ -19,6 +19,7 @@ public sealed class PlayerActor(IZLinkActorContext context, NodeSettings setting
             return ValueTask.CompletedTask;
         return Context.BoundSession.Send(message).Async();
     }
+
     public IZLinkActorContext Context { get; } = context;
     public double X { get; private set; }
     public long Sequence { get; private set; }

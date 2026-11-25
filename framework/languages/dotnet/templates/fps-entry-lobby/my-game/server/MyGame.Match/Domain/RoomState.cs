@@ -31,7 +31,8 @@ public sealed class RoomState
     private string? ValidateAction(Combatant player, long sequence) =>
         sequence > GameNames.MaxSequence ? Rejection.IntegerOutOfRange
         : sequence <= player.Sequence ? Rejection.StaleSequence
-        : Phase == MatchPhase.Finished ? Rejection.MatchFinished : null;
+        : Phase == MatchPhase.Finished ? Rejection.MatchFinished
+        : null;
 
     public ActionRejected? Move(string id, MoveRequest move)
     {
@@ -56,8 +57,10 @@ public sealed class RoomState
             var elapsed = Math.Max(0, now - lastMove);
             var budget = Math.Min(GameNames.MaxStep, GameNames.MaxSpeed * elapsed / 1000);
             if (distance > budget)
-                return new(Rejection.MoveBudget,
-                    Math.Max(1, (int)Math.Ceiling(distance * 1000 / GameNames.MaxSpeed - elapsed)));
+                return new(
+                    Rejection.MoveBudget,
+                    Math.Max(1, (int)Math.Ceiling(distance * 1000 / GameNames.MaxSpeed - elapsed))
+                );
         }
         player.Position = next;
         player.Sequence = move.Sequence;
@@ -74,8 +77,13 @@ public sealed class RoomState
             return new(new ShotRejected(Rejection.InvalidAim), null);
         var now = nowMs();
         if (shooter.NextFireMs is { } nextFire && now < nextFire)
-            return new(new ShotRejected(Rejection.FireTooSoon,
-                Math.Max(1, (int)Math.Ceiling(nextFire - now))), null);
+            return new(
+                new ShotRejected(
+                    Rejection.FireTooSoon,
+                    Math.Max(1, (int)Math.Ceiling(nextFire - now))
+                ),
+                null
+            );
         var origin = shooter.Position + new Vec3(0, GameNames.EyeHeight, 0);
         var wallDistance = double.PositiveInfinity;
         foreach (var wall in ArenaMap.Walls)
@@ -87,8 +95,13 @@ public sealed class RoomState
         {
             if (candidate == shooter || candidate.Hp == 0)
                 continue;
-            if (ArenaMap.PlayerBox(candidate.Position).Intersect(origin, direction,
-                    GameNames.ShotRange) is { } distance && distance < targetDistance)
+            if (
+                ArenaMap
+                    .PlayerBox(candidate.Position)
+                    .Intersect(origin, direction, GameNames.ShotRange)
+                    is { } distance
+                && distance < targetDistance
+            )
             {
                 target = candidate;
                 targetDistance = distance;
@@ -109,21 +122,38 @@ public sealed class RoomState
         }
         shooter.Sequence = shot.Sequence;
         shooter.NextFireMs = now + GameNames.FireIntervalMs;
-        return new(null, new ShotResult(outcome, outcome == ShotOutcome.Hit ? target!.PlayerId : null,
-            shot.Sequence));
+        return new(
+            null,
+            new ShotResult(
+                outcome,
+                outcome == ShotOutcome.Hit ? target!.PlayerId : null,
+                shot.Sequence
+            )
+        );
     }
 
-    public PlayerView[] View() => Players.Select(p =>
-        new PlayerView(p.PlayerId, p.Position, p.Hp, p.Sequence)).ToArray();
+    public PlayerView[] View() =>
+        Players.Select(p => new PlayerView(p.PlayerId, p.Position, p.Hp, p.Sequence)).ToArray();
 
     public RoomSnapshot Capture()
     {
         var now = nowMs();
-        return new(Players.Select(p => new CombatantSnapshot(p.PlayerId, p.Position, p.Hp, p.Sequence,
-            p.NextFireMs is { } fire ? Math.Max(0, fire - now) : 0,
-            p.LastMoveMs is { } moved
-                ? Math.Max(0, GameNames.MaxStep * 1000 / GameNames.MaxSpeed - (now - moved)) : 0))
-            .ToArray(), Phase, Winner);
+        return new(
+            Players
+                .Select(p => new CombatantSnapshot(
+                    p.PlayerId,
+                    p.Position,
+                    p.Hp,
+                    p.Sequence,
+                    p.NextFireMs is { } fire ? Math.Max(0, fire - now) : 0,
+                    p.LastMoveMs is { } moved
+                        ? Math.Max(0, GameNames.MaxStep * 1000 / GameNames.MaxSpeed - (now - moved))
+                        : 0
+                ))
+                .ToArray(),
+            Phase,
+            Winner
+        );
     }
 
     public void Restore(RoomSnapshot snapshot)
@@ -131,11 +161,22 @@ public sealed class RoomState
         var now = nowMs();
         Players.Clear();
         foreach (var p in snapshot.Players)
-            Players.Add(new Combatant(p.PlayerId, p.Position) {
-                Hp = p.Hp, Sequence = p.Sequence, NextFireMs = now + p.FireRemainingMs,
-                LastMoveMs = p.MoveRemainingMs > 0
-                    ? now - (GameNames.MaxStep * 1000 / GameNames.MaxSpeed - p.MoveRemainingMs) : null,
-            });
+            Players.Add(
+                new Combatant(p.PlayerId, p.Position)
+                {
+                    Hp = p.Hp,
+                    Sequence = p.Sequence,
+                    NextFireMs = now + p.FireRemainingMs,
+                    LastMoveMs =
+                        p.MoveRemainingMs > 0
+                            ? now
+                                - (
+                                    GameNames.MaxStep * 1000 / GameNames.MaxSpeed
+                                    - p.MoveRemainingMs
+                                )
+                            : null,
+                }
+            );
         Phase = snapshot.Phase;
         Winner = snapshot.Winner;
     }
@@ -152,6 +193,14 @@ public sealed class Combatant(string playerId, Vec3 position)
 }
 
 public sealed record ShotDecision(ShotRejected? Rejected, ShotResult? Result);
-public sealed record CombatantSnapshot(string PlayerId, Vec3 Position, int Hp, long Sequence,
-    double FireRemainingMs, double MoveRemainingMs);
+
+public sealed record CombatantSnapshot(
+    string PlayerId,
+    Vec3 Position,
+    int Hp,
+    long Sequence,
+    double FireRemainingMs,
+    double MoveRemainingMs
+);
+
 public sealed record RoomSnapshot(CombatantSnapshot[] Players, MatchPhase Phase, string? Winner);
