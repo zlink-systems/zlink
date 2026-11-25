@@ -1045,6 +1045,11 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         {
             stage.PublishGate.Release();
         }
+        // Publication is already settled. Report a failed replay to the
+        // cutover owner without making the stage terminal depend on a send.
+        await Task.WhenAll(stage.ActorReplayTerminals)
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private TargetStage RequireWireStage(
@@ -2670,6 +2675,7 @@ internal sealed record TargetStage(
     internal TaskCompletionSource Terminal { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal Task? CapturedRequestDelivery { get; set; }
+    internal IReadOnlyList<Task> ActorReplayTerminals { get; set; } = [];
     private readonly ulong _preparedSpotAuthorityOwnerGeneration = TargetAuthorityOwnerGeneration;
     private readonly IReadOnlyDictionary<
         ZLinkActorId,

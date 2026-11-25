@@ -4062,6 +4062,8 @@ internal sealed class CanonicalRelocationTransportProbe
     internal TaskCompletionSource CutoverSendStarted { get; } = Signal();
     internal TaskCompletionSource ReleaseCutoverSend { get; } = Signal();
     internal TaskCompletionSource CutoverSendSubmitted { get; } = Signal();
+    internal TaskCompletionSource<Exception?> TargetCutoverFailure { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource SourceLeaveSubmitted { get; } = Signal();
     internal TaskCompletionSource RemoteSessionPushSubmitted { get; } = Signal();
     internal TaskCompletionSource TargetPreparedBeforeReadySend { get; } = Signal();
@@ -4540,11 +4542,23 @@ internal sealed class CanonicalRelocationTransportProbe
             CancellationToken cancellationToken
         ) => inner.StageDataAsync(data, authenticatedSourceNodeRid, cancellationToken);
 
-        public ValueTask CutoverAsync(
+        public async ValueTask CutoverAsync(
             ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
             RoutingId authenticatedSourceNodeRid,
             CancellationToken cancellationToken
-        ) => inner.CutoverAsync(cutover, authenticatedSourceNodeRid, cancellationToken);
+        )
+        {
+            try
+            {
+                await inner.CutoverAsync(cutover, authenticatedSourceNodeRid, cancellationToken);
+                probe.TargetCutoverFailure.TrySetResult(null);
+            }
+            catch (Exception failure)
+            {
+                probe.TargetCutoverFailure.TrySetResult(failure);
+                throw;
+            }
+        }
     }
 }
 

@@ -3964,7 +3964,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 !ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(job.Payload.Span, out _, out _)
             )
             .ToDictionary(static job => job.AcceptedSequence);
-        AdmitTransferredActorPrefix(
+        _ = AdmitTransferredActorPrefix(
             actorState,
             handoffId,
             targetAuthority.MeshName,

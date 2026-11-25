@@ -1160,7 +1160,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     () =>
                     {
                         actorState.Handoff.PrepareImportedReplay([]);
-                        AdmitTransferredActorPrefix(
+                        _ = AdmitTransferredActorPrefix(
                             actorState,
                             request.HandoffId,
                             targetMeshName,
@@ -1561,7 +1561,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         else
                         {
                             actorState.Handoff.PrepareImportedReplay(request.Frames);
-                            AdmitTransferredActorPrefix(
+                            _ = AdmitTransferredActorPrefix(
                                 actorState,
                                 request.HandoffId,
                                 publishedActorAuthority.MeshName
@@ -2856,7 +2856,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             _ => ZLinkFrameworkErrorKind.InternalFailure,
         };
 
-    private void AdmitTransferredActorPrefix(
+    private Task AdmitTransferredActorPrefix(
         ZLinkActorRuntimeState actorState,
         string handoffId,
         string receiverMeshName,
@@ -2866,7 +2866,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         var start = actorState.Handoff.TargetActivation;
-        _ = actorState.Handoff.AdmitDurablePrefix(
+        return actorState.Handoff.AdmitDurablePrefix(
             handoffId,
             frame => AdmitActorHandoffFrame(actorState, frame, start, receiverMeshName, dispatch),
             isCapturedRequest,

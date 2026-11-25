@@ -90,6 +90,7 @@
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberOwnershipTests.cs"/>
+        <Compile Include="Runtime/SpotWideMemberReplayFailureTests.cs"/>
         <Compile Include="Runtime/SpotWideTargetAdmissionTests.cs"/>
         <Compile Include="Runtime/SpotWideTargetSpotAdmissionTests.cs"/>
         <Compile Include="Runtime/SpotWideFindReadinessTests.cs"/>

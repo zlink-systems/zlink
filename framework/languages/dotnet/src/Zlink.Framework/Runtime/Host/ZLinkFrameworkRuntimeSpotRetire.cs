@@ -596,7 +596,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 cancellationToken
             )
             .ConfigureAwait(false);
-        AdmitInboundAggregateActorPrefixes(stage, cancellationToken);
+        stage.ActorReplayTerminals = AdmitInboundAggregateActorPrefixes(stage, cancellationToken);
         var replayJobs = spotParticipant
             .AcceptedJobs.Concat(stage.SnapshotHeldRecords())
             .OrderBy(static job => job.AcceptedSequence)
@@ -619,12 +619,13 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
     }
 
-    private void AdmitInboundAggregateActorPrefixes(
+    private IReadOnlyList<Task> AdmitInboundAggregateActorPrefixes(
         TargetStage stage,
         CancellationToken cancellationToken
     )
     {
         var handoffId = stage.Envelope.AggregateId.ToString("N");
+        var replayTerminals = new List<Task>(stage.ActorStates.Count);
         foreach (var actorState in stage.ActorStates)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -648,37 +649,40 @@ internal sealed partial class ZLinkFrameworkRuntime
             var requests = participant
                 .AcceptedJobs.Where(static job => job.CanonicalRequest is { ReplyRouteId: not 0 })
                 .ToDictionary(static job => checked((long)job.AcceptedSequence));
-            AdmitTransferredActorPrefix(
-                actorState,
-                handoffId,
-                stage.TargetMeshName,
-                frame =>
-                    stage.Spot.Activation.DispatchOwnedActorFrameAsync(
-                        actorRef,
-                        frame,
-                        requests.TryGetValue(frame.ArrivalIndex, out var job)
-                            ? (replayed, reply, ct) =>
-                                CompleteAcceptedActorReplayAsync(
-                                    stage,
-                                    participant,
-                                    job,
-                                    replayed,
-                                    reply,
-                                    ct
-                                )
-                            : null,
-                        ShutdownToken
-                    ),
-                frame => requests.ContainsKey(frame.ArrivalIndex),
-                acceptedThrough: checked(
-                    (long)
-                        participant
-                            .AcceptedJobs.Select(static job => job.AcceptedSequence)
-                            .DefaultIfEmpty()
-                            .Max()
+            replayTerminals.Add(
+                AdmitTransferredActorPrefix(
+                    actorState,
+                    handoffId,
+                    stage.TargetMeshName,
+                    frame =>
+                        stage.Spot.Activation.DispatchOwnedActorFrameAsync(
+                            actorRef,
+                            frame,
+                            requests.TryGetValue(frame.ArrivalIndex, out var job)
+                                ? (replayed, reply, ct) =>
+                                    CompleteAcceptedActorReplayAsync(
+                                        stage,
+                                        participant,
+                                        job,
+                                        replayed,
+                                        reply,
+                                        ct
+                                    )
+                                : null,
+                            ShutdownToken
+                        ),
+                    frame => requests.ContainsKey(frame.ArrivalIndex),
+                    acceptedThrough: checked(
+                        (long)
+                            participant
+                                .AcceptedJobs.Select(static job => job.AcceptedSequence)
+                                .DefaultIfEmpty()
+                                .Max()
+                    )
                 )
             );
         }
+        return replayTerminals;
     }
 
     internal async ValueTask OpenInboundSpotAggregateAdmissionAsync(
