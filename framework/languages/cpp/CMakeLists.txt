@@ -1681,7 +1681,36 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     TIMEOUT 10)
 
   add_executable(test_cpp_framework_m6c_runtime
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_runtime.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_actor_leave.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_aggregate_relocation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_application_backlog.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_boundary_reply.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_completion_lifetime.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_entry_relocation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_execution_barriers.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_network_cutover.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_payload_dispatch.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_ready_boundary.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_recovery_codec.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_relocation_wire.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_request_registry.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_restore_publication.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_runtime.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_session_relocation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_source_metrics.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_source_settlement.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_source_settlement_chain.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_spot_readiness.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_spot_restore.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_store_adapters.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_target_cutover.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_target_shutdown.cpp
+    tests/support/m6c_memory_authority_fixture.cpp
+    tests/support/m6c_public_authority_fixture.cpp
+    tests/support/m6c_relocation_store_fixture.cpp
+    tests/support/m6c_spot_turn.cpp
+    tests/support/m6c_stateful_fixture.cpp
+    tests/support/m6c_task.cpp)
   target_compile_features(test_cpp_framework_m6c_runtime PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_m6c_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
