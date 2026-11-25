@@ -801,6 +801,19 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _node.ConnectPeer(endpoint, peerRid, expectedSecurityIdentity);
     }
 
+    public bool TryConnectPeerAuto(
+        RoutingId? peerRid,
+        string endpoint,
+        string expectedSecurityIdentity,
+        ulong? expectedLifecycleGeneration
+    ) =>
+        _node.TryConnectPeerAuto(
+            peerRid,
+            endpoint,
+            expectedSecurityIdentity,
+            expectedLifecycleGeneration
+        );
+
     public void SetPeerExpectation(
         RoutingId peerRid,
         string endpoint,
