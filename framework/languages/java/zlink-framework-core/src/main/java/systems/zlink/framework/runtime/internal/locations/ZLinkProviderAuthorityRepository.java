@@ -17,7 +17,6 @@ import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
@@ -1104,77 +1103,48 @@ final class ZLinkProviderAuthorityRepository {
         return evidence.thenCompose(
                 projected -> {
                     var ownerEvidence = (ZLinkAuthoritySnapshot) projected;
-                    ZLinkStoreKey leaseKey = ownerKey(ownerEvidence.ownerId());
-                    var target = current.allocation().descriptor();
-                    ZLinkStoreKey descriptorKey =
+                    var owner =
+                            new ZLinkLocationOwnerToken(
+                                    ownerEvidence.ownerId(), ownerEvidence.ownerLeaseGeneration());
+                    var source = current.allocation().descriptor();
+                    var sourceKey =
                             ZLinkProviderDescriptorRepository.meshKey(
-                                    target.meshName(), target.rid());
-                    return provider.read(leaseKey, cancellation)
+                                    source.meshName(), source.rid());
+                    return provider.read(ownerKey(owner.ownerId()), cancellation)
                             .thenCompose(
                                     lease -> {
                                         boolean ownerLive =
                                                 ZLinkProviderOwnerLeaseRepository.isLive(
                                                         lease,
-                                                        ownerEvidence.ownerId(),
-                                                        ownerEvidence.ownerLeaseGeneration());
+                                                        owner.ownerId(),
+                                                        owner.leaseGeneration());
                                         if (requiredOwner != null
-                                                && (!ownerLive
-                                                        || !requiredOwner
-                                                                .ownerId()
-                                                                .equals(ownerEvidence.ownerId())
-                                                        || requiredOwner.leaseGeneration()
-                                                                != ownerEvidence
-                                                                        .ownerLeaseGeneration()))
+                                                && (!ownerLive || !requiredOwner.equals(owner))) {
                                             return completed(StaleAuthorityReclaim.NOT_RECLAIMABLE);
-                                        var ownerToken =
-                                                new ZLinkLocationOwnerToken(
-                                                        ownerEvidence.ownerId(),
-                                                        ownerEvidence.ownerLeaseGeneration());
+                                        }
                                         boolean authorityOwnerWaiting =
                                                 active
                                                         && !ownerLive
                                                         && (discarded || steadyReady)
-                                                        && ownerLeaseWait.shouldWait(ownerToken);
-                                        return provider.read(descriptorKey, cancellation)
+                                                        && ownerLeaseWait.shouldWait(owner);
+                                        if (active) {
+                                            if (ownerLive && !owner.equals(discardedOwner)) {
+                                                return completed(StaleAuthorityReclaim.OWNER_LIVE);
+                                            }
+                                            if (current.aggregate() != null
+                                                    || current.relocation() != null
+                                                    || ZLinkCanonicalRelocationAuthorityStateCodec
+                                                                    .decode(current.payload())
+                                                            != null) {
+                                                throw new ZLinkFrameworkException(
+                                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                        "Ended authority requires relocation recovery");
+                                            }
+                                        }
+                                        return provider.read(sourceKey, cancellation)
                                                 .thenCompose(
                                                         descriptor -> {
-                                                            ZLinkStoreCondition descriptorCondition;
-                                                            if (active) {
-                                                                if (ownerLive
-                                                                        && (!discarded
-                                                                                || !discardedOwner
-                                                                                        .equals(
-                                                                                                ownerToken)))
-                                                                    return completed(
-                                                                            StaleAuthorityReclaim
-                                                                                    .OWNER_LIVE);
-                                                                if (current.aggregate() != null
-                                                                        || current.relocation()
-                                                                                != null
-                                                                        || ZLinkCanonicalRelocationAuthorityStateCodec
-                                                                                        .decode(
-                                                                                                current
-                                                                                                        .payload())
-                                                                                != null)
-                                                                    throw new ZLinkFrameworkException(
-                                                                            ZLinkFrameworkErrorKind
-                                                                                    .UNAVAILABLE,
-                                                                            "Ended authority"
-                                                                                    + " requires"
-                                                                                    + " relocation"
-                                                                                    + " recovery");
-                                                                if (!discarded
-                                                                        && !(request
-                                                                                        .relocationPolicy()
-                                                                                instanceof
-                                                                                RelocationPolicy
-                                                                                        .Disabled))
-                                                                    throw new ZLinkFrameworkException(
-                                                                            ZLinkFrameworkErrorKind
-                                                                                    .UNAVAILABLE,
-                                                                            "Object owner lease is"
-                                                                                    + " unavailable");
-                                                            }
+                                                            ZLinkStoreCondition sourceCondition;
                                                             if (descriptor
                                                                     instanceof
                                                                     ZLinkStoreReadFound found) {
@@ -1186,106 +1156,138 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                         .bytes())
                                                                                         .lifecycleGeneration()
                                                                                 == current.allocation()
-                                                                                        .descriptorLifecycleGeneration())
+                                                                                        .descriptorLifecycleGeneration()) {
                                                                     return completed(
                                                                             StaleAuthorityReclaim
                                                                                     .OWNER_LIVE);
-                                                                descriptorCondition =
+                                                                }
+                                                                sourceCondition =
                                                                         new ZLinkStoreVersionCondition(
-                                                                                descriptorKey,
+                                                                                sourceKey,
                                                                                 found.value()
                                                                                         .version());
-                                                            } else
-                                                                descriptorCondition =
+                                                            } else {
+                                                                sourceCondition =
                                                                         new ZLinkStoreMissingCondition(
-                                                                                descriptorKey);
-                                                            CompletionStage<List<EndedMember>>
-                                                                    members = completed(List.of());
-                                                            if (active
-                                                                    && current.allocation()
-                                                                                    .objectKind()
-                                                                            != ZLinkPlacementObjectKind
-                                                                                    .ACTOR) {
-                                                                var spot =
-                                                                        new ZLinkServiceAuthorityPayloadCodec()
-                                                                                .decode(
-                                                                                        current
-                                                                                                .payload());
-                                                                if (spot.isEmpty()
-                                                                        || (!discarded
-                                                                                && (spot.get()
-                                                                                                        .state()
-                                                                                                != ZLinkServiceAuthorityPayloadCodec
-                                                                                                        .State
-                                                                                                        .READY
-                                                                                        || spot.get()
-                                                                                                .activationRecoveryState()
-                                                                                                .isPresent()))) {
-                                                                    throw new ZLinkFrameworkException(
-                                                                            ZLinkFrameworkErrorKind
-                                                                                    .UNAVAILABLE,
-                                                                            "Ended Spot authority"
-                                                                                    + " is not"
-                                                                                    + " reclaimable");
-                                                                }
-                                                                if (spot.get().user().isPresent()) {
-                                                                    members =
-                                                                            readEndedSpotMembers(
-                                                                                    spot.get()
-                                                                                            .spotId(),
-                                                                                    current
-                                                                                            .objectGeneration(),
-                                                                                    null,
-                                                                                    new ArrayList<>(),
-                                                                                    cancellation,
-                                                                                    !discarded);
-                                                                }
+                                                                                sourceKey);
                                                             }
-                                                            return members.thenCompose(
-                                                                    ended -> {
-                                                                        if (discarded
-                                                                                && (authorityOwnerWaiting
-                                                                                        || !ended
-                                                                                                .isEmpty()))
-                                                                            return completed(
-                                                                                    StaleAuthorityReclaim
-                                                                                            .NOT_RECLAIMABLE);
-                                                                        if (discarded && ownerLive)
-                                                                            return compareExchange(
-                                                                                            discardedKey,
-                                                                                            new ZLinkAuthorityExpectFound(
-                                                                                                    authority
-                                                                                                            .value()
-                                                                                                            .version()
-                                                                                                            .value()),
-                                                                                            new ZLinkAuthorityDelete(),
-                                                                                            cancellation
-                                                                                                    ::isCancellationRequested)
-                                                                                    .thenApply(
-                                                                                            result ->
-                                                                                                    result
-                                                                                                                    instanceof
-                                                                                                                    ZLinkAuthorityDeleted
-                                                                                                            ? StaleAuthorityReclaim
-                                                                                                                    .RECLAIMED
-                                                                                                            : StaleAuthorityReclaim
-                                                                                                                    .CONFLICT);
-                                                                        return releaseEndedAuthority(
-                                                                                authorityKey,
-                                                                                authority,
-                                                                                current,
-                                                                                active,
-                                                                                ownerEvidence
-                                                                                        .ownerId(),
-                                                                                lease,
-                                                                                descriptorCondition,
-                                                                                ended,
-                                                                                authorityOwnerWaiting,
-                                                                                cancellation);
-                                                                    });
+                                                            return creationPolicyCondition(
+                                                                            active,
+                                                                            discarded,
+                                                                            request,
+                                                                            sourceKey,
+                                                                            descriptor,
+                                                                            cancellation)
+                                                                    .thenCompose(
+                                                                            targetCondition ->
+                                                                                    readEndedMembers(
+                                                                                                    current,
+                                                                                                    active,
+                                                                                                    discarded,
+                                                                                                    cancellation)
+                                                                                            .thenCompose(
+                                                                                                    ended -> {
+                                                                                                        if (discarded
+                                                                                                                && (authorityOwnerWaiting
+                                                                                                                        || !ended
+                                                                                                                                .isEmpty())) {
+                                                                                                            return completed(
+                                                                                                                    StaleAuthorityReclaim
+                                                                                                                            .NOT_RECLAIMABLE);
+                                                                                                        }
+                                                                                                        if (discarded
+                                                                                                                && ownerLive) {
+                                                                                                            return compareExchange(
+                                                                                                                            discardedKey,
+                                                                                                                            new ZLinkAuthorityExpectFound(
+                                                                                                                                    authority
+                                                                                                                                            .value()
+                                                                                                                                            .version()
+                                                                                                                                            .value()),
+                                                                                                                            new ZLinkAuthorityDelete(),
+                                                                                                                            cancellation
+                                                                                                                                    ::isCancellationRequested)
+                                                                                                                    .thenApply(
+                                                                                                                            result ->
+                                                                                                                                    result
+                                                                                                                                                    instanceof
+                                                                                                                                                    ZLinkAuthorityDeleted
+                                                                                                                                            ? StaleAuthorityReclaim
+                                                                                                                                                    .RECLAIMED
+                                                                                                                                            : StaleAuthorityReclaim
+                                                                                                                                                    .CONFLICT);
+                                                                                                        }
+                                                                                                        return releaseEndedAuthority(
+                                                                                                                authorityKey,
+                                                                                                                authority,
+                                                                                                                current,
+                                                                                                                active,
+                                                                                                                owner
+                                                                                                                        .ownerId(),
+                                                                                                                lease,
+                                                                                                                sourceCondition,
+                                                                                                                targetCondition,
+                                                                                                                ended,
+                                                                                                                authorityOwnerWaiting,
+                                                                                                                cancellation);
+                                                                                                    }));
                                                         });
                                     });
                 });
+    }
+
+    private CompletionStage<List<EndedMember>> readEndedMembers(
+            AuthorityRecord current,
+            boolean active,
+            boolean discarded,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        if (!active || current.allocation().objectKind() == ZLinkPlacementObjectKind.ACTOR) {
+            return completed(List.of());
+        }
+        var spot = new ZLinkServiceAuthorityPayloadCodec().decode(current.payload());
+        if (spot.isEmpty()
+                || (!discarded
+                        && (spot.get().state() != ZLinkServiceAuthorityPayloadCodec.State.READY
+                                || spot.get().activationRecoveryState().isPresent()))) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE, "Ended Spot authority is not reclaimable");
+        }
+        if (spot.get().user().isEmpty()) return completed(List.of());
+        return readEndedSpotMembers(
+                spot.get().spotId(),
+                current.objectGeneration(),
+                null,
+                new ArrayList<>(),
+                cancellation,
+                !discarded);
+    }
+
+    private CompletionStage<ZLinkStoreCondition> creationPolicyCondition(
+            boolean active,
+            boolean discarded,
+            ZLinkObjectReservationRequest request,
+            ZLinkStoreKey sourceKey,
+            ZLinkStoreReadResult source,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        if (!active || discarded) return completed(null);
+        var target = request.targetDescriptor();
+        var targetKey = ZLinkProviderDescriptorRepository.meshKey(target.meshName(), target.rid());
+        var sameKey = targetKey.equals(sourceKey);
+        return (sameKey ? completed(source) : provider.read(targetKey, cancellation))
+                .thenApply(
+                        targetRead -> {
+                            var found = targetRead instanceof ZLinkStoreReadFound row ? row : null;
+                            ZLinkAuthorityCleanup.requireDisabledCreationPolicy(
+                                    request,
+                                    found == null
+                                            ? null
+                                            : ZLinkProviderDescriptorRepository
+                                                    .decodeMeshNodeRecord(found.value().bytes()));
+                            return sameKey
+                                    ? null
+                                    : new ZLinkStoreVersionCondition(
+                                            targetKey, found.value().version());
+                        });
     }
 
     /** An Actor membership of an ended User Spot incarnation, read from one scan snapshot. */
@@ -1426,6 +1428,7 @@ final class ZLinkProviderAuthorityRepository {
             String ownerId,
             ZLinkStoreReadResult ownerLease,
             ZLinkStoreCondition descriptorCondition,
+            ZLinkStoreCondition targetCondition,
             List<EndedMember> members,
             boolean authorityOwnerWaiting,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
@@ -1464,6 +1467,7 @@ final class ZLinkProviderAuthorityRepository {
                             new ZLinkStoreVersionCondition(
                                     authorityKey, authority.value().version()));
                     conditions.add(descriptorCondition);
+                    if (targetCondition != null) conditions.add(targetCondition);
                     mutations.add(new ZLinkStoreDelete(authorityKey));
                     for (var member : members) {
                         if (ZLinkProviderOwnerLeaseRepository.isLive(

@@ -109,6 +109,8 @@ public interface ZLinkStreamConnector {
 
     AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler handler);
 
+    AutoCloseable onAdmissionWaiting(ZLinkStreamAdmissionWaitingHandler handler);
+
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
 
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler);

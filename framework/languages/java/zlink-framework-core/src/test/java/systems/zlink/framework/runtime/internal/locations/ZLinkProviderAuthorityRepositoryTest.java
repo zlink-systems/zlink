@@ -782,17 +782,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .join());
     }
 
-    private record ReclaimActor(systems.zlink.framework.actors.ZLinkActorContext context)
-            implements systems.zlink.framework.actors.ZLinkActor {}
-
-    private static final class ReclaimFactory
-            implements systems.zlink.framework.actors.ZLinkActorFactory {
-        public CompletionStage<systems.zlink.framework.actors.ZLinkActor> create(
-                systems.zlink.framework.actors.ZLinkActorContext context) {
-            return CompletableFuture.completedFuture(new ReclaimActor(context));
-        }
-    }
-
     @Test
     void metricsReadOnlyConfirmedCapacityAndNeverQueryTheStoreDuringCollection() throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
@@ -924,24 +913,14 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         .get())
                         .token();
 
-        var descriptor = actorReclaimDescriptor(owner, 1);
+        var descriptor =
+                actorReclaimDescriptor(owner, 1, ZLinkObjectMaintenancePolicyKind.DISABLED);
         repository
                 .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture()
                 .get();
 
         var key = ZLinkAuthorityKeyCodec.actor("reclaim-actor");
-        var registration =
-                new systems.zlink.framework.runtime.mesh.MeshNodeRegistration("reclaim-source");
-        registration
-                .objects()
-                .server()
-                .addActorFactory(
-                        "player",
-                        ReclaimActor.class,
-                        ReclaimFactory.class,
-                        factory -> factory.disableRelocation());
-        var policy = registration.actorRelocationPolicy("player");
         var request =
                 new ZLinkObjectReservationRequest(
                         ZLinkPlacementObjectKind.ACTOR,
@@ -954,8 +933,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         descriptor.lifecycleGeneration(),
                         owner,
                         new byte[] {1},
-                        ZLinkPlacementCapacityBundle.actor(1),
-                        policy);
+                        ZLinkPlacementCapacityBundle.actor(1));
         var first =
                 ((ZLinkObjectReserved)
                                 repository
@@ -1049,7 +1027,13 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         .toCompletableFuture()
                                         .get())
                         .token();
-        var nextDescriptor = actorReclaimDescriptor(newOwner, 2);
+        var nextDescriptor =
+                actorReclaimDescriptor(
+                        newOwner,
+                        2,
+                        scenario.equals("recreate") || scenario.equals("relocationRecreate")
+                                ? ZLinkObjectMaintenancePolicyKind.RECREATE
+                                : ZLinkObjectMaintenancePolicyKind.DISABLED);
         repository
                 .updateMeshNode(nextDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture()
@@ -1067,11 +1051,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         nextDescriptor.lifecycleGeneration(),
                         newOwner,
                         new byte[] {2},
-                        ZLinkPlacementCapacityBundle.actor(1),
-                        (scenario.equals("recreate") || scenario.equals("relocationRecreate"))
-                                ? new systems.zlink.framework.runtime.internal.configuration
-                                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Recreate()
-                                : policy);
+                        ZLinkPlacementCapacityBundle.actor(1));
         var retainedBefore = repository.read(key, () -> false).toCompletableFuture().get();
         if (testsReleaseWait) {
             ZLinkLocationRepository retryRepository = repository;
@@ -1195,7 +1175,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     private static ZLinkMeshNodeDescriptor actorReclaimDescriptor(
-            ZLinkLocationOwnerToken owner, long generation) {
+            ZLinkLocationOwnerToken owner,
+            long generation,
+            ZLinkObjectMaintenancePolicyKind policy) {
         var d = capacityDescriptor(owner);
         return new ZLinkMeshNodeDescriptor(
                 d.meshName(),
@@ -1207,11 +1189,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 d.applicationVersion(),
                 List.of(
                         new ZLinkObjectCapability(
-                                ZLinkPlacementObjectKind.ACTOR,
-                                "player",
-                                ZLinkObjectMaintenancePolicyKind.DISABLED,
-                                false,
-                                0)),
+                                ZLinkPlacementObjectKind.ACTOR, "player", policy, false, 0)),
                 d.objectRole(),
                 Optional.of("reclaim-entry-" + generation),
                 d.placementWeight(),

@@ -18,6 +18,7 @@ internal static partial class ZLinkFrameworkRegistrationValidator
         foreach (var channel in registration.Channels.Values)
             ValidateChannel(channel, registration.Locations.Enabled, handlerExposure);
 
+        ValidateAuthenticationAdmission(registration);
         ValidateUniqueStreamSessionTypes(registration);
         foreach (var streamNode in registration.StreamNodes.Values)
             ValidateStreamNode(streamNode, registration);
@@ -48,6 +49,36 @@ internal static partial class ZLinkFrameworkRegistrationValidator
 
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
         registration.Locations.CaptureStartupOptions();
+    }
+
+    private static void ValidateAuthenticationAdmission(ZLinkFrameworkRegistration registration)
+    {
+        ZLinkAuthenticationAdmissionOptions? common = null;
+        foreach (var stream in registration.StreamNodes.Values)
+        {
+            var options = stream.AuthenticationAdmission;
+            if (options.Limit <= 0)
+                throw new ZLinkConfigurationException(
+                    "MaxConcurrentAuthentications must be positive."
+                );
+            if (
+                options.RetryDelay.Ticks < TimeSpan.TicksPerMillisecond
+                || options.RetryDelay.Ticks > int.MaxValue * TimeSpan.TicksPerMillisecond
+                || options.RetryDelay.Ticks % TimeSpan.TicksPerMillisecond != 0
+            )
+                throw new ZLinkConfigurationException(
+                    "AuthenticationRetryDelay must be a whole number of milliseconds from 1 through 2147483647."
+                );
+            if (options.PacketName is { } name && string.IsNullOrWhiteSpace(name))
+                throw new ZLinkConfigurationException(
+                    "AuthenticationPacketName must not be empty."
+                );
+            if (common is not null && common != options)
+                throw new ZLinkConfigurationException(
+                    "STREAM registrations on the same host must use the same authentication admission settings."
+                );
+            common = options;
+        }
     }
 
     private static void ValidateUniqueStreamSessionTypes(ZLinkFrameworkRegistration registration)

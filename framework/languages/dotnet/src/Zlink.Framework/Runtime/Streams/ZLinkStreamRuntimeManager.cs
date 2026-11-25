@@ -8,6 +8,7 @@ internal sealed class ZLinkStreamRuntimeManager(
 {
     private readonly HashSet<IZLinkBackendStreamSocket> _unattachedSockets = [];
     private Task? _disposeTask;
+    private IDisposable? _authenticationAdmissionMetrics;
 
     public ValueTask DisposeAsync() =>
         new(
@@ -24,6 +25,7 @@ internal sealed class ZLinkStreamRuntimeManager(
                                 _unattachedSockets.Remove(socket);
                             })
                             .ConfigureAwait(false);
+                    _authenticationAdmissionMetrics?.Dispose();
                     failures.ThrowIfAny();
                 }
             )
@@ -43,6 +45,13 @@ internal sealed class ZLinkStreamRuntimeManager(
 
         state.StreamRuntimeManager = this;
         var monitoringAdapter = backendAdapterFactory.CreateMonitoringAdapter();
+
+        var authenticationOptions = registration.StreamNodes.Values.First().AuthenticationAdmission;
+        var authenticationAdmission = new ZLinkAuthenticationAdmission(authenticationOptions);
+        _authenticationAdmissionMetrics =
+            Diagnostics.ZLinkRuntimeMetrics.RegisterAuthenticationAdmission(() =>
+                authenticationAdmission.InFlight
+            );
 
         foreach (var streamNodeRegistration in registration.StreamNodes.Values)
         {
@@ -64,7 +73,8 @@ internal sealed class ZLinkStreamRuntimeManager(
                     streamNodeRegistration.TlsServer is null ? "tcp" : "tls",
                     actorDispatchEnabled: streamNodeRegistration.ActorDispatchEnabled,
                     maxMessageSize: streamNodeRegistration.SocketConfig.MaxMessageSize,
-                    applicationJobQueue: state.ApplicationJobQueue
+                    applicationJobQueue: state.ApplicationJobQueue,
+                    authenticationAdmission: authenticationAdmission
                 );
             }
             catch (Exception error)

@@ -562,6 +562,17 @@ public final class ZLinkSerialExecutionQueue {
      * Closing seal rejects new work, a relocated owner reports the post-cut arrival, and otherwise
      * the queue accepts. A relocation seal is not a rejection; the caller holds the work.
      */
+    private CompletionStage<Void> applicationAdmissionFailureLocked() {
+        var rejection = admissionFailureLocked();
+        if (rejection != null) return rejection;
+        try {
+            requireMailboxExecution(true);
+            return null;
+        } catch (systems.zlink.framework.errors.ZLinkFrameworkException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
     private CompletionStage<Void> admissionFailureLocked() {
         return admissionFailureLocked(null, ignored -> false, ZLinkFrameworkErrorKind.REJECTED);
     }
@@ -572,6 +583,9 @@ public final class ZLinkSerialExecutionQueue {
         boolean closing = transition != null && transition.committed.getAsBoolean();
         boolean retainedMessage = (closingAdmissionSealed || closing) && retains.test(message);
         if (closingAdmissionSealed || closing && !retainedMessage) {
+            if (lanePolicy instanceof ZLinkExecutionLanePolicy.Session) {
+                return CompletableFuture.failedFuture(sessionShutdownFailure());
+            }
             try {
                 requireMailboxExecution(false);
             } catch (systems.zlink.framework.errors.ZLinkFrameworkException failure) {
@@ -944,6 +958,11 @@ public final class ZLinkSerialExecutionQueue {
 
     /** Cancel accepted application work using the queue's existing ownership/release path. */
     public CompletionStage<Void> discardApplications() {
+        if (lanePolicy instanceof ZLinkExecutionLanePolicy.Session) {
+            // Both STREAM lanes run application callbacks.
+            discardSessionTurns();
+            return CompletableFuture.completedFuture(null);
+        }
         return underSharedSpotGateAsync(
                 () -> {
                     List<Entry> pending;
@@ -973,6 +992,34 @@ public final class ZLinkSerialExecutionQueue {
                     scheduleDrainIfNeeded(schedule, null);
                     return null;
                 });
+    }
+
+    /** Seals a STREAM session queue and releases both lanes' unstarted turns. */
+    private void discardSessionTurns() {
+        List<Entry> discarded;
+        List<CompletableFuture<Void>> quiescent;
+        synchronized (this) {
+            closingAdmissionSealed = true;
+            discarded = new ArrayList<>(applicationPending);
+            discarded.addAll(lifecyclePending);
+            discarded.addAll(continuationPending);
+            applicationPending.clear();
+            updatePendingApplicationTailDurable();
+            lifecyclePending.clear();
+            continuationPending.clear();
+            discarded.forEach(entry -> decrementOutstanding());
+            quiescent = takeQuiescenceWaitersIfReady();
+        }
+        for (Entry entry : discarded) {
+            release(entry);
+            rejectUnstarted(entry, sessionShutdownFailure());
+        }
+        quiescent.forEach(waiter -> waiter.complete(null));
+    }
+
+    private static RuntimeException sessionShutdownFailure() {
+        return ZLinkFrameworkErrorOrigin.framework(
+                ZLinkFrameworkErrorKind.SHUTTING_DOWN, "STREAM session is shutting down");
     }
 
     private void completeDiscardedApplication(Entry entry) {
@@ -1120,7 +1167,7 @@ public final class ZLinkSerialExecutionQueue {
         CompletionStage<Void> rejection = null;
         synchronized (this) {
             validatePayloadBytes(payloadBytes);
-            rejection = admissionFailureLocked();
+            rejection = applicationAdmissionFailureLocked();
             result =
                     rejection == null
                             ? enqueueAccepted(
@@ -1161,13 +1208,17 @@ public final class ZLinkSerialExecutionQueue {
     public CompletionStage<Void> enqueueBarrierNext(
             Supplier<CompletionStage<Void>> operation, CompletableFuture<Void> admission) {
         EnqueueResult result;
-        boolean rejected;
+        RuntimeException failure = null;
         synchronized (this) {
-            rejected = relocated;
-            result = rejected ? null : enqueueBarrierNextLocked(operation, admission);
+            if (relocated) {
+                failure = new RelocatedOwnerException();
+            } else if (closingAdmissionSealed
+                    && lanePolicy instanceof ZLinkExecutionLanePolicy.Session) {
+                failure = sessionShutdownFailure();
+            }
+            result = failure == null ? enqueueBarrierNextLocked(operation, admission) : null;
         }
-        if (rejected) {
-            RelocatedOwnerException failure = new RelocatedOwnerException();
+        if (failure != null) {
             if (admission != null) admission.completeExceptionally(failure);
             return CompletableFuture.failedFuture(failure);
         }
@@ -1558,7 +1609,7 @@ public final class ZLinkSerialExecutionQueue {
         synchronized (this) {
             Objects.requireNonNull(record, "record");
             Objects.requireNonNull(relocationRelease, "relocationRelease");
-            rejection = admissionFailureLocked();
+            rejection = applicationAdmissionFailureLocked();
             result =
                     rejection == null
                             ? enqueueAccepted(
@@ -1625,7 +1676,7 @@ public final class ZLinkSerialExecutionQueue {
             Objects.requireNonNull(operation, "operation");
             Objects.requireNonNull(relocationRelease, "relocationRelease");
             validatePayloadBytes(recordSizeHint);
-            immediate = admissionFailureLocked();
+            immediate = applicationAdmissionFailureLocked();
             if (immediate == null) {
                 if (nextSequence == Long.MAX_VALUE) {
                     throw new IllegalStateException("queue sequence exhausted");

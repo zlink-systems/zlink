@@ -3598,7 +3598,7 @@ void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
             found->second.disconnected = actor_disconnect_terminal (found->second.disconnected);
         }
         _state->bound_session_sinks.erase (actor_id);
-        if (stream && actor_slot != 0 && !stream->_state->closed.load (std::memory_order_acquire)) {
+        if (stream && actor_slot != 0 && !stream->_state->closed.stop_requested ()) {
             const auto payload = stream_runtime_t::encode_actor_unbound_payload (actor_slot);
             stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
                                     stream_header_flags_t::none, std::nullopt,

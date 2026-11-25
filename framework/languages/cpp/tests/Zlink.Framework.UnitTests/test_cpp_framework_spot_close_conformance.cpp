@@ -587,7 +587,12 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
         ++pending_callbacks;
         return task_t<zlink::message_t> (result_t<zlink::message_t>::success (zlink::message_t{}));
     };
-    node->lane.run ([&] { state->timers = {running, pending}; }).get ();
+    node->lane
+      .run ([&] {
+          state->timers.push_back (running);
+          state->timers.push_back (pending);
+      })
+      .get ();
     auto marker = std::make_shared<std::promise<void>> ();
     auto application_drained = marker->get_future ();
     std::shared_ptr<void> cleanup_on_exit (nullptr, [&] (void *) {

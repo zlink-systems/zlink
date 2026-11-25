@@ -24,6 +24,7 @@ import systems.zlink.framework.locationprovider.ZLinkStorePut;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.locations.ZLinkPageRequest;
@@ -33,17 +34,22 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
+import systems.zlink.framework.runtime.locations.ZLinkTimerAdmissionTestRuntime;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
+import systems.zlink.framework.spots.ZLinkTimer;
 import systems.zlink.framework.spots.ZLinkTimerOptions;
 import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -159,13 +165,16 @@ final class ZLinkLocationRuntimeHostStartupTest {
     void ownerAdmissionDeadlineDiscardsOldIncarnationsAndAdmitsNewWork() throws Exception {
         ProbeSpot.reset();
         ProbeActorFactory.reset();
-        RecoveringLocationStore store = new RecoveringLocationStore(true);
+        var store = new RecoveringLocationStore(Clock.fixed(Instant.now(), ZoneOffset.UTC), true);
+        Duration leaseTtl = Duration.ofSeconds(1);
+        Duration renewInterval = Duration.ofMillis(20);
+        Duration renewTimeout = Duration.ofMillis(10);
+        Duration fencingMargin = Duration.ofMillis(700);
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
-        options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(1));
-        options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(20));
-        options.configureLocations().setOwnerLeaseRenewTimeout(Duration.ofMillis(10));
-        Duration fencingMargin = Duration.ofMillis(700);
+        options.configureLocations().setOwnerLeaseTtl(leaseTtl);
+        options.configureLocations().setOwnerLeaseRenewInterval(renewInterval);
+        options.configureLocations().setOwnerLeaseRenewTimeout(renewTimeout);
         options.configureLocations().setOwnerLeaseFencingMargin(fencingMargin);
         var mesh =
                 options.addRouteMesh("game")
@@ -188,22 +197,35 @@ final class ZLinkLocationRuntimeHostStartupTest {
                 ZLinkRegisteredLocationStores.fromUnified(
                         new ZLinkProviderLocationRepository(
                                 store, monotonicNanos::get, fencingMargin));
+        var locationRuntime =
+                ZLinkTimerAdmissionTestRuntime.createWithManualHeartbeat(
+                        locationStores,
+                        leaseTtl,
+                        renewInterval,
+                        renewTimeout,
+                        fencingMargin,
+                        monotonicNanos);
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
                         options,
                         new ZLinkJavaBackendAdapterFactory(),
                         systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
                                 .reflection(),
                         null,
                         new ZLinkFrameworkRuntimeTestAccess.Construction()
-                                .locationStores(locationStores))) {
-            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
-            monotonicNanos.set(fencingMargin.multipliedBy(3).toNanos());
+                                .locationStores(locationStores)
+                                .locationRuntime(locationRuntime))) {
+            // The first fixed RID claim observes the missing descriptor and starts its release
+            // wait.
+            long startupRenewalNanos = fencingMargin.multipliedBy(3).toNanos();
+            monotonicNanos.set(startupRenewalNanos);
             assertTrue(
-                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                    locationRuntime
+                            .renewOwnerLeaseOnce()
                             .toCompletableFuture()
-                            .join());
-            await(runtime::isReady, Duration.ofSeconds(2));
+                            .get(1, TimeUnit.SECONDS));
+            assertTrue(runtime.isReady());
+            var ownerToken = locationRuntime.currentOwnerToken();
             runtime.spotManager()
                     .getOrCreate("probe", "probe")
                     .submit()
@@ -212,19 +234,26 @@ final class ZLinkLocationRuntimeHostStartupTest {
             ProbeSpot originalSpot = ProbeSpot.last;
             long descriptorRevision = store.descriptors().getFirst().descriptorRevision();
             assertEquals("pong:open", request("open"));
-            await(() -> ProbeSpot.timerTicks.get() > 0, Duration.ofSeconds(1));
+            assertTrue(originalSpot.firstTick.await(1, TimeUnit.SECONDS));
             ProbeActorFactory.block();
             CompletableFuture<?> factoryAcrossDeadline =
                     runtime.actorManager()
                             .create("crossing-actor", "probe-actor")
                             .submit()
                             .toCompletableFuture();
-            await(() -> ProbeActorFactory.invocations.get() == 1, Duration.ofSeconds(1));
+            assertTrue(ProbeActorFactory.started.await(1, TimeUnit.SECONDS));
 
             store.available.set(false);
-            await(
-                    () -> !ZLinkFrameworkRuntimeTestAccess.ownerAdmissionOpen(runtime),
-                    Duration.ofSeconds(1));
+            assertFalse(
+                    locationRuntime
+                            .renewOwnerLeaseOnce()
+                            .toCompletableFuture()
+                            .get(1, TimeUnit.SECONDS));
+            assertTrue(locationRuntime.isOwnerAdmissionOpen());
+            monotonicNanos.set(startupRenewalNanos + leaseTtl.minus(fencingMargin).toNanos());
+            ZLinkTimerAdmissionTestRuntime.latch(locationRuntime);
+            assertFalse(locationRuntime.isOwnerAdmissionOpen());
+            assertTrue(locationRuntime.ownerLeaseSnapshot().outageDiscarded());
 
             assertDoesNotThrow(
                     () ->
@@ -234,33 +263,36 @@ final class ZLinkLocationRuntimeHostStartupTest {
             int messagesWhileClosed = ProbeSpot.messages.get();
             assertThrows(Exception.class, () -> request("closed"));
             assertEquals(messagesWhileClosed, ProbeSpot.messages.get());
-            Thread.sleep(30);
-            int ticksWhileClosed = ProbeSpot.timerTicks.get();
-            Thread.sleep(50);
-            assertEquals(ticksWhileClosed, ProbeSpot.timerTicks.get());
             ProbeActorFactory.release.complete(null);
             assertThrows(Exception.class, () -> factoryAcrossDeadline.get(1, TimeUnit.SECONDS));
             assertEquals(1, ProbeActorFactory.invocations.get());
             assertEquals(
                     ZLinkFrameworkRelocationReason.RUNTIME_NOT_READY, relocate(runtime).reason());
 
-            store.available.set(true);
-            await(
-                    () ->
-                            ZLinkFrameworkRuntimeTestAccess.ownerAdmissionOpen(runtime)
-                                    && store.descriptors().getFirst().descriptorRevision()
-                                            > descriptorRevision,
-                    Duration.ofSeconds(1));
+            var descriptorWrite = store.reopenAndObserveDescriptorWrite();
+            // Discarded executions can finish recovery while descriptor publication is pending.
+            assertTrue(
+                    locationRuntime
+                            .renewOwnerLeaseOnce()
+                            .toCompletableFuture()
+                            .get(1, TimeUnit.SECONDS));
+            descriptorWrite.get(1, TimeUnit.SECONDS);
+            assertDoesNotThrow(locationRuntime::ensureOwnerAdmissionOpen);
+            assertEquals(ownerToken, locationRuntime.currentOwnerToken());
+            assertTrue(store.descriptors().getFirst().descriptorRevision() > descriptorRevision);
+            assertTrue(originalSpot.timer.isDisposed());
+            int discardedTicks = originalSpot.timerTicks.get();
             runtime.routeMeshRuntimeOptionsInternal().mesh("game").setPlacementWeight(80);
-            assertThrows(Exception.class, () -> request("discarded-incarnation"));
             runtime.spotManager()
                     .getOrCreate("recovered-probe", "probe")
                     .submit()
                     .toCompletableFuture()
                     .get(2, TimeUnit.SECONDS);
             assertNotSame(originalSpot, ProbeSpot.last);
+            assertThrows(Exception.class, () -> request("discarded-incarnation"));
             assertEquals("pong:recovered", request("recovered-probe", "recovered"));
-            await(() -> ProbeSpot.timerTicks.get() > ticksWhileClosed, Duration.ofSeconds(1));
+            assertTrue(ProbeSpot.last.firstTick.await(1, TimeUnit.SECONDS));
+            assertEquals(discardedTicks, originalSpot.timerTicks.get());
             ProbeActorFactory.unblock();
             runtime.actorManager()
                     .create("recovered-actor", "probe-actor")
@@ -369,18 +401,29 @@ final class ZLinkLocationRuntimeHostStartupTest {
     }
 
     private static final class RecoveringLocationStore implements ZLinkLocationStore {
-        private final ZLinkInMemoryProviderLocationStore inner =
-                new ZLinkInMemoryProviderLocationStore();
-        private final ZLinkProviderLocationRepository repository =
-                new ZLinkProviderLocationRepository(inner);
+        private final ZLinkInMemoryProviderLocationStore inner;
+        private final ZLinkProviderLocationRepository repository;
         private final AtomicBoolean available = new AtomicBoolean();
         private final AtomicInteger failedRequests = new AtomicInteger();
         private final CountDownLatch unavailableObserved = new CountDownLatch(1);
 
-        RecoveringLocationStore() {}
+        private volatile CompletableFuture<Void> descriptorWrite;
 
-        RecoveringLocationStore(boolean available) {
+        RecoveringLocationStore() {
+            this(Clock.systemUTC(), false);
+        }
+
+        RecoveringLocationStore(Clock clock, boolean available) {
+            inner = new ZLinkInMemoryProviderLocationStore(clock);
+            repository = new ZLinkProviderLocationRepository(inner);
             this.available.set(available);
+        }
+
+        CompletableFuture<Void> reopenAndObserveDescriptorWrite() {
+            var completion = new CompletableFuture<Void>();
+            descriptorWrite = completion;
+            available.set(true);
+            return completion;
         }
 
         @Override
@@ -398,7 +441,18 @@ final class ZLinkLocationRuntimeHostStartupTest {
             if (!available.get()) {
                 return unavailable();
             }
-            return inner.write(request, cancellation);
+            var completion = descriptorWrite;
+            var write = inner.write(request, cancellation);
+            if (completion == null
+                    || !(request.mutations().getFirst() instanceof ZLinkStorePut put)
+                    || !put.key().value().startsWith("mesh-node\0")) {
+                return write;
+            }
+            return write.thenApply(
+                    result -> {
+                        if (result instanceof ZLinkStoreWriteApplied) completion.complete(null);
+                        return result;
+                    });
         }
 
         @Override
@@ -433,9 +487,11 @@ final class ZLinkLocationRuntimeHostStartupTest {
 
     public static final class ProbeSpot implements ZLinkSpot<ZLinkActor> {
         private static final AtomicInteger messages = new AtomicInteger();
-        private static final AtomicInteger timerTicks = new AtomicInteger();
         private static ProbeSpot last;
         private final ZLinkSpotContext context;
+        private final CountDownLatch firstTick = new CountDownLatch(1);
+        private final AtomicInteger timerTicks = new AtomicInteger();
+        private ZLinkTimer timer;
 
         public ProbeSpot(ZLinkSpotContext context) {
             this.context = context;
@@ -444,7 +500,6 @@ final class ZLinkLocationRuntimeHostStartupTest {
 
         static void reset() {
             messages.set(0);
-            timerTicks.set(0);
             last = null;
         }
 
@@ -466,7 +521,7 @@ final class ZLinkLocationRuntimeHostStartupTest {
                             TimerHandler.class,
                             new ZLinkTimerOptions(
                                     ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, false))
-                    .thenApply(ignored -> null);
+                    .thenAccept(timer -> this.timer = timer);
         }
 
         @Override
@@ -498,7 +553,8 @@ final class ZLinkLocationRuntimeHostStartupTest {
     public static final class TimerHandler implements ZLinkSpotTimerHandler<ProbeSpot> {
         @Override
         public CompletionStage<Void> handle(ProbeSpot spot, ZLinkTimerTick tick) {
-            ProbeSpot.timerTicks.incrementAndGet();
+            spot.timerTicks.incrementAndGet();
+            spot.firstTick.countDown();
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -508,9 +564,11 @@ final class ZLinkLocationRuntimeHostStartupTest {
     public static final class ProbeActorFactory implements ZLinkActorFactory {
         private static final AtomicInteger invocations = new AtomicInteger();
         private static CompletableFuture<Void> release;
+        private static CountDownLatch started;
 
         static void reset() {
             invocations.set(0);
+            started = new CountDownLatch(1);
             unblock();
         }
 
@@ -525,6 +583,7 @@ final class ZLinkLocationRuntimeHostStartupTest {
         @Override
         public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
             invocations.incrementAndGet();
+            started.countDown();
             return release.thenApply(ignored -> new ProbeActor(context));
         }
     }

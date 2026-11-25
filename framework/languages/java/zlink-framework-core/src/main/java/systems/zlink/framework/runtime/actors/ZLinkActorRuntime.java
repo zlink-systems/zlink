@@ -254,17 +254,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             java.util.logging.Logger.getLogger(ZLinkActorRuntime.class.getName());
     final ZLinkActorDispatchSerials dispatches;
     private volatile Function<String, CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>>
-            actorDispatchTargetResolver =
-                    actorId ->
-                            actorRegistry
-                                    .actorAsync(actorId)
-                                    .thenApply(
-                                            actor ->
-                                                    new ZLinkActorDispatchTarget.ActivationSnapshot(
-                                                            null,
-                                                            actor == null
-                                                                    ? null
-                                                                    : actor.context()));
+            actorDispatchTargetResolver = actorRegistry::standaloneDispatchTarget;
     final ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
     private final Map<String, CompletableFuture<Void>> actorCreationTails = new HashMap<>();
     private Consumer<String> actorTimerDisposer = ignored -> {};
@@ -859,19 +849,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             Function<String, CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>>
                     resolver) {
         actorDispatchTargetResolver =
-                resolver == null
-                        ? actorId ->
-                                actorRegistry
-                                        .actorAsync(actorId)
-                                        .thenApply(
-                                                actor ->
-                                                        new ZLinkActorDispatchTarget
-                                                                .ActivationSnapshot(
-                                                                null,
-                                                                actor == null
-                                                                        ? null
-                                                                        : actor.context()))
-                        : resolver;
+                resolver == null ? actorRegistry::standaloneDispatchTarget : resolver;
     }
 
     public void setCountChanged(Runnable callback) {
@@ -1210,8 +1188,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 () -> {
                     ZLinkActor existing = actorRegistry.actor(actorId);
                     if (existing != null) {
+                        ActorRef ref = publicRefFor(existing);
+                        if (ref.objectGeneration() != objectGeneration) {
+                            throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                    "reserved Actor generation differs from local Actor: "
+                                            + actorId);
+                        }
                         return CompletableFuture.completedFuture(
-                                new ZLinkActorCreateResult.Existing(publicRefFor(existing)));
+                                new ZLinkActorCreateResult.Existing(ref));
                     }
                     Class<? extends ZLinkActorFactory> factoryType = requireFactory(actorType);
                     Object createContext = actorCreateContextSupplier.get();
@@ -1253,8 +1238,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 });
     }
 
-    CompletionStage<Void> discardReservedActor(String actorId) {
-        return discardLocalActor(actorId, false);
+    CompletionStage<Void> awaitReservedActorRetirement(String actorId, long objectGeneration) {
+        ZLinkBackendActorRef previous = spotNode.actorLookup(actorId);
+        return awaitActorRetirement(
+                actorId,
+                previous != null && previous.generation() < objectGeneration ? previous : null);
+    }
+
+    CompletionStage<Void> discardReservedActor(String actorId, long objectGeneration) {
+        return discardLocalActor(actorId, false, objectGeneration);
     }
 
     public CompletionStage<ZLinkActor> materializeTransferredActor(
@@ -1318,15 +1310,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         Objects.requireNonNull(cancellation, "cancellation");
         Class<? extends ZLinkActorFactory> factoryType = requireFactory(actorType);
-        ZLinkActorJoinRelocationPort sourceOwner = actorJoinRelocationPort;
-        CompletionStage<Void> sourceCleanup =
-                sourceOwner == null || preparedActorRef == null
-                        ? CompletableFuture.completedFuture(null)
-                        : sourceOwner.awaitSourceCleanup(actorId, preparedActorRef.generation());
-        return sourceCleanup
-                .thenCompose(
-                        ignored ->
-                                dispatches.awaitTeardown(actorId).handle((done, failure) -> null))
+        return awaitActorRetirement(actorId, preparedActorRef)
                 .thenCompose(
                         ignored -> {
                             locations.ensureOwnerAdmissionOpen();
@@ -1347,6 +1331,17 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     cancellation,
                                     actorRef);
                         });
+    }
+
+    private CompletionStage<Void> awaitActorRetirement(
+            String actorId, ZLinkBackendActorRef sourceActor) {
+        ZLinkActorJoinRelocationPort sourceOwner = actorJoinRelocationPort;
+        CompletionStage<Void> sourceCleanup =
+                sourceOwner == null || sourceActor == null
+                        ? CompletableFuture.completedFuture(null)
+                        : sourceOwner.awaitSourceCleanup(actorId, sourceActor.generation());
+        return sourceCleanup.thenCompose(
+                ignored -> dispatches.awaitTeardown(actorId).handle((done, failure) -> null));
     }
 
     private ZLinkBackendActorRef prepareTransferredActorRef(
@@ -2330,6 +2325,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private CompletionStage<Void> discardLocalActor(String actorId, boolean releaseLocation) {
+        return discardLocalActor(actorId, releaseLocation, 0L);
+    }
+
+    private CompletionStage<Void> discardLocalActor(
+            String actorId, boolean releaseLocation, long objectGeneration) {
         ActorStateSnapshot state =
                 inStateLane(
                         () -> {
@@ -2342,7 +2342,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         ZLinkActor actor = state.actor();
         DefaultActorContext context = state.context();
         String actorType = state.actorType();
-        if (actor == null || context == null || context.actorRef() == null) {
+        ZLinkBackendActorRef actorRef = context == null ? null : context.actorRef();
+        if (actor == null
+                || actorRef == null
+                || (objectGeneration != 0 && actorRef.generation() != objectGeneration)) {
             return CompletableFuture.completedFuture(null);
         }
         return dispatches.beginTeardown(
@@ -2352,9 +2355,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     return ZLinkHandlerStages.completeAll(
                             List.of(
                                     context::disconnectBoundSessionForDestroy,
-                                    () ->
-                                            spotNode.destroyActor(
-                                                    context.actorRef(), defaultRequestTimeout),
+                                    () -> spotNode.destroyActor(actorRef, defaultRequestTimeout),
                                     () ->
                                             releaseLocation
                                                     ? locations.releaseActor(actorType, actorId)
@@ -3252,6 +3253,19 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return handoff.hasMessageFollowSource(actorId);
     }
 
+    public ZLinkServiceM6BWireCodec.ActorRouteFence messageFollowSourceFence(
+            ZLinkBackendActorRef actor) {
+        return handoff.messageFollowSource(actor)
+                .map(
+                        route ->
+                                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                        actor,
+                                        route.targetNodeGeneration(),
+                                        route.authorityOwnerGeneration(),
+                                        route.ownerLeaseGeneration()))
+                .orElse(null);
+    }
+
     /**
      * Relays one stale raw Actor record through the committed typed Actor route. The caller
      * transfers the received parts and admission lease only when this method returns true.
@@ -3291,6 +3305,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         ZLinkActorTransferHandoff.MessageFollowSource followSource =
                 handoff.messageFollowSource(sourceRoute).orElse(null);
         if (followSource == null) {
+            // A retained route can coexist with a new local stay. Only the complete current
+            // authority fence may fall through to normal ingress.
+            if (isCurrentLocalRoute(header.target())) {
+                return false;
+            }
             if (sameActor.sourceActorRef().generation() != staleActor.generation()) {
                 return rejectRetainedMessageFollowIngress(
                         parts,
@@ -3298,13 +3317,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         ZLinkFrameworkErrorKind.INVALID_OPERATION,
                         "Message Follow object generation does not match",
                         terminalRelease);
-            }
-            // A retained A->B tenure may coexist with a newly adopted A route
-            // after B->A.  A same-generation exact miss belongs to normal
-            // local ingress only when its complete authority fence is current;
-            // the old tenure must not shadow that route.
-            if (isCurrentLocalRoute(header.target())) {
-                return false;
             }
             return rejectRetainedMessageFollowIngress(
                     parts,
@@ -4809,7 +4821,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             String actorId, RelocationSourceCheck source, DepartedStay departed) {
         return ZLinkHandlerStages.completeAll(
                 List.of(
-                        () -> retireDepartedActorBinding(departed),
+                        () -> retireDepartedActor(departed),
                         () -> removeActorSessionRouteForContext(source.context()),
                         () ->
                                 ZLinkHandlerStages.fromRunnable(
@@ -4829,14 +4841,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         () -> ZLinkHandlerStages.fromRunnable(context.state::clearAfterDestroy)));
     }
 
-    /**
-     * The committed relocation ended this stay, so the source SpotNode retires exactly the stay's
-     * binding record; a return of the Actor to this node then installs its route without conflict.
-     */
-    private CompletionStage<Void> retireDepartedActorBinding(DepartedStay departed) {
+    /** A committed relocation ends the local Actor stay. The handoff owns its retained route. */
+    private CompletionStage<Void> retireDepartedActor(DepartedStay departed) {
         return departed == null
                 ? CompletableFuture.completedFuture(null)
-                : spotNode.retireDepartedActorBinding(
+                : spotNode.retireDepartedActor(
                         departed.actorRef(),
                         departed.sessionRid(),
                         departed.authorityOwnerGeneration());
@@ -4847,13 +4856,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         // The SpotNode record owns the binding of the departed stay.
         var binding = actorRef == null ? null : context.boundSessionRoute();
         RoutingId sessionRid = binding == null ? null : binding.sessionRid();
-        return actorRef == null || sessionRid == null
+        return actorRef == null
                 ? null
                 : new DepartedStay(
                         actorRef, sessionRid, spotNode.actorAuthorityOwnerGeneration(actorRef));
     }
 
-    /** The bound stay a committed relocation ends: ActorRef, Session and authority generation. */
+    /** The ActorRef, optional Session and authority generation of a committed relocation source. */
     private record DepartedStay(
             ZLinkBackendActorRef actorRef, RoutingId sessionRid, long authorityOwnerGeneration) {}
 
@@ -4920,6 +4929,16 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     () -> {
                         ActorEntry entry = byId.get(actorId);
                         return entry == null ? null : entry.actor();
+                    });
+        }
+
+        CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot> standaloneDispatchTarget(
+                String actorId) {
+            return stateLane.runNowOrQueue(
+                    () -> {
+                        ActorEntry entry = byId.get(actorId);
+                        return new ZLinkActorDispatchTarget.ActivationSnapshot(
+                                null, entry == null ? null : entry.context());
                     });
         }
 
