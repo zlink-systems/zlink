@@ -1856,18 +1856,56 @@ final class ZLinkCanonicalRelocationStateMachine
                 prepare.object().kind() == 1
                         ? readStandaloneActor(prepare)
                         : readUserSpotInventory(prepare);
-        return inventory.thenApply(
+        return inventory.thenCompose(
                 entries -> {
-                    ZLinkSpotRetireControl.TargetProfile profile =
-                            Objects.requireNonNull(
-                                    target.applyTargetProfile(
-                                            stageRequest(prepare, payload, entries),
-                                            localNodeGeneration),
-                                    "canonical target profile returned null");
-                    ZLinkSpotRetireControl.StageRequest request = profile.request();
-                    return new TargetRestore(
-                            request, authorityRequest(prepare, payload, entries, profile));
+                    var profile = stageRequest(prepare, payload, entries);
+                    return target.applyTargetProfile(profile, () -> awaitShellPublication(profile))
+                            .thenApply(
+                                    resolved ->
+                                            new TargetRestore(
+                                                    resolved.request(),
+                                                    authorityRequest(
+                                                            prepare, payload, entries, resolved)));
                 });
+    }
+
+    private CompletionStage<Void> awaitShellPublication(
+            ZLinkSpotRetireControl.TargetProfile profile) {
+        var request = profile.request();
+        return locations
+                .read(ZLinkAuthorityKeyCodec.spot(request.spotId()), OPEN)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot shell)
+                                    || shell.objectGeneration() != profile.actorSpotGeneration()
+                                    || shell.allocation().objectKind()
+                                            != ZLinkPlacementObjectKind.USER_SPOT
+                                    || !shell.ownerId().equals(request.targetOwnerId())
+                                    || shell.ownerLeaseGeneration()
+                                            != request.targetOwnerLeaseGeneration()
+                                    || !shell.allocation().descriptor().rid().equals(localNodeRid)
+                                    || shell.allocation().descriptorLifecycleGeneration()
+                                            != localNodeGeneration) {
+                                return failed(
+                                        new IllegalStateException(
+                                                "Actor relocation target does not own the PerActor Spot shell"));
+                            }
+                            var committed = ZLinkAuthorityRelocation.publication(shell, 0);
+                            if (committed == null) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            var fence =
+                                    new Fence(
+                                            committed.aggregateId(),
+                                            committed.targetAttemptGeneration());
+                            TargetAttempt shellAttempt = inStateLane(() -> targets.get(fence));
+                            // Authority commits before the receiving Spot publishes its queue.
+                            CompletionStage<Void> publication =
+                                    shellAttempt == null ? null : shellAttempt.publication();
+                            return publication == null
+                                    ? CompletableFuture.completedFuture(null)
+                                    : publication;
+                        });
     }
 
     private ZLinkAggregateRelocationCoordinator.Request authorityRequest(
@@ -1976,6 +2014,13 @@ final class ZLinkCanonicalRelocationStateMachine
                                                 var actorCodec =
                                                         new ZLinkActorAuthorityPayloadCodec();
                                                 for (ZLinkAuthorityEntry actor : actors) {
+                                                    var relocation = actor.snapshot().relocation();
+                                                    if (relocation == null
+                                                            || !relocation
+                                                                    .relocationId()
+                                                                    .equals(prepare.id())) {
+                                                        continue;
+                                                    }
                                                     var authority =
                                                             actorCodec.decode(
                                                                     actor.snapshot().payload());
@@ -2023,7 +2068,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         });
     }
 
-    private ZLinkSpotRetireControl.StageRequest stageRequest(
+    private ZLinkSpotRetireControl.TargetProfile stageRequest(
             ZLinkCanonicalRelocationProtocol.Prepare prepare,
             byte[] rootBytes,
             List<ZLinkAuthorityEntry> entries) {
@@ -2050,6 +2095,8 @@ final class ZLinkCanonicalRelocationStateMachine
         var spotCodec = new ZLinkServiceAuthorityPayloadCodec();
         String stableType = null;
         String targetSpotId = entrySpotId;
+        long actorSpotGeneration = localNodeGeneration;
+        int actorSpotKind = 1;
         boolean restorePrimary = false;
         ZLinkAuthoritySnapshot primarySnapshot = null;
         for (int index = 0; index < entries.size(); index++) {
@@ -2096,6 +2143,15 @@ final class ZLinkCanonicalRelocationStateMachine
                 stableType = objectType;
                 restorePrimary = hasState;
                 primarySnapshot = snapshot;
+                if (kind == ZLinkPlacementObjectKind.ACTOR.value()) {
+                    var actor = new ZLinkActorAuthorityPayloadCodec().decode(snapshot.payload());
+                    if (actor.isPresent() && actor.orElseThrow().currentSpotKind() == 2) {
+                        var membership = actor.orElseThrow();
+                        targetSpotId = membership.currentSpotId();
+                        actorSpotGeneration = membership.currentSpotGeneration();
+                        actorSpotKind = membership.currentSpotKind();
+                    }
+                }
             }
         }
         validateResolvedPrimary(prepare, participants);
@@ -2137,50 +2193,57 @@ final class ZLinkCanonicalRelocationStateMachine
         if (!coordinatorFenceMatches) {
             throw new IllegalStateException("relocation coordinator authority version differs");
         }
-        return new ZLinkSpotRetireControl.StageRequest(
-                new ZLinkSpotRetireControl.Fence(prepare.id(), prepare.targetAttemptGeneration()),
-                prepare.sourceNodeRid(),
-                prepare.sourceNodeGeneration(),
-                prepare.coordinator().ownerId(),
-                prepare.coordinator().ownerLeaseGeneration(),
-                prepare.target().nodeRid(),
-                prepare.target().nodeGeneration(),
-                prepare.target().ownerId(),
-                prepare.target().ownerLeaseGeneration(),
-                meshName,
-                targetSpotId,
-                stableType,
-                false,
-                restorePrimary,
-                rootBytes,
-                participants,
-                envelope.sessionBindings().stream()
-                        .map(
-                                binding -> {
-                                    if (binding.participantId() <= 0
-                                            || binding.participantId() > participants.size())
-                                        throw new IllegalArgumentException(
-                                                "Session binding participant is outside inventory");
-                                    var participant =
-                                            participants.get(
-                                                    Math.toIntExact(binding.participantId() - 1));
-                                    if (participant.objectKind()
-                                            != ZLinkPlacementObjectKind.ACTOR.value())
-                                        throw new IllegalArgumentException(
-                                                "Session binding participant is not an Actor");
-                                    return new ZLinkSpotRetireControl.SessionRouteFence(
-                                            participant.objectId(),
-                                            participant.objectGeneration(),
-                                            participant.sourceAuthorityOwnerGeneration(),
-                                            prepare.coordinator().expectedAuthorityStoreVersion(),
-                                            RoutingId.from(binding.sessionOwnerNodeRid()),
-                                            binding.sessionOwnerNodeGeneration(),
-                                            binding.sessionOwnerId(),
-                                            binding.sessionOwnerLeaseGeneration(),
-                                            RoutingId.from(binding.sessionRid()),
-                                            binding.bindingGeneration());
-                                })
-                        .toList());
+        var request =
+                new ZLinkSpotRetireControl.StageRequest(
+                        new ZLinkSpotRetireControl.Fence(
+                                prepare.id(), prepare.targetAttemptGeneration()),
+                        prepare.sourceNodeRid(),
+                        prepare.sourceNodeGeneration(),
+                        prepare.coordinator().ownerId(),
+                        prepare.coordinator().ownerLeaseGeneration(),
+                        prepare.target().nodeRid(),
+                        prepare.target().nodeGeneration(),
+                        prepare.target().ownerId(),
+                        prepare.target().ownerLeaseGeneration(),
+                        meshName,
+                        targetSpotId,
+                        stableType,
+                        false,
+                        restorePrimary,
+                        rootBytes,
+                        participants,
+                        envelope.sessionBindings().stream()
+                                .map(
+                                        binding -> {
+                                            if (binding.participantId() <= 0
+                                                    || binding.participantId()
+                                                            > participants.size())
+                                                throw new IllegalArgumentException(
+                                                        "Session binding participant is outside inventory");
+                                            var participant =
+                                                    participants.get(
+                                                            Math.toIntExact(
+                                                                    binding.participantId() - 1));
+                                            if (participant.objectKind()
+                                                    != ZLinkPlacementObjectKind.ACTOR.value())
+                                                throw new IllegalArgumentException(
+                                                        "Session binding participant is not an Actor");
+                                            return new ZLinkSpotRetireControl.SessionRouteFence(
+                                                    participant.objectId(),
+                                                    participant.objectGeneration(),
+                                                    participant.sourceAuthorityOwnerGeneration(),
+                                                    prepare.coordinator()
+                                                            .expectedAuthorityStoreVersion(),
+                                                    RoutingId.from(binding.sessionOwnerNodeRid()),
+                                                    binding.sessionOwnerNodeGeneration(),
+                                                    binding.sessionOwnerId(),
+                                                    binding.sessionOwnerLeaseGeneration(),
+                                                    RoutingId.from(binding.sessionRid()),
+                                                    binding.bindingGeneration());
+                                        })
+                                .toList());
+        return new ZLinkSpotRetireControl.TargetProfile(
+                request, actorSpotGeneration, actorSpotKind);
     }
 
     private static String relocationInventoryDiagnostic(

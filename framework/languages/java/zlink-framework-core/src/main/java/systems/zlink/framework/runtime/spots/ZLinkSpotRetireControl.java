@@ -282,9 +282,9 @@ final class ZLinkSpotRetireControl {
         }
 
         /** Applies an admitted target-only profile before authority prepare. */
-        default TargetProfile applyTargetProfile(
-                StageRequest request, long defaultActorSpotGeneration) {
-            return new TargetProfile(request, defaultActorSpotGeneration, 1);
+        default CompletionStage<TargetProfile> applyTargetProfile(
+                TargetProfile profile, Supplier<CompletionStage<Void>> awaitShellPublication) {
+            return CompletableFuture.completedFuture(profile);
         }
 
         CompletionStage<Void> stage(StageRequest request);

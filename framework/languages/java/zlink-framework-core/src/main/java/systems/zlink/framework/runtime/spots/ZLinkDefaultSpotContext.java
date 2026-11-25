@@ -753,7 +753,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     byte[] freezeTimerRelocationEnvelope() {
-        return ZLinkSpotTimerRelocationEnvelope.encode(timers.freeze());
+        var frozen = timers.freeze();
+        return executionMode == ZLinkUserSpotExecutionMode.PER_ACTOR
+                ? ZLinkSpotTimerRelocationEnvelope.encodeCanonical(List.of())
+                : ZLinkSpotTimerRelocationEnvelope.encode(frozen);
     }
 
     void resumeTimersAfterRelocationAbort() {

@@ -672,7 +672,8 @@ final class ZLinkActorJoinPrewarmIngressTest {
             actors.publishRelocatedActor(
                     (ZLinkActorRuntime.PreparedTransferredActor) actor,
                     request.targetSpotId(),
-                    targetOwnerGeneration);
+                    targetOwnerGeneration,
+                    null);
         }
 
         @Override

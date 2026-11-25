@@ -1078,7 +1078,8 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             actors.publishRelocatedActor(
                     (ZLinkActorRuntime.PreparedTransferredActor) actor,
                     request.targetSpotId(),
-                    targetOwnerGeneration);
+                    targetOwnerGeneration,
+                    spots.spotFor(request.targetSpotId()));
         }
 
         @Override
