@@ -17,12 +17,14 @@ import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.spots.*;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -57,13 +59,13 @@ final class ZLinkEndedInstanceIntentTest {
 
     @ParameterizedTest
     @CsvSource({"provider, false", "provider, true", "memory, false", "memory, true"})
-    void endedEmptyUserGetOrCreateUsesRequestingNodePolicy(String backend, boolean fromClientNode)
+    void endedEmptyUserGetOrCreateUsesFactoryTargetPolicy(String backend, boolean fromClientNode)
             throws Exception {
         recreateEndedSpot(backend, ZLinkPlacementObjectKind.USER_SPOT, fromClientNode, null);
     }
 
     @RepeatedTest(100)
-    void endedEmptyUserGetOrCreateWaitsBeforeApplyingRequestingNodePolicy() throws Exception {
+    void endedEmptyUserGetOrCreateWaitsBeforeApplyingFactoryTargetPolicy() throws Exception {
         for (String backend : List.of("provider", "memory"))
             for (boolean fromClientNode : List.of(false, true))
                 recreateEndedSpot(
@@ -72,13 +74,13 @@ final class ZLinkEndedInstanceIntentTest {
 
     @ParameterizedTest
     @CsvSource({"provider, false", "provider, true", "memory, false", "memory, true"})
-    void userReclamationPolicyComesFromRequestNodeRatherThanFactoryTarget(
-            String backend, boolean requestDisabled) throws Exception {
+    void userReclamationPolicyComesFromFactoryTarget(String backend, boolean requestDisabled)
+            throws Exception {
         recreateEndedSpot(backend, ZLinkPlacementObjectKind.USER_SPOT, true, requestDisabled);
     }
 
     @RepeatedTest(100)
-    void userReclamationPolicyRemainsRequestOwnedAfterReleaseWait() throws Exception {
+    void userReclamationPolicyRemainsTargetOwnedAfterReleaseWait() throws Exception {
         for (String backend : List.of("provider", "memory"))
             for (boolean requestDisabled : List.of(false, true))
                 recreateEndedSpot(
@@ -153,10 +155,13 @@ final class ZLinkEndedInstanceIntentTest {
             boolean fromClientNode,
             Boolean requestingNodeDisabled)
             throws Exception {
+        var oldOwnerExpiryClock = new OwnerExpiryClock();
+        boolean expireOldOwner = fromClientNode && kind == ZLinkPlacementObjectKind.USER_SPOT;
+        Clock storeClock = expireOldOwner ? oldOwnerExpiryClock : Clock.systemUTC();
         ZLinkLocationStore provider =
                 backend.equals("memory")
-                        ? new ZLinkInMemoryLocationStore()
-                        : new ZLinkInMemoryProviderLocationStore();
+                        ? new ZLinkInMemoryLocationStore(storeClock)
+                        : new ZLinkInMemoryProviderLocationStore(storeClock);
         var monotonicNanos = new AtomicLong();
         var fencingMargin = Duration.ofNanos(1);
         // Runtime resolves public LocationStore providers through the provider repository.
@@ -249,8 +254,7 @@ final class ZLinkEndedInstanceIntentTest {
                                                         owner,
                                                         new byte[] {1},
                                                         ZLinkPlacementCapacityBundle.spot(
-                                                                kind, "room", 1),
-                                                        new RelocationPolicy.Disabled()),
+                                                                kind, "room", 1)),
                                                 () -> false)
                                         .toCompletableFuture()
                                         .join())
@@ -280,7 +284,8 @@ final class ZLinkEndedInstanceIntentTest {
         assertEquals(
                 ZLinkObjectCommitResult.COMMITTED,
                 repository.commit(reservation, ready, () -> false).toCompletableFuture().join());
-        repository.releaseOwnerLease(owner).toCompletableFuture().join();
+        if (expireOldOwner) oldOwnerExpiryClock.advance(Duration.ofMinutes(5));
+        else repository.releaseOwnerLease(owner).toCompletableFuture().join();
         var endedAuthority =
                 (ZLinkAuthoritySnapshot)
                         repository.read(key, () -> false).toCompletableFuture().join();
@@ -401,7 +406,7 @@ final class ZLinkEndedInstanceIntentTest {
                                     .getOrCreate("ended-instance-spot", "room")
                                     .submit()
                                     .toCompletableFuture();
-                    if (fromClientNode && !Boolean.TRUE.equals(requestingNodeDisabled)) {
+                    if (Boolean.TRUE.equals(requestingNodeDisabled)) {
                         var failure =
                                 assertThrows(
                                         java.util.concurrent.ExecutionException.class,
@@ -424,6 +429,7 @@ final class ZLinkEndedInstanceIntentTest {
                         creation.get(10, TimeUnit.SECONDS);
                         var current = observed.ready.get(10, TimeUnit.SECONDS);
                         assertTrue(current.objectGeneration() > reservation.objectGeneration());
+                        assertEquals(TARGET_RID, current.allocation().descriptor().rid());
                         assertEquals(1, factories.get());
                     }
                     return;
@@ -519,6 +525,29 @@ final class ZLinkEndedInstanceIntentTest {
     public record Probe(String value) {}
 
     public record Reply(long generation) {}
+
+    private static final class OwnerExpiryClock extends Clock {
+        private volatile Instant now = Instant.now();
+
+        void advance(Duration duration) {
+            now = now.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return Clock.fixed(now, zone);
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
+    }
 
     private static final class SteadyInstanceProvider implements ZLinkLocationStore {
         private final ZLinkLocationStore delegate;

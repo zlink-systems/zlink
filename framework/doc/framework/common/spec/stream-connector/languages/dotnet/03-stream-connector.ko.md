@@ -66,6 +66,7 @@ public interface IZlinkStreamConnector : IAsyncDisposable
 
 
     IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
+    IDisposable OnAdmissionWaiting(Func<ZlinkStreamAdmissionWaiting, CancellationToken, ValueTask> handler);
     IDisposable OnReplyReceived(Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler);
     IDisposable OnConnectionStateChanged(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
     IDisposable OnDisconnected(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler);
@@ -186,6 +187,12 @@ public interface IZlinkStreamWaitCall
 [공통 스펙 §5.7](../../32-stream-connector.ko.md#57-요청-hook)의 두 hook을 `OnRequestSending`·`OnReplyReceived`(§3)와 다음 context로 투영한다. 송신 hook은 dispatch mode를 따르지 않으므로 동기 `Action`이고, 응답 hook은 다른 수신 callback과 같은 형태다.
 
 ```csharp
+public sealed record ZlinkStreamAdmissionWaiting(
+    string RequestPacketName,
+    string? ActorId,
+    TimeSpan RetryAfter
+);
+
 public sealed class ZlinkStreamRequestSendingContext
 {
     public string RequestPacketName { get; }
@@ -237,6 +244,7 @@ codec 표면은 `IZlinkStreamPayloadCodec`과 `IZlinkStreamCompressionCodec`이�
 `ZlinkStreamConnectorOptions`의 다음 property다.
 
 ```csharp
+public TimeSpan? MaxAdmissionWait { get; init; }
 public IZlinkStreamPayloadCodec? PayloadCodec { get; init; }          // null이면 ZlinkStreamJsonCodec
 public IZlinkStreamPacketNameResolver NameResolver { get; init; }
     = new ZlinkStreamPacketNameResolver();                            // 기본 resolver
@@ -442,3 +450,5 @@ package와 clean consumer가 모두 같은 공개 계약인지 확인한다.
 <!-- framework-adapter-nav:bottom:start -->
 [문서 목록](../../../../../../README.ko.md)
 <!-- framework-adapter-nav:bottom:end -->
+
+입장 대기와 기본 마감은 [공통 스펙 §5.8](../../32-stream-connector.ko.md#58-입장-대기와-자동-재시도)이 정한다.

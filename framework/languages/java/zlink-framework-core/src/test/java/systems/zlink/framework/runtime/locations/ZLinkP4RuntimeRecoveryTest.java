@@ -422,7 +422,7 @@ final class ZLinkP4RuntimeRecoveryTest {
             runtime.setOwnerLeaseRecoveryListener(
                     open -> {
                         countPublication();
-                        f.owner = runtime.currentOwnerToken();
+                        f.owner = runtime.descriptorPublicationOwnerToken();
                         return runtime.writeDescriptor(
                                         f.node,
                                         () -> {
@@ -1211,7 +1211,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                     f.runtime.setOwnerLeaseRecoveryListener(
                             open -> {
                                 f.countPublication();
-                                f.f.owner = f.runtime.currentOwnerToken();
+                                f.f.owner = f.runtime.descriptorPublicationOwnerToken();
                                 var first =
                                         f.runtime.writeDescriptor(
                                                 firstNode,
@@ -1607,7 +1607,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                             if (open) return CompletableFuture.completedFuture(null);
                             int attempt = attempts.incrementAndGet();
                             f.countPublication();
-                            f.f.owner = f.runtime.currentOwnerToken();
+                            f.f.owner = f.runtime.descriptorPublicationOwnerToken();
                             return f.runtime
                                     .writeDescriptor(
                                             f.f.node,

@@ -234,6 +234,9 @@ export interface ZLinkRouteChannelOptions {
 }
 
 export interface ZLinkStreamNodeOptions {
+  readonly authenticationPacketName?: string;
+  readonly maxConcurrentAuthentications?: number;
+  readonly authenticationRetryDelayMs?: number;
   readonly heartbeatIntervalMs?: number;
   readonly heartbeatTimeoutMs?: number;
   readonly idleTimeoutMs?: number;

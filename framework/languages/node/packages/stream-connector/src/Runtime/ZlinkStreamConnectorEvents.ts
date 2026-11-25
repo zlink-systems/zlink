@@ -1,4 +1,9 @@
-import type { Disposable, ZlinkStreamConnectionStateChanged, ZlinkStreamError } from '../Contracts';
+import type {
+  Disposable,
+  ZlinkStreamAdmissionWaitingContext,
+  ZlinkStreamConnectionStateChanged,
+  ZlinkStreamError
+} from '../Contracts';
 import { ZlinkStreamErrorCode } from '../Contracts';
 import {
   currentRegistrations,
@@ -25,6 +30,26 @@ export class ZlinkStreamConnectorEvents {
       (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void
     >
   >();
+
+  private readonly admissionWaitingHandlers = new Set<
+    HandlerRegistration<
+      (context: ZlinkStreamAdmissionWaitingContext, signal?: AbortSignal) => Promise<void> | void
+    >
+  >();
+
+  onAdmissionWaiting(
+    handler: (
+      context: ZlinkStreamAdmissionWaitingContext,
+      signal?: AbortSignal
+    ) => Promise<void> | void
+  ): Disposable {
+    return registerHandler(this.admissionWaitingHandlers, handler);
+  }
+
+  publishAdmissionWaiting(context: ZlinkStreamAdmissionWaitingContext, signal?: AbortSignal): void {
+    if (this.admissionWaitingHandlers.size === 0) return;
+    this.publish(this.admissionWaitingHandlers, (handler) => handler(context, signal), signal);
+  }
 
   onError(
     handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void

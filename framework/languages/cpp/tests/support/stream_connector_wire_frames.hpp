@@ -3,6 +3,7 @@
 
 #include "runtime/protocol/framing/frame_codec.hpp"
 #include "runtime/protocol/header_codec.hpp"
+#include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/stream_connector.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -73,7 +74,8 @@ inline zlink::message_t make_server_frame (zlink::stream_connector::message_kind
                                            std::string name,
                                            std::string payload,
                                            bool compressed = false,
-                                           std::optional<std::uint16_t> actor_slot = std::nullopt)
+                                           std::optional<std::uint16_t> actor_slot = std::nullopt,
+                                           zlink::stream_connector::metadata_t metadata = {})
 {
     const bool reply = kind == zlink::stream_connector::message_kind_t::response
                        || kind == zlink::stream_connector::message_kind_t::error;
@@ -91,6 +93,7 @@ inline zlink::message_t make_server_frame (zlink::stream_connector::message_kind
                            : std::optional<std::uint64_t>{};
     header.name = reply ? std::string{} : name;
     header.actor_slot = actor_slot;
+    header.metadata = std::move (metadata);
     auto header_bytes = zlink::stream_connector::detail::header_codec_t{}.encode (header);
     zlink::stream_connector::connector_options_t options;
     options.compression = zlink::stream_connector::compression_t::lz4;

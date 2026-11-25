@@ -1130,13 +1130,6 @@ mesh_node_host_service_t::create_actor (bool exclusive,
 
       .capacity_bundle = {.actor_slots = 1},
       .operation_deadline = operation_deadline};
-    const auto &source_registration =
-      _registrations[static_cast<std::size_t> (std::distance (_nodes.begin (), source_runtime))];
-    if (source_registration && source_registration->spot_state) {
-        const auto factory = source_registration->spot_state->actor_factories.find (stable_type);
-        if (factory != source_registration->spot_state->actor_factories.end ())
-            reserve.relocation_policy = factory->second.relocation.kind;
-    }
     struct select_actor_target_t
     {
         static task_t<actor_target_selection_t>
@@ -1746,7 +1739,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
             co_return result_t<spot_create_result_t>::failure (
               framework_error_kind_t::invalid_operation,
               "More than one object Mesh is registered; select one with in_mesh");
-        source = _nodes.front ();
+        source = request_source;
     }
     if (!spot_id) {
         spot_id = detail::new_user_spot_id ();
@@ -1766,7 +1759,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
     }
     const auto selected_mesh = mesh_name.value_or (source->mesh_name ());
     std::set<std::pair<std::string, std::uint64_t>> excluded_targets;
-    mesh_node_descriptor_t target;
+    std::optional<mesh_node_descriptor_t> placement_target;
     std::vector<std::byte> application_bytes;
     if (request) {
         const auto raw = detail::message_to_raw (*request, *_serializers);
@@ -1798,22 +1791,37 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
     reserve_request.creating_payload = creating_payload;
     reserve_request.capacity_bundle = {
       0, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, stable_type, 1}};
-    const auto source_index =
-      std::distance (_nodes.begin (), std::find (_nodes.begin (), _nodes.end (), request_source));
-    const auto &source_registration = _registrations[static_cast<std::size_t> (source_index)];
-    if (source_registration && source_registration->spot_state
-        && source_registration->spot_state->spot_factories.contains (stable_type)
-        && std::find (source_registration->spot_state->snapshot.instance_spot_names.begin (),
-                      source_registration->spot_state->snapshot.instance_spot_names.end (),
-                      stable_type)
-             == source_registration->spot_state->snapshot.instance_spot_names.end ()) {
-        const auto policy =
-          source_registration->spot_state->spot_factory_relocations.find (stable_type);
-        reserve_request.relocation_policy =
-          policy == source_registration->spot_state->spot_factory_relocations.end ()
-            ? detail::factory_relocation_kind_t::disabled
-            : policy->second.kind;
-    }
+    // Static coroutine with by-value inputs: a capturing coroutine lambda would read
+    // its captures after suspension (CP.51).
+    struct select_user_spot_target_t
+    {
+        static task_t<std::optional<mesh_node_descriptor_t>>
+        run (mesh_node_host_service_t *self,
+             std::string mesh,
+             std::string type,
+             std::shared_ptr<detail::mesh_node_runtime_t> origin,
+             std::chrono::steady_clock::time_point until,
+             std::set<std::pair<std::string, std::uint64_t>> excluded,
+             spot_id_t id)
+        {
+            const auto candidates = co_await placement_candidates (
+              self->_services->get_required<live_location_reader_t> (), mesh,
+              placement_object_kind_t::user_spot, type, origin, until,
+              [&excluded] (const auto &candidate) {
+                  return excluded.contains (
+                    {candidate.rid.to_hex (), candidate.lifecycle_generation});
+              });
+            if (candidates.empty ())
+                co_return std::nullopt;
+            co_return choose_placement_target (candidates, id);
+        }
+    };
+    const auto use_target = [&] {
+        reserve_request.target = {placement_target->mesh_name,
+                                  node_rid_t::from_string (placement_target->rid.to_string ()),
+                                  placement_target->lifecycle_generation,
+                                  {placement_target->owner_id, placement_target->lease_generation}};
+    };
     object_reserve_result_t reserved;
     live_location_reader_t authority_reader (*_location_store);
     while (true) {
@@ -1841,10 +1849,24 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
                 owner_unavailable = !owner_available;
             }
             if (reservation_pending || owner_unavailable) {
+                if (current->allocation.state == placement_allocation_state_t::active) {
+                    if (!placement_target) {
+                        placement_target = co_await select_user_spot_target_t::run (
+                          this, selected_mesh, stable_type, source, deadline, excluded_targets,
+                          *spot_id);
+                        if (placement_target)
+                            use_target ();
+                    }
+                    if (!placement_target)
+                        co_return result_t<spot_create_result_t>::failure (
+                          framework_error_kind_t::unavailable,
+                          "User Spot authority cannot be released after its owner ended");
+                }
                 const auto released = co_await _location_store->release_ended_reservation (
                   spot_authority_key (*spot_id), current->store_version, {}, reserve_request);
                 if (released)
                     continue;
+                placement_target.reset ();
                 auto after_release =
                   co_await _location_store->read_authority (spot_authority_key (*spot_id));
                 const auto *same = std::get_if<authority_snapshot_t> (&after_release);
@@ -1877,14 +1899,13 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
                           deadline - std::chrono::steady_clock::now ())));
             continue;
         }
-        const auto candidates = co_await placement_candidates (
-          _services->get_required<live_location_reader_t> (), selected_mesh,
-          placement_object_kind_t::user_spot, stable_type, source, deadline,
-          [&] (const auto &candidate) {
-              return excluded_targets.contains (
-                {candidate.rid.to_hex (), candidate.lifecycle_generation});
-          });
-        if (candidates.empty ()) {
+        if (!placement_target) {
+            placement_target = co_await select_user_spot_target_t::run (
+              this, selected_mesh, stable_type, source, deadline, excluded_targets, *spot_id);
+            if (placement_target)
+                use_target ();
+        }
+        if (!placement_target) {
             // A winner may have committed between the Missing observation and
             // placement lookup. Only the outer observation classifies it.
             auto raced = co_await _location_store->read_authority (spot_authority_key (*spot_id));
@@ -1893,11 +1914,6 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
             co_return result_t<spot_create_result_t>::failure (
               framework_error_kind_t::unavailable, "No eligible User Spot target is ready");
         }
-        target = choose_placement_target (candidates, *spot_id);
-        reserve_request.target = {selected_mesh,
-                                  node_rid_t::from_string (target.rid.to_string ()),
-                                  target.lifecycle_generation,
-                                  {target.owner_id, target.lease_generation}};
         reserved = co_await _location_store->reserve (reserve_request);
         if (exclusive
             && (std::holds_alternative<object_already_exists_t> (reserved)
@@ -1906,14 +1922,19 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
               framework_error_kind_t::already_exists,
               "Framework-generated User SpotId already has an authority claim");
         if (std::holds_alternative<object_placement_capacity_exhausted_t> (reserved)) {
-            excluded_targets.emplace (target.rid.to_hex (), target.lifecycle_generation);
+            excluded_targets.emplace (placement_target->rid.to_hex (),
+                                      placement_target->lifecycle_generation);
+            placement_target.reset ();
             continue;
         }
         if (std::holds_alternative<object_already_exists_t> (reserved)
-            || std::holds_alternative<object_reserve_conflict_t> (reserved))
+            || std::holds_alternative<object_reserve_conflict_t> (reserved)) {
+            placement_target.reset ();
             continue;
+        }
         break;
     }
+    auto target = std::move (*placement_target);
     if (const auto *mismatch = std::get_if<object_type_mismatch_t> (&reserved)) {
         if (exclusive && mismatch->current.allocation.state == placement_allocation_state_t::active)
             co_return result_t<spot_create_result_t>::failure (
@@ -3704,7 +3725,8 @@ task_t<bool> mesh_node_host_service_t::publish_requested_descriptors (
         std::lock_guard lock (_descriptor_publish_mutex);
         if (_descriptor_stop.stop_requested () || cancellation.stop_requested ())
             return task_t<bool> (result_t<bool>::success (false));
-        const auto owner = current_location_owner ();
+        const auto owner =
+          _location_runtime ? _location_runtime->descriptor_publication_owner () : std::nullopt;
         if (!_location_store || !owner)
             return task_t<bool> (result_t<bool>::success (_published_mesh_descriptors.empty ()));
         const bool all_claimed =
@@ -3793,7 +3815,8 @@ task_t<bool> mesh_node_host_service_t::write_mesh_descriptors (
   std::stop_token cancellation,
   std::chrono::steady_clock::time_point deadline)
 {
-    const auto owner = current_location_owner ();
+    const auto owner =
+      _location_runtime ? _location_runtime->descriptor_publication_owner () : std::nullopt;
     if (!owner)
         co_return descriptors.empty ();
     std::vector<task_t<bool>> publications;

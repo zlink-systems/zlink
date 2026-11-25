@@ -425,6 +425,11 @@ final class ZLinkStreamJsonTest {
         }
 
         @Override
+        public AutoCloseable onAdmissionWaiting(ZLinkStreamAdmissionWaitingHandler handler) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler) {
             return () -> {};
         }

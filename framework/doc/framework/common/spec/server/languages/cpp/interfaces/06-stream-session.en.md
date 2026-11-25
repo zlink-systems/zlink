@@ -120,8 +120,17 @@ public:
     stream_builder_t &set_bind_host(std::string host);
     stream_builder_t &set_advertise_host(std::string host);
     stream_builder_t &register_session(std::string session_name);
+    stream_builder_t &set_authentication(detail::stream_authentication_options_t options);
     stream_snapshot_t snapshot() const;
 };
+
+namespace detail {
+struct stream_authentication_options_t {
+    std::optional<std::string> packet_name;
+    std::optional<std::int64_t> max_concurrent;
+    std::chrono::milliseconds retry_delay{500};
+};
+}
 
 struct stream_snapshot_t {
     std::string name;
@@ -131,6 +140,7 @@ struct stream_snapshot_t {
     std::string tls_private_key_file;
     bool tls_require_client_certificate;
     std::int64_t max_message_size = 64 * 1024;
+    detail::stream_authentication_options_t authentication;
 };
 
 class stream_compression_options_builder_t {
@@ -161,6 +171,9 @@ public:
     stream_node_options_builder_t &set_heartbeat(std::chrono::milliseconds interval,
                                                  std::chrono::milliseconds timeout);
     stream_node_options_builder_t &set_idle_timeout(std::chrono::milliseconds timeout);
+    stream_node_options_builder_t &set_authentication_packet_name(std::string name);
+    stream_node_options_builder_t &set_max_concurrent_authentications(std::int64_t value);
+    stream_node_options_builder_t &set_authentication_retry_delay(std::chrono::milliseconds delay);
     stream_node_options_builder_t &register_session(std::string session_name);
 
     template <typename TSession>
@@ -241,3 +254,5 @@ same values as the `session-closing` payload in
 [Stream Connector §4.6](../../../../stream-connector/32-stream-connector.en.md).
 **Don't cast the enum to an integer and use it as the wire value** —
 the codec converts it explicitly.
+
+Defaults and validation for authentication admission are defined by [authentication admission](../../../04-session/03-authentication-admission.en.md).

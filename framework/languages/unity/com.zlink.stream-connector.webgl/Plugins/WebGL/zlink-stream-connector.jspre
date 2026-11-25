@@ -178,13 +178,13 @@ var ZlinkStreamConnectorBundle = (() => {
     ZlinkStreamCodec2[ZlinkStreamCodec2["Protobuf"] = 3] = "Protobuf";
     return ZlinkStreamCodec2;
   })(ZlinkStreamCodec || {});
-  var ZlinkStreamMessageKind = /* @__PURE__ */ ((ZlinkStreamMessageKind2) => {
-    ZlinkStreamMessageKind2[ZlinkStreamMessageKind2["Send"] = 1] = "Send";
-    ZlinkStreamMessageKind2[ZlinkStreamMessageKind2["Request"] = 2] = "Request";
-    ZlinkStreamMessageKind2[ZlinkStreamMessageKind2["Response"] = 3] = "Response";
-    ZlinkStreamMessageKind2[ZlinkStreamMessageKind2["Error"] = 4] = "Error";
-    ZlinkStreamMessageKind2[ZlinkStreamMessageKind2["Control"] = 5] = "Control";
-    return ZlinkStreamMessageKind2;
+  var ZlinkStreamMessageKind = /* @__PURE__ */ ((ZlinkStreamMessageKind3) => {
+    ZlinkStreamMessageKind3[ZlinkStreamMessageKind3["Send"] = 1] = "Send";
+    ZlinkStreamMessageKind3[ZlinkStreamMessageKind3["Request"] = 2] = "Request";
+    ZlinkStreamMessageKind3[ZlinkStreamMessageKind3["Response"] = 3] = "Response";
+    ZlinkStreamMessageKind3[ZlinkStreamMessageKind3["Error"] = 4] = "Error";
+    ZlinkStreamMessageKind3[ZlinkStreamMessageKind3["Control"] = 5] = "Control";
+    return ZlinkStreamMessageKind3;
   })(ZlinkStreamMessageKind || {});
   var ZlinkStreamHeaderFlags = /* @__PURE__ */ ((ZlinkStreamHeaderFlags2) => {
     ZlinkStreamHeaderFlags2[ZlinkStreamHeaderFlags2["None"] = 0] = "None";
@@ -1786,6 +1786,7 @@ var ZlinkStreamConnectorBundle = (() => {
       transport: inferredTransport,
       connectTimeoutMs: (_a = options.connectTimeoutMs) != null ? _a : DEFAULT_CONNECT_TIMEOUT_MS,
       requestTimeoutMs: (_b = options.requestTimeoutMs) != null ? _b : DEFAULT_REQUEST_TIMEOUT_MS,
+      maxAdmissionWaitMs: options.maxAdmissionWaitMs,
       waitTimeoutMs: (_c = options.waitTimeoutMs) != null ? _c : DEFAULT_WAIT_TIMEOUT_MS,
       heartbeat: {
         enabled: (_e = (_d = options.heartbeat) == null ? void 0 : _d.enabled) != null ? _e : true,
@@ -1810,6 +1811,9 @@ var ZlinkStreamConnectorBundle = (() => {
     };
     validatePositive(normalized.connectTimeoutMs, "ConnectTimeout");
     validatePositive(normalized.requestTimeoutMs, "RequestTimeout");
+    if (normalized.maxAdmissionWaitMs !== void 0) {
+      validatePositive(normalized.maxAdmissionWaitMs, "MaxAdmissionWait");
+    }
     validatePositive(normalized.waitTimeoutMs, "WaitTimeout");
     validatePositive(normalized.maxSendPayloadSize, "MaxSendPayloadSize");
     validatePositive(normalized.maxReceivePayloadSize, "MaxReceivePayloadSize");
@@ -1963,6 +1967,11 @@ var ZlinkStreamConnectorBundle = (() => {
 
   // packages/stream-connector/src/Runtime/Protocol/ZlinkStreamHeaderCodec.ts
   var ZlinkStreamHeaderCodec = class {
+    static encodeRetryHeader(firstRequestHeader, requestSeq) {
+      const header = firstRequestHeader.slice();
+      new DataView(header.buffer).setBigUint64(4, requestSeq);
+      return header;
+    }
     static encode(header) {
       const reply = isReplyKind2(header.kind);
       if (!reply) validateName(header.name, header.kind === 5 /* Control */);
@@ -2098,6 +2107,21 @@ var ZlinkStreamConnectorBundle = (() => {
       );
       return this.encodeFrame(header, payloadBytes);
     }
+    reencodeRequest(frame, requestSeq) {
+      const headerLength = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint16(
+        0
+      );
+      const payloadOffset = ZLINK_STREAM_FRAME_PREFIX_BYTES + headerLength;
+      const header = ZlinkStreamHeaderCodec.encodeRetryHeader(
+        frame.subarray(ZLINK_STREAM_FRAME_PREFIX_BYTES, payloadOffset),
+        requestSeq
+      );
+      return ZlinkStreamFrameCodec.encode(
+        header,
+        frame.subarray(payloadOffset),
+        this.options.maxSendPayloadSize
+      );
+    }
     encodeControl(name, payload = new Uint8Array()) {
       return this.encodeFrame(
         {
@@ -2148,91 +2172,136 @@ var ZlinkStreamConnectorBundle = (() => {
   };
 
   // packages/stream-connector/src/Runtime/ZlinkStreamPendingRequests.ts
+  var MAX_TIMER_DELAY_MS = 2147483647;
   var ZlinkStreamPendingRequests = class {
     constructor() {
       __publicField(this, "nextRequestSeq", 1n);
-      __publicField(this, "active", /* @__PURE__ */ new Map());
+      __publicField(this, "active", /* @__PURE__ */ new Set());
+      __publicField(this, "attempts", /* @__PURE__ */ new Map());
     }
-    create(packetName, timeoutMs) {
-      if (this.nextRequestSeq > UINT64_MAX) {
-        throw connectorError("sendFailed" /* SendFailed */, "Request sequence is exhausted.");
-      }
-      const requestSeq = this.nextRequestSeq++;
-      let timeout;
-      let resolvePending;
-      let rejectPending;
-      const promise = new Promise(
-        (resolve, reject) => {
-          resolvePending = resolve;
-          rejectPending = (error) => reject(connectorError(error.code, error.message, error.cause));
+    submit(options) {
+      const packetName = options.packetName;
+      const signal = options.signal;
+      const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, options.timeoutMs) : 1;
+      const writeLifetime = new AbortController();
+      let requestSeq;
+      let timer;
+      let deadline = Infinity;
+      let firstRejectionAt;
+      let resolve;
+      let reject;
+      const promise = new Promise((accept, fail) => {
+        resolve = accept;
+        reject = fail;
+      });
+      const timeoutError = () => connectorError("requestTimeout" /* RequestTimeout */, `Request '${packetName}' timed out.`);
+      const removeAttempt = () => {
+        if (requestSeq === void 0) return;
+        this.attempts.delete(requestSeq);
+        requestSeq = void 0;
+      };
+      const finish = () => {
+        if (!this.active.delete(pending)) return false;
+        removeAttempt();
+        clearTimeout(timer);
+        signal == null ? void 0 : signal.removeEventListener("abort", cancel);
+        writeLifetime.abort();
+        return true;
+      };
+      const cancel = () => pending.reject(connectorError("disconnected" /* Disconnected */, "Operation canceled."));
+      const schedule = (retryAt = Infinity) => {
+        clearTimeout(timer);
+        const wakeAt = Math.min(deadline, retryAt);
+        timer = setTimeout(
+          () => {
+            const now = performance.now();
+            if (pending.expireIfDue(now)) return;
+            if (now >= retryAt) sendAttempt(true);
+            else schedule(retryAt);
+          },
+          Math.min(Math.ceil(wakeAt - performance.now()), MAX_TIMER_DELAY_MS)
+        );
+      };
+      const sendAttempt = (retry) => {
+        if (this.nextRequestSeq > UINT64_MAX) {
+          pending.reject(
+            connectorError("sendFailed" /* SendFailed */, "Request sequence is exhausted.")
+          );
+          return;
         }
-      );
-      const tracked = {
-        packetName,
-        promise,
-        startTimeout: () => {
-          if (timeout !== void 0 || this.active.get(requestSeq) !== tracked) return;
-          timeout = setTimeout(() => {
-            this.active.delete(requestSeq);
-            rejectPending({
-              code: "requestTimeout" /* RequestTimeout */,
-              message: `Request '${packetName}' timed out.`
-            });
-          }, timeoutMs);
-        },
-        resolve: (value) => {
-          if (timeout !== void 0) {
-            clearTimeout(timeout);
-          }
-          resolvePending(value);
+        requestSeq = this.nextRequestSeq++;
+        this.attempts.set(requestSeq, pending);
+        if (retry) schedule();
+        void options.send(requestSeq, {
+          signal: writeLifetime.signal,
+          onAccepted: retry ? void 0 : () => {
+            deadline = performance.now() + timeoutMs;
+            schedule();
+          },
+          beforeWrite: retry ? () => {
+            if (performance.now() >= deadline) throw timeoutError();
+          } : void 0,
+          onFailure: pending.reject
+        }).catch(pending.reject);
+      };
+      const pending = {
+        resolve: (value, metadata) => {
+          if (pending.expireIfDue(performance.now())) return;
+          const payload = value();
+          if (finish()) resolve({ name: packetName, metadata, payload });
         },
         reject: (error) => {
-          if (timeout !== void 0) {
-            clearTimeout(timeout);
-          }
-          rejectPending(error);
+          if (finish()) reject(error);
         },
-        cancel: () => {
-          if (timeout !== void 0) {
-            clearTimeout(timeout);
-          }
+        expireIfDue: (now) => {
+          if (now < deadline) return false;
+          pending.reject(timeoutError());
+          return true;
+        },
+        waitForAdmission: (retryAfterMs, receivedAt) => {
+          var _a;
+          removeAttempt();
+          firstRejectionAt != null ? firstRejectionAt : firstRejectionAt = receivedAt;
+          deadline = Math.min(deadline, firstRejectionAt + ((_a = options.maxAdmissionWaitMs) != null ? _a : timeoutMs));
+          schedule(receivedAt + retryAfterMs + Math.floor(Math.random() * 51));
+          options.onAdmissionWaiting(retryAfterMs);
         }
       };
-      this.active.set(requestSeq, tracked);
-      return { requestSeq, promise, startTimeout: tracked.startTimeout };
+      this.active.add(pending);
+      signal == null ? void 0 : signal.addEventListener("abort", cancel, { once: true });
+      if ((signal == null ? void 0 : signal.aborted) === true) cancel();
+      else sendAttempt(false);
+      return promise;
     }
-    /* stream connector spec §5.2: a pending request is matched by request_seq alone. */
+    /* Stream connector spec §5.2 matches replies by the current request sequence. */
     resolve(requestSeq, value, metadata) {
-      const pending = this.active.get(requestSeq);
-      if (pending === void 0) {
-        return false;
-      }
-      const payload = value();
-      this.active.delete(requestSeq);
-      pending.resolve({ name: pending.packetName, metadata, payload });
-      return true;
+      var _a;
+      (_a = this.attempts.get(requestSeq)) == null ? void 0 : _a.resolve(value, metadata);
     }
-    reject(requestSeq, error) {
-      const pending = this.active.get(requestSeq);
-      if (pending === void 0) {
-        return false;
+    reject(requestSeq, error, retryAfter, receivedAt = performance.now()) {
+      const pending = this.attempts.get(requestSeq);
+      if (pending === void 0) return false;
+      if (pending.expireIfDue(receivedAt)) return true;
+      if (retryAfter === void 0) {
+        pending.reject(connectorError(error.code, error.message, error.cause));
+      } else {
+        const retryAfterMs = Number(retryAfter);
+        if (!Number.isInteger(retryAfterMs) || retryAfterMs < 0 || retryAfterMs > MAX_TIMER_DELAY_MS || String(retryAfterMs) !== retryAfter) {
+          pending.reject(
+            connectorError(
+              "frameDecodeFailed" /* FrameDecodeFailed */,
+              "Invalid authentication admission retry delay."
+            )
+          );
+        } else {
+          pending.waitForAdmission(retryAfterMs, receivedAt);
+        }
       }
-      this.active.delete(requestSeq);
-      pending.reject(error);
       return true;
-    }
-    cancel(requestSeq) {
-      const pending = this.active.get(requestSeq);
-      if (pending === void 0) {
-        return;
-      }
-      this.active.delete(requestSeq);
-      pending.cancel();
     }
     failAll(error) {
-      for (const [requestSeq, pending] of this.active) {
-        this.active.delete(requestSeq);
-        pending.reject(error);
+      for (const pending of this.active) {
+        pending.reject(connectorError(error.code, error.message, error.cause));
       }
     }
   };
@@ -2765,10 +2834,21 @@ var ZlinkStreamConnectorBundle = (() => {
       for (const operation of operations) operation.fail(error);
     }
     advance() {
+      var _a;
       if (this.active !== void 0) return;
-      const next = this.queue.values().next().value;
-      if (next === void 0) return;
-      this.queue.delete(next);
+      for (const next of this.queue) {
+        this.queue.delete(next);
+        try {
+          (_a = next.beforeWrite) == null ? void 0 : _a.call(next);
+        } catch (error) {
+          next.fail(error);
+          continue;
+        }
+        this.start(next);
+        return;
+      }
+    }
+    start(next) {
       this.active = next;
       let write;
       try {
@@ -2808,8 +2888,8 @@ var ZlinkStreamConnectorBundle = (() => {
       this.protocol = protocol;
       __publicField(this, "queues", /* @__PURE__ */ new Map());
     }
-    async send(connection, kind, name, payload, metadata, compress, requestSeq, signal, correlationId, actorSlot, expiry, onAccepted) {
-      throwIfAborted(signal);
+    async send(connection, kind, name, payload, metadata, compress, requestSeq, correlationId, actorSlot, options) {
+      throwIfAborted(options == null ? void 0 : options.signal);
       await this.write(
         connection,
         this.protocol.encode(
@@ -2822,10 +2902,25 @@ var ZlinkStreamConnectorBundle = (() => {
           correlationId,
           actorSlot
         ),
-        signal,
-        expiry,
-        onAccepted
+        options
       );
+    }
+    createRequestSender(connection, name, payload, metadata, compress, correlationId, actorSlot) {
+      let firstFrame;
+      return async (requestSeq, options) => {
+        throwIfAborted(options.signal);
+        const frame = firstFrame === void 0 ? firstFrame = this.protocol.encode(
+          2 /* Request */,
+          name,
+          payload,
+          metadata,
+          compress,
+          requestSeq,
+          correlationId,
+          actorSlot
+        ) : this.protocol.reencodeRequest(firstFrame, requestSeq);
+        await this.write(connection, frame, options);
+      };
     }
     /**
      * Writes a control frame (heartbeat ping or pong). A control frame belongs to
@@ -2859,7 +2954,11 @@ var ZlinkStreamConnectorBundle = (() => {
       this.queues.delete(connection);
       queue.failAll(error);
     }
-    write(connection, frame, signal, expiry, onAccepted) {
+    write(connection, frame, options = {}) {
+      const signal = options.signal;
+      const beforeWrite = options.beforeWrite;
+      const onAccepted = options.onAccepted;
+      const onFailure = options.onFailure;
       throwIfAborted(signal);
       const queue = this.queues.get(connection);
       if (queue === void 0) {
@@ -2875,6 +2974,7 @@ var ZlinkStreamConnectorBundle = (() => {
         );
         operation = {
           frame,
+          beforeWrite,
           complete: () => {
             if (settled) return;
             settled = true;
@@ -2886,11 +2986,11 @@ var ZlinkStreamConnectorBundle = (() => {
             settled = true;
             cleanup();
             reject(error);
+            onFailure == null ? void 0 : onFailure(error);
           }
         };
         signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
         onAccepted == null ? void 0 : onAccepted();
-        expiry == null ? void 0 : expiry.then(void 0, (error) => queue.cancel(operation, error));
         queue.enqueue(operation);
       });
       return promise;
@@ -3029,9 +3129,15 @@ var ZlinkStreamConnectorBundle = (() => {
         return;
       }
       if (header.kind === 4 /* Error */) {
+        const receivedAt = performance.now();
         let error;
+        let retryAfter;
         try {
-          error = decodeRemoteError(this.decodePayload(header, payload));
+          const remote = decodeRemoteError(this.decodePayload(header, payload));
+          error = remote;
+          if (remote.cause.code === "unavailable") {
+            retryAfter = header.metadata.get("$zlink.admission.retryAfterMs");
+          }
         } catch (cause) {
           if (cause instanceof ZlinkStreamConnectionEnd) throw cause;
           error = toStreamError(
@@ -3040,7 +3146,7 @@ var ZlinkStreamConnectorBundle = (() => {
             "Remote error payload is invalid."
           );
         }
-        if (header.requestSeq === void 0 || !this.pendingRequests.reject(header.requestSeq, error)) {
+        if (header.requestSeq === void 0 || !this.pendingRequests.reject(header.requestSeq, error, retryAfter, receivedAt)) {
           this.events.publishError(error, signal);
         }
         return;
@@ -3600,6 +3706,14 @@ var ZlinkStreamConnectorBundle = (() => {
       __publicField(this, "errorHandlers", /* @__PURE__ */ new Set());
       __publicField(this, "disconnectedHandlers", /* @__PURE__ */ new Set());
       __publicField(this, "stateHandlers", /* @__PURE__ */ new Set());
+      __publicField(this, "admissionWaitingHandlers", /* @__PURE__ */ new Set());
+    }
+    onAdmissionWaiting(handler) {
+      return registerHandler(this.admissionWaitingHandlers, handler);
+    }
+    publishAdmissionWaiting(context, signal) {
+      if (this.admissionWaitingHandlers.size === 0) return;
+      this.publish(this.admissionWaitingHandlers, (handler) => handler(context, signal), signal);
     }
     onError(handler) {
       return registerHandler(this.errorHandlers, handler);
@@ -3968,6 +4082,9 @@ var ZlinkStreamConnectorBundle = (() => {
     onRequestSending(handler) {
       return registerHandler(this.requestSendingHandlers, handler);
     }
+    onAdmissionWaiting(handler) {
+      return this.events.onAdmissionWaiting(handler);
+    }
     onReplyReceived(handler) {
       return registerHandler(this.replyReceivedHandlers, handler);
     }
@@ -4167,7 +4284,7 @@ var ZlinkStreamConnectorBundle = (() => {
       }
       return payload;
     }
-    async sendEncoded(kind, name, payload, metadata, compress, requestSeq, signal, correlationId, actorSlot, expiry, onAccepted) {
+    async sendEncoded(kind, name, payload, metadata, compress, requestSeq, signal, correlationId, actorSlot) {
       await this.frameSender.send(
         this.lifecycle.connectionForSend(),
         kind,
@@ -4176,11 +4293,9 @@ var ZlinkStreamConnectorBundle = (() => {
         metadata,
         compress,
         requestSeq,
-        signal,
         correlationId,
         actorSlot,
-        expiry,
-        onAccepted
+        { signal }
       );
     }
     /**
@@ -4192,7 +4307,7 @@ var ZlinkStreamConnectorBundle = (() => {
       return this.correlationCounter.toString(16);
     }
     async requestEncoded(name, payload, metadata, compress, timeoutMs, signal, actorSlot) {
-      const startedAt = Date.now();
+      const startedAt = performance.now();
       const actorId = actorSlot === void 0 ? void 0 : this.boundActors.resolve(actorSlot).actorId;
       let requestMetadata = metadata;
       const sendingContext = {
@@ -4202,8 +4317,6 @@ var ZlinkStreamConnectorBundle = (() => {
           requestMetadata = requestMetadata.with(key, value);
         }
       };
-      let pending;
-      let stopCancellation;
       try {
         throwIfAborted(signal);
         for (const { handler } of currentRegistrations(this.requestSendingHandlers)) {
@@ -4220,44 +4333,39 @@ var ZlinkStreamConnectorBundle = (() => {
             );
           }
         }
-        pending = this.pendingRequests.create(name, timeoutMs);
-        const accepted = pending;
-        const write = this.sendEncoded(
-          2 /* Request */,
-          name,
-          payload,
-          requestMetadata,
-          compress,
-          accepted.requestSeq,
+        const connection = this.lifecycle.connectionForSend();
+        const correlationId = this.nextCorrelationId();
+        const reply = await this.pendingRequests.submit({
+          packetName: name,
+          timeoutMs,
+          maxAdmissionWaitMs: this.options.maxAdmissionWaitMs,
           signal,
-          this.nextCorrelationId(),
-          actorSlot,
-          accepted.promise,
-          accepted.startTimeout
-        );
-        const canceled = new Promise((_, reject) => {
-          const onAbort = () => reject(connectorError("disconnected" /* Disconnected */, "Operation canceled."));
-          signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
-          stopCancellation = () => signal == null ? void 0 : signal.removeEventListener("abort", onAbort);
+          send: this.frameSender.createRequestSender(
+            connection,
+            name,
+            payload,
+            requestMetadata,
+            compress,
+            correlationId,
+            actorSlot
+          ),
+          onAdmissionWaiting: (retryAfterMs) => this.events.publishAdmissionWaiting(
+            actorId === void 0 ? { requestPacketName: name, retryAfterMs } : { requestPacketName: name, actorId, retryAfterMs },
+            signal
+          )
         });
-        const reply = await Promise.race([
-          write.then(() => accepted.promise),
-          accepted.promise,
-          canceled
-        ]);
         this.publishReplyReceived(
           {
             requestPacketName: name,
             actorId,
             succeeded: true,
             reply: { ...reply, actorId },
-            elapsed: Date.now() - startedAt
+            elapsed: performance.now() - startedAt
           },
           signal
         );
         return reply.payload;
       } catch (error) {
-        if (pending !== void 0) this.pendingRequests.cancel(pending.requestSeq);
         if ((signal == null ? void 0 : signal.aborted) === true) throw error;
         this.publishReplyReceived(
           {
@@ -4265,13 +4373,11 @@ var ZlinkStreamConnectorBundle = (() => {
             actorId,
             succeeded: false,
             error: unwrapStreamError(error),
-            elapsed: Date.now() - startedAt
+            elapsed: performance.now() - startedAt
           },
           signal
         );
         throw error;
-      } finally {
-        stopCancellation == null ? void 0 : stopCancellation();
       }
     }
     publishReplyReceived(context, signal) {

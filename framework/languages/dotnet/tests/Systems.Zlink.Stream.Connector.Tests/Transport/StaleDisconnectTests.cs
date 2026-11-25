@@ -45,10 +45,12 @@ public sealed partial class StreamConnectorTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
     public async Task StaleDisconnectDuringTransportCloseDoesNotFailNewConnectionRequest(
-        bool replyBeforeEnding
+        bool replyBeforeEnding,
+        bool retryAfterAdmissionRejection
     )
     {
         var first = new ScriptedConnection();
@@ -62,7 +64,8 @@ public sealed partial class StreamConnectorTests
             second,
             slowClose.CloseEntered.Task,
             () => slowClose.ReleaseClose.TrySetResult(),
-            replyBeforeEnding
+            replyBeforeEnding,
+            retryAfterAdmissionRejection
         );
     }
 
@@ -72,7 +75,8 @@ public sealed partial class StreamConnectorTests
         ScriptedConnection second,
         Task endingHeld,
         Action releaseEnding,
-        bool replyBeforeEnding
+        bool replyBeforeEnding,
+        bool retryAfterAdmissionRejection = false
     )
     {
         var disconnected = new TaskCompletionSource<ZlinkStreamCloseReason>(
@@ -94,6 +98,9 @@ public sealed partial class StreamConnectorTests
                 .Async()
                 .AsTask();
             await first.WaitForWritesAsync(1);
+            var codec = new ZlinkStreamHeaderCodec();
+            if (retryAfterAdmissionRejection)
+                await RetryAfterAdmissionRejectionAsync(first);
 
             first.Deliver(ZlinkStreamFrameCodec.Encode([0xFF, 0xFF, 0xFF, 0xFF], []));
             await endingHeld.WaitAsync(EndingWait);
@@ -107,8 +114,15 @@ public sealed partial class StreamConnectorTests
                 .AsTask();
             await second.WaitForWritesAsync(1);
 
-            var codec = new ZlinkStreamHeaderCodec();
-            var sent = codec.Decode(Assert.Single(second.Written).Header);
+            if (retryAfterAdmissionRejection)
+                await RetryAfterAdmissionRejectionAsync(second);
+            var sent = codec.Decode(
+                (
+                    retryAfterAdmissionRejection
+                        ? second.Written.Last()
+                        : Assert.Single(second.Written)
+                ).Header
+            );
             var reply = new ZlinkStreamHeader(
                 ZlinkStreamMessageKind.Response,
                 ZlinkStreamCodec.Raw,
@@ -151,6 +165,31 @@ public sealed partial class StreamConnectorTests
         {
             releaseEnding();
             await connector.DisposeAsync().AsTask().WaitAsync(EndingWait);
+        }
+
+        static async Task RetryAfterAdmissionRejectionAsync(ScriptedConnection connection)
+        {
+            var codec = new ZlinkStreamHeaderCodec();
+            var firstAttempt = codec.Decode(Assert.Single(connection.Written).Header);
+            var rejection = new ZlinkStreamHeader(
+                ZlinkStreamMessageKind.Error,
+                ZlinkStreamCodec.Json,
+                ZlinkStreamHeaderFlags.HasRequestSeq,
+                firstAttempt.RequestSeq,
+                string.Empty,
+                ZlinkStreamMetadata.Empty.With("$zlink.admission.retryAfterMs", "0")
+            );
+            connection.Deliver(
+                ZlinkStreamFrameCodec.Encode(
+                    codec.Encode(rejection).Span,
+                    """{"code":"unavailable","message":"Authentication admission is full."}"""u8
+                )
+            );
+            await connection.WaitForWritesAsync(1);
+            Assert.Equal(2, connection.Written.Count);
+            var retry = codec.Decode(connection.Written.Last().Header);
+            Assert.NotEqual(firstAttempt.RequestSeq, retry.RequestSeq);
+            Assert.Equal(firstAttempt.CorrelationId, retry.CorrelationId);
         }
     }
 

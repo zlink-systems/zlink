@@ -464,6 +464,11 @@ retransmission exists for this order; if an earlier submission does not finish, 
 existing deadline. [STREAM session §4.1](01-stream-session.en.md#41-transport-operation-teardown-boundary) owns the
 completion of writes Core has accepted.
 
+A reply returned by a turn's handler is registered in this order before that Actor's next turn opens, so a close
+requested in the next turn is also submitted to Core after the earlier turn's reply. This is the Core submission
+order, not a confirmation that the client received and processed the reply; when that confirmation is needed, the
+application protocol provides it. (#4889)
+
 The close reply carries the transport close terminal and does not wait for the §7 disconnect callback, tombstone or
 local cleanup that this close triggers. Binding cleanup and the Actor notification come once from §7; the close request
 path does not release the binding separately. Command 54's request/reply follows the existing correlation, deadline,

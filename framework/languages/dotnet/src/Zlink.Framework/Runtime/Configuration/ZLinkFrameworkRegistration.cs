@@ -313,8 +313,25 @@ internal sealed class ZLinkChannelSubscriberCapabilityRegistration
     public ZLinkEndpointConnections ManualConnections { get; } = new();
 }
 
+internal sealed record ZLinkAuthenticationAdmissionOptions(
+    string? PacketName,
+    int Limit,
+    TimeSpan RetryDelay
+)
+{
+    public static ZLinkAuthenticationAdmissionOptions Default { get; } =
+        new(
+            null,
+            (int)Math.Min(int.MaxValue, 8L * Environment.ProcessorCount),
+            TimeSpan.FromMilliseconds(500)
+        );
+}
+
 internal sealed class ZLinkStreamNodeRegistration
 {
+    public ZLinkAuthenticationAdmissionOptions AuthenticationAdmission { get; set; } =
+        ZLinkAuthenticationAdmissionOptions.Default;
+
     public TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(1);
     public TimeSpan HeartbeatTimeout { get; set; } = TimeSpan.FromSeconds(5);
     public TimeSpan IdleTimeout { get; set; } = TimeSpan.Zero;
