@@ -5906,6 +5906,13 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     }
     current = co_await run_blocking_step<authority_read_result_t> (
       [store, authority_key] { return store->read_authority (authority_key); });
+    const auto activation_creation_target = [&] {
+        return object_creation_target_t{
+          request.target.mesh_name,
+          node_rid_t::from_string (
+            zlink::routing_id_t::from (request.target.target_node_routing_id).to_string ()),
+          request.target.target_node_generation, *instance_owner};
+    };
     auto current_ready = decode_current_authority (current);
     if (request.target.authority_owner_generation == 0) {
         if (const auto *snapshot = std::get_if<authority_snapshot_t> (&current)) {
@@ -5954,9 +5961,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                 object_reserve_request_t release;
                 release.key = {placement_object_kind_t::instance_spot, request.target.spot_id};
                 release.intent.stable_type = request.target.stable_type;
-                if (instance_materializer->relocation_policy)
-                    release.relocation_policy =
-                      instance_materializer->relocation_policy (request.target.stable_type);
+                release.target = activation_creation_target ();
                 const auto released = co_await store->release_ended_reservation (
                   authority_key, snapshot->store_version, {}, std::move (release));
                 if (released)
@@ -6022,11 +6027,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     reserve.intent.request_content_reference = recovery_root.reference;
     reserve.intent.request_sha256 = request_sha256;
     reserve.intent.request_encoded_size = recovery_public.size ();
-    reserve.target = {
-      request.target.mesh_name,
-      node_rid_t::from_string (
-        zlink::routing_id_t::from (request.target.target_node_routing_id).to_string ()),
-      request.target.target_node_generation, *instance_owner};
+    reserve.target = activation_creation_target ();
     const std::string creating = "zlink:instance-spot:creating:v1";
     for (const auto value : creating)
         reserve.creating_payload.push_back (
