@@ -1753,6 +1753,92 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         return authorities;
     }
 
+    internal TargetStage? FindActorAdmissionStage(
+        ZLinkActorRuntimeState actor,
+        ActorMessageFollowIngress ingress
+    )
+    {
+        if (
+            actor.NativeActorRef is not { } target
+            || target.Generation != ingress.TargetActor.ObjectGeneration
+            || target.NodeRid != ingress.TargetActor.NodeRid
+        )
+            return null;
+
+        foreach (var entry in _staged)
+        {
+            if (
+                entry.Value is TargetStage stage
+                && stage.Node.Node.RoutingId == target.NodeRid
+                && stage.TargetNodeLifecycleGeneration == ingress.TargetNodeGeneration
+                && stage.TargetOwnerLeaseGeneration == ingress.OwnerLeaseGeneration
+                && stage.ActorTargetAuthorityOwnerGenerations.TryGetValue(
+                    actor.RuntimeActorId,
+                    out var sourceAuthorityGeneration
+                )
+                && ingress.AuthorityOwnerGeneration > sourceAuthorityGeneration
+                && actor.Handoff.IsKnown(entry.Key.AggregateId.ToString("N"))
+            )
+                return stage;
+        }
+        return null;
+    }
+
+    internal Func<Task<bool>>? ConfirmSpotRequest(
+        RoutingId nodeRid,
+        SpotRelocationRequest request,
+        CancellationToken cancellationToken
+    )
+    {
+        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(request.SpotId);
+        foreach (var candidate in _staged.Values)
+        {
+            if (
+                candidate is TargetStage stage
+                && stage.SpotParticipant.ObjectKind == ZLinkPlacementObjectKind.UserSpot
+                && stage.SpotParticipant.AuthorityKey == key
+                && stage.SpotParticipant.ObjectGeneration == request.SpotGeneration
+                && stage.Node.Node.RoutingId == nodeRid
+                && stage.TargetNodeLifecycleGeneration == request.NodeGeneration
+                && stage.TargetOwnerLeaseGeneration == request.OwnerLeaseGeneration
+                && Volatile.Read(ref stage.AdmissionOpened) == 0
+            )
+                return () =>
+                    MatchesAdmissionAuthorityAsync(
+                        stage,
+                        key,
+                        request.AuthorityOwnerGeneration,
+                        cancellationToken
+                    );
+        }
+        return null;
+    }
+
+    internal async Task<bool> MatchesAdmissionAuthorityAsync(
+        TargetStage stage,
+        ZLinkAuthorityKey key,
+        ulong authorityOwnerGeneration,
+        CancellationToken cancellationToken
+    )
+    {
+        var participant = stage.Envelope.Participants.Single(item => item.AuthorityKey == key);
+        var store =
+            registration.Locations.ResolveStore()
+            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
+        var owner = StageOwner(stage);
+        var read = await store.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
+        return read is ZLinkAuthorityReadResult.Found found
+            && found.Snapshot.AuthorityOwnerGeneration == authorityOwnerGeneration
+            && MatchesStageAuthority(
+                stage,
+                participant,
+                found.Snapshot,
+                owner,
+                Convert.ToHexString(stage.Envelope.InventoryDigest.Span).ToLowerInvariant()
+            )
+            && runtime.LocationLifecycle?.IsOwnerLeaseValid(owner) == true;
+    }
+
     private static bool MatchesStageAuthority(
         TargetStage stage,
         ZLinkRelocationParticipantEnvelope participant,

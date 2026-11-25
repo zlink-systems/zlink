@@ -128,7 +128,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     ) => _pump.AcceptRequestSourceAsync(sourceNodeRid, sourceNodeGeneration, cancellationToken);
 
     public void SetActorMessageFollowIngressHandler(
-        Func<IReadOnlyList<ZLinkBackendActorPart>, bool> handler
+        Func<ActorMessageFollowIngress, IReadOnlyList<ZLinkBackendActorPart>, bool> handler
     ) => _messageFollowIngress.SetHandler(handler);
 
     public void SetActorMessageFollowIngressAdmission(
@@ -1564,7 +1564,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         : IActorMessageFollowIngressTarget
     {
         private Func<ActorMessageFollowIngress, bool>? _admission;
-        private Func<IReadOnlyList<ZLinkBackendActorPart>, bool>? _handler;
+        private Func<
+            ActorMessageFollowIngress,
+            IReadOnlyList<ZLinkBackendActorPart>,
+            bool
+        >? _handler;
 
         internal void SetAdmission(Func<ActorMessageFollowIngress, bool> admission)
         {
@@ -1578,7 +1582,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                 );
         }
 
-        internal void SetHandler(Func<IReadOnlyList<ZLinkBackendActorPart>, bool> handler)
+        internal void SetHandler(
+            Func<ActorMessageFollowIngress, IReadOnlyList<ZLinkBackendActorPart>, bool> handler
+        )
         {
             ArgumentNullException.ThrowIfNull(handler);
             if (
@@ -1596,12 +1602,17 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             if (handler is null)
                 return false;
             IReadOnlyList<Message> parts = ingress.Parts;
-            var decoded = false;
-            if (parts.Count == 0 && !ingress.EncodedPayload.IsEmpty)
+            var decode = parts.Count == 0 && !ingress.EncodedPayload.IsEmpty;
+            if (decode || ingress.EarlyAdmission is not null)
             {
                 var admission = Volatile.Read(ref _admission);
                 if (admission is not null && !admission(ingress))
                     return false;
+            }
+
+            var ownsParts = false;
+            if (decode)
+            {
                 if (
                     !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
                         ingress.EncodedPayload,
@@ -1610,7 +1621,12 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                 )
                     return false;
                 parts = decodedParts;
-                decoded = true;
+                ownsParts = true;
+            }
+            else if (ingress.EarlyAdmission is not null)
+            {
+                parts = ZLinkMessageParts.CopyAll(parts);
+                ownsParts = true;
             }
             if (parts.Count == 0)
                 return false;
@@ -1651,14 +1667,14 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                 );
             try
             {
-                var accepted = handler(backendParts);
-                if (!accepted && decoded)
+                var accepted = handler(ingress, backendParts);
+                if (!accepted && ownsParts)
                     ZLinkMessageParts.DisposeAll(parts);
                 return accepted;
             }
             catch
             {
-                if (decoded)
+                if (ownsParts)
                     ZLinkMessageParts.DisposeAll(parts);
                 throw;
             }
