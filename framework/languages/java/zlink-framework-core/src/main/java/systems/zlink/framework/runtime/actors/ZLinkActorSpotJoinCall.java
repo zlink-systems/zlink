@@ -302,31 +302,25 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                                                         context.actorRef(),
                                                                         context.meshName()));
                                     }
-                                    if ((services.canonicalMeshNode() != null
-                                                    || services.routedTransport() != null
-                                                    || services.transferTransport() != null)
-                                            && (explicitTarget != null
-                                                    || internalRouteChannel != null
-                                                    || services.remoteAddressResolver() != null)) {
-                                        return joinRemoteRoutedSpot(
-                                                target, requestPart, operationId, deadlineNanos);
-                                    }
-                                    return services.spotNode()
-                                            .joinActor(
-                                                    context.actorRef(),
-                                                    target.targetNodeRid(),
-                                                    spotId,
-                                                    target.spotGeneration(),
-                                                    List.of(requestPart),
-                                                    remaining)
+                                    return services.actors()
+                                            .isActorRelocationDisabled(context.actorRef().actorId())
                                             .thenCompose(
-                                                    result ->
-                                                            applyRemoteActorMigration(result)
-                                                                    .thenCompose(
-                                                                            ignored ->
-                                                                                    decodeJoinResultAsync(
-                                                                                            result,
-                                                                                            deadlineNanos)));
+                                                    disabled -> {
+                                                        if (disabled) {
+                                                            throw new ZLinkFrameworkException(
+                                                                    ZLinkFrameworkErrorKind
+                                                                            .REJECTED,
+                                                                    "Actor relocation policy"
+                                                                            + " forbids cross-node"
+                                                                            + " relocation");
+                                                        }
+                                                        return joinRemoteSpot(
+                                                                target,
+                                                                requestPart,
+                                                                operationId,
+                                                                deadlineNanos,
+                                                                remaining);
+                                                    });
                                 })
                         .whenComplete((result, failure) -> requestPart.close())
                         .whenComplete((result, failure) -> traceJoinReplyReceived(failure));
@@ -647,6 +641,37 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         });
     }
 
+    private CompletionStage<ZLinkActorJoinOutcome> joinRemoteSpot(
+            SpotTransportAddress target,
+            Message requestPart,
+            ZLinkActorJoinOperationId operationId,
+            long deadlineNanos,
+            Duration remaining) {
+        if ((services.canonicalMeshNode() != null
+                        || services.routedTransport() != null
+                        || services.transferTransport() != null)
+                && (explicitTarget != null
+                        || internalRouteChannel != null
+                        || services.remoteAddressResolver() != null)) {
+            return joinRemoteRoutedSpot(target, requestPart, operationId, deadlineNanos);
+        }
+        return services.spotNode()
+                .joinActor(
+                        context.actorRef(),
+                        target.targetNodeRid(),
+                        spotId,
+                        target.spotGeneration(),
+                        List.of(requestPart),
+                        remaining)
+                .thenCompose(
+                        result ->
+                                applyRemoteActorMigration(result)
+                                        .thenCompose(
+                                                ignored ->
+                                                        decodeJoinResultAsync(
+                                                                result, deadlineNanos)));
+    }
+
     private CompletionStage<ZLinkActorJoinOutcome> joinRemoteRoutedSpot(
             SpotTransportAddress target,
             Message requestPart,
@@ -931,7 +956,6 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             ZLinkChannelRuntime routedTransport,
             TransferTransport transferTransport,
             ZLinkInternalMeshNode canonicalMeshNode,
-            Function<String, String> actorTypes,
             ZLinkMessageSerializer serializer,
             ZLinkMessageFlowTracer flow,
             ZLinkActorRuntime actors,
