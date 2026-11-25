@@ -48,10 +48,12 @@ public sealed class TypedJsonPayloadContractTests
             if (accept)
                 Assert.Equal(json, Encoding.UTF8.GetString(wire!));
             else
-                Assert.Equal(
-                    "Property 'wireValue' does not allow null.",
-                    Assert.IsAssignableFrom<JsonException>(error).Message
-                );
+            {
+                var diagnostic = Assert.IsAssignableFrom<JsonException>(error).Message;
+                Assert.Contains(value.GetType().Name, diagnostic);
+                Assert.Contains("Property 'wireValue' does not allow null.", diagnostic);
+                Assert.Contains("nullable", diagnostic);
+            }
             byte[]? connectorWire = null;
             var encodeConnectorError = Record.Exception(() =>
                 connectorWire = value.ToJson().Payload.ToArray()
@@ -106,6 +108,29 @@ public sealed class TypedJsonPayloadContractTests
         );
         Assert.Contains("Duplicate JSON property", error.InnerException!.Message);
     }
+
+    [Theory]
+    [InlineData("""{"child":{"name":null,"sequence":"1"}}""", "$.child.name", "nullable")]
+    [InlineData("""{"child":{"name":"ok","sequence":1}}""", "$.child.sequence", "64-bit")]
+    public void Decode_diagnostics_include_message_type_and_full_property_path(
+        string json,
+        string path,
+        string advice
+    )
+    {
+        var error = Assert.Throws<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<DiagnosticPayload>(
+                Encoding.UTF8.GetBytes(json)
+            )
+        );
+        Assert.Contains(nameof(DiagnosticPayload), error.Message);
+        Assert.Contains(path, error.Message);
+        Assert.Contains(advice, error.Message);
+    }
+
+    public sealed record DiagnosticPayload(DiagnosticChild Child);
+
+    public sealed record DiagnosticChild(string Name, long Sequence);
 
     public sealed record StringPayload([property: JsonPropertyName("wireValue")] string Value);
 
