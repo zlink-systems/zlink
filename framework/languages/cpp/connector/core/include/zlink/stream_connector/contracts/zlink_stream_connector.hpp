@@ -180,6 +180,10 @@ class connector_t
     [[nodiscard]] subscription_t
     on_reply_received (std::function<void (const reply_received_context_t &)> handler);
 
+    /// Registers a callback for each admission rejection that schedules a wait.
+    subscription_t
+    on_admission_waiting (std::function<void (const admission_waiting_context_t &)> handler);
+
     /// Registers a disconnected callback (stream-connector §6.2, §7).
     ///
     /// The handler receives the close reason. The same value stays readable

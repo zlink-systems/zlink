@@ -38,12 +38,33 @@ class shared_runtime_t;
 bool stream_trace_enabled ();
 bool configure_shared_runtime_worker_count (std::size_t worker_count);
 
+using request_clock_t = std::chrono::steady_clock;
+
+// The request scheduler uses an absolute monotonic deadline.
+struct request_timing_t
+{
+    virtual ~request_timing_t () = default;
+    virtual request_clock_t::time_point now () const = 0;
+    virtual std::chrono::milliseconds admission_jitter () = 0;
+    // Scheduling returns a cancellation action without executing the operation inline.
+    virtual std::function<void ()> schedule (request_clock_t::time_point when,
+                                             std::function<void ()> operation) = 0;
+};
+
+enum class read_state_t
+{
+    idle,
+    receiving,
+    ending
+};
+
 struct pending_write_t
 {
     std::vector<std::uint8_t> frame;
     std::function<void (result_t<void>)> callback;
     std::uint64_t write_id = 0;
     bool ready = true;
+    std::uint64_t retry_request_id = 0;
 };
 
 struct pending_request_t
@@ -51,12 +72,21 @@ struct pending_request_t
     std::uint64_t write_id = 0;
     packet_t packet;
     std::function<void (result_t<request_reply_t>)> callback;
-    std::shared_ptr<boost::asio::steady_timer> timeout_timer;
     // Internal sync-over-async bridges set this: their callback only resolves
     // a promise, so it must run directly instead of riding the user delivery
     // queue (which the blocked caller can never dispatch in queued mode).
     bool deliver_direct = false;
     std::shared_ptr<std::vector<std::uint64_t>> reply_hook_ids;
+    std::optional<actor_binding_ref_t> actor_binding;
+    std::weak_ptr<stream_connection_t> connection;
+    std::string correlation_id;
+    std::uint64_t attempt_seq = 0;
+    request_clock_t::time_point deadline;
+    std::chrono::milliseconds max_admission_wait{0};
+    std::optional<request_clock_t::time_point> first_rejection;
+    std::optional<request_clock_t::time_point> retry_at;
+    std::shared_ptr<boost::asio::steady_timer> timeout_timer;
+    std::optional<std::function<void ()>> cancel_test_timer;
 };
 
 /* Lock order for connector_state_t (see the mutex members below).
@@ -155,7 +185,10 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     connection_state_t state = connection_state_t::created;
     std::uint64_t next_request_seq = 1;
     std::uint64_t next_wait_id = 1;
+    // The first sequence identifies the logical request. Only active retries need an index.
     std::map<std::uint64_t, pending_request_t> pending_requests;
+    std::map<std::uint64_t, std::uint64_t> request_attempts;
+    std::unique_ptr<request_timing_t> request_timing;
     std::map<std::uint64_t, pending_wait_t> pending_waits;
     /* Bumped on every insertion into and removal from pending_waits. A matcher
      * that evaluates user predicates outside transport_mutex re-reads this
@@ -189,6 +222,8 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
       request_sending_handlers;
     std::vector<handler_entry_t<std::function<void (const reply_received_context_t &)>>>
       reply_received_handlers;
+    std::vector<handler_entry_t<std::function<void (const admission_waiting_context_t &)>>>
+      admission_waiting_handlers;
     std::vector<handler_entry_t<std::function<void (std::optional<close_reason_t>)>>>
       disconnected_handlers;
     std::vector<std::pair<std::uint16_t, std::shared_ptr<actor_t>>> actors_by_slot;
@@ -209,7 +244,7 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
      * outside a callback waits on lifecycle_changed for it. */
     bool close_completed = false;
     std::uint64_t next_write_id = 1;
-    bool read_in_progress = false;
+    read_state_t read_state = read_state_t::idle;
     // Last error that drove a disconnect/close transition. Synchronous waiters
     // that observe the transport already down report this instead of a generic
     // "not connected" when the pump consumed the inbound error first.
@@ -466,6 +501,10 @@ std::shared_ptr<boost::asio::steady_timer>
 post_runtime_operation_after (const std::shared_ptr<connector_state_t> &state,
                               std::chrono::milliseconds delay,
                               std::function<void ()> operation);
+std::shared_ptr<boost::asio::steady_timer>
+post_runtime_operation_at (const std::shared_ptr<connector_state_t> &state,
+                           request_clock_t::time_point when,
+                           std::function<void ()> operation);
 bool change_state (std::shared_ptr<connector_state_t> state,
                    connection_state_t next,
                    std::optional<error_t> error = std::nullopt,

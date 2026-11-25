@@ -157,8 +157,14 @@ class shared_operation_runner_t : public std::enable_shared_from_this<shared_ope
     std::shared_ptr<boost::asio::steady_timer> post_after (std::chrono::milliseconds delay,
                                                            std::function<void ()> operation)
     {
+        return post_at (request_clock_t::now () + delay, std::move (operation));
+    }
+
+    std::shared_ptr<boost::asio::steady_timer> post_at (request_clock_t::time_point when,
+                                                        std::function<void ()> operation)
+    {
         auto timer = std::make_shared<boost::asio::steady_timer> (_io_context);
-        timer->expires_after (delay);
+        timer->expires_at (when);
         timer->async_wait ([timer, operation = std::move (operation)] (
                              const boost::system::error_code &error) mutable {
             if (error) {
@@ -331,6 +337,12 @@ result_t<transport_t> validate_options (const connector_options_t &options)
         return result_t<transport_t>::failure (
           error_code_t::validation_failed,
           "stream connector request_timeout must be greater than zero");
+    }
+    if (options.max_admission_wait
+        && *options.max_admission_wait <= std::chrono::milliseconds::zero ()) {
+        return result_t<transport_t>::failure (
+          error_code_t::validation_failed,
+          "stream connector max_admission_wait must be greater than zero");
     }
     if (options.wait_timeout <= std::chrono::milliseconds::zero ()) {
         return result_t<transport_t>::failure (
@@ -630,6 +642,7 @@ void remove_subscription (const std::shared_ptr<void> &state_handle, std::uint64
     drop (state->error_handlers);
     drop (state->request_sending_handlers);
     drop (state->reply_received_handlers);
+    drop (state->admission_waiting_handlers);
     drop (state->disconnected_handlers);
     drop (state->actor_bound_handlers);
     drop (state->actor_unbound_handlers);
@@ -749,6 +762,14 @@ post_runtime_operation_after (const std::shared_ptr<connector_state_t> &state,
     return state->runtime->operation->post_after (delay, std::move (operation));
 }
 
+std::shared_ptr<boost::asio::steady_timer>
+post_runtime_operation_at (const std::shared_ptr<connector_state_t> &state,
+                           request_clock_t::time_point when,
+                           std::function<void ()> operation)
+{
+    return state->runtime->operation->post_at (when, std::move (operation));
+}
+
 void connector_runtime_t::receive_packet (packet_t packet)
 {
     deliver_received_packet (*_state, std::move (packet));
@@ -811,7 +832,7 @@ bool change_state (std::shared_ptr<connector_state_t> state,
             state->last_heartbeat_sent = connected_at;
             state->last_inbound_received = connected_at;
             // §10: a new connection owns fresh read state, receive queue and counts.
-            state->read_in_progress = false;
+            state->read_state = read_state_t::idle;
             state->inbound_buffer.clear ();
             state->dispatch_queue.clear ();
             ++state->dispatch_queue_generation;
@@ -1679,6 +1700,18 @@ connector_t::on_reply_received (std::function<void (const reply_received_context
     {
         std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
         state->reply_received_handlers.push_back ({id, std::move (handler)});
+    }
+    return subscription_t (_state, id);
+}
+
+subscription_t connector_t::on_admission_waiting (
+  std::function<void (const admission_waiting_context_t &)> handler)
+{
+    auto state = detail::state_from (_state);
+    const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+        state->admission_waiting_handlers.push_back ({id, std::move (handler)});
     }
     return subscription_t (_state, id);
 }

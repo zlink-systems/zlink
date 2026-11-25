@@ -41,6 +41,7 @@ template <typename T> struct task_state_t
     std::optional<result_t<T>> result;
     std::coroutine_handle<> continuation;
     starter_t starter;
+    std::function<void ()> cancel_operation;
     bool started = false;
 
     void complete (result_t<T> value)
@@ -66,6 +67,7 @@ template <typename T> struct task_state_t
     /// away with the owner that held it.
     void cancel ()
     {
+        std::function<void ()> cancel;
         {
             std::lock_guard<std::mutex> lock (mutex);
             if (result.has_value ()) {
@@ -74,8 +76,12 @@ template <typename T> struct task_state_t
             continuation = {};
             result =
               result_t<T>::failure (error_code_t::disconnected, "stream e2e task was canceled");
+            cancel = std::move (cancel_operation);
         }
         ready.notify_all ();
+        if (cancel) {
+            cancel ();
+        }
     }
 };
 
@@ -241,6 +247,13 @@ template <typename T> class task_t
     }
 
   private:
+    friend class coroutine_request_call_t;
+
+    task_t (starter_t starter, std::function<void ()> cancel) : task_t (std::move (starter))
+    {
+        _state->cancel_operation = std::move (cancel);
+    }
+
     explicit task_t (std::shared_ptr<state_t> state) : _state (std::move (state)) {}
 
     void start_operation () const

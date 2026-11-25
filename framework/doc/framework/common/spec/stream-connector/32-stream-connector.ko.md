@@ -456,6 +456,8 @@ connector가 같은 연결에서 그 request를 자동으로 다시 보낸다. �
   늘리지 않는다. 마감까지 성공하지 못하면 `RequestTimeout`으로 끝내고 마감 뒤에는 보내지 않는다.
   `MaxAdmissionWait`의 기본값은 그 request의 유효 request timeout이다. 지정할 때는 양수이며, 0 이하는 설정 오류다.
 - 연결이 끊기면 대기 중인 request는 기존 연결 생명주기(§6) 규칙대로 끝난다. 재접속이 대기 중인 request를 복원하지 않는다.
+- 2단계 대기열(`$zlink.admission.queueRequired`)의 enqueue, 순번·ticket 처리, 재등록과 callback 순서는
+  [인증 입장 제한 §3.4–§3.5](../server/04-session/03-authentication-admission.ko.md#34-wire)가 정한다.
 
 ## 6. 연결 생명주기
 

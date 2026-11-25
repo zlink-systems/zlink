@@ -155,7 +155,7 @@ numbers, and `ticket` is an RFC 4648 §5 base64url string without padding.
 | Server → client, Error for an authentication Request | `unavailable` + header metadata `$zlink.admission.queueRequired` = `"1"` | Stage 2 is on and the authentication request has no valid ticket. The handler doesn't run and the request isn't counted in stage 1's in-flight count |
 | Client → server | Request `$zlink.admission.enqueue`, payload `{}` | Enters the queue. The Framework sends it to the queue Instance Spot |
 | Server → client, Response to that Request | `{"position": n, "estimatedWaitMs": m}` or `{"ticket": "...", "expiresInMs": t}` | The position and estimated wait, or a ticket when admission is possible right away |
-| Server → client | Send `$zlink.admission.position`, `{"position": n, "estimatedWaitMs": m}` | Sent when the position changes |
+| Server → client | Send `$zlink.admission.position`, `{"position": n, "estimatedWaitMs": m}` | Sent when the position or estimated wait changes, and every 5 seconds (§3.5.4) |
 | Server → client | Send `$zlink.admission.ticket`, `{"ticket": "...", "expiresInMs": t}` | Sent once when it's the client's turn |
 | Client → server, authentication Request | Header metadata `$zlink.admission.ticket` = the ticket string | Resends the authentication request carrying the ticket |
 
@@ -176,9 +176,104 @@ The connector handles it as follows.
 - If the `$zlink.admission.queueRequired` value isn't `"1"`, or a Response or Send payload doesn't match the shapes
   above, only that request ends with `FrameDecodeFailed`; the connection stays open.
 
+### 3.5 Queue Details
+
+These were fixed by the PM decision (11-25, #4546 stage 2). Changing one changes this section,
+[Stream Connector §5.8](../../stream-connector/32-stream-connector.en.md#58-admission-wait-and-automatic-retry), and the shared fixture together.
+
+#### 3.5.1 Queue Spot and Epoch
+
+- The queue Spot is one Instance Spot per RouteMesh that holds the authentication STREAM registration, with Spot ID
+  `$zlink.admission-queue`. The Framework prepares it by sending the first `$zlink.admission.enqueue` or the first node
+  report (§3.5.3) with an `InstanceSpot(...)` intent. Placement follows the existing Instance Spot placement rules; there's
+  no separate placement authority.
+- The epoch is a nonzero unsigned 64-bit integer that the queue Spot incarnation generates from a CSPRNG when it
+  initializes. A new incarnation (re-preparation after the Spot goes away, or re-initialization after relocation)
+  generates a new epoch, and all earlier waiting clients are gone.
+- Each node receives the current epoch in the Response to its node report. A node rejects tickets whose epoch differs
+  from the last epoch it received. A node that hasn't received a report Response yet rejects every ticket (the result
+  in the first row of §3.4).
+
+#### 3.5.2 Ticket Format and Signature
+
+- The ticket is 49 bytes: `version (1 byte, 0x01) || expiresAtUnixMs (8 bytes big-endian) || epoch (8 bytes big-endian) || mac (32 bytes)`,
+  sent on the wire as base64url without padding (66 characters). A ticket with any other length or version is rejected
+  without checking the signature.
+- `mac = HMAC-SHA256(key, "zlink-admission-ticket-v1" || 0x00 || len(SessionRid) (1 byte) || SessionRid bytes || expiresAtUnixMs || epoch)`.
+  The SessionRid isn't in the ticket. The validating node recomputes the MAC with the SessionRid of the session that
+  received the authentication request, so a ticket issued to a different session doesn't verify.
+- The expiry is wall-clock UTC Unix milliseconds. The issuing Spot sets it to `issue time + 30 seconds`. A validating node
+  accepts the ticket only when `current wall clock ≤ expiresAtUnixMs + 2000 ms` (2 seconds of allowed clock difference
+  between nodes). `expiresInMs` is `expiresAtUnixMs − issue time`.
+- Keys come from the settings `AdmissionQueueKey` (the current key, required) and `AdmissionQueuePreviousKey` (optional).
+  Each value is a base64url string, and a decoded length outside 32–64 bytes is a startup error. Turning on stage 2
+  without a current key is also a startup error. Validation tries the current key, then the previous key, and the
+  signature check passes if either matches by constant-time comparison. Keys rotate by changing each node's settings
+  and restarting it; the previous key stays configured until every node signs with the new current key.
+
+#### 3.5.3 Node Reports and Ticket Issue
+
+- Every node with stage 2 on sends the queue Spot a `NodeReport` Spot request once per second. It carries the node RID,
+  the stage 1 limit, the current in-flight count, the SessionRids whose tickets were used since the previous report,
+  and the SessionRids of waiting sessions that ended since the previous report. The Spot returns the current epoch in
+  the Response. These reports are Framework-internal Spot messages, not client wire.
+- The Spot treats only reports received within the last 3 seconds as valid. It issues no tickets to sessions on a node
+  without a valid report.
+- Each waiting client is recorded by SessionRid and its session's node RID. A ticket can only be used on that session's
+  node, so the issue budget is counted per node:
+  `budget(N) = max(0, limit − in-flight − tickets issued to N's waiting clients since that report)`. When a report arrives
+  and when a client enters the queue, the Spot issues tickets to each node's waiting clients in enqueue order, up to that
+  node's budget. Order is therefore FIFO within a node and approximately FIFO across the mesh.
+- The estimated wait `estimatedWaitMs` is `ceil(position × 1000 / r)`, where r is the number of tickets issued in the last
+  30 seconds divided by 30 (per second). When r is 0, it's `position × 1000`. The result is clamped to 2^31 − 1.
+  `position` is the 1-based position across the mesh.
+- `$zlink.admission.enqueue` is idempotent per SessionRid. If the session is already waiting, the Response carries its
+  current position; if it holds an unused, unexpired ticket, the Response carries that same ticket. No new waiting
+  entry is created.
+- A waiting client is removed in three cases: a report lists its ticket as used, a report lists its session as ended,
+  or its ticket expires unused. A ticket can be used several times on the same session until it expires (resends after
+  stage 1 rejections); once the authentication handler runs with that ticket, the node reports it as used.
+
+#### 3.5.4 Position Pushes and Re-registration
+
+- The Spot sends `$zlink.admission.position` to a waiting client when its position or estimated wait changes, and every
+  5 seconds even when neither changed. The same values can repeat.
+- If the connector receives no position or ticket Send for 15 seconds after entering the queue, it sends
+  `$zlink.admission.enqueue` again. If the queue Spot is unchanged, the idempotent handling returns the current position;
+  if it's a new incarnation, the client re-enters at the back. Re-registration doesn't call `OnAdmissionQueued` again.
+
+#### 3.5.5 Concurrent Authentication Requests on One Connection
+
+- Tickets and the waiting state are per session (connection). When several authentication requests on one connection
+  are rejected with queueRequired, the connector sends enqueue once and resends every waiting request with the ticket
+  it receives. Position and ticket Sends are therefore handled per connection, with no operation identifier.
+- A ticket Send that arrives before the enqueue Response is accepted. Positions that arrive after the ticket (in a
+  Response or a Send) are ignored and don't call `OnAdmissionPosition`. Position and ticket Sends that arrive while no
+  request is waiting are discarded.
+
+#### 3.5.6 Reserved Names and Metadata Conflicts
+
+- Only the Framework uses `$zlink.` packet names and metadata keys (Stream Connector §4.6). The connector consumes
+  `$zlink.admission.position` and `$zlink.admission.ticket` Sends before the application message callbacks and doesn't
+  pass them to the application.
+- An Error carrying both `$zlink.admission.retryAfterMs` and `$zlink.admission.queueRequired` ends that request with
+  `FrameDecodeFailed`. Admission metadata on an Error whose code isn't `unavailable` is ignored, and the request ends
+  with that code's usual result.
+
+#### 3.5.7 Connector Callback Order
+
+- A queueRequired rejection doesn't call `OnAdmissionWaiting`. When the connection enters the waiting state (when it
+  sends enqueue), `OnAdmissionQueued` is called once, including when a ticket arrives right away.
+- `OnAdmissionPosition(position, estimatedWaitMs)` is called for every position received (the position in the Response
+  and each position Send).
+- If a request resent with the ticket is rejected by stage 1, `OnAdmissionWaiting` is called per Stream Connector §5.8.
+  There's no separate callback for leaving the waiting state; each request's completion marks the end.
+- On one connection the order is `OnAdmissionQueued` → `OnAdmissionPosition`* → (`OnAdmissionWaiting`*) → request
+  completion. Each language's exact interface fixes the exact signatures together with the implementation PR.
+
 ## 4. Tests
 
-- All four languages run the shared fixture `login-admission-v1.json`: 12 server scenarios and 7 connector scenarios.
+- All four languages run the shared fixture `login-admission-v1.json`: 12 server scenarios and 11 connector scenarios.
 - A cross-language contract test of four language servers × four language connectors: no handler run over the limit,
   the rejection code and `$zlink.admission.retryAfterMs`, success after the connector's automatic retry, and no Actor,
   Location Store, or permit use by a rejected request.
