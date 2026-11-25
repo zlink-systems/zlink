@@ -3101,6 +3101,7 @@ internal sealed class RelocationBehaviorTrace
     internal int OrdinarySendBatchSize { get; init; }
     internal Func<ValueTask>? BeforeTargetAdmissionReply { get; set; }
     internal Func<BehaviorActor, ValueTask>? OnTargetJoined { get; set; }
+    internal Func<CancellationToken, ValueTask>? BeforeTargetWorkReply { get; set; }
     internal Func<ValueTask>? OnTargetClosing { get; set; }
     internal Func<BehaviorActor, ValueTask>? OnPublicJoinCompleted { get; set; }
 
@@ -4018,7 +4019,7 @@ internal sealed class NextBehaviorJoinSendHandler
 internal sealed class TargetBehaviorWorkHandler(RelocationBehaviorTrace trace, BehaviorNode node)
     : IZLinkSpotActorRequestHandler<BehaviorTargetSpot, BehaviorActor, BehaviorWork, BehaviorAck>
 {
-    public ValueTask<BehaviorAck> HandleAsync(
+    public async ValueTask<BehaviorAck> HandleAsync(
         BehaviorTargetSpot spot,
         BehaviorActor actor,
         IZLinkMessageContext context,
@@ -4027,7 +4028,9 @@ internal sealed class TargetBehaviorWorkHandler(RelocationBehaviorTrace trace, B
     )
     {
         trace.RecordDelivery(request.Marker, node.Name);
-        return ValueTask.FromResult(new BehaviorAck(request.Marker));
+        if (trace.BeforeTargetWorkReply is { } beforeReply)
+            await beforeReply(cancellationToken);
+        return new BehaviorAck(request.Marker);
     }
 }
 
