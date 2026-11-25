@@ -262,6 +262,9 @@ public interface IZLinkStreamNodeBuilder
     IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
     IZLinkStreamNodeBuilder SetHeartbeat(TimeSpan interval, TimeSpan timeout);
     IZLinkStreamNodeBuilder SetIdleTimeout(TimeSpan timeout);
+    string? AuthenticationPacketName { get; set; }
+    int MaxConcurrentAuthentications { get; set; }
+    TimeSpan AuthenticationRetryDelay { get; set; }
     IZLinkStreamSocketConfig ConfigureSocket();
     IZLinkStreamNodeBuilder EnableActorDispatch();
     IZLinkStreamNodeBuilder SetTlsServer(
@@ -592,3 +595,5 @@ public interface IZLinkMetadataCall<TSelf>
 실패한다. process-local in-memory 구현은 단일 process contract test에서만 등록할 수 있다.
 정확한 store capability와 Redis 생성자·option은
 [.NET Location과 maintenance](08-location-maintenance.ko.md)가 소유한다.
+
+인증 입장 설정의 기본값과 검증은 [인증 입장 제한](../../../04-session/03-authentication-admission.ko.md)이 정한다.

@@ -111,9 +111,17 @@ class coroutine_request_call_t
 
     template <typename TReply> task_t<TReply> async ()
     {
+        auto cancel_operation = std::make_shared<std::function<void ()>> ();
         auto task = task_t<TReply> (
-          [inner = std::move (_inner)] (std::function<void (result_t<TReply>)> callback) mutable {
-              inner.template submit<TReply> (std::move (callback));
+          [inner = std::move (_inner),
+           cancel_operation] (std::function<void (result_t<TReply>)> callback) mutable {
+              inner.template submit_with_cancellation<TReply> (std::move (callback),
+                                                               cancel_operation.get ());
+          },
+          [cancel_operation] {
+              if (*cancel_operation) {
+                  (*cancel_operation) ();
+              }
           });
         task.start ();
         return task;

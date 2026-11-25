@@ -44,6 +44,7 @@ export function normalizeOptions(
     transport: inferredTransport,
     connectTimeoutMs: options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
     requestTimeoutMs: options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    maxAdmissionWaitMs: options.maxAdmissionWaitMs,
     waitTimeoutMs: options.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS,
     heartbeat: {
       enabled: options.heartbeat?.enabled ?? true,
@@ -71,6 +72,9 @@ export function normalizeOptions(
   };
   validatePositive(normalized.connectTimeoutMs, 'ConnectTimeout');
   validatePositive(normalized.requestTimeoutMs, 'RequestTimeout');
+  if (normalized.maxAdmissionWaitMs !== undefined) {
+    validatePositive(normalized.maxAdmissionWaitMs, 'MaxAdmissionWait');
+  }
   validatePositive(normalized.waitTimeoutMs, 'WaitTimeout');
   validatePositive(normalized.maxSendPayloadSize, 'MaxSendPayloadSize');
   validatePositive(normalized.maxReceivePayloadSize, 'MaxReceivePayloadSize');

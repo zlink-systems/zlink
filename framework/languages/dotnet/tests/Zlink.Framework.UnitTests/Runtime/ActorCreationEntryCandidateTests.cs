@@ -66,6 +66,52 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task EndedActorGetOrCreateUsesRemoteFactoryTarget()
+    {
+        const string actorId = "split-player";
+        var time = new ManualTimeProvider();
+        var node = new CapturingSpotNode();
+        AdmitAcceptingPeer(node);
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            includeActorFactory: false,
+            preseedActorOwnership: false,
+            includeEntrySpotActivation: false,
+            locationTimeProvider: time,
+            objectClient: true
+        );
+        try
+        {
+            var store = RequireLocationStore(runtime);
+            var prior = await ProviderLocationRepositoryAuthorityTests.SeedExpiredPlayerAsync(
+                store,
+                time,
+                actorId
+            );
+            var target = await PublishAcceptingNodeAsync(runtime, store, actorType: "player");
+            var remoteCreates = HandleRemoteCreatesOnAcceptingNode(node, runtime, store);
+            var manager = new ZLinkActorManagerService(runtime);
+            var waiting = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await manager.GetOrCreate(actorId, "player").InMesh("entry").Async()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, waiting.Kind);
+            time.Advance(TimeSpan.FromMilliseconds(3));
+
+            var created = Assert.IsType<ZLinkActorCreateResult.Created>(
+                await manager.GetOrCreate(actorId, "player").InMesh("entry").Async()
+            );
+            Assert.Equal(target.Rid, created.Actor.NodeRid);
+            Assert.True(created.Actor.ObjectGeneration > prior.ObjectGeneration);
+            Assert.Equal(actorId, Assert.Single(remoteCreates));
+            Assert.Empty(node.CreatedActors);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task ActorCreate_SelectsOnlyNodeWhoseEntrySpotAcceptsActorType()
     {
         //  The local node registers the "probe" factory but its Entry Spot
@@ -565,7 +611,8 @@ public sealed partial class EntrySpotActorDispatchTests
     private static ZLinkMeshNodeDescriptor CreateNodeDescriptor(
         ZLinkFrameworkRegistration framework,
         RoutingId rid,
-        Type entrySpotType
+        Type entrySpotType,
+        string actorType = "probe"
     )
     {
         var registration = new ZLinkSpotNodeRegistration
@@ -579,7 +626,7 @@ public sealed partial class EntrySpotActorDispatchTests
             .Objects()
             .Server()
             .AddActorFactory<ProbeActor, ProbeActorFactory>(
-                "probe",
+                actorType,
                 factory => factory.DisableRelocation()
             );
         return ZLinkMeshNodeDescriptorFactory.Create(
@@ -596,14 +643,16 @@ public sealed partial class EntrySpotActorDispatchTests
 
     private static async Task<ZLinkMeshNodeDescriptor> PublishAcceptingNodeAsync(
         ZLinkFrameworkRuntime runtime,
-        IZLinkLocationRepository store
+        IZLinkLocationRepository store,
+        string actorType = "probe"
     )
     {
         var owner = await store.ClaimLiveOwnerAsync("accepting-owner", TimeSpan.FromMinutes(1));
         var descriptor = CreateNodeDescriptor(
             runtime.Registration,
             AcceptingNodeRid,
-            typeof(AcceptingProbeEntrySpot)
+            typeof(AcceptingProbeEntrySpot),
+            actorType
         ) with
         {
             OwnerId = owner.OwnerId,

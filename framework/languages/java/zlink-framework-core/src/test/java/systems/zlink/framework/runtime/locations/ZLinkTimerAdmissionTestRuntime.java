@@ -27,7 +27,25 @@ public final class ZLinkTimerAdmissionTestRuntime {
 
     /** Runs the owner-deadline task now, as the scheduler would at the recorded deadline. */
     public static void latch(ZLinkLocationRuntime runtime) {
-        runtime.ownerDeadlineCore();
+        runtime.stateLane.runAsync(runtime::ownerDeadlineCore).toCompletableFuture().join();
+    }
+
+    public static ZLinkLocationRuntime createWithManualHeartbeat(
+            ZLinkRegisteredLocationStores stores,
+            Duration ttl,
+            Duration interval,
+            Duration timeout,
+            Duration margin,
+            AtomicLong now) {
+        return new ZLinkLocationRuntime(
+                stores,
+                "owner-admission-test",
+                ttl,
+                interval,
+                timeout,
+                margin,
+                now::get,
+                new ZLinkLocationFirstHeartbeatTest.RecordingScheduler());
     }
 
     public static ZLinkLocationRuntime create(AtomicLong now, ScheduledExecutorService executor) {

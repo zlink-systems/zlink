@@ -99,11 +99,12 @@ class creation_terminal_failure_store_t final : public location_store_t
         if (fault == fault_t::capacity_conflict_once) {
             if (std::none_of (request.conditions.begin (), request.conditions.end (),
                               [this] (const auto &condition) {
-                                  return std::visit (
-                                    [this] (const auto &value) {
-                                        return value.key.value == conflicting_capacity_key.value;
-                                    },
-                                    condition);
+                                  bool matches = false;
+                                  runtime::for_each_condition_key (
+                                    condition, [&] (const auto &key) {
+                                        matches |= key.value == conflicting_capacity_key.value;
+                                    });
+                                  return matches;
                               }))
                 co_return co_await inner.write (std::move (request));
             fault = fault_t::none;

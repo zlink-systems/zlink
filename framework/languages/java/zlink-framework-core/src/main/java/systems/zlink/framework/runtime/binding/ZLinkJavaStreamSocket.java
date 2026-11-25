@@ -583,6 +583,10 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     private CompletionStage<Void> submitOnSocket(RoutingId routingId, Message frame) {
         try {
+            if (closed.get()) {
+                return CompletableFuture.failedFuture(
+                        new ZlinkSubmitException(SubmitResult.TERMINATED));
+            }
             return streamAdmission.send(socket, routingId, List.of(frame), null);
         } finally {
             frame.close();

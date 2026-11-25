@@ -52,10 +52,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         Assert.IsType<ZLinkObjectReserveResult.Reserved>(await restarted.ReserveAsync(untouched));
 
         ZLinkObjectReservationRequest Request(string actorId) =>
-            Reservation(actorId, targetDescriptor, target) with
-            {
-                ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
-            };
+            Reservation(actorId, targetDescriptor, target);
 
         async Task<(ZLinkLocationOwnerToken, ZLinkMeshNodeDescriptor)> SeedAsync(
             IZLinkLocationRepository observer

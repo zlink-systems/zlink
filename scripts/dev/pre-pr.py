@@ -25,7 +25,7 @@ CPP = (
     "Verify framework relocation conformance inventory",
     "Resolve the runner vcpkg",
     "Install Framework C++ vcpkg dependencies",
-    "Check vcpkg dependency versions against vcpkg.json",
+    "Verify vcpkg versions against the manifest and Conan locks",
     "Build the checkout C++ binding package",
     "Configure and build Framework C++ tests",
     "Run Framework C++ unit and contract tests",

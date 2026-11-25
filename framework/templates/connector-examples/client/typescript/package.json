@@ -1,0 +1,21 @@
+{
+  "name": "connector-example-typescript",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "browser": "npm run build && esbuild dist/browser.js --bundle --outfile=dist/browser.bundle.js --servedir=. --serve=127.0.0.1:8000",
+    "e2e": "npm run build && node --test e2e.mjs",
+    "build:browser": "npm run build && esbuild dist/browser.js --bundle --outfile=dist/browser.bundle.js"
+  },
+  "dependencies": {
+    "@zlink-systems/stream-connector": "0.34.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}

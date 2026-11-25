@@ -182,8 +182,10 @@ int main ()
       read_text_file (root / "framework/src/runtime/stateful/raw_stateful_dispatch.hpp");
     const auto monitoring_unit =
       read_text_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp");
-    const auto actor_gateway_unit = read_text_file (
-      root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp");
+    const auto unit_tests = root / "tests/Zlink.Framework.UnitTests";
+    const auto actor_gateway_unit =
+      read_text_file (unit_tests / "test_cpp_framework_actor_gateway_session_binding.cpp")
+      + read_text_file (unit_tests / "test_cpp_framework_actor_gateway_relay_dispatch.cpp");
     const auto actor_gateway_runtime =
       read_text_file (root / "framework/src/runtime/actors/actor_gateway_runtime.cpp");
     const auto message_flow_unit =
@@ -792,15 +794,16 @@ int main ()
     const auto recovery_publisher =
       location_runtime.find ("auto pending = publish (intent, cancellation, deadline);");
     const auto recovery_accept = location_runtime.find ("static task_t<void> heartbeat_accept");
-    const auto recovery_episode = location_runtime.find ("if (recovering) {", recovery_accept);
+    const auto recovery_episode = location_runtime.find (
+      "const auto episode = recovering ? attempt->requested_outage : nullptr;", recovery_accept);
     const auto recovery_new_token = location_runtime.find (
-      "if (episode->token.lease_generation != token.lease_generation)", recovery_episode);
-    const auto recovery_start =
-      location_runtime.find ("runtime->republish_descriptors (", recovery_new_token);
-    const auto recovery_intent = location_runtime.find (
-      "location_write_intent_t::renew, attempt->cancellation", recovery_start);
+      "if (publishing || (episode && episode->token.lease_generation != token.lease_generation))",
+      recovery_episode);
+    const auto recovery_start = location_runtime.find (
+      "runtime->republish_descriptors (location_write_intent_t::renew,", recovery_new_token);
+    const auto recovery_cancel = location_runtime.find ("attempt->cancellation,", recovery_start);
     const auto recovery_submitted =
-      location_runtime.find ("co_await submitted->task ();", recovery_intent);
+      location_runtime.find ("co_await submitted->task ();", recovery_cancel);
     const auto recovery_objects =
       location_runtime.find ("return recover_execution (", recovery_submitted);
     const auto recovery_invalidation = location_auto_connect.find (
@@ -818,7 +821,7 @@ int main ()
         && recovery_owner_check != std::string::npos && recovery_republish != std::string::npos
         && recovery_publisher != std::string::npos && recovery_accept != std::string::npos
         && recovery_episode != std::string::npos && recovery_new_token != std::string::npos
-        && recovery_start != std::string::npos && recovery_intent != std::string::npos
+        && recovery_start != std::string::npos && recovery_cancel != std::string::npos
         && recovery_submitted != std::string::npos && recovery_objects != std::string::npos
         && recovery_invalidation != std::string::npos && recovery_diff != std::string::npos
         && location_auto_connect.find (

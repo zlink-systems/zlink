@@ -780,13 +780,19 @@ class provider_location_repository_t final : public location_repository_t
               version_condition (spot_key, spot_row->value.version));
             auto required_owner = owner_condition (spot.owner);
             const auto &owner_value = std::get<store_value_condition_t> (required_owner);
-            const auto existing_owner = std::find_if (
-              write_request.conditions.begin (), write_request.conditions.end (),
-              [&] (const auto &condition) {
-                  return std::visit (
-                    [&] (const auto &value) { return value.key.value == owner_value.key.value; },
-                    condition);
-              });
+            const auto existing_owner =
+              std::find_if (write_request.conditions.begin (), write_request.conditions.end (),
+                            [&] (const auto &condition) {
+                                return std::visit (
+                                  [&] (const auto &value) {
+                                      if constexpr (std::is_same_v<std::decay_t<decltype (value)>,
+                                                                   store_sum_at_most_condition_t>)
+                                          return false;
+                                      else
+                                          return value.key.value == owner_value.key.value;
+                                  },
+                                  condition);
+                            });
             if (existing_owner == write_request.conditions.end ())
                 write_request.conditions.push_back (std::move (required_owner));
             else {
@@ -2772,23 +2778,26 @@ class provider_location_repository_t final : public location_repository_t
         if (std::chrono::steady_clock::now () >= deadline)
             throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
                                          "Store cleanup deadline expired");
-        auto first = co_await await_result (_store.write_as (request, operation));
-        if (first)
-            co_return first.value ();
-        if (auto applied = co_await reconcile_write_async (request, deadline))
-            co_return store_write_result_t{std::move (*applied)};
-        if (first.error () != nullptr && detail::is_transient_error (first.error ()->kind ())) {
-            if (std::chrono::steady_clock::now () >= deadline)
-                throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
-                                             "Store cleanup deadline expired");
-            auto retried = co_await await_result (_store.write_as (request, operation));
-            if (retried)
-                co_return retried.value ();
+        auto result = co_await await_result (_store.write_as (request, operation));
+        if (!result) {
             if (auto applied = co_await reconcile_write_async (request, deadline))
                 co_return store_write_result_t{std::move (*applied)};
-            co_return retried.value ();
+            if (result.error () != nullptr
+                && detail::is_transient_error (result.error ()->kind ())) {
+                if (std::chrono::steady_clock::now () >= deadline)
+                    throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                                 "Store cleanup deadline expired");
+                result = co_await await_result (_store.write_as (request, operation));
+                if (!result)
+                    if (auto applied = co_await reconcile_write_async (request, deadline))
+                        co_return store_write_result_t{std::move (*applied)};
+            }
         }
-        co_return first.value ();
+        const auto &written = result.value ();
+        if (std::holds_alternative<store_write_corrupt_t> (written))
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         "Location Store write reported corrupt data");
+        co_return written;
     }
 
     task_t<std::optional<store_write_applied_t>>
@@ -2799,6 +2808,8 @@ class provider_location_repository_t final : public location_repository_t
             co_return std::nullopt;
         store_write_applied_t applied;
         for (const auto &mutation : request.mutations) {
+            if (std::holds_alternative<store_add_t> (mutation))
+                co_return std::nullopt;
             const auto key = std::visit ([] (const auto &value) { return value.key; }, mutation);
             if (std::chrono::steady_clock::now () >= deadline)
                 throw framework_exception_t (framework_error_kind_t::deadline_exceeded,

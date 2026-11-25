@@ -69,7 +69,8 @@ target_include_directories(zlink_framework_locations_etcd
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-  PRIVATE "${ZLINK_ETCD_GENERATED_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  PRIVATE "${ZLINK_ETCD_GENERATED_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src"
+          "${ZLINK_FRAMEWORK_CPP_DIR}/framework/src")
 target_link_libraries(zlink_framework_locations_etcd
   PUBLIC zlink::framework_provider_abstractions
   PRIVATE gRPC::grpc++ protobuf::libprotobuf OpenSSL::Crypto)

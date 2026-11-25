@@ -432,11 +432,15 @@ export class ServiceStatefulRegistry {
     return accepted;
   }
 
-  binding(actor: ServiceActorRef): ServiceSessionBinding | undefined {
+  binding(
+    actor: Pick<ServiceActorRef, 'actorId' | 'generation'>
+  ): ServiceSessionBinding | undefined {
     return this.bindingCore(actor);
   }
 
-  private bindingCore(actor: ServiceActorRef): ServiceSessionBinding | undefined {
+  private bindingCore(
+    actor: Pick<ServiceActorRef, 'actorId' | 'generation'>
+  ): ServiceSessionBinding | undefined {
     const binding = this.bindings.get(actorKey(actor))?.binding;
     return binding?.actor.generation === actor.generation ? binding : undefined;
   }
@@ -705,7 +709,7 @@ export class ServiceTerminalOperationRegistry<T, Context = unknown> {
   }
 }
 
-function actorKey(actor: ServiceActorRef): string {
+function actorKey(actor: Pick<ServiceActorRef, 'actorId' | 'generation'>): string {
   return `${actor.actorId}\0${actor.generation}`;
 }
 

@@ -293,6 +293,11 @@ public sealed class RuntimeMetricsTests
             ["zlink.location.owner_lease.renew.lateness"] = (typeof(Histogram<>), "s"),
             ["zlink.observability.events.overflow"] = (typeof(Counter<>), "{event}"),
             ["zlink.host.state"] = (typeof(ObservableGauge<>), "{runtime}"),
+            ["zlink.host.authentication_admission.in_flight"] = (
+                typeof(ObservableGauge<>),
+                "{request}"
+            ),
+            ["zlink.host.authentication_admission.rejections"] = (typeof(Counter<>), "{request}"),
             ["zlink.host.core_hwm.effective_budget"] = (typeof(ObservableGauge<>), "By"),
             ["zlink.host.core_hwm.applied"] = (typeof(ObservableGauge<>), "By"),
             ["zlink.host.core_hwm.accounted"] = (typeof(ObservableGauge<>), "By"),
