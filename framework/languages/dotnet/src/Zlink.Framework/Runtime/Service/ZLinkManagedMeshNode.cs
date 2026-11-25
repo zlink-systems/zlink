@@ -560,16 +560,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 )
                     return 0UL;
 
-                // A skipped dial has no owned intent to remove when discovery
-                // drops the descriptor. Install its expectation with the intent.
-                if (expectedRid is { } peerRid && expectedLifecycleGeneration is { } generation)
-                    SetPeerExpectationOnLane(
-                        peerRid,
-                        endpoint,
-                        expectedSecurityIdentity,
-                        generation
-                    );
-
                 // Repeated configuration of the same target owns one intent and
                 // one endpoint registration throughout admission and reconnect.
                 var existingIntent = _peersByIntent.Values.FirstOrDefault(intent =>

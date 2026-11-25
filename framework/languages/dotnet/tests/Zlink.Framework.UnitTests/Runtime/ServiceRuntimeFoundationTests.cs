@@ -2,13 +2,20 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.AspNetCore;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests;
@@ -1463,6 +1470,251 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public async Task AutoConnect_FencesSkippedTarget_AndForgetsItAfterDescriptorRemoval()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var meshName = $"auto-connect-fence-{suffix}";
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkProviderLocationRepository(locationProvider);
+        var peerOwner = await store.ClaimLiveOwnerAsync(
+            $"peer-owner-{suffix}",
+            TimeSpan.FromMinutes(1)
+        );
+        var peerRid = RoutingId.From($"zz-peer-{suffix}");
+        const string configuredEndpoint = "tcp://127.0.0.1:0";
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options =>
+        {
+            options.AddLocationStore(locationProvider);
+            options
+                .AddRouteMesh(meshName)
+                .SetRoutingIdPrefix($"aa-local-{suffix}")
+                .Listen(configuredEndpoint);
+        });
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var locations = provider.GetRequiredService<ZLinkLocationRuntime>();
+        var autoConnect = provider.GetRequiredService<ZLinkLocationAutoConnectHost>();
+        var localRid = runtime.PrepareLocationNodeRoutingId();
+        Assert.True(
+            ZLinkRoutingIdOrder.Instance.Compare(localRid, peerRid) < 0,
+            "The local route mesh node must own the dial side for this regression."
+        );
+        await locations.StartAsync(localRid);
+        var autoConnectStarted = false;
+        try
+        {
+            await runtime.StartAsync(CancellationToken.None);
+            var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            var spotRuntime = Assert.Single(state.SpotNodes.Values);
+            Assert.NotNull(spotRuntime!.StartupState);
+            Assert.Equal(localRid, spotRuntime.StartupState!.RoutingId);
+            var local = Assert
+                .IsType<ZLinkBackendSpotNodeWrapper>(runtime.GetMeshNodeRuntime(meshName).Node)
+                .NativeNode;
+            var localEndpoint = local.Status().LocalEndpoint;
+            Assert.True(locations.IsOwnerAdmissionOpen);
+            await autoConnect.StartAsync(state);
+            autoConnectStarted = true;
+
+            await using var context = Systems.Zlink.Zlink.CreateContext();
+            await using var peer = new ZLinkManagedMeshNode(context, meshName);
+            peer.SetRoutingId(peerRid);
+            peer.SetBind(configuredEndpoint);
+            peer.Start();
+            var peerEndpoint = peer.Status().LocalEndpoint;
+            var firstConnection = peer.ConnectPeer(localEndpoint, localRid);
+            await WaitUntilAsync(() =>
+                local
+                    .Peers()
+                    .Any(candidate =>
+                        candidate.RoutingId == peerRid && candidate.State == MeshPeerState.Admitted
+                    )
+            );
+
+            var oldGeneration = peer.Status().LifecycleGeneration;
+            var descriptorGeneration =
+                oldGeneration == ulong.MaxValue ? oldGeneration - 1 : oldGeneration + 1;
+            Assert.Equal(
+                ZLinkLocationWriteStatus.Stored,
+                (
+                    await store.UpdateMeshNodeAsync(
+                        new ZLinkMeshNodeDescriptor(
+                            meshName,
+                            peerRid,
+                            descriptorGeneration,
+                            1,
+                            peerEndpoint,
+                            new Dictionary<string, int>(StringComparer.Ordinal),
+                            ZLinkTransportSecurityIdentity.Plaintext,
+                            peerOwner.OwnerId,
+                            peerOwner.LeaseGeneration,
+                            DateTimeOffset.UtcNow
+                        )
+                        {
+                            State = ZLinkFrameworkRuntimeState.Serving,
+                        },
+                        ZLinkLocationWriteIntent.NewClaim
+                    )
+                ).Status
+            );
+            Assert.Equal(
+                ZLinkPeerAcquisitionMode.AutoConnect,
+                runtime.Registration.SpotNodes[meshName].Router!.AcquisitionMode
+            );
+            Assert.Contains(
+                await provider
+                    .GetRequiredService<IZLinkMeshNodeLocationResolver>()
+                    .ListLiveMeshNodesAsync(meshName, CancellationToken.None),
+                row => row.Rid == peerRid && row.LifecycleGeneration == descriptorGeneration
+            );
+
+            await autoConnect.ReconcilePeerAsync(meshName, peerRid, CancellationToken.None);
+            Assert.Equal(
+                ZLinkRouteMeshTargetClassification.RequiredNotConnected,
+                autoConnect.ClassifyRouteMeshTarget(meshName, peerRid)
+            );
+            Assert.Equal(
+                descriptorGeneration,
+                local.ObservePeerRoute(peerRid).Expectation?.LifecycleGeneration
+            );
+            using var monitor = local.OpenMonitor();
+            var rejectedBefore = monitor.Status().PeerRejected;
+            peer.RemovePeerConnection(firstConnection);
+            await WaitUntilAsync(() =>
+                !local.Peers().Any(candidate => candidate.RoutingId == peerRid)
+            );
+            _ = peer.ConnectPeer(localEndpoint, localRid);
+            await WaitUntilAsync(() =>
+                monitor.Status().PeerRejected != rejectedBefore
+                || local
+                    .Peers()
+                    .Any(candidate =>
+                        candidate.RoutingId == peerRid && candidate.State == MeshPeerState.Admitted
+                    )
+            );
+
+            Assert.True(
+                monitor.Status().PeerRejected > rejectedBefore,
+                "The discovered lifecycle generation must reject the old inbound peer."
+            );
+            Assert.Equal(
+                descriptorGeneration,
+                local.ObservePeerRoute(peerRid).Expectation?.LifecycleGeneration
+            );
+
+            Assert.Equal(
+                ZLinkLocationWriteStatus.Stored,
+                await store.RemoveMeshNodeAsync(
+                    new ZLinkMeshNodeDescriptorKey(meshName, peerRid),
+                    new ZLinkLocationOwnerToken(peerOwner.OwnerId, peerOwner.LeaseGeneration)
+                )
+            );
+            await autoConnect.ReconcilePeerAsync(meshName, peerRid, CancellationToken.None);
+            Assert.Null(local.ObservePeerRoute(peerRid).Expectation);
+        }
+        finally
+        {
+            if (autoConnectStarted)
+                await autoConnect.StopAsync();
+            await runtime.StopAsync(CancellationToken.None);
+            await locations.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task AutoConnect_ForgetsRemovedTargetThatNeverBecameActive()
+    {
+        const string meshName = "forgotten-unaccepted-target";
+        var time = TimeProvider.System;
+        var store = new ZLinkInMemoryLocationStore(time);
+        var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
+        var localRid = RoutingId.From("local");
+        await using var runtime = new ZLinkLocationRuntime(options, store, time);
+        await runtime.StartAsync(localRid);
+
+        var localRow = new ZLinkMeshNodeDescriptor(
+            meshName,
+            localRid,
+            1,
+            1,
+            "tcp://127.0.0.1:31001",
+            new Dictionary<string, int>(StringComparer.Ordinal),
+            ZLinkTransportSecurityIdentity.Plaintext,
+            string.Empty,
+            0,
+            DateTimeOffset.UtcNow
+        )
+        {
+            State = ZLinkFrameworkRuntimeState.Serving,
+        };
+        var localPublication = await runtime.WriteDescriptorAsync(
+            localRow,
+            ZLinkLocationWriteIntent.NewClaim
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.Stored, localPublication.Status);
+
+        var peerOwner = await store.ClaimLiveOwnerAsync("peer-owner", TimeSpan.FromMinutes(1));
+        var peerRid = RoutingId.From("peer");
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await store.UpdateMeshNodeAsync(
+                    localRow with
+                    {
+                        Rid = peerRid,
+                        LifecycleGeneration = 2,
+                        Endpoint = "tcp://127.0.0.1:31002",
+                        OwnerId = peerOwner.OwnerId,
+                        LeaseGeneration = peerOwner.LeaseGeneration,
+                    },
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
+
+        var resolver = new ZLinkStoreLocationResolvers(
+            store,
+            new ZLinkOwnerLeaseTracker(store, options, time)
+        );
+        var executor = new ForgetRecordingAutoConnectExecutor();
+        var reconciler = new ZLinkAutoConnectReconciler(
+            new ZLinkAutoConnectLocal(
+                ZLinkLocationAutoConnectType.SpotMesh,
+                ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
+                ZLinkLocationRole.Spot,
+                localRid,
+                localRow.Endpoint
+            ),
+            localRow,
+            runtime,
+            resolver,
+            executor,
+            options,
+            time,
+            initiallyPublished: true,
+            initialStoreGeneration: localPublication.Generation
+        );
+
+        await reconciler.TickAsync();
+        Assert.Empty(reconciler.ActiveTargets);
+        Assert.Single(executor.Connected);
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            await store.RemoveMeshNodeAsync(
+                new ZLinkMeshNodeDescriptorKey(meshName, peerRid),
+                new ZLinkLocationOwnerToken(peerOwner.OwnerId, peerOwner.LeaseGeneration)
+            )
+        );
+
+        await reconciler.TickAsync();
+
+        Assert.Equal(peerRid, Assert.Single(executor.Forgotten).NodeRid);
+        Assert.Empty(reconciler.ActiveTargets);
+        await reconciler.ShutdownAsync();
+    }
+
+    [Fact]
     public async Task ManagedNode_LocalAndTransportOperationsShareOneIdNamespace()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -2013,7 +2265,7 @@ public sealed class ServiceRuntimeFoundationTests
             )
         );
         Assert.NotEqual(manualIntent, Assert.Single(local.Peers()).ConnectionIntentId);
-        Assert.Equal(7UL, local.ObservePeerRoute(peerRid).Expectation?.LifecycleGeneration);
+        Assert.Null(local.ObservePeerRoute(peerRid).Expectation);
     }
 
     [Fact]
@@ -4017,6 +4269,22 @@ public sealed class ServiceRuntimeFoundationTests
                 throw new TimeoutException("The managed MeshNode condition was not reached.");
             await Task.Delay(10);
         }
+    }
+
+    private sealed class ForgetRecordingAutoConnectExecutor : IZLinkAutoConnectExecutor
+    {
+        internal List<ZLinkAutoConnectTarget> Connected { get; } = [];
+        internal List<ZLinkAutoConnectTarget> Forgotten { get; } = [];
+
+        public bool Connect(ZLinkAutoConnectTarget target)
+        {
+            Connected.Add(target);
+            return false;
+        }
+
+        public bool Disconnect(ZLinkAutoConnectTarget target) => true;
+
+        public void ForgetTarget(ZLinkAutoConnectTarget target) => Forgotten.Add(target);
     }
 
     private sealed class PausedReceivePoller(RoutingId targetRoutingId) : IPoller
