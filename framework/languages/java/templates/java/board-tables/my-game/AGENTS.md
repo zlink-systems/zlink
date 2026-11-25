@@ -27,7 +27,7 @@ Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/jav
 
 ## Project overview
 
-This Java 25 project is a board-table server example in which players sit at a Table, are dealt private cards, and bet in turn. It runs a Session gateway for connections, Play nodes A and B whose Tables are created on demand, a Matchmaker node, an API node for player balances, and Redis for location, relocation and player records. `build.gradle.kts` pins the ZLink Framework to `0.34.1` and the binding to `1.26.0`.
+This Java 25 project is a board-table server example in which players sit at a Table, are dealt private cards, and bet in turn. It runs a Session gateway for connections, Play nodes A and B whose Tables are created on demand, a Matchmaker node, an API node for player balances, and Redis for location, relocation and player records. `build.gradle.kts` pins the ZLink Framework to `0.34.2` and the binding to `1.26.0`.
 
 The project layout below describes where to add gameplay, and "Extend this template's domain" describes where to add new rules. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 

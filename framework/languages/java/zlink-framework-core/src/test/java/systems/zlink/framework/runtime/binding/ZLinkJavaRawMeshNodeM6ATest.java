@@ -684,6 +684,10 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         var targetRid = RoutingId.from("wire-reject-target");
         var peerRid = RoutingId.from("wire-reject-peer");
         var codec = new ZLinkServiceM6AWireCodec();
+        var admit =
+                List.of(
+                        codec.encodeAdmission(
+                                ServiceWireConstants.COMMAND_ADMIT, descriptor(peerRid)));
         try (var context = Zlink.createContext();
                 var target = meshNode(context);
                 var port = new ZLinkJavaRawServicePort(context);
@@ -706,6 +710,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                         ServiceWireConstants.COMMAND_ADMIT,
                         codec.decodeHeader(admitted.frames().getFirst()).command());
             }
+            port.send(peer, targetRid, admit).toCompletableFuture().get(2, TimeUnit.SECONDS);
             var received = new CompletableFuture<ZLinkMeshDispatchRecord>();
             target.startDispatch(received::complete);
             // service-wire-v1.schema.json reject-reason: securityIdentityMismatch.
@@ -746,6 +751,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 }
             }
             assertFalse(received.isDone(), "REJECT must revoke admission before the next record");
+            // The target completes its handshake when it receives the peer's ADMIT.
+            port.send(peer, targetRid, admit).toCompletableFuture().get(2, TimeUnit.SECONDS);
             try (var packet = Message.from("wire-readmitted-marker");
                     var payload = Message.from(new byte[] {2})) {
                 port.send(

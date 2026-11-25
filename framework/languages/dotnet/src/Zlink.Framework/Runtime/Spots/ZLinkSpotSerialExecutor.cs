@@ -119,21 +119,38 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     internal bool IsCurrentLifecycleTurn => _queue.IsCurrentLifecycleTurn;
 
-    internal bool IsTargetPreparing => Volatile.Read(ref _relocationBarrier)?.QueueSeal is not null;
+    // This observation selects the gate for publishing staging work. Only
+    // the queue's current lifecycle owner decides whether to accept it.
+    private bool IsTargetPreparing => Volatile.Read(ref _relocationBarrier)?.QueueSeal is not null;
 
-    internal ValueTask ExecuteTargetPreparationAsync(
+    internal async ValueTask ExecuteTargetPreparationAsync(
         Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
         CancellationToken ct
     )
     {
-        var barrier =
-            Volatile.Read(ref _relocationBarrier)
-            ?? throw new InvalidOperationException("Target preparation has no staging seal.");
-        return _queue.RunTargetPreparationAsync(
-            barrier.QueueSeal!,
-            token => ExecuteLifecycleOperationAsync(operation, token),
-            ct
-        );
+        if (!await TryExecuteTargetPreparationAsync(operation, ct).ConfigureAwait(false))
+            throw new InvalidOperationException("Target preparation has no staging seal.");
+    }
+
+    // The barrier state lane defers submissions until the replay reservation
+    // callback settles. The queue selects the staging owner at publication.
+    internal async ValueTask<bool> TryExecuteTargetPreparationAsync(
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
+        CancellationToken ct
+    )
+    {
+        var item = await RunBarrierStateAsync(
+                () =>
+                    _queue.TryPostTargetPreparation(token =>
+                        ExecuteLifecycleOperationAsync(operation, token)
+                    ),
+                gateTurn: IsTargetPreparing
+            )
+            .ConfigureAwait(false);
+        if (item is null)
+            return false;
+        await item.Completion.WaitAsync(ct).ConfigureAwait(false);
+        return true;
     }
 
     internal async ValueTask PrepareActivationAsync(
@@ -355,7 +372,13 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             // is still pending.
             var execution = RunClaimedAsync(
                     lane,
-                    reservation.RunAsync,
+                    ct =>
+                        ExecuteActorOperationAsync(
+                            actorId,
+                            static (_, replay, token) => replay.RunAsync(token),
+                            reservation,
+                            ct
+                        ),
                     claim,
                     CancellationToken.None,
                     ready: _executionMode == ZLinkUserSpotExecutionMode.SpotWide
@@ -430,24 +453,41 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         if (_isDisposed())
             return;
 
-        if (IsTargetPreparing)
-        {
-            await ExecuteTargetPreparationAsync(operation, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
         var callerFlow = ZLinkFlowContext.Current;
-        var admission = PostLifecycle(
-            _ => ExecuteLifecycleOperationAsync(operation, cancellationToken, callerFlow),
-            out var item
-        );
+        var transferred = ZLinkApplicationJobQueueInvocation.HasTransferableOwnerReservation();
+        var (admission, item) = await RunBarrierStateAsync(
+                () =>
+                {
+                    if (
+                        _queue.TryPostTargetPreparation(ct =>
+                            ExecuteLifecycleOperationAsync(operation, ct, callerFlow)
+                        ) is
+                        { } staged
+                    )
+                        return (ZLinkAcceptedWorkAdmission.Accepted, staged);
+
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return PostLifecycleOnStateLane(
+                        _ =>
+                            ExecuteLifecycleOperationAsync(
+                                operation,
+                                cancellationToken,
+                                callerFlow
+                            ),
+                        transferred,
+                        onSkipped: null,
+                        _queue
+                    );
+                },
+                gateTurn: IsTargetPreparing
+            )
+            .ConfigureAwait(false);
         if (admission != ZLinkAcceptedWorkAdmission.Accepted)
             throw new ZLinkFrameworkException(
                 admission.ErrorKind(),
                 "SPOT lifecycle admission is sealed."
             );
-        await item.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await item!.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     internal async ValueTask<T> ExecuteActorLifecycleAsync<T>(
@@ -497,38 +537,47 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     {
         var transferred = ZLinkApplicationJobQueueInvocation.HasTransferableOwnerReservation();
         var result = RunBarrierState(() =>
-        {
-            var admission = LifecycleAdmission;
-            if (admission != ZLinkAcceptedWorkAdmission.Accepted)
-                return (admission, (ZLinkSerialWorkItem?)null);
-            var posted = (lane ?? _queue).TryPostNextWithAdmission(
-                ct =>
-                {
-                    if (LifecycleAdmission != ZLinkAcceptedWorkAdmission.Closing)
-                        return callback(ct);
-                    if (onSkipped is not null)
-                    {
-                        onSkipped();
-                        return ValueTask.CompletedTask;
-                    }
-                    return ValueTask.FromException(
-                        new ZLinkFrameworkException(
-                            ZLinkAcceptedWorkAdmission.Closing.ErrorKind(),
-                            "SPOT lifecycle admission is sealed."
-                        )
-                    );
-                },
-                payloadBytes: 0,
-                metadataBytes: 0,
-                transferred,
-                out var postedItem
-            );
-            return posted == ZLinkSerialPostAdmission.Accepted
-                ? (ZLinkAcceptedWorkAdmission.Accepted, postedItem)
-                : (ZLinkAcceptedWorkAdmission.Closed, null);
-        });
+            PostLifecycleOnStateLane(callback, transferred, onSkipped, lane ?? _queue)
+        );
         item = result.Item2!;
         return result.Item1;
+    }
+
+    private (ZLinkAcceptedWorkAdmission, ZLinkSerialWorkItem?) PostLifecycleOnStateLane(
+        Func<CancellationToken, ValueTask> callback,
+        bool transferred,
+        Action? onSkipped,
+        ZLinkSerialExecutionQueue lane
+    )
+    {
+        var admission = LifecycleAdmission;
+        if (admission != ZLinkAcceptedWorkAdmission.Accepted)
+            return (admission, (ZLinkSerialWorkItem?)null);
+        var posted = lane.TryPostNextWithAdmission(
+            ct =>
+            {
+                if (LifecycleAdmission != ZLinkAcceptedWorkAdmission.Closing)
+                    return callback(ct);
+                if (onSkipped is not null)
+                {
+                    onSkipped();
+                    return ValueTask.CompletedTask;
+                }
+                return ValueTask.FromException(
+                    new ZLinkFrameworkException(
+                        ZLinkAcceptedWorkAdmission.Closing.ErrorKind(),
+                        "SPOT lifecycle admission is sealed."
+                    )
+                );
+            },
+            payloadBytes: 0,
+            metadataBytes: 0,
+            transferred,
+            out var postedItem
+        );
+        return posted == ZLinkSerialPostAdmission.Accepted
+            ? (ZLinkAcceptedWorkAdmission.Accepted, postedItem)
+            : (ZLinkAcceptedWorkAdmission.Closed, null);
     }
 
     private ZLinkAcceptedWorkAdmission LifecycleAdmission =>
@@ -1428,27 +1477,26 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(seal);
         ArgumentNullException.ThrowIfNull(operation);
-        await RunBarrierStateAsync(() =>
-            {
-                if (
-                    _relocationBarrier?.Generation != seal.Generation
-                    || !_relocationBarrier.BoundaryReached
-                    || !_relocationBarrier.Quiescent.Task.IsCompleted
-                )
-                    throw new InvalidOperationException(
-                        "SPOT relocation lifecycle requires the current quiescent seal."
+        var staged = await RunBarrierStateAsync(
+                () =>
+                {
+                    if (
+                        _relocationBarrier?.Generation != seal.Generation
+                        || !_relocationBarrier.BoundaryReached
+                        || !_relocationBarrier.Quiescent.Task.IsCompleted
+                    )
+                        throw new InvalidOperationException(
+                            "SPOT relocation lifecycle requires the current quiescent seal."
+                        );
+                    return _queue.TryPostTargetPreparation(ct =>
+                        ExecuteLifecycleOperationAsync(operation, ct)
                     );
-                return true;
-            })
+                },
+                gateTurn: IsTargetPreparing
+            )
             .ConfigureAwait(false);
-        if (IsTargetPreparing)
-            await _queue
-                .RunTargetPreparationAsync(
-                    seal.QueueSeal,
-                    ct => ExecuteLifecycleOperationAsync(operation, ct),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
+        if (staged is not null)
+            await staged.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
         else
             await ExecuteLifecycleOperationAsync(operation, cancellationToken)
                 .ConfigureAwait(false);

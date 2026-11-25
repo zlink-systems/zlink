@@ -132,6 +132,7 @@ interface ZlinkStreamConnector {
   ): Disposable;
 
   onRequestSending(handler: (context: ZlinkStreamRequestSendingContext) => void): Disposable;
+  onAdmissionWaiting(handler: (context: ZlinkStreamAdmissionWaitingContext, signal?: AbortSignal) => Promise<void> | void): Disposable;
   onReplyReceived(
     handler: (context: ZlinkStreamReplyReceivedContext, signal?: AbortSignal) => Promise<void> | void
   ): Disposable;
@@ -227,6 +228,12 @@ interface ZlinkStreamMessage<TPayload = unknown> {
   readonly metadata: ZlinkStreamMetadata;
   readonly payload: TPayload;
   readonly actorId?: string;                   // 상대 bound Actor. slot 없는 frame은 undefined(공통 스펙 §5.6)
+}
+
+interface ZlinkStreamAdmissionWaitingContext {
+  readonly requestPacketName: string;
+  readonly actorId?: string;
+  readonly retryAfterMs: number;
 }
 
 interface ZlinkStreamRequestSendingContext {
@@ -327,6 +334,7 @@ interface ZlinkStreamConnectorOptions {
   readonly transportFactory?: ZlinkStreamTransportFactory;
   readonly connectTimeoutMs?: number;
   readonly requestTimeoutMs?: number;
+  readonly maxAdmissionWaitMs?: number;
   readonly waitTimeoutMs?: number;
   readonly heartbeat?: ZlinkStreamHeartbeatOptions;
   readonly reconnect?: ZlinkStreamReconnectOptions;
@@ -375,6 +383,7 @@ interface RequiredZlinkStreamConnectorOptions {
   readonly transport: ZlinkStreamTransport;
   readonly connectTimeoutMs: number;
   readonly requestTimeoutMs: number;
+  readonly maxAdmissionWaitMs?: number;
   readonly waitTimeoutMs: number;
   readonly heartbeat: Required<ZlinkStreamHeartbeatOptions>;
   readonly reconnect: Required<ZlinkStreamReconnectOptions>;
@@ -471,3 +480,5 @@ TypeScript는 읽기 속성 쪽을 택한다. 아직 끊긴 적이 없으면 `un
 <!-- framework-adapter-nav:bottom:start -->
 [문서 목록](../../../../../../README.ko.md)
 <!-- framework-adapter-nav:bottom:end -->
+
+입장 대기와 기본 마감은 [공통 스펙 §5.8](../../32-stream-connector.ko.md#58-입장-대기와-자동-재시도)이 정한다.

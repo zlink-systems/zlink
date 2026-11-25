@@ -1,6 +1,6 @@
 plugins { kotlin("jvm") version "2.3.21" apply false }
 
-extra["frameworkVersion"] = "0.34.1"
+extra["frameworkVersion"] = "0.34.2"
 
 extra["bindingVersion"] = "1.26.0"
 

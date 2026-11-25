@@ -20,7 +20,10 @@ final class ZLinkStreamConnectorConfiguration {
         this.dispatchMode = options.dispatchMode();
         this.timeouts =
                 new Timeouts(
-                        options.connectTimeout(), options.requestTimeout(), options.waitTimeout());
+                        options.connectTimeout(),
+                        options.requestTimeout(),
+                        options.waitTimeout(),
+                        options.maxAdmissionWait());
         this.limits = new Limits(options.maxSendPayloadSize(), options.maxReceivePayloadSize());
         this.heartbeat =
                 new Heartbeat(
@@ -59,6 +62,9 @@ final class ZLinkStreamConnectorConfiguration {
         requireOption(options.nameResolver(), "nameResolver");
         requirePositive(options.connectTimeout(), "connectTimeout");
         requirePositive(options.requestTimeout(), "requestTimeout");
+        if (options.maxAdmissionWait() != null) {
+            requirePositive(options.maxAdmissionWait(), "maxAdmissionWait");
+        }
         requirePositive(options.waitTimeout(), "waitTimeout");
         requirePositive(options.heartbeatInterval(), "heartbeatInterval");
         requirePositive(options.heartbeatTimeout(), "heartbeatTimeout");
@@ -123,7 +129,11 @@ final class ZLinkStreamConnectorConfiguration {
         return transport;
     }
 
-    record Timeouts(Duration connect, Duration request, Duration waitForMessage) {}
+    record Timeouts(
+            Duration connect,
+            Duration request,
+            Duration waitForMessage,
+            Duration maxAdmissionWait) {}
 
     record Limits(int sendPayload, int receivePayload) {}
 

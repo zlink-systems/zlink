@@ -22,7 +22,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 for Windows. The included Gradle wrapper downloads Gradle. Maven Central supplies Framework 0.34.1 and binding 1.26.0; versions are declared once in `build.gradle.kts`.
+Docker with Compose v2, and PowerShell 7 for Windows. The included Gradle wrapper downloads Gradle. Maven Central supplies Framework 0.34.2 and binding 1.26.0; versions are declared once in `build.gradle.kts`.
 
 ## Build
 

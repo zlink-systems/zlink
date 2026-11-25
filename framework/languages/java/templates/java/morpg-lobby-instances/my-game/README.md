@@ -22,7 +22,7 @@ The Lobby and Instance roles (`lobby`, `instanceA`, and `instanceB`) explicitly 
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 on Windows. Gradle Wrapper is included. Public Framework packages are pinned to 0.34.1 and the binding to 1.26.0 in `build.gradle.kts`.
+Docker with Compose v2, and PowerShell 7 on Windows. Gradle Wrapper is included. Public Framework packages are pinned to 0.34.2 and the binding to 1.26.0 in `build.gradle.kts`.
 
 ## Build
 
@@ -180,7 +180,7 @@ For structure checks only, pass `--check-structure` to the shell runner or `-Che
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
-Validated against the published Framework 0.34.1 packages.
+Validated against the published Framework 0.34.2 packages.
 
 ## Deployment sequence
 

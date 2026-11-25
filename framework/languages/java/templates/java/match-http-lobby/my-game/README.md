@@ -22,7 +22,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 for Windows. The included Gradle wrapper downloads Gradle. Maven Central supplies Framework 0.34.1 and binding 1.26.0; versions are declared once in `build.gradle.kts`.
+Docker with Compose v2, and PowerShell 7 for Windows. The included Gradle wrapper downloads Gradle. Maven Central supplies Framework 0.34.2 and binding 1.26.0; versions are declared once in `build.gradle.kts`.
 
 ## Build
 
@@ -187,7 +187,7 @@ The runner validates `zlink.structure.json`, runs game and wire checks during th
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
-Validated against the published Framework 0.34.1 packages.
+Validated against the published Framework 0.34.2 packages.
 
 ## Deployment sequence
 

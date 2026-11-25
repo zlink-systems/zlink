@@ -1,6 +1,6 @@
 # my-game
 
-A Kotlin MORPG template using public ZLink Framework 0.34.1 packages. Play nodes (field) host four fixed Field User Spots; each server-issued Party ID identifies a dynamic Party User Spot, and each Run ID identifies a dynamic Dungeon User Spot. `FieldPositionDomain` owns movement authority, `PartySpot` owns party membership and run phases, and `DungeonRun` owns the active run and stage.
+A Kotlin MORPG template using public ZLink Framework 0.34.2 packages. Play nodes (field) host four fixed Field User Spots; each server-issued Party ID identifies a dynamic Party User Spot, and each Run ID identifies a dynamic Dungeon User Spot. `FieldPositionDomain` owns movement authority, `PartySpot` owns party membership and run phases, and `DungeonRun` owns the active run and stage.
 
 ```mermaid
 flowchart LR
@@ -188,8 +188,8 @@ The domain check covers movement rejection order, sequence bounds, relative-time
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
-Validated against the published Framework 0.34.1 packages.
-Border subscriptions use Framework 0.34.1 `addSubscribe(handlerType, channelName, topic)` at Field activation. One handler serves all adjacent-field topics.
+Validated against the published Framework 0.34.2 packages.
+Border subscriptions use Framework 0.34.2 `addSubscribe(handlerType, channelName, topic)` at Field activation. One handler serves all adjacent-field topics.
 
 ## Deployment sequence
 

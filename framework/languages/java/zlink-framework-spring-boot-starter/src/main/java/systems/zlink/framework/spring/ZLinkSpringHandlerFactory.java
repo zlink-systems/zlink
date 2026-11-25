@@ -493,7 +493,7 @@ final class ZLinkSpringHandlerFactory
             return beanFactory.initializeBean(
                     instance, construction.registration().metadata.beanName());
         } catch (ReflectiveOperationException failure) {
-            throw new IllegalStateException(
+            throw new ZLinkHandlerActivator.ConstructionException(
                     "failed to construct Framework-owned handler: " + handlerType.getName(),
                     unwrap(failure));
         }

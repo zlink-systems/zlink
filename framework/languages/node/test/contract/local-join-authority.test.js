@@ -1138,8 +1138,7 @@ async function membershipFailureFixture(backend) {
       },
       target,
       creatingPayload: Buffer.from('creating'),
-      capacity: kind === 'actor' ? { actors: 1, spots: 0 } : { actors: 0, spots: 1 },
-      actorRelocationPolicy: 'disabled'
+      capacity: kind === 'actor' ? { actors: 1, spots: 0 } : { actors: 0, spots: 1 }
     });
     assert.equal(reserved.kind, 'reserved');
     const readyPayload = payload(reserved.creating.objectGeneration);
