@@ -721,56 +721,29 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                                                             : ZLinkRequestMetrics.elapsed(
                                                                     started, runtime.nanoTime()),
                                                     failure));
-            CompletionStage<TReply> stage;
             try {
-                var operationFlow =
-                        systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext
-                                .current();
-                stage =
-                        SpotTransportAddressResolver.resolveForCall(
-                                        resolver, target, instanceIntent)
-                                .handle(
-                                        (address, failure) ->
-                                                systems.zlink.framework.runtime.internal.diagnostics
-                                                        .ZLinkFlowContext.call(
-                                                        operationFlow,
-                                                        () -> {
-                                                            if (failure != null) {
-                                                                return CompletableFuture
-                                                                        .<TReply>failedFuture(
-                                                                                SpotCallAddresses
-                                                                                        .unwrap(
-                                                                                                failure));
-                                                            }
-                                                            CompletionStage<TReply> submitted =
-                                                                    instanceIntent
-                                                                            ? activation == null
-                                                                                    ? CompletableFuture
-                                                                                            .failedFuture(
-                                                                                                    new ZLinkConfigurationException(
-                                                                                                            "Instance"
-                                                                                                                    + " Spot"
-                                                                                                                    + " runtime"
-                                                                                                                    + " is not"
-                                                                                                                    + " configured"))
-                                                                                    : activateRequest(
-                                                                                            activation,
-                                                                                            replyType,
-                                                                                            address)
-                                                                            : submitExisting(
-                                                                                    address,
-                                                                                    replyType);
-                                                            systems.zlink.framework.runtime.internal
-                                                                    .ZLinkCompletionBridge
-                                                                    .forwardCancellation(
-                                                                            result, submitted);
-                                                            return !instanceIntent
-                                                                            && resolver != null
-                                                                    ? resolver.observeTerminal(
-                                                                            target, submitted)
-                                                                    : submitted;
-                                                        }))
-                                .thenCompose(java.util.function.Function.identity());
+                SpotTransportAddressResolver.request(
+                        resolver,
+                        target,
+                        instanceIntent,
+                        timeout == null && host != null
+                                ? host.get().effectiveRouteTimeout(null)
+                                : timeout,
+                        runtime::nanoTime,
+                        runtime.operations,
+                        result,
+                        (address, remaining) -> {
+                            if (instanceIntent) {
+                                return activation == null
+                                        ? CompletableFuture.failedFuture(
+                                                new ZLinkConfigurationException(
+                                                        "Instance Spot runtime is not configured"))
+                                        : activateRequest(
+                                                activation, replyType, address, remaining);
+                            }
+                            return resolver.observeTerminal(
+                                    target, submitExisting(address, replyType, remaining));
+                        });
             } catch (RuntimeException | Error failure) {
                 ZLinkRequestMetrics.complete(
                         metric,
@@ -780,11 +753,6 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                         failure);
                 throw failure;
             }
-            stage.whenComplete(
-                    (value, failure) -> {
-                        if (failure == null) result.complete(value);
-                        else result.completeExceptionally(failure);
-                    });
             return ZLinkSerialExecutionQueue.manageCurrent(result);
         }
     }
@@ -792,7 +760,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
     private <TReply> CompletionStage<TReply> activateRequest(
             ZLinkInstanceSpotCallRuntime activation,
             Class<TReply> replyType,
-            SpotTransportAddress readyRoute) {
+            SpotTransportAddress readyRoute,
+            Duration remaining) {
         return activation
                 .request(
                         target,
@@ -802,7 +771,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                         packetName,
                         contentType,
                         metadata.values(),
-                        timeout,
+                        remaining,
                         readyRoute,
                         resolver,
                         requestAdmission)
@@ -817,7 +786,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
     }
 
     private <TReply> CompletionStage<TReply> submitExisting(
-            SpotTransportAddress address, Class<TReply> replyType) {
+            SpotTransportAddress address, Class<TReply> replyType, Duration remaining) {
         UUID operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts =
                 runtime.registeredEnvelopeParts(
@@ -840,7 +809,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                         address.authorityOwnerGeneration(),
                         address.ownerLeaseGeneration(),
                         requestParts,
-                        timeout,
+                        remaining,
                         operationId,
                         requestAdmission);
         var decoded =
