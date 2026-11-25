@@ -25,17 +25,17 @@ after(() => {
 
 test('a: shuffled deck contains every card exactly once and admission remains stable', () => {
   const table = new TableState();
-  table.admit('p1');
+  table.admit('p1', Game.initialChips);
   const onePlayer = structuredClone(table.snapshot);
   assert.equal(table.start('p1'), Reasons.players);
   assert.deepEqual(table.snapshot, onePlayer);
-  assert.equal(table.admit('p1'), true);
+  assert.equal(table.admit('p1', Game.initialChips), true);
   assert.deepEqual(table.snapshot, onePlayer);
 
-  for (const id of ['p2', 'p3', 'p4']) table.admit(id);
+  for (const id of ['p2', 'p3', 'p4']) table.admit(id, Game.initialChips);
   const seated = structuredClone(table.snapshot.seats);
-  assert.equal(table.admit('p5'), false);
-  assert.equal(table.admit('p1'), true);
+  assert.equal(table.admit('p5', Game.initialChips), false);
+  assert.equal(table.admit('p1', Game.initialChips), true);
   assert.deepEqual(table.snapshot.seats, seated);
   assert.equal(table.start('p1'), undefined);
 
@@ -56,24 +56,30 @@ test('b: the constructor test RNG produces a deterministic deal order', () => {
     bounds.push(exclusiveMax);
     return exclusiveMax - 1;
   });
-  table.admit('p1');
-  table.admit('p2');
+  table.admit('p1', Game.initialChips);
+  table.admit('p2', Game.initialChips);
   assert.equal(table.start('p1'), undefined);
   assert.deepEqual(
     bounds,
     Array.from({ length: Game.deckSize - 1 }, (_, index) => Game.deckSize - index)
   );
-  assert.deepEqual(table.snapshot.seats.map((seat) => seat.cards), [
-    [50, 51],
-    [48, 49]
-  ]);
-  assert.deepEqual(table.snapshot.deck, Array.from({ length: 48 }, (_, card) => card));
+  assert.deepEqual(
+    table.snapshot.seats.map((seat) => seat.cards),
+    [
+      [50, 51],
+      [48, 49]
+    ]
+  );
+  assert.deepEqual(
+    table.snapshot.deck,
+    Array.from({ length: 48 }, (_, card) => card)
+  );
   completeCheck();
 });
 
 test('c: relocation restores a live hand and settlement clears every private hand', () => {
   const source = new TableState((exclusiveMax) => exclusiveMax - 1);
-  for (const player of ['p1', 'p2', 'p3']) source.admit(player);
+  for (const player of ['p1', 'p2', 'p3']) source.admit(player, Game.initialChips);
   assert.equal(source.start('p1'), undefined);
   source.snapshot.seats[0].cards = [0, 1];
   source.snapshot.seats[1].cards = [13, 14];
@@ -96,7 +102,10 @@ test('c: relocation restores a live hand and settlement clears every private han
     3000n
   );
   assert(result.seats.every((seat) => seat.cardCount === 0));
-  assert.deepEqual(restored.snapshot.seats.map((seat) => seat.cards), [[], [], []]);
+  assert.deepEqual(
+    restored.snapshot.seats.map((seat) => seat.cards),
+    [[], [], []]
+  );
   assert.deepEqual(restored.cards('p1'), []);
   assert.equal(restored.snapshot.turnSeat, Game.noSeat);
   assert.equal(restored.snapshot.pot, 0n);
@@ -113,8 +122,8 @@ test('d: the maximum bet is accepted and a larger bet rejects without mutation',
   assert.equal(tryAddContractIntegers(MaxContractInteger, 1n), undefined);
 
   const table = new TableState((exclusiveMax) => exclusiveMax - 1);
-  table.admit('p1');
-  table.admit('p2');
+  table.admit('p1', Game.initialChips);
+  table.admit('p2', Game.initialChips);
   assert.equal(table.start('p1'), undefined);
   table.snapshot.seats[0].chips = MaxContractInteger;
   assert.equal(table.bet('p1', 1n, MaxContractInteger), undefined);
@@ -144,8 +153,8 @@ test('d: the maximum bet is accepted and a larger bet rejects without mutation',
 
 test('e: a pot sum overflow rejects without mutation', () => {
   const table = new TableState((exclusiveMax) => exclusiveMax - 1);
-  table.admit('p1');
-  table.admit('p2');
+  table.admit('p1', Game.initialChips);
+  table.admit('p2', Game.initialChips);
   assert.equal(table.start('p1'), undefined);
   table.snapshot.seats[0].chips = 1n;
   table.snapshot.pot = MaxContractInteger;
@@ -157,8 +166,8 @@ test('e: a pot sum overflow rejects without mutation', () => {
 
 test('f: a payout overflow rejects without mutation', () => {
   const table = new TableState((exclusiveMax) => exclusiveMax - 1);
-  table.admit('p1');
-  table.admit('p2');
+  table.admit('p1', Game.initialChips);
+  table.admit('p2', Game.initialChips);
   assert.equal(table.start('p1'), undefined);
   table.snapshot.seats[0].chips = MaxContractInteger;
   table.snapshot.seats[0].cards = [12, 25];
@@ -172,8 +181,8 @@ test('f: a payout overflow rejects without mutation', () => {
 
 test('g: starting at the maximum hand number rejects without mutation', () => {
   const table = new TableState();
-  table.admit('p1');
-  table.admit('p2');
+  table.admit('p1', Game.initialChips);
+  table.admit('p2', Game.initialChips);
   table.snapshot.handNumber = MaxContractInteger;
   const before = structuredClone(table.snapshot);
   assert.equal(table.start('p1'), Reasons.integerOutOfRange);

@@ -2,6 +2,12 @@
 
 ## Rules for AI
 
+### Use this template as a reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+### Server design
+
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
@@ -31,13 +37,15 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
-Default builds and e2e run nodes and the runner in Docker without a host Node.js installation. Run these commands from this directory.
+Run one scenario with `./run-e2e.sh --scenario lobby`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
+With the local server stopped, builds and e2e run the nodes and runner in Docker without a host Node.js installation. Run these commands from this directory.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario party,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario lobby,party,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 Bash provides the same workflow:
@@ -45,7 +53,7 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario party,reconnect,update
+./run-e2e.sh --scenario lobby,party,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -116,6 +124,10 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 ## Extending the MORPG domain
 
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Declare nullable fields as `T | null`. The template schema generator emits `{ type: "nullable", value }` for the packet. Use `?` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/node/guide/server/20-channel-messaging/#12-message-value-rules)
+
 Extend this template's domain to build a MORPG server. Run the build, domain tests and e2e before changing gameplay.
 
 - Extend party decisions in `server/lobby/domain.ts` and dungeon decisions in `server/instance/domain.ts`. Party Spot retains Members, Ready, Phase and RunId while Actors are in a dungeon. Dungeon state owns arrivals and Stage.
@@ -151,7 +163,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains effective settings written by `e2e/runner.ts` at node startup and logs for each node.
 
-Settings files are `instanceA.json`, `instanceB.json`, `lobby.json`, and `session.json`. `NodeProcess` in `e2e/runner.ts` records diagnostic stderr in `<node>-<n>.err.log` and readiness/control stdout in `<node>-<n>.out.log`, where `<n>` counts the processes started in the run; a replaced node has a second pair with a later `<n>`. The client packets each scenario received are in `<scenario>-<suffix>.jsonl`. Docker command logs of the run are `docker-<label>.log`, and local build output is in `.logs/build.log`. The shell runner writes Docker build, Redis, and outer cleanup logs to `.logs/docker-<project>/`. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
+Settings files are `instanceA.json`, `instanceB.json`, `lobby.json`, and `session.json`. `NodeProcess` in `e2e/runner.ts` records diagnostic stderr in `<node>-<n>.err.log` and readiness/control stdout in `<node>-<n>.out.log`, where `<n>` counts the processes started in the run; a replacement gets files with a later `<n>`. The client packets each scenario received are in `<scenario>-<suffix>.jsonl`. Docker command logs of the run are `docker-<label>.log`, and local build output is in `.logs/run-<id>/build.log`. The shell runner writes Docker build, Redis, and outer cleanup logs to `.logs/docker-<project>/`. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
 
 ### Diagnostic levels
 
@@ -245,3 +257,9 @@ The [README client connection section](README.md#client-connection) owns the sha
 Send `JoinLobbyRequest(playerId)` first; a fresh player receives an empty `LobbyView` push. This Lobby uses mesh, not HTTP. Party and leader-driven Dungeon entry follow lobby entry. Register push handlers before sending with `send(...).submit()`; do not turn admission into request/reply. Request `SessionInfoRequest` only after Actor binding. Retain the default typed JSON path and validate identity before binding when adding authentication.
 
 Match connector versions to `package.json` dependencies `@zlink-systems/framework` and `@zlink-systems/stream-connector`; check examples against the public connector source and pinned package. Preserve the endpoint, HTTP preconditions, packet names, and push/reply distinction when updating the README.
+
+## Run the server and e2e
+
+Run `./run-server.sh` or `.\run-server.cmd` to build and start the local nodes and Redis. Use the WebSocket endpoint printed by `Server ready` and stop the server with Ctrl+C. In another terminal, `./run-e2e.sh` or `.\run-e2e.cmd` detects that server and runs compatible scenarios. Stop the server for full Docker isolation. On PowerShell 7 the corresponding scripts are `run-server.ps1` and `run-e2e.ps1`.
+
+Node stdout, stderr, Framework message-flow files and failure details are under `.logs/run-<id>/`. Docker build and cleanup logs are under `.logs/docker-<project>/`. Use the log paths printed by each command.

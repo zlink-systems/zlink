@@ -78,8 +78,11 @@ export class PrepareDungeon {
   ) {}
 }
 export class DungeonPrepared {
-  constructor(readonly dungeonId: string = '', readonly runId: string = '',
-    readonly rejection: ActionRejected | null = null) {}
+  constructor(
+    readonly dungeonId: string = '',
+    readonly runId: string = '',
+    readonly rejection: ActionRejected | null = null
+  ) {}
 }
 export class JoinDungeon {
   constructor(
@@ -88,7 +91,17 @@ export class JoinDungeon {
   ) {}
 }
 export class ActionRejected {
-  constructor(readonly reason: string = '', readonly retryAfterMs: number = 0) {}
+  constructor(
+    readonly reason: string = '',
+    readonly retryAfterMs: number = 0
+  ) {}
+}
+export class LeaveDungeonRequest {}
+export class DungeonLeft {
+  constructor(
+    readonly dungeonId: string,
+    readonly objectGeneration: bigint
+  ) {}
 }
 export class SessionInfoRequest {}
 export class SessionInfo {
@@ -102,16 +115,30 @@ export class SessionInfo {
 export const MaxSafeInteger = 9_007_199_254_740_991n;
 export type RunPhase = 'Forming' | 'Preparing' | 'Entering' | 'Active' | 'Completed';
 export class PartyCommand {
-  constructor(readonly actorId = '', readonly join = false, readonly enter = false) {}
+  constructor(
+    readonly actorId = '',
+    readonly join = false,
+    readonly enter = false
+  ) {}
 }
 export class PartyCommandResult {
-  constructor(readonly view: PartyView | null = null, readonly rejection: ActionRejected | null = null) {}
+  constructor(
+    readonly view: PartyView | null = null,
+    readonly rejection: ActionRejected | null = null
+  ) {}
 }
 export class DungeonMemberEntered {
-  constructor(readonly runId = '', readonly actorId = '') {}
+  constructor(
+    readonly runId = '',
+    readonly actorId = ''
+  ) {}
 }
-export class RunStarted { constructor(readonly runId = '') {} }
-export class RunCompleted { constructor(readonly runId = '') {} }
+export class RunStarted {
+  constructor(readonly runId = '') {}
+}
+export class RunCompleted {
+  constructor(readonly runId = '') {}
+}
 
 const notificationTypes: ReadonlyMap<string, () => Notification> = new Map<
   string,
