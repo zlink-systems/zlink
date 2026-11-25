@@ -61,8 +61,17 @@ public sealed class DungeonSpot(
         await BroadcastAsync();
     }
 
-    public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct) =>
-        ValueTask.CompletedTask;
+    public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct)
+    {
+        state.Joined.Remove(actor.Context.ActorId);
+        return ValueTask.CompletedTask;
+    }
+
+    public async ValueTask<DungeonLeft> LeaveAsync(PlayerActor actor, CancellationToken ct)
+    {
+        await Context.LeaveActorAsync(actor, ct);
+        return new DungeonLeft(Context.SpotId, Context.ObjectGeneration, state.Joined.Count);
+    }
 
     public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken ct) =>
         ValueTask.CompletedTask;

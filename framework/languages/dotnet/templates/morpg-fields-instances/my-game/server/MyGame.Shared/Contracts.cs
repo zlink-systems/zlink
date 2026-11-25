@@ -135,7 +135,7 @@ public sealed record ActionRejected(string Reason, int RetryAfterMs = 0);
 
 public sealed record LeaveDungeonRequest;
 
-public sealed record DungeonLeft(string DungeonId, ulong ObjectGeneration);
+public sealed record DungeonLeft(string DungeonId, ulong ObjectGeneration, int RemainingPlayers);
 
 public sealed record SessionInfoRequest;
 

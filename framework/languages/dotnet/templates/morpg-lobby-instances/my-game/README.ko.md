@@ -52,7 +52,7 @@ Docker 빌드는 `server/MyGame.sln`의 프로젝트를 빌드합니다. 확인 
 
 서버를 빌드한 뒤 Redis는 Docker에서, 게임 노드는 로컬 프로세스로 시작합니다. `Server ready`에 표시되는 WebSocket 주소를 클라이언트에서 사용합니다. HTTP API가 있는 구성은 API 주소도 표시합니다. Ctrl+C로 노드와 Redis를 종료합니다. 서버가 실행 중이면 두 번째 시작을 거부합니다.
 
-Dungeon을 떠나려면 `LeaveDungeonRequest`를 보내고 `DungeonLeft` 응답을 기다립니다. 마지막 플레이어가 떠나면 서버는 응답 전에 Dungeon User Spot을 닫아 설정된 용량의 슬롯을 반환합니다. 연결이 끊기면 재접속에 사용할 멤버십을 유지합니다.
+Dungeon을 떠나려면 `LeaveDungeonRequest`를 보내고 `DungeonLeft` 응답을 기다립니다. Dungeon은 퇴장 후 남은 플레이어 수를 `remainingPlayers`에 담습니다. 이 값이 0이면 Session이 같은 세대의 Dungeon Spot을 닫아 응답 전에 슬롯을 반환합니다. 연결이 끊기면 재접속에 사용할 멤버십을 유지합니다.
 
 ## 클라이언트 연결
 
@@ -138,6 +138,7 @@ Console.WriteLine(await received.Task.WaitAsync(ct));
 | `party` | 서버가 Party ID와 Run ID를 발급합니다. 준비되지 않거나 리더가 아닌 요청과 내부 패킷은 거부합니다. 연속 입장은 동일한 Dungeon을 사용하며 FinalStage에서 완료합니다. |
 | `reconnect` | p2가 기존 Actor, Dungeon, RunId, Phase, Stage로 재접속합니다. |
 | `update` | relocation에서 Session, 명단, RunId, Phase, Stage를 유지합니다. 교체 노드가 다른 파티와 Dungeon을 수락합니다. |
+| `dungeon-leave` | 한 명이 떠난 뒤 남은 플레이어가 같은 Dungeon에서 다음 단계로 진행하고, 마지막 퇴장으로 슬롯이 반환되는지 확인합니다. |
 
 격리 실행은 독립 Compose 프로젝트를 만들고 READY를 확인한 뒤 시나리오를 실행합니다. docker cp로 설정을 전달하고 docker start -a -i로 노드 표준 입출력을 연결합니다. 각 실행은 자신이 시작한 프로세스와 컨테이너를 정리합니다. 호스트 노드를 디버깅하려면 `--local` 또는 -Local을 사용합니다. Redis는 Docker에서 실행합니다. Debug 빌드가 있으면 `--no-build` 또는 -NoBuild로 빌드를 생략할 수 있습니다.
 

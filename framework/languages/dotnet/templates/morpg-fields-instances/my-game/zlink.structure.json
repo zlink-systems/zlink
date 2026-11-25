@@ -22,7 +22,8 @@
       "field",
       "dungeon",
       "reconnect",
-      "update"
+      "update",
+      "dungeon-leave"
     ]
   },
   "nodes": [

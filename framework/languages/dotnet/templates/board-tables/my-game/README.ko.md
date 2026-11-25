@@ -14,8 +14,10 @@
 
 ## 알려진 문제
 
+- 이 템플릿에는 아직 매치메이킹과 API node가 없습니다. 플레이어가 테이블에 바로 들어갑니다. 다른 언어 board-tables의 매치메이킹(Pool·RoomProvisioner)과 API node는 [#5647](https://github.com/zlink-systems/zlink/issues/5647)에서 다룹니다.
+
 drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.
 
 ## 포그라운드 서버
 
-Linux 또는 WSL에서 `./run-server.sh`로 서버를 시작합니다. 다른 터미널에서 `./run-e2e.sh --attach <endpoint>`를 실행하고 서버가 출력한 WebSocket 주소를 지정하면 `table`과 `reconnect`를 검증합니다. 재시작 검사와 `update`는 격리 실행에서만 수행합니다. 서버 터미널에서 Ctrl+C를 눌러 노드와 Redis를 종료합니다.
+Linux 또는 WSL에서는 `./run-server.sh`, Windows에서는 `.\run-server.cmd`로 서버를 시작합니다. `Server ready`가 출력되면 다른 터미널에서 `./run-e2e.sh` 또는 `.\run-e2e.cmd`를 실행합니다. e2e는 `.logs/server.json`의 주소를 읽어 실행 중인 서버에 접속하고 `table`과 `reconnect`를 검증합니다. 재시작 검사와 `update`는 격리 실행에서 수행합니다. 서버 터미널에서 Ctrl+C를 누르면 노드와 Redis를 종료하고 `.logs/server.json`을 삭제합니다.

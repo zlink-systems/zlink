@@ -92,9 +92,12 @@ public sealed class PlayerSession(
                 .Async<DungeonLeft>(cancellationToken);
 
             // Close outside the Dungeon turn, after its membership change completes.
-            var dungeon = await spots.FindAsync(left.DungeonId, cancellationToken);
-            if (dungeon is { } current && current.ObjectGeneration == left.ObjectGeneration)
-                await spots.CloseAsync(current, cancellationToken);
+            if (left.RemainingPlayers == 0)
+            {
+                var dungeon = await spots.FindAsync(left.DungeonId, cancellationToken);
+                if (dungeon is { } current && current.ObjectGeneration == left.ObjectGeneration)
+                    await spots.CloseAsync(current, cancellationToken);
+            }
 
             await Context.Client.Reply(left).Async();
             return;

@@ -3,15 +3,17 @@ using MyGame.Shared;
 
 namespace MyGame.E2E;
 
-internal sealed class TableRun(string root, int tableCapacity, RunOutcome outcome) : IAsyncDisposable
+internal sealed class TableRun(
+    string root,
+    int tableCapacity,
+    RunOutcome outcome,
+    string runDirectory,
+    bool foreground = false
+) : IAsyncDisposable
 {
+    public static readonly TimeSpan RunDeadline = TimeSpan.FromMinutes(3);
     private readonly List<ManagedProcess> nodes = [];
     private readonly string project = "my-game-e2e-" + Guid.NewGuid().ToString("N");
-    private readonly string runDirectory = Path.Combine(
-        root,
-        ".logs",
-        "run-" + Guid.NewGuid().ToString("N")
-    );
     private readonly string? dockerProject = Environment.GetEnvironmentVariable(
         "MY_GAME_DOCKER_PROJECT"
     );
@@ -27,7 +29,6 @@ internal sealed class TableRun(string root, int tableCapacity, RunOutcome outcom
     public async Task StartAsync(CancellationToken ct)
     {
         Directory.CreateDirectory(runDirectory);
-        Console.WriteLine($"Run logs: {runDirectory}");
         if (dockerProject is null)
         {
             composeStarted = true;
@@ -127,7 +128,8 @@ internal sealed class TableRun(string root, int tableCapacity, RunOutcome outcom
                 "docker",
                 ["start", "-a", "-i", name],
                 runDirectory,
-                suffix
+                suffix,
+                foreground
             );
         }
         else
@@ -146,7 +148,8 @@ internal sealed class TableRun(string root, int tableCapacity, RunOutcome outcom
                 "dotnet",
                 [dll, "--config", config],
                 runDirectory,
-                suffix
+                suffix,
+                foreground
             );
         }
         nodes.Add(node);
@@ -156,6 +159,7 @@ internal sealed class TableRun(string root, int tableCapacity, RunOutcome outcom
             ) ?? throw new InvalidOperationException($"Invalid readiness for {configName}.");
         if (ready.Id != settings.Id || ready.MeshEndpoint.EndsWith(":0", StringComparison.Ordinal))
             throw new InvalidOperationException($"Incorrect listener readiness for {configName}.");
+        node.Ready();
         return (node, ready);
     }
 
@@ -164,7 +168,12 @@ internal sealed class TableRun(string root, int tableCapacity, RunOutcome outcom
         CancellationToken ct
     )
     {
-        await using var fresh = new TableRun(root, 1, outcome);
+        await using var fresh = new TableRun(
+            root,
+            1,
+            outcome,
+            Path.Combine(runDirectory, "fresh-world")
+        );
         await fresh.StartAsync(ct);
         await probe(fresh.Endpoint, ct);
     }
@@ -172,8 +181,7 @@ internal sealed class TableRun(string root, int tableCapacity, RunOutcome outcom
     public async Task WaitForExitAsync(CancellationToken ct)
     {
         var exited = await Task.WhenAny(nodes.Select(node => node.WaitForExitAsync(ct)));
-        await exited;
-        throw new InvalidOperationException("A board server node exited.");
+        throw new InvalidOperationException($"Server node {await exited} exited.");
     }
 
     public async Task DrainAsync(string nodeId, CancellationToken ct)

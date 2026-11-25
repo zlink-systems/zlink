@@ -72,13 +72,22 @@ public sealed class DungeonSpot(
                 .Async<PartyCommandResult>(ct);
             if (started.Rejection is not null)
                 throw new InvalidDataException(started.Rejection.Reason);
-            foreach (var id in state.Members)
+            foreach (var id in state.Entered)
                 await actors.SendToActor(id, View()).Async();
         }
     }
 
-    public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct) =>
-        ValueTask.CompletedTask;
+    public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct)
+    {
+        state.Entered.Remove(actor.Context.ActorId);
+        return ValueTask.CompletedTask;
+    }
+
+    public async ValueTask<DungeonLeft> LeaveAsync(PlayerActor actor, CancellationToken ct)
+    {
+        await Context.LeaveActorAsync(actor, ct);
+        return new DungeonLeft(Context.SpotId, Context.ObjectGeneration, state.Entered.Count);
+    }
 
     public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken ct) =>
         ValueTask.CompletedTask;
@@ -115,7 +124,7 @@ public sealed class DungeonSpot(
         }
         var view = View();
         await requester.Context.BoundSession.Send(view).Async();
-        foreach (var id in state.Members)
+        foreach (var id in state.Entered)
             if (id != requester.Context.ActorId)
                 await actors.SendToActor(id, view).Async();
     }

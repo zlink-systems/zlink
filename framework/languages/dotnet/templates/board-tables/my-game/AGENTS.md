@@ -157,9 +157,11 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 ### Logs for each run
 
+`ServerHost.cs` holds `.logs/server.lock` while it runs and publishes the STREAM endpoint in `.logs/server.json` after startup. `run-e2e` uses the running server for `table` and `reconnect`; `update` requires an isolated run. Ctrl+C removes the endpoint file and stops the nodes and Redis.
+
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains effective settings written by `TableRun.cs` at node startup and logs for each node.
 
-Settings files are `session.json`, `table-a.json`, and `table-b.json`; a replaced node uses the `-replacement` suffix, such as `table-a-replacement`. `ManagedProcess.cs` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`. Redis logs are `redis-start.log`, `redis-port.log`, `redis.log`, and `redis-stop.log`; local build output is in `.logs/build.log`. Docker build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`.
+Settings files are `session.json`, `table-a.json`, and `table-b.json`; a replaced node uses the `-replacement` suffix, such as `table-a-replacement`. `ManagedProcess.cs` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`. Redis logs are `redis-start.log`, `redis-port.log`, `redis.log`, and `redis-stop.log`; local build output is in `.logs/run-build-<id>/build.log`. Docker build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`.
 
 ### Diagnostic levels
 

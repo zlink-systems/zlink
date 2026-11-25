@@ -9,7 +9,7 @@ internal static class Scenarios
     private const string Party = "party";
     private const string Reconnect = "reconnect";
     private const string Update = "update";
-    public static readonly string[] All = [Party, Reconnect, Update];
+    public static readonly string[] All = [Party, Reconnect, Update, "dungeon-leave"];
 
     public static string[] Select(string? value)
     {
@@ -44,7 +44,11 @@ internal static class Scenarios
         var leaderLeft = await leader.LeaveDungeonAsync(ct);
         var memberLeft = await member.LeaveDungeonAsync(ct);
         Require(
-            leaderLeft.DungeonId == dungeon.DungeonId && leaderLeft == memberLeft,
+            leaderLeft.DungeonId == dungeon.DungeonId
+                && leaderLeft.DungeonId == memberLeft.DungeonId
+                && leaderLeft.ObjectGeneration == memberLeft.ObjectGeneration
+                && leaderLeft.RemainingPlayers == 1
+                && memberLeft.RemainingPlayers == 0,
             "Dungeon departure identified a different Spot."
         );
     }
@@ -234,6 +238,58 @@ internal static class Scenarios
         return leaderView;
     }
 
+    private static async Task VerifyDungeonLeaveAsync(
+        string endpoint,
+        WorldRun run,
+        CancellationToken ct
+    )
+    {
+        async Task<GameClient> ConnectAsync(string suffix) =>
+            await GameClient.ConnectAsync(run.Outcome, endpoint, run.PlayerId(suffix), ct);
+
+        async Task<DungeonView> EnterPairAsync(GameClient leader, GameClient member)
+        {
+            await leader.JoinAsync(ct);
+            await member.JoinAsync(ct);
+            return await EnterAsync(leader, member, ct);
+        }
+
+        await using var leader = await ConnectAsync("leave-leader");
+        await using var member = await ConnectAsync("leave-member");
+        await using var otherLeader = await ConnectAsync("leave-other-leader");
+        await using var otherMember = await ConnectAsync("leave-other-member");
+        await using var freshLeader = await ConnectAsync("leave-fresh-leader");
+        await using var freshMember = await ConnectAsync("leave-fresh-member");
+        var original = await EnterPairAsync(leader, member);
+        var other = await EnterPairAsync(otherLeader, otherMember);
+        Require(original.NodeId != other.NodeId, "Each instance must hold one Dungeon.");
+
+        var first = await leader.LeaveDungeonAsync(ct);
+        var continued = await member.SendAsync<DungeonView, AdvanceRequest>(
+            new(),
+            view => view.DungeonId == original.DungeonId && view.Stage == original.Stage + 1,
+            ct
+        );
+        SameDungeon(original with { Stage = original.Stage + 1 }, continued);
+        var last = await member.LeaveDungeonAsync(ct);
+        Require(
+            first.DungeonId == original.DungeonId
+                && last.DungeonId == original.DungeonId
+                && first.ObjectGeneration == last.ObjectGeneration
+                && first.RemainingPlayers == 1
+                && last.RemainingPlayers == 0,
+            "Expected the Dungeon to report one remaining player and then zero."
+        );
+
+        var fresh = await EnterPairAsync(freshLeader, freshMember);
+        Require(
+            fresh.NodeId == original.NodeId && fresh.DungeonId != original.DungeonId,
+            "Last departure did not release the original Dungeon slot."
+        );
+        await LeaveAsync(freshLeader, freshMember, fresh, ct);
+        await LeaveAsync(otherLeader, otherMember, other, ct);
+    }
+
     public static async Task RunAsync(
         string endpoint,
         WorldRun run,
@@ -241,6 +297,11 @@ internal static class Scenarios
         CancellationToken ct
     )
     {
+        if (selected.Contains("dungeon-leave"))
+        {
+            await VerifyDungeonLeaveAsync(endpoint, run, ct);
+            return;
+        }
         await using var p1 = await GameClient.ConnectAsync(
             run.Outcome,
             endpoint,

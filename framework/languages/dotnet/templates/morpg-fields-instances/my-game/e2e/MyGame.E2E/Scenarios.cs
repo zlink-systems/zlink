@@ -5,7 +5,14 @@ namespace MyGame.E2E;
 
 internal static class Scenarios
 {
-    public static readonly string[] All = ["field", "dungeon", "reconnect", "update"];
+    public static readonly string[] All =
+    [
+        "field",
+        "dungeon",
+        "reconnect",
+        "update",
+        "dungeon-leave",
+    ];
 
     public static string[] Select(string? value)
     {
@@ -40,7 +47,11 @@ internal static class Scenarios
         var leaderLeft = await leader.LeaveDungeonAsync(ct);
         var memberLeft = await member.LeaveDungeonAsync(ct);
         Require(
-            leaderLeft.DungeonId == dungeon.DungeonId && leaderLeft == memberLeft,
+            leaderLeft.DungeonId == dungeon.DungeonId
+                && leaderLeft.DungeonId == memberLeft.DungeonId
+                && leaderLeft.ObjectGeneration == memberLeft.ObjectGeneration
+                && leaderLeft.RemainingPlayers == 1
+                && memberLeft.RemainingPlayers == 0,
             "Dungeon departure identified a different Spot."
         );
     }
@@ -121,6 +132,53 @@ internal static class Scenarios
         return leaderView;
     }
 
+    private static async Task VerifyDungeonLeaveAsync(
+        string endpoint,
+        WorldRun run,
+        CancellationToken ct
+    )
+    {
+        async Task<GameClient> ConnectAsync(string suffix) =>
+            await GameClient.ConnectAsync(run.Outcome, endpoint, run.PlayerId(suffix), ct);
+
+        async Task<DungeonView> EnterPairAsync(GameClient leader, GameClient member, string suffix)
+        {
+            await leader.JoinAsync(250, ct);
+            await member.JoinAsync(250, ct);
+            return await EnterAsync(leader, member, suffix, ct);
+        }
+
+        await using var leader = await ConnectAsync("leave-leader");
+        await using var member = await ConnectAsync("leave-member");
+        await using var otherLeader = await ConnectAsync("leave-other-leader");
+        await using var otherMember = await ConnectAsync("leave-other-member");
+        await using var freshLeader = await ConnectAsync("leave-fresh-leader");
+        await using var freshMember = await ConnectAsync("leave-fresh-member");
+        var original = await EnterPairAsync(leader, member, "leave-original");
+        var other = await EnterPairAsync(otherLeader, otherMember, "leave-other");
+        Require(original.NodeId != other.NodeId, "Each instance must hold one Dungeon.");
+
+        var first = await leader.LeaveDungeonAsync(ct);
+        SameDungeon(original, await member.DungeonAsync(ct));
+        var last = await member.LeaveDungeonAsync(ct);
+        Require(
+            first.DungeonId == original.DungeonId
+                && last.DungeonId == original.DungeonId
+                && first.ObjectGeneration == last.ObjectGeneration
+                && first.RemainingPlayers == 1
+                && last.RemainingPlayers == 0,
+            "Expected the Dungeon to report one remaining player and then zero."
+        );
+
+        var fresh = await EnterPairAsync(freshLeader, freshMember, "leave-fresh");
+        Require(
+            fresh.NodeId == original.NodeId && fresh.DungeonId != original.DungeonId,
+            "Last departure did not release the original Dungeon slot."
+        );
+        await LeaveAsync(freshLeader, freshMember, fresh, ct);
+        await LeaveAsync(otherLeader, otherMember, other, ct);
+    }
+
     public static async Task RunAsync(
         string endpoint,
         WorldRun run,
@@ -129,6 +187,8 @@ internal static class Scenarios
         CancellationToken ct
     )
     {
+        var verifyLeave = selected.Contains("dungeon-leave");
+        selected = selected.Where(id => id != "dungeon-leave").ToArray();
         if (selected.Contains("field"))
         {
             log.Start("field");
@@ -405,6 +465,12 @@ internal static class Scenarios
             {
                 await p2.DisposeAsync();
             }
+        }
+        if (verifyLeave)
+        {
+            log.Start("dungeon-leave");
+            await VerifyDungeonLeaveAsync(endpoint, run, ct);
+            log.Pass("dungeon-leave");
         }
     }
 }

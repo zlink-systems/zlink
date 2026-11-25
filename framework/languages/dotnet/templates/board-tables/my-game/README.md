@@ -42,7 +42,7 @@ Scripts remove unique image tags after each invocation. Docker retains build lay
 
 ## Foreground server
 
-Run `./run-server.sh` on Linux or WSL and use the WebSocket endpoint it prints. In a second terminal, attach the e2e client with `./run-e2e.sh --attach <endpoint>` to run `table` and `reconnect` against that server. The restart check and `update` run only in isolation. Press Ctrl+C in the server terminal to stop its nodes and Redis.
+Run `./run-server.sh` on Linux or WSL, or `.\run-server.cmd` on Windows. When it prints `Server ready`, run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner automatically attaches to the published endpoint in `.logs/server.json` and checks `table` and `reconnect`. The restart check and `update` run only in isolation. Press Ctrl+C in the server terminal to stop the nodes and Redis and remove `.logs/server.json`.
 
 ## Client connection
 
@@ -222,6 +222,8 @@ Node stderr records the message flow from the dispatch diagnostics `Normal` logg
 - **READY and Serving** — Framework nodes print `READY` after observing runtime `Serving`. [Guide](https://docs.zlink.systems/dotnet/guide/server/12-operations/#wait-for-serving). [server/MyGame.Shared/NodeControl.cs:19](server/MyGame.Shared/NodeControl.cs); [server/MyGame.Shared/NodeControl.cs:40](server/MyGame.Shared/NodeControl.cs).
 
 ## Known issues in the public package
+
+- This template has no matchmaking or API node yet; players join tables directly. The other languages' board-tables matchmaking (Pool, RoomProvisioner) and API node are tracked in [#5647](https://github.com/zlink-systems/zlink/issues/5647).
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 

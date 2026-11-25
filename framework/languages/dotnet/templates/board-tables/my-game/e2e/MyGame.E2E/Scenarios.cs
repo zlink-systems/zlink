@@ -37,30 +37,15 @@ internal static class Scenarios
         TableRun? run,
         RunOutcome outcome,
         string[] selected,
+        RunLog log,
         CancellationToken ct
     )
     {
-        var passed = 0;
-        try
+        foreach (var scenario in selected)
         {
-            foreach (var scenario in selected)
-            {
-                try
-                {
-                    await PlayAsync(endpoint, scenario, run, outcome, ct);
-                    Console.WriteLine($"✓ {scenario}");
-                    passed++;
-                }
-                catch
-                {
-                    Console.WriteLine($"✗ {scenario}");
-                    throw;
-                }
-            }
-        }
-        finally
-        {
-            Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed");
+            log.Start(scenario);
+            await PlayAsync(endpoint, scenario, run, outcome, ct);
+            log.Pass(scenario);
         }
     }
 
@@ -99,10 +84,7 @@ internal static class Scenarios
         );
         await p2.SendAsync(new HandResult(0, 0, [], [], []), ct);
         var internalPacket = await packetRejected;
-        Require(
-            internalPacket.RetryAfterMs == 0,
-            "Packet rejection included a retry delay."
-        );
+        Require(internalPacket.RetryAfterMs == 0, "Packet rejection included a retry delay.");
         var unchangedAfterPacket = await p2.ViewAsync(
             view => view.TableId == table && !view.InHand,
             ct
@@ -161,7 +143,10 @@ internal static class Scenarios
                 ct
             );
             var overLimitRejection = await overLimit;
-            Require(overLimitRejection.RetryAfterMs == 0, "Integer rejection included a retry delay.");
+            Require(
+                overLimitRejection.RetryAfterMs == 0,
+                "Integer rejection included a retry delay."
+            );
             var unchangedAfterLimit = await p1.ViewAsync(
                 view => view.InHand && view.TurnSeat == 0 && view.Pot == 0,
                 ct
@@ -172,10 +157,7 @@ internal static class Scenarios
                 rejection => rejection.Reason == Rejection.InvalidAmount,
                 ct
             );
-            await p1.SendAsync(
-                new BetRequest(hand1.HandNumber, GameNames.InitialChips + 1),
-                ct
-            );
+            await p1.SendAsync(new BetRequest(hand1.HandNumber, GameNames.InitialChips + 1), ct);
             var invalidAmountRejection = await invalidAmount;
             Require(
                 invalidAmountRejection.RetryAfterMs == 0,
@@ -268,7 +250,10 @@ internal static class Scenarios
                 {
                     await using (
                         var stale = await GameClient.ConnectAsync(
-                            outcome, freshEndpoint, p2.PlayerId, deadline
+                            outcome,
+                            freshEndpoint,
+                            p2.PlayerId,
+                            deadline
                         )
                     )
                     {
@@ -280,7 +265,10 @@ internal static class Scenarios
                         );
                     }
                     await using var fresh = await GameClient.ConnectAsync(
-                        outcome, freshEndpoint, p1.PlayerId, deadline
+                        outcome,
+                        freshEndpoint,
+                        p1.PlayerId,
+                        deadline
                     );
                     var joined = await fresh.JoinAsync(table, deadline);
                     Require(

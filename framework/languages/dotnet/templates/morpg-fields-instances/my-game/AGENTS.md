@@ -79,7 +79,7 @@ An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame
 
 `server/MyGame.Instance/Program.cs` registers the Dungeon factory, and `server/MyGame.Instance/DungeonSpot.cs` owns the party roster and the stage of one Dungeon, accepts only roster members, and answers the typed preparation request. `server/MyGame.Instance/Handlers.cs` holds the Dungeon handlers, including `Advance` and the delivery handler. `DungeonSpot` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract. Add encounters, rewards, and Dungeon lifecycle behavior in your game project.
 
-`LeaveDungeonRequest` runs in the Dungeon Actor handler, which awaits the public membership leave. The Session then attempts to close the same Spot generation through the public Spot manager, outside the Dungeon turn. Close preserves the Spot while members remain and releases its capacity after the last Actor leaves. The Session sends `DungeonLeft` after the close attempt. Disconnect preserves Dungeon membership for reconnect.
+`LeaveDungeonRequest` runs in the Dungeon Actor handler. The Dungeon reports `remainingPlayers` from its joined players after the public membership leave. Only when the count is zero does the Session ask the public Spot manager to close the same Spot generation from outside the Dungeon turn. The Session then replies with `DungeonLeft`. Disconnect preserves Dungeon membership for reconnect.
 
 ### Shared contracts and hosting
 
