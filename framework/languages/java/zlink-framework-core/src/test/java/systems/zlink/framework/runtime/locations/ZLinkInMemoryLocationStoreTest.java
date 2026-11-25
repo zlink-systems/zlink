@@ -1319,7 +1319,8 @@ class ZLinkInMemoryLocationStoreTest {
                         8,
                         1,
                         "tcp://127.0.0.1:6101",
-                        "ready-next-entry");
+                        "ready-next-entry",
+                        ZLinkObjectMaintenancePolicyKind.DISABLED);
         store.updateMeshNode(nextDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture()
                 .get();
@@ -1412,9 +1413,7 @@ class ZLinkInMemoryLocationStoreTest {
                 descriptor.lifecycleGeneration(),
                 owner,
                 new byte[] {(byte) generation},
-                ZLinkPlacementCapacityBundle.actor(1),
-                new systems.zlink.framework.runtime.internal.configuration
-                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled());
+                ZLinkPlacementCapacityBundle.actor(1));
     }
 
     private static void assertUnavailable(
@@ -1599,6 +1598,24 @@ class ZLinkInMemoryLocationStoreTest {
             long revision,
             String endpoint,
             String entrySpotId) {
+        return meshNodeDescriptor(
+                owner,
+                rid,
+                lifecycleGeneration,
+                revision,
+                endpoint,
+                entrySpotId,
+                ZLinkObjectMaintenancePolicyKind.SNAPSHOT);
+    }
+
+    private static ZLinkMeshNodeDescriptor meshNodeDescriptor(
+            ZLinkLocationOwnerToken owner,
+            RoutingId rid,
+            long lifecycleGeneration,
+            long revision,
+            String endpoint,
+            String entrySpotId,
+            ZLinkObjectMaintenancePolicyKind policy) {
         return new ZLinkMeshNodeDescriptor(
                 "mesh",
                 rid,
@@ -1611,8 +1628,8 @@ class ZLinkInMemoryLocationStoreTest {
                         new ZLinkObjectCapability(
                                 ZLinkPlacementObjectKind.ACTOR,
                                 "player",
-                                ZLinkObjectMaintenancePolicyKind.SNAPSHOT,
-                                true,
+                                policy,
+                                policy == ZLinkObjectMaintenancePolicyKind.SNAPSHOT,
                                 0)),
                 ZLinkMeshNodeObjectRole.SERVER,
                 Optional.of(entrySpotId),

@@ -675,6 +675,10 @@ target_include_directories(zlink_framework_locations_redis PUBLIC
 target_link_libraries(zlink_framework_locations_redis PUBLIC
   zlink::framework_provider_abstractions
   zlink::framework)
+# redis.cpp hashes its Lua scripts with Beast's SHA-1 for EVALSHA (#5458). The
+# Framework targets keep their Boost tree to themselves in an installed archive,
+# so this target resolves the same Boost checkout through the shared helper.
+zlink_framework_cpp_add_boost_headers(zlink_framework_locations_redis)
 set(ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES "")
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS OFF)
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV OFF)
@@ -2964,7 +2968,42 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
   add_executable(test_cpp_framework_spot_close_conformance
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance.cpp
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join.cpp
+    # Keep the original GoogleTest registration order across translation units.
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_user_spot_creation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relay_admission.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_consecutive_joins.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_bound_session_sequence.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_bound_session_close.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_joined_view.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_backlog_replay.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_successor_join.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_maintenance_seal.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_accepted_records.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_authority_failure.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_native_claim.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_acceptance_store.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_entry_join.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_accepted_source_restore.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_join_settlement.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_authority_publication.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_host_relocation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_lifecycle_turns.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_authority_turns.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_return_join.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_join_failure.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_entry_placement.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relocation_settlement.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_deferred_join_reservation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_canonical_replay.cpp
+    tests/support/actor_maintenance_join_actors.cpp
+    tests/support/actor_maintenance_join_host_access.cpp
+    tests/support/actor_maintenance_join_host_fixture.cpp
+    tests/support/actor_maintenance_join_location_store_fixtures.cpp
+    tests/support/actor_maintenance_join_native_fixture.cpp
+    tests/support/actor_maintenance_join_placement.cpp
+    tests/support/actor_maintenance_join_replay_access.cpp
+    tests/support/actor_maintenance_join_stream_fixture.cpp
+    tests/support/actor_maintenance_join_suffix_fixture.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spotwide_host_relocation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp)
   target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
@@ -3211,6 +3250,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-contract;stream;reply"
     unit)
   add_zlink_framework_test(
+    test_cpp_framework_login_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_login_admission.cpp
+    "framework-unit;framework-contract;stream;admission"
+    contract)
+  target_compile_definitions(test_cpp_framework_login_admission PRIVATE
+    ZLINK_LOGIN_ADMISSION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-v1.json")
+  target_include_directories(test_cpp_framework_login_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_login_admission PRIVATE
+    opentelemetry-cpp::metrics
+    nlohmann_json::nlohmann_json)
+  add_zlink_framework_test(
     test_cpp_framework_same_node_duplicate_bind
     tests/Zlink.Framework.UnitTests/test_cpp_framework_same_node_duplicate_bind.cpp
     "framework-integration;framework-contract;stream;stream-session"
@@ -3289,6 +3340,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_stream_framework PRIVATE
     opentelemetry-cpp::metrics
     zlink::stream_connector)
+  foreach(transport IN ITEMS tcp ws)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_stream_session_creation_failure_${transport}
+      COMMAND test_cpp_framework_stream_framework --session-creation-failure-${transport}
+      LABELS "framework-unit;framework-contract;stream;stream-session"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_stream_connection_registry_lifetime
     COMMAND test_cpp_framework_stream_framework --connection-registry-lifetime
@@ -3942,6 +4001,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_heartbeat.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_inbound_codec.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_inbound_framing.cpp
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_login_admission.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_payload_codecs.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_receive_waits.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_reconnect.cpp
@@ -3951,6 +4011,23 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_typed_messaging.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_wire_headers.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_write_order.cpp)
+  target_compile_definitions(test_cpp_stream_connector PRIVATE
+    ZLINK_LOGIN_ADMISSION_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-v1.json")
+  target_link_libraries(test_cpp_stream_connector PRIVATE nlohmann_json::nlohmann_json)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_stream_connector_login_admission
+    COMMAND test_cpp_stream_connector login-admission
+    LABELS "connector-unit;connector-contract;stream;admission"
+    TIER contract
+    TIMEOUT 30)
+  add_zlink_connector_test(
+    test_cpp_stream_connector_request_allocations
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_request_allocations.cpp
+    "connector-unit;connector-regression"
+    unit)
+  target_sources(test_cpp_stream_connector_request_allocations PRIVATE
+    tests/support/allocation_counter.cpp)
+  target_link_libraries(test_cpp_stream_connector_request_allocations PRIVATE zlink::cpp)
   add_zlink_connector_test(
     test_cpp_stream_revision
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp

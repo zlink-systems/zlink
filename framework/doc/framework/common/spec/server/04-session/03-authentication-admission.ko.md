@@ -137,7 +137,7 @@ Ticket 검증과 비밀 키는 다음을 지킨다.
 | Server → client, 인증 Request의 Error | `unavailable` + header metadata `$zlink.admission.queueRequired` = `"1"` | 2단계가 켜져 있고 인증 request에 유효한 ticket이 없다. Handler를 실행하지 않고 1단계 처리 중 수에도 넣지 않는다 |
 | Client → server | Request `$zlink.admission.enqueue`, payload `{}` | 대기열에 들어간다. Framework가 대기열 Instance Spot으로 보낸다 |
 | Server → client, 위 Request의 Response | `{"position": n, "estimatedWaitMs": m}` 또는 `{"ticket": "...", "expiresInMs": t}` | 대기 순번과 예상 대기, 또는 바로 입장할 수 있으면 ticket |
-| Server → client | Send `$zlink.admission.position`, `{"position": n, "estimatedWaitMs": m}` | 순번이 바뀔 때 보낸다 |
+| Server → client | Send `$zlink.admission.position`, `{"position": n, "estimatedWaitMs": m}` | 순번·예상 대기가 바뀔 때와 5초마다 보낸다(§3.5.4) |
 | Server → client | Send `$zlink.admission.ticket`, `{"ticket": "...", "expiresInMs": t}` | 차례가 되었을 때 한 번 보낸다 |
 | Client → server, 인증 Request | header metadata `$zlink.admission.ticket` = ticket 문자열 | 받은 ticket을 담아 인증 request를 다시 보낸다 |
 
@@ -157,9 +157,91 @@ Connector는 다음과 같이 처리한다.
 - `$zlink.admission.queueRequired` 값이 `"1"`이 아니거나 Response·Send payload가 위 형식이 아니면 `FrameDecodeFailed`로
   그 request만 끝내고 연결은 유지한다.
 
+### 3.5 대기열 세부 계약
+
+다음은 PM 판정(11-25, #4546 2단계)으로 정했다. 바꿀 때는 이 절, [Stream Connector §5.8](../../stream-connector/32-stream-connector.ko.md#58-입장-대기와-자동-재시도)과
+공통 fixture를 함께 고친다.
+
+#### 3.5.1 대기열 Spot과 epoch
+
+- 대기열 Spot은 인증 STREAM 등록이 속한 RouteMesh마다 하나인 Instance Spot이고 Spot ID는 `$zlink.admission-queue`다.
+  Framework가 첫 `$zlink.admission.enqueue`나 첫 node 보고(§3.5.3)를 `InstanceSpot(...)` intent로 보내 준비한다.
+  배치는 기존 Instance Spot 배치 규칙을 따르며 별도 배치 권위를 두지 않는다.
+- Epoch는 대기열 Spot incarnation이 초기화할 때 CSPRNG로 만드는 0이 아닌 64-bit 부호 없는 정수다. Incarnation이
+  바뀌면(소멸 뒤 재준비, relocation 뒤 재초기화 포함) 새 epoch를 만들고 이전 대기자는 모두 사라진다.
+- 각 node는 현재 epoch를 node 보고의 Response로 받는다. Node는 마지막으로 받은 epoch와 다른 epoch의 ticket을
+  거절한다. 아직 보고 Response를 받지 못한 node는 모든 ticket을 거절한다(§3.4 첫 행 결과).
+
+#### 3.5.2 Ticket 형식과 서명
+
+- Ticket 바이트는 `version(1 byte, 0x01) || expiresAtUnixMs(8 byte big-endian) || epoch(8 byte big-endian) || mac(32 byte)`
+  49 byte이고, wire에는 이것을 padding 없는 base64url로 보낸다(66자). 길이나 version이 다르면 서명을 검사하지 않고 거절한다.
+- `mac = HMAC-SHA256(key, "zlink-admission-ticket-v1" || 0x00 || len(SessionRid)(1 byte) || SessionRid 바이트 || expiresAtUnixMs || epoch)`.
+  SessionRid는 ticket에 넣지 않는다. 검증 node는 인증 request를 받은 session의 SessionRid로 다시 계산하므로, 다른
+  session에서 받은 ticket은 서명이 맞지 않는다.
+- 만료 시각은 UTC Unix 밀리초 wall clock이다. 발급 Spot은 `발급 시각 + 30초`로 정한다. 검증 node는
+  `현재 wall clock ≤ expiresAtUnixMs + 2000ms`일 때만 받는다(2초는 node 간 시계 차 허용값). `expiresInMs`는
+  `expiresAtUnixMs − 발급 시각`이다.
+- 키는 설정 값 `AdmissionQueueKey`(현재 키, 필수)와 `AdmissionQueuePreviousKey`(선택)로 받는다. 값은 base64url
+  문자열이고, 디코딩한 길이가 32~64 byte가 아니면 시작 오류다. 2단계를 켜고 현재 키가 없어도 시작 오류다. 검증은
+  현재 키, 다음 이전 키 순으로 하고 어느 쪽이든 상수 시간 비교로 맞으면 서명 검사를 통과한다. 키 교체는 node마다
+  설정을 바꾸고 다시 시작하는 방식이며, 모든 node가 새 현재 키로 서명하기 전까지 이전 키를 남겨 둔다.
+
+#### 3.5.3 Node 보고와 ticket 발급
+
+- 2단계가 켜진 node는 1초마다 대기열 Spot에 `NodeReport` Spot request를 보낸다. 내용은 node RID, 1단계 한도, 현재
+  처리 중 수, 직전 보고 뒤 사용된 ticket의 SessionRid 목록, 직전 보고 뒤 끝난 대기 session의 SessionRid 목록이다.
+  Spot은 그 Response로 현재 epoch를 돌려준다. 이 보고는 Framework 내부 Spot 메시지이고 client wire가 아니다.
+- Spot은 3초 안에 받은 보고만 유효로 본다. 유효 보고가 없는 node의 session에는 ticket을 내지 않는다.
+- 대기자는 SessionRid와 그 session의 node RID로 기록한다. Ticket은 그 session의 node에서만 쓸 수 있으므로 발급
+  예산도 node마다 센다: `예산(N) = max(0, 한도 − 처리 중 수 − 그 보고 뒤 N의 대기자에게 낸 ticket 수)`. Spot은 보고를
+  받을 때와 대기자가 들어올 때 각 node의 예산만큼 그 node 대기자에게 enqueue 순서대로 ticket을 낸다. 그래서 순서는
+  node 안에서 FIFO이고 mesh 전체로는 근사 FIFO다.
+- 예상 대기 `estimatedWaitMs`는 `ceil(position × 1000 / r)`이고, r은 최근 30초 동안 낸 ticket 수 ÷ 30(초당)이다.
+  r이 0이면 `position × 1000`이다. 결과는 2^31 − 1에서 자른다. `position`은 1부터 시작하는 mesh 전체 순번이다.
+- 같은 SessionRid의 `$zlink.admission.enqueue`는 멱등이다. 이미 대기 중이면 현재 순번을, ticket을 받고 아직 쓰지
+  않았고 만료되지 않았으면 같은 ticket을 Response로 준다. 새 대기자를 만들지 않는다.
+- 대기자를 지우는 경우는 세 가지다: 보고에 사용된 ticket으로 올라온 경우, 보고에 끝난 session으로 올라온 경우,
+  낸 ticket이 쓰이지 않고 만료된 경우. Ticket은 같은 session에서 만료까지 여러 번 쓸 수 있고(1단계 거절 뒤 재전송),
+  인증 handler가 그 ticket으로 한 번 실행되면 node가 사용된 것으로 보고한다.
+
+#### 3.5.4 순번 push와 재등록
+
+- Spot은 순번이나 예상 대기가 바뀔 때, 그리고 바뀌지 않아도 5초마다 대기자에게 `$zlink.admission.position`을 보낸다.
+  같은 값이 반복될 수 있다.
+- Connector는 대기열에 들어간 뒤 15초 동안 position·ticket Send를 하나도 받지 못하면 `$zlink.admission.enqueue`를 다시
+  보낸다. 대기열 Spot이 그대로면 멱등 처리로 현재 순번을 받고, 새 incarnation이면 맨 뒤로 다시 들어간다.
+  재등록은 `OnAdmissionQueued`를 다시 부르지 않는다.
+
+#### 3.5.5 한 연결의 동시 인증 request
+
+- Ticket과 대기 상태는 session(연결) 단위다. 한 연결에서 queueRequired로 거절된 인증 request가 여럿이면 connector는
+  enqueue를 한 번만 보내고, 받은 ticket으로 대기 중인 request를 모두 다시 보낸다. 그래서 position·ticket Send는
+  operation 식별자 없이 연결 단위로 처리한다.
+- Ticket Send가 enqueue Response보다 먼저 와도 받는다. Ticket을 받은 뒤 오는 순번(Response나 Send)은 무시하고
+  `OnAdmissionPosition`도 부르지 않는다. 대기 중인 request가 없을 때 온 position·ticket Send는 버린다.
+
+#### 3.5.6 예약 이름과 metadata 충돌
+
+- `$zlink.` packet 이름과 metadata key는 Framework만 쓴다(Stream Connector §4.6). Connector는 `$zlink.admission.position`·
+  `$zlink.admission.ticket` Send를 앱 message callback보다 먼저 소비하고 앱에 넘기지 않는다.
+- `$zlink.admission.retryAfterMs`와 `$zlink.admission.queueRequired`가 한 Error에 함께 있으면 `FrameDecodeFailed`로
+  그 request만 끝낸다. `unavailable`이 아닌 code의 Error에 붙은 admission metadata는 무시하고, 그 code의 원래
+  결과로 끝낸다.
+
+#### 3.5.7 Connector callback 순서
+
+- queueRequired 거절은 `OnAdmissionWaiting`을 부르지 않는다. 그 연결이 대기 상태에 들어갈 때(enqueue를 보낼 때)
+  `OnAdmissionQueued`를 한 번 부른다. 바로 ticket을 받는 경우에도 부른다.
+- 순번을 받을 때마다(Response의 순번과 각 position Send) `OnAdmissionPosition(position, estimatedWaitMs)`을 부른다.
+- Ticket으로 다시 보낸 request가 1단계에서 거절되면 Stream Connector §5.8대로 `OnAdmissionWaiting`을 부른다. 대기
+  상태가 끝났다는 별도 callback은 없다. 각 request의 완료가 끝을 알린다.
+- 한 연결의 순서는 `OnAdmissionQueued` → `OnAdmissionPosition`* → (`OnAdmissionWaiting`*) → request 완료다.
+  정확한 signature는 언어별 exact interface가 구현 PR과 함께 정한다.
+
 ## 4. 시험
 
-- 공통 fixture `login-admission-v1.json`의 서버 시나리오 12개와 connector 시나리오 7개를 네 언어가 실행한다.
+- 공통 fixture `login-admission-v1.json`의 서버 시나리오 12개와 connector 시나리오 11개를 네 언어가 실행한다.
 - 네 언어 서버 × 네 언어 connector 교차언어 contract test: 한도 초과 시 handler 미실행, 거절 결과의 code와
   `$zlink.admission.retryAfterMs`, connector 자동 재시도 뒤 성공, 거절된 request의 Actor·Location Store·permit 미사용.
 - Fixture validator 통과는 runtime 통과가 아니다. 각 언어 runtime 시험은 fixture에 없는 다음도 확인한다: 거절된

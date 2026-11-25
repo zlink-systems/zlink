@@ -5292,6 +5292,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             new ObservedSpotAuthorityKey(targetNodeRid, targetSpotId),
             out var localAuthority
         );
+        Func<Task<bool>>? targetAdmission = null;
         if (
             !TryAcceptDirectSpot(
                 targetSpotId,
@@ -5301,7 +5302,25 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 out var spot
             )
         )
-            return SubmitResult.NotFound;
+        {
+            if (
+                !request
+                || operation is null
+                || !hasLocalAuthority
+                || spot is null
+                || messageFollowRoute is not null
+                || readyRoute is not null
+            )
+                return SubmitResult.NotFound;
+            targetAdmission = ConfirmSpotTargetRequest(
+                targetSpotId,
+                targetSpotGeneration,
+                localAuthority,
+                operation.Token
+            );
+            if (targetAdmission is null)
+                return SubmitResult.NotFound;
+        }
         // Message Follow retains the original incarnation's authority fence.
         if (
             messageFollowRoute is not null
@@ -5330,6 +5349,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
                 return SubmitResult.Ok;
             };
+        SpotTargetAdmission? spotTargetAdmission = null;
+        if (targetAdmission is not null)
+        {
+            var pending = operation!;
+            spotTargetAdmission = new SpotTargetAdmission(
+                targetAdmission,
+                () => _ = CompleteManagedOperationAsync(pending, RequestResult.NotFound, 0, []),
+                requestAdmission
+            );
+        }
         var retained = CloneParts(parts);
         var record = new MeshReceiveRecord(
             request ? MeshRecordKind.SpotRequest : MeshRecordKind.SpotSend,
@@ -5347,7 +5376,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             retained.Count,
             0,
             0,
-            null,
+            spotTargetAdmission,
             reply,
             targetNodeGeneration: localAuthority.TargetNodeGeneration,
             authorityOwnerGeneration: localAuthority.AuthorityOwnerGeneration,
@@ -5367,10 +5396,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             MailboxKey.ForSpot(spot, MeshReadyDomains.Application),
             record,
             retained,
-            requestAdmission: requestAdmission
+            requestAdmission: targetAdmission is null ? requestAdmission : null
         );
         return SubmitResult.Ok;
     }
+
+    private Func<Task<bool>>? ConfirmSpotTargetRequest(
+        string spotId,
+        ulong spotGeneration,
+        ObservedAuthority authority,
+        CancellationToken cancellationToken
+    ) =>
+        RunState(() => _canonicalRelocationTarget)
+            ?.ConfirmSpotRequest(
+                new SpotRelocationRequest(
+                    spotId,
+                    spotGeneration,
+                    authority.TargetNodeGeneration,
+                    authority.AuthorityOwnerGeneration,
+                    authority.OwnerLeaseGeneration
+                ),
+                cancellationToken
+            );
 
     private bool TryAcceptDirectSpot(
         string spotId,
@@ -5638,16 +5685,45 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 new ObservedActorAuthorityKey(actorRef.NodeRid, actorRef.ActorId),
                 out var localAuthority
             );
-            if (
-                hasLocalAuthority
-                && (
-                    localAuthority.TargetNodeGeneration != _lifecycleGeneration
-                    || localAuthority.AuthorityOwnerGeneration != actor.AuthorityOwnerGeneration
-                    || localAuthority.OwnerLeaseGeneration
-                        != checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration))
+            if (hasLocalAuthority && !MatchesActorAuthority(actor, localAuthority))
+            {
+                if (request && operation is not null)
+                {
+                    var replyRoute = new LocalActorReplyRoute(this, operation, physicalCompletion);
+                    var ingress = new ActorMessageFollowIngress(
+                        _routingId,
+                        _lifecycleGeneration,
+                        string.Empty,
+                        actorRef,
+                        routedOperationId,
+                        operation.OperationId.Low,
+                        localAuthority.TargetNodeGeneration,
+                        localAuthority.AuthorityOwnerGeneration,
+                        localAuthority.OwnerLeaseGeneration,
+                        0,
+                        operation.DeadlineUnixMs,
+                        default,
+                        parts,
+                        replyRoute.Reply
+                    )
+                    {
+                        EarlyAdmission = new EarlyActorRequestAdmission(
+                            () => TryGetCurrentActorRequestRoute(actorRef, localAuthority, out _),
+                            replyRoute.RejectNotFound,
+                            requestAdmission is null ? null : requestAdmission.Complete,
+                            operation.Token
+                        ),
+                    };
+                    if (TryRouteStaleActorIngress(ingress))
+                        return SubmitResult.Ok;
+                    // Publication can install the backend fence between the
+                    // initial read and the stage lookup.
+                }
+                if (
+                    !request || !TryGetCurrentActorRequestRoute(actorRef, localAuthority, out actor)
                 )
-            )
-                return SubmitResult.NotFound;
+                    return SubmitResult.NotFound;
+            }
             if (!hasLocalAuthority)
                 localAuthority = new ObservedAuthority(
                     _lifecycleGeneration,
@@ -5706,6 +5782,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 DisposeParts(parts);
         }
     }
+
+    private bool MatchesActorAuthority(ManagedActor actor, ObservedAuthority authority) =>
+        authority.TargetNodeGeneration == _lifecycleGeneration
+        && authority.AuthorityOwnerGeneration == actor.AuthorityOwnerGeneration
+        && authority.OwnerLeaseGeneration
+            == checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration));
+
+    private bool TryGetCurrentActorRequestRoute(
+        ActorRef actorRef,
+        ObservedAuthority authority,
+        out ManagedActor actor
+    ) => TryGetActor(actorRef, out actor) && MatchesActorAuthority(actor, authority);
+
+    private bool TryRouteStaleActorIngress(ActorMessageFollowIngress ingress) =>
+        RunState(() => _actorMessageFollowIngressTarget)?.TryFollow(ingress) == true;
 
     private SubmitResult SubmitNativeDurableRequest(
         RoutingId targetRid,
@@ -9010,20 +9101,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             : default;
         string sourceSpotId = stateful.SourceSpotId;
         ManagedActor? admittedActor = null;
+        SpotTargetAdmission? spotTargetAdmission = null;
         if (
             stateful.Command
             is ServiceWireConstants.Command.SpotSend
                 or ServiceWireConstants.Command.SpotRequest
         )
         {
+            var authority = new ObservedAuthority(
+                stateful.TargetNodeGeneration,
+                stateful.AuthorityOwnerGeneration,
+                stateful.OwnerLeaseGeneration
+            );
             var accepted = TryAcceptDirectSpot(
                 stateful.TargetSpotId,
                 stateful.TargetSpotGeneration,
-                new ObservedAuthority(
-                    stateful.TargetNodeGeneration,
-                    stateful.AuthorityOwnerGeneration,
-                    stateful.OwnerLeaseGeneration
-                ),
+                authority,
                 instanceReadyRoute ? stateful.TargetOwnerId : null,
                 out var spot
             );
@@ -9031,6 +9124,33 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var localOwnerLeaseGeneration = checked(
                 (ulong)Volatile.Read(ref _localOwnerLeaseGeneration)
             );
+            if (
+                !accepted
+                && request
+                && hasTargetSpot
+                && !instanceReadyRoute
+                && stateful.MessageFollowHopCount == 0
+                && ConfirmSpotTargetRequest(
+                    stateful.TargetSpotId,
+                    stateful.TargetSpotGeneration,
+                    authority,
+                    _stop?.Token ?? CancellationToken.None
+                )
+                    is { } confirmation
+            )
+            {
+                spotTargetAdmission = new SpotTargetAdmission(
+                    confirmation,
+                    () =>
+                        Reply(
+                            RequestResult.Conflict,
+                            (uint)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale,
+                            Array.Empty<Message>()
+                        )
+                );
+                accepted = true;
+            }
+
             if (!accepted)
             {
                 ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -9116,11 +9236,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     != checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration))
             )
             {
-                var messageFollowTarget = RunState(() => _actorMessageFollowIngressTarget);
                 Func<IReadOnlyList<Message>, SubmitResult>? messageFollowReply = request
                     ? replyParts => Reply(RequestResult.Ok, 0, replyParts)
                     : null;
-                var followed = messageFollowTarget?.TryFollow(
+                var rejectedResult = actorPresent ? RequestResult.Conflict : RequestResult.NotFound;
+                var rejectedCode = actorPresent
+                    ? ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
+                    : ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound;
+                var requestAuthority = new ObservedAuthority(
+                    stateful.TargetNodeGeneration,
+                    stateful.AuthorityOwnerGeneration,
+                    stateful.OwnerLeaseGeneration
+                );
+                var followed = TryRouteStaleActorIngress(
                     new ActorMessageFollowIngress(
                         sourceRid,
                         sourceGeneration,
@@ -9140,14 +9268,32 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     {
                         EncodedPayload = received.Parts[payloadOffset].AsReadOnlyMemory(),
                         ApplicationMetadataSource = stateful.HasMetadata ? received.Parts[1] : null,
+                        EarlyAdmission = request
+                            ? new EarlyActorRequestAdmission(
+                                () =>
+                                    TryGetCurrentActorRequestRoute(
+                                        stateful.TargetActor,
+                                        requestAuthority,
+                                        out _
+                                    ),
+                                () =>
+                                    Reply(
+                                        rejectedResult,
+                                        (uint)rejectedCode,
+                                        Array.Empty<Message>()
+                                    ),
+                                null,
+                                _stop?.Token ?? CancellationToken.None
+                            )
+                            : null,
                     }
                 );
                 //  Follow taking responsibility without replying and the stale
                 //  reply below are indistinguishable from the caller's side.
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"actor_stale_path actor={stateful.TargetActor} followed={followed} has_follow_target={messageFollowTarget is not null} request={request}"
+                    $"actor_stale_path actor={stateful.TargetActor} followed={followed} request={request}"
                 );
-                if (followed == true)
+                if (followed)
                     return false;
                 //  Spec 06 §13.1 separates two outcomes. No Actor incarnation
                 //  under this reference means the authority is gone, which is
@@ -9156,17 +9302,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 //  caller can re-resolve, which stays `ActorLocationStale`. A
                 //  relocation in flight is carried by the follow target above,
                 //  so reaching here with no Actor is a real absence.
-                if (request)
-                    Reply(
-                        actorPresent ? RequestResult.Conflict : RequestResult.NotFound,
-                        (uint)(
-                            actorPresent
-                                ? ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-                                : ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
-                        ),
-                        Array.Empty<Message>()
-                    );
-                return false;
+                if (
+                    !request
+                    || !TryGetCurrentActorRequestRoute(
+                        stateful.TargetActor,
+                        requestAuthority,
+                        out actor
+                    )
+                )
+                {
+                    if (request)
+                        Reply(rejectedResult, (uint)rejectedCode, Array.Empty<Message>());
+                    return false;
+                }
             }
             admittedActor = actor;
             owner = MailboxKey.ForActor(actor.Ref, MeshReadyDomains.Application);
@@ -9218,7 +9366,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             parts.Length,
             0,
             0,
-            null,
+            spotTargetAdmission,
             reply,
             targetNodeGeneration: stateful.TargetNodeGeneration,
             authorityOwnerGeneration: stateful.AuthorityOwnerGeneration,
@@ -14463,6 +14611,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         internal Action<ManagedRequestCompletion>? PhysicalCompletion { get; } = physicalCompletion;
+
+        internal void RejectNotFound()
+        {
+            if (PhysicalCompletion is not null)
+                PhysicalCompletion(new ManagedRequestCompletion(RequestResult.NotFound, []));
+            else
+                _ = owner.CompleteManagedOperationAsync(operation, RequestResult.NotFound, 0, []);
+        }
 
         internal SubmitResult Reply(IReadOnlyList<Message> replyParts)
         {

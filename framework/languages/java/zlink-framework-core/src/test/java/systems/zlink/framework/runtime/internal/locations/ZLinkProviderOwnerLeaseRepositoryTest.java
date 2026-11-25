@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locations.*;
 
@@ -166,9 +168,9 @@ final class ZLinkProviderOwnerLeaseRepositoryTest {
                                             .claim("owner-a", Duration.ofMinutes(1))
                                             .toCompletableFuture()
                                             .get());
-            assertInstanceOf(IllegalStateException.class, failure.getCause());
             assertEquals(
-                    "Location Store owner counter is invalid", failure.getCause().getMessage());
+                    ZLinkFrameworkErrorKind.DATA_LOST,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
         }
     }
 

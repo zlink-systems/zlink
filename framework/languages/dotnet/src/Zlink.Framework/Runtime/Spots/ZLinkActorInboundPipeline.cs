@@ -191,6 +191,16 @@ internal sealed class ZLinkActorInboundPipeline(
                     ?? throw new InvalidOperationException(
                         "Actor replay frame is missing its handoff arrival identity."
                     );
+                // The queue position is already reserved. Authority I/O can finish
+                // here before the reservation is filled and the handler can run.
+                if (
+                    frame.TargetAdmission is { } admission
+                    && !await admission.ConfigureAwait(false)
+                )
+                {
+                    acknowledgeFrame(arrivalIndex);
+                    continue;
+                }
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"actor_replay_frame_begin actor={frame.Actor.ActorId} request_id={frame.RequestId} arrival={arrivalIndex}"
                 );

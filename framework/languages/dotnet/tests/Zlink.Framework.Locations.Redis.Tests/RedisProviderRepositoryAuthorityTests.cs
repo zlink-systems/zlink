@@ -194,15 +194,7 @@ public sealed class RedisProviderRepositoryAuthorityTests(RedisTestFixture fixtu
             )
         );
         await repository.ReleaseOwnerLeaseAsync(oldOwner);
-        var next = SpotReservation(spotId, newDescriptor, newOwner) with
-        {
-            ObjectRelocationPolicy = Zlink
-                .Framework
-                .Runtime
-                .Configuration
-                .ZLinkObjectRelocationRegistration
-                .DisabledPolicy,
-        };
+        var next = SpotReservation(spotId, newDescriptor, newOwner);
 
         async Task ReserveIsUnavailableAsync()
         {

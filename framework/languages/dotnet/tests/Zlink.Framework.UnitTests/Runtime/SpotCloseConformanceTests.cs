@@ -437,7 +437,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task GetOrCreate_releases_expired_Ready_or_ended_Creating_before_capacity_selection(
+    public async Task GetOrCreate_retains_expired_Ready_and_releases_ended_Creating_without_target(
         bool ready
     )
     {
@@ -519,8 +519,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
                                 SpotCloseHost.SpotType,
                                 1
                             )
-                        ),
-                        ZLinkObjectRelocationRegistration.DisabledPolicy
+                        )
                     )
                 )
             )
@@ -579,17 +578,21 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             );
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, afterWait.Kind);
         }
-        Assert.IsType<ZLinkAuthorityReadResult.Missing>(await repository.ReadAuthorityAsync(key));
+        var authority = await repository.ReadAuthorityAsync(key);
         var expired = (
             await repository.ListMeshNodesAsync(SpotCloseHost.MeshName, default)
         ).Items.SingleOrDefault(item => item.Rid == expiredDescriptor.Rid);
         if (ready)
         {
+            Assert.IsType<ZLinkAuthorityReadResult.Found>(authority);
             Assert.NotNull(expired);
-            Assert.Equal(0, expired.Capacity.Spots.Active);
+            Assert.Equal(1, expired.Capacity.Spots.Active);
         }
         else
+        {
+            Assert.IsType<ZLinkAuthorityReadResult.Missing>(authority);
             Assert.Null(expired);
+        }
         Assert.Equal(1, host.State.FactoryCalls);
     }
 
@@ -2118,10 +2121,15 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
 
     private static async Task<SpotCloseHost> StartPeerAsync(
         SpotCloseHost host,
-        bool registerInstanceFactory = true
+        bool registerInstanceFactory = true,
+        bool actorRelocationEnabled = false
     )
     {
-        var source = await SpotCloseHost.StartAsync(host.Store, registerInstanceFactory);
+        var source = await SpotCloseHost.StartAsync(
+            host.Store,
+            registerInstanceFactory,
+            actorRelocationEnabled: actorRelocationEnabled
+        );
         try
         {
             using var peerDeadline = new CancellationTokenSource(Wait);
@@ -2896,7 +2904,9 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         int spotLimit = 100,
         TimeProvider? timeProvider = null,
         bool clientOnly = false,
-        Action<IServiceCollection, IZLinkMeshObjectServerBuilder>? configureServer = null
+        Action<IServiceCollection, IZLinkMeshObjectServerBuilder>? configureServer = null,
+        int actorLimit = 100,
+        bool actorRelocationEnabled = false
     )
     {
         var store =
@@ -2933,14 +2943,20 @@ internal sealed class SpotCloseHost : IAsyncDisposable
                 .AddRouteMesh(MeshName)
                 .Listen("tcp://127.0.0.1:0")
                 .SetRoutingIdPrefix("spot-close")
-                .SetActorLimit(100)
+                .SetActorLimit(actorLimit)
                 .SetSpotLimit(spotLimit)
                 .Objects()
                 .Server()
                 .AddEntrySpot<SpotCloseEntrySpot>()
                 .AddActorFactory<SpotCloseActor, SpotCloseActorFactory>(
                     ActorType,
-                    static factory => factory.DisableRelocation()
+                    factory =>
+                    {
+                        if (actorRelocationEnabled)
+                            factory.RecreateOnRelocation();
+                        else
+                            factory.DisableRelocation();
+                    }
                 );
             configureServer?.Invoke(services, server);
             if (registerUserSpotFactory)
@@ -3047,13 +3063,13 @@ internal sealed class SpotCloseHost : IAsyncDisposable
     internal async Task<string> AdmissionAsync(string spotId) =>
         await RequestAsync(spotId) is "handlerReply" ? "open" : "sealed";
 
-    internal async Task<string> CreateActorAsync()
+    internal async Task<string> CreateActorAsync(string actorType = ActorType)
     {
         var actorId = $"spot-close-actor-{Guid.NewGuid():N}";
         _ = Assert.IsType<ZLinkActorCreateResult.Created>(
             await _provider
                 .GetRequiredService<IZLinkActorManager>()
-                .GetOrCreate(actorId, ActorType)
+                .GetOrCreate(actorId, actorType)
                 .InMesh(MeshName)
                 .Request(ZLinkMessage.Empty)
                 .Timeout(TimeSpan.FromSeconds(10))
@@ -3142,6 +3158,7 @@ internal sealed class SpotCloseProbeState
     internal bool ThrowOnClosing { get; set; }
     internal bool HoldOnClosing { get; set; }
     internal bool HoldJoin { get; set; }
+    internal Func<string, ZLinkSpotActorJoinResult>? OnJoin { get; set; }
     internal bool ThrowOnInitialize { get; set; }
     internal ConcurrentQueue<ulong> InitializedGenerations { get; } = new();
     internal Func<ulong, Task>? OnReinitialize { get; set; }
@@ -3443,7 +3460,7 @@ internal sealed class SpotCloseProbeSpot : IZLinkSpot<SpotCloseActor>
             State.JoinEntered.TrySetResult();
             await State.ReleaseJoin.Task.WaitAsync(cancellationToken);
         }
-        return ZLinkSpotActorJoinResult.Accept(request);
+        return State.OnJoin?.Invoke(actorId) ?? ZLinkSpotActorJoinResult.Accept(request);
     }
 
     public ValueTask OnJoinedActorAsync(SpotCloseActor actor, CancellationToken cancellationToken)

@@ -113,6 +113,9 @@ struct connector_options_t
     /// Packet-name resolver injection point (stream-connector §5.4). Empty
     /// selects the default naming rule of §5.
     std::shared_ptr<const packet_name_resolver_t> name_resolver;
+
+    /// Maximum admission wait from the first rejection. Empty uses the request timeout.
+    std::optional<std::chrono::milliseconds> max_admission_wait;
 };
 
 } // namespace zlink::stream_connector

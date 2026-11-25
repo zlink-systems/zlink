@@ -19,7 +19,6 @@ import systems.zlink.framework.locations.*;
 import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
@@ -95,7 +94,7 @@ final class ZLinkUserSpotExistingCapacityTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void expiredReadyOwnerIsReleasedBeforeCapacityFailure(boolean capacityConditionConflict)
+    void expiredReadyOwnerIsReleasedBeforeCapacityFailure(boolean descriptorConditionConflict)
             throws Exception {
         FACTORY_CALLS.set(0);
         var clock = new MutableClock();
@@ -208,8 +207,7 @@ final class ZLinkUserSpotExistingCapacityTest {
                                                                     ZLinkPlacementObjectKind
                                                                             .USER_SPOT,
                                                                     "room",
-                                                                    1),
-                                                            new RelocationPolicy.Disabled()),
+                                                                    1)),
                                                     () -> false)
                                             .toCompletableFuture()
                                             .get(5, TimeUnit.SECONDS))
@@ -233,7 +231,7 @@ final class ZLinkUserSpotExistingCapacityTest {
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS));
             clock.advance(Duration.ofSeconds(2));
-            store.armed.set(capacityConditionConflict);
+            store.armed.set(descriptorConditionConflict);
             var firstRequest =
                     runtime.spotManager()
                             .getOrCreate("expired-room", "room")
@@ -257,8 +255,8 @@ final class ZLinkUserSpotExistingCapacityTest {
             assertEquals(
                     ZLinkFrameworkErrorKind.UNAVAILABLE,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
-            assertEquals(capacityConditionConflict ? 1 : 0, store.conflicts.get());
-            if (capacityConditionConflict) {
+            assertEquals(descriptorConditionConflict ? 1 : 0, store.conflicts.get());
+            if (descriptorConditionConflict) {
                 assertEquals(store.beforeVersion.get(), store.afterVersion.get());
             }
             assertInstanceOf(
@@ -534,86 +532,59 @@ final class ZLinkUserSpotExistingCapacityTest {
                             .findFirst();
             if (deletion.isEmpty() || !armed.compareAndSet(true, false))
                 return inner.write(request, cancellation);
-            var capacity =
-                    request.mutations().stream()
-                            .filter(
-                                    m ->
-                                            m instanceof ZLinkStorePut put
-                                                    && put.key()
-                                                            .value()
-                                                            .startsWith("zlink:v11:capacity:"))
-                            .map(ZLinkStorePut.class::cast)
+            var descriptor =
+                    request.conditions().stream()
+                            .filter(ZLinkStoreVersionCondition.class::isInstance)
+                            .map(ZLinkStoreVersionCondition.class::cast)
+                            .filter(condition -> condition.key().value().startsWith("mesh-node\0"))
                             .findFirst()
                             .orElseThrow();
-            return inner.read(deletion.orElseThrow().key(), cancellation)
+            var authorityKey = deletion.orElseThrow().key();
+            return inner.read(authorityKey, cancellation)
                     .thenCompose(
-                            before -> {
+                            read -> {
                                 beforeVersion.set(
-                                        assertInstanceOf(ZLinkStoreReadFound.class, before)
+                                        assertInstanceOf(ZLinkStoreReadFound.class, read)
                                                 .value()
                                                 .version()
                                                 .value());
-                                return inner.read(capacity.key(), cancellation)
-                                        .thenCompose(
+                                return inner.read(descriptor.key(), cancellation);
+                            })
+                    .thenCompose(
+                            read -> {
+                                var value =
+                                        assertInstanceOf(ZLinkStoreReadFound.class, read).value();
+                                return inner.write(
+                                        new ZLinkStoreWriteRequest(
+                                                java.util.List.of(descriptor),
+                                                java.util.List.of(
+                                                        new ZLinkStorePut(
+                                                                descriptor.key(),
+                                                                value.bytes(),
+                                                                null))),
+                                        cancellation);
+                            })
+                    .thenCompose(
+                            rewritten -> {
+                                assertInstanceOf(ZLinkStoreWriteApplied.class, rewritten);
+                                return inner.write(request, cancellation);
+                            })
+                    .thenCompose(
+                            result -> {
+                                assertInstanceOf(ZLinkStoreWriteConflict.class, result);
+                                conflicts.incrementAndGet();
+                                return inner.read(authorityKey, cancellation)
+                                        .thenApply(
                                                 read -> {
-                                                    var value =
+                                                    afterVersion.set(
                                                             assertInstanceOf(
                                                                             ZLinkStoreReadFound
                                                                                     .class,
                                                                             read)
-                                                                    .value();
-                                                    return inner.write(
-                                                                    new ZLinkStoreWriteRequest(
-                                                                            java.util.List.of(
-                                                                                    new ZLinkStoreVersionCondition(
-                                                                                            capacity
-                                                                                                    .key(),
-                                                                                            value
-                                                                                                    .version())),
-                                                                            java.util.List.of(
-                                                                                    new ZLinkStorePut(
-                                                                                            capacity
-                                                                                                    .key(),
-                                                                                            value
-                                                                                                    .bytes(),
-                                                                                            null))),
-                                                                    cancellation)
-                                                            .thenCompose(
-                                                                    rewritten -> {
-                                                                        assertInstanceOf(
-                                                                                ZLinkStoreWriteApplied
-                                                                                        .class,
-                                                                                rewritten);
-                                                                        return inner.write(
-                                                                                        request,
-                                                                                        cancellation)
-                                                                                .thenCompose(
-                                                                                        result -> {
-                                                                                            assertInstanceOf(
-                                                                                                    ZLinkStoreWriteConflict
-                                                                                                            .class,
-                                                                                                    result);
-                                                                                            conflicts
-                                                                                                    .incrementAndGet();
-                                                                                            return inner.read(
-                                                                                                            deletion.orElseThrow()
-                                                                                                                    .key(),
-                                                                                                            cancellation)
-                                                                                                    .thenApply(
-                                                                                                            after -> {
-                                                                                                                afterVersion
-                                                                                                                        .set(
-                                                                                                                                assertInstanceOf(
-                                                                                                                                                ZLinkStoreReadFound
-                                                                                                                                                        .class,
-                                                                                                                                                after)
-                                                                                                                                        .value()
-                                                                                                                                        .version()
-                                                                                                                                        .value());
-                                                                                                                return result;
-                                                                                                            });
-                                                                                        });
-                                                                    });
+                                                                    .value()
+                                                                    .version()
+                                                                    .value());
+                                                    return result;
                                                 });
                             });
         }

@@ -12478,7 +12478,8 @@ public sealed partial class EntrySpotActorDispatchTests
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
             includeSpotRoute: true,
-            joinTimeProvider: time
+            joinTimeProvider: time,
+            actorRelocationEnabled: true
         );
         try
         {
@@ -13752,7 +13753,10 @@ public sealed partial class EntrySpotActorDispatchTests
         ILoggerFactory? loggerFactory = null,
         TimeProvider? joinTimeProvider = null,
         TimeSpan? sessionReplacementCallbackTimeout = null,
-        EntryTimerSerialProbe? entryTimerProbe = null
+        bool objectClient = false,
+        Action<ZLinkSpotNodeRegistration>? configureNode = null,
+        EntryTimerSerialProbe? entryTimerProbe = null,
+        bool actorRelocationEnabled = false
     )
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
@@ -13865,8 +13869,9 @@ public sealed partial class EntrySpotActorDispatchTests
             ImplicitHandlerAutoRegistrationEnabled = false,
         };
         registration.Locations.StoreInstance = runtimeLocationProvider;
-        if (relocationStore is not null)
-            registration.Locations.RelocationStoreInstance = relocationStore;
+        if (relocationStore is not null || actorRelocationEnabled)
+            registration.Locations.RelocationStoreInstance =
+                relocationStore ?? new InMemoryRelocationStore();
         if (messageFlowMode is { } mode)
             registration.DispatchOptions.Diagnostics.SetLevel(mode);
         else if (messageFlowObserver is not null)
@@ -13911,6 +13916,11 @@ public sealed partial class EntrySpotActorDispatchTests
                 .SpotNodes["entry"]
                 .ChannelMemberships.Add(new ZLinkMeshChannelMembership { ChannelName = "entry" });
         }
+        if (objectClient)
+        {
+            registration.Locations._repository = runtimeLocationStore;
+            new ZLinkMeshNodeBuilder(registration.SpotNodes["entry"]).Objects().Client();
+        }
         if (includeActorFactory)
         {
             new Zlink.Framework.Runtime.Configuration.Builders.ZLinkMeshNodeBuilder(
@@ -13920,7 +13930,13 @@ public sealed partial class EntrySpotActorDispatchTests
                 .Server()
                 .AddActorFactory<ProbeActor, ProbeActorFactory>(
                     "probe",
-                    factory => factory.DisableRelocation()
+                    factory =>
+                    {
+                        if (actorRelocationEnabled)
+                            factory.RecreateOnRelocation();
+                        else
+                            factory.DisableRelocation();
+                    }
                 );
         }
         if (includeJoinTarget)
@@ -13972,6 +13988,7 @@ public sealed partial class EntrySpotActorDispatchTests
             registration.SpotNodes["entry"].ObjectRole = ZLinkMeshNodeObjectRole.Server;
             registration.SpotNodes["entry"].ObjectRoleSelected = true;
         }
+        configureNode?.Invoke(registration.SpotNodes["entry"]);
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
         runtime = new ZLinkFrameworkRuntime(
             services,
@@ -14081,7 +14098,12 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
             );
         }
-        if (includeInstanceSpotRoute)
+        if (
+            includeInstanceSpotRoute
+            && registration
+                .SpotNodes["entry"]
+                .InstanceSpotRelocations.ContainsKey("Tests.InstanceSpot")
+        )
         {
             _ = await PublishLocalInstanceSpotAuthorityAsync(
                 locationStore,

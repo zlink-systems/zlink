@@ -13,6 +13,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
@@ -780,17 +782,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .join());
     }
 
-    private record ReclaimActor(systems.zlink.framework.actors.ZLinkActorContext context)
-            implements systems.zlink.framework.actors.ZLinkActor {}
-
-    private static final class ReclaimFactory
-            implements systems.zlink.framework.actors.ZLinkActorFactory {
-        public CompletionStage<systems.zlink.framework.actors.ZLinkActor> create(
-                systems.zlink.framework.actors.ZLinkActorContext context) {
-            return CompletableFuture.completedFuture(new ReclaimActor(context));
-        }
-    }
-
     @Test
     void metricsReadOnlyConfirmedCapacityAndNeverQueryTheStoreDuringCollection() throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
@@ -823,6 +814,12 @@ final class ZLinkProviderAuthorityRepositoryTest {
             try (var metrics =
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
                             .install()) {
+                repository
+                        .refreshCapacityMetrics(
+                                new ZLinkMeshNodeDescriptorKey(
+                                        descriptor.meshName(), descriptor.rid()))
+                        .toCompletableFuture()
+                        .join();
                 var tags = Map.of("mesh_name", "game", "capacity_scope", "spot");
                 assertEquals(0, metrics.observable("zlink.object.capacity.active", tags));
                 assertEquals(1, metrics.observable("zlink.object.capacity.reserved", tags));
@@ -850,6 +847,12 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         () -> false)
                                 .toCompletableFuture()
                                 .join());
+                repository
+                        .refreshCapacityMetrics(
+                                new ZLinkMeshNodeDescriptorKey(
+                                        descriptor.meshName(), descriptor.rid()))
+                        .toCompletableFuture()
+                        .join();
                 assertEquals(1, metrics.observable("zlink.object.capacity.active", tags));
                 assertEquals(0, metrics.observable("zlink.object.capacity.reserved", tags));
                 assertInstanceOf(
@@ -910,24 +913,14 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         .get())
                         .token();
 
-        var descriptor = actorReclaimDescriptor(owner, 1);
+        var descriptor =
+                actorReclaimDescriptor(owner, 1, ZLinkObjectMaintenancePolicyKind.DISABLED);
         repository
                 .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture()
                 .get();
 
         var key = ZLinkAuthorityKeyCodec.actor("reclaim-actor");
-        var registration =
-                new systems.zlink.framework.runtime.mesh.MeshNodeRegistration("reclaim-source");
-        registration
-                .objects()
-                .server()
-                .addActorFactory(
-                        "player",
-                        ReclaimActor.class,
-                        ReclaimFactory.class,
-                        factory -> factory.disableRelocation());
-        var policy = registration.actorRelocationPolicy("player");
         var request =
                 new ZLinkObjectReservationRequest(
                         ZLinkPlacementObjectKind.ACTOR,
@@ -940,8 +933,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         descriptor.lifecycleGeneration(),
                         owner,
                         new byte[] {1},
-                        ZLinkPlacementCapacityBundle.actor(1),
-                        policy);
+                        ZLinkPlacementCapacityBundle.actor(1));
         var first =
                 ((ZLinkObjectReserved)
                                 repository
@@ -1035,7 +1027,13 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         .toCompletableFuture()
                                         .get())
                         .token();
-        var nextDescriptor = actorReclaimDescriptor(newOwner, 2);
+        var nextDescriptor =
+                actorReclaimDescriptor(
+                        newOwner,
+                        2,
+                        scenario.equals("recreate") || scenario.equals("relocationRecreate")
+                                ? ZLinkObjectMaintenancePolicyKind.RECREATE
+                                : ZLinkObjectMaintenancePolicyKind.DISABLED);
         repository
                 .updateMeshNode(nextDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture()
@@ -1053,11 +1051,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         nextDescriptor.lifecycleGeneration(),
                         newOwner,
                         new byte[] {2},
-                        ZLinkPlacementCapacityBundle.actor(1),
-                        (scenario.equals("recreate") || scenario.equals("relocationRecreate"))
-                                ? new systems.zlink.framework.runtime.internal.configuration
-                                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Recreate()
-                                : policy);
+                        ZLinkPlacementCapacityBundle.actor(1));
         var retainedBefore = repository.read(key, () -> false).toCompletableFuture().get();
         if (testsReleaseWait) {
             ZLinkLocationRepository retryRepository = repository;
@@ -1119,7 +1113,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                     new java.util.concurrent.atomic.AtomicReference<ZLinkObjectReserveResult>();
             provider.beforeRead =
                     storeKey -> {
-                        if (!storeKey.value().contains("capacity:"))
+                        if (!storeKey.value().equals(generationKey(OBJECT_COUNTER_KEY, key)))
                             return CompletableFuture.completedFuture(null);
                         provider.beforeRead = null;
                         return repository.reserve(next, () -> false).thenAccept(winner::set);
@@ -1181,7 +1175,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     private static ZLinkMeshNodeDescriptor actorReclaimDescriptor(
-            ZLinkLocationOwnerToken owner, long generation) {
+            ZLinkLocationOwnerToken owner,
+            long generation,
+            ZLinkObjectMaintenancePolicyKind policy) {
         var d = capacityDescriptor(owner);
         return new ZLinkMeshNodeDescriptor(
                 d.meshName(),
@@ -1193,11 +1189,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 d.applicationVersion(),
                 List.of(
                         new ZLinkObjectCapability(
-                                ZLinkPlacementObjectKind.ACTOR,
-                                "player",
-                                ZLinkObjectMaintenancePolicyKind.DISABLED,
-                                false,
-                                0)),
+                                ZLinkPlacementObjectKind.ACTOR, "player", policy, false, 0)),
                 d.objectRole(),
                 Optional.of("reclaim-entry-" + generation),
                 d.placementWeight(),
@@ -1211,12 +1203,27 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 d.updatedAt());
     }
 
-    private static final String OBJECT_COUNTER_KEY = "zlink:v11:object-counter";
-    private static final String AUTHORITY_OWNER_COUNTER_KEY = "zlink:v11:authority-owner-counter";
+    private static final String OBJECT_COUNTER_KEY = "zlink:v12:object-counter";
+    private static final String AUTHORITY_OWNER_COUNTER_KEY = "zlink:v12:authority-owner-counter";
+
+    private static String generationKey(String prefix, String authorityKey) {
+        var identity = ZLinkAuthorityKeyCodec.decode(authorityKey);
+        return prefix + "\0" + identity.kind() + "\0" + identity.id();
+    }
+
+    private static ZLinkStoreKey actorCapacityKey(String mesh, String rid, String state) {
+        return new ZLinkStoreKey(
+                "zlink:v12:capacity\0"
+                        + mesh
+                        + "\0"
+                        + RoutingId.from(rid).toHex()
+                        + "\0actors\0"
+                        + state);
+    }
 
     @ParameterizedTest
     @ValueSource(ints = {10, 16384})
-    void deleteRebuildsCapacityConditionsAfterProviderConflict(int conflicts) throws Exception {
+    void deleteRebuildsDescriptorConditionAfterProviderConflict(int conflicts) throws Exception {
         var fixture = reincarnationFixture("delete-capacity-conflict");
         fixture.repository()
                 .commit(fixture.reservation(), new byte[] {2}, null, () -> false)
@@ -1246,12 +1253,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
                             attempts[0]++;
                             if (attempts[0] <= conflicts) {
                                 var capacityKey =
-                                        request.mutations().stream()
-                                                .filter(ZLinkStorePut.class::isInstance)
-                                                .map(ZLinkStorePut.class::cast)
-                                                .map(ZLinkStorePut::key)
-                                                .findFirst()
-                                                .orElseThrow();
+                                        ZLinkProviderDescriptorRepository.meshKey(
+                                                fixture.descriptor().meshName(),
+                                                fixture.descriptor().rid());
                                 return read(capacityKey, cancellation)
                                         .thenCompose(
                                                 read -> {
@@ -1347,7 +1351,11 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         .toCompletableFuture()
                                         .get())
                         .reservation();
-        var capacityKey = new ZLinkStoreKey("zlink:v11:capacity:game:capacity-node");
+        var capacityKey =
+                new ZLinkStoreKey(
+                        "zlink:v12:capacity\0game\0"
+                                + descriptor.rid().toHex()
+                                + "\0spots\0pending");
         if (scenario.equals("missingCapacity") || scenario.equals("underflow")) {
             provider.write(
                             new ZLinkStoreWriteRequest(
@@ -1357,7 +1365,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                                     ? new ZLinkStoreDelete(capacityKey)
                                                     : new ZLinkStorePut(
                                                             capacityKey,
-                                                            "{\"active\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}},\"pending\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}}}"
+                                                            "0"
                                                                     .getBytes(
                                                                             java.nio.charset
                                                                                     .StandardCharsets
@@ -1369,10 +1377,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
         }
         if (scenario.equals("expired")) now.set(now.get().plusSeconds(61));
         else if (!scenario.equals("live")) owners.release(owner).toCompletableFuture().get();
-        if (scenario.equals("underflow")) {
+        if (scenario.equals("underflow") || scenario.equals("missingCapacity")) {
             var capacityBefore =
-                    (ZLinkStoreReadFound)
-                            provider.read(capacityKey, () -> false).toCompletableFuture().get();
+                    provider.read(capacityKey, () -> false).toCompletableFuture().get();
             var failure =
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
@@ -1382,16 +1389,24 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                                     key, reservation.storeVersion(), () -> false)
                                             .toCompletableFuture()
                                             .get());
-            assertInstanceOf(IllegalStateException.class, failure.getCause());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DATA_LOST,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             assertTrue(failure.getCause().getMessage().contains("capacity record is inconsistent"));
-            var capacityAfter =
-                    (ZLinkStoreReadFound)
-                            provider.read(capacityKey, () -> false).toCompletableFuture().get();
-            assertEquals(capacityBefore.value().version(), capacityAfter.value().version());
-            assertArrayEquals(capacityBefore.value().bytes(), capacityAfter.value().bytes());
+            var capacityAfter = provider.read(capacityKey, () -> false).toCompletableFuture().get();
+            if (capacityBefore instanceof ZLinkStoreReadFound before) {
+                var after = assertInstanceOf(ZLinkStoreReadFound.class, capacityAfter);
+                assertEquals(before.value().version(), after.value().version());
+                assertArrayEquals(before.value().bytes(), after.value().bytes());
+            } else {
+                assertInstanceOf(
+                        systems.zlink.framework.locationprovider.ZLinkStoreReadMissing.class,
+                        capacityAfter);
+            }
             assertEquals(
                     reservation.storeVersion(),
-                    ((ZLinkAuthoritySnapshot)
+                    assertInstanceOf(
+                                    ZLinkAuthoritySnapshot.class,
                                     repository.read(key, () -> false).toCompletableFuture().get())
                             .storeVersion());
         } else {
@@ -1419,10 +1434,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .commit(reservation, new byte[] {1}, null, () -> false)
                                 .toCompletableFuture()
                                 .get());
-            if (scenario.equals("missingCapacity"))
-                assertInstanceOf(
-                        systems.zlink.framework.locationprovider.ZLinkStoreReadMissing.class,
-                        provider.read(capacityKey, () -> false).toCompletableFuture().get());
         }
     }
 
@@ -1526,16 +1537,19 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                             (ZLinkStoreReadFound)
                                                     provider.read(
                                                                     new ZLinkStoreKey(
-                                                                            "zlink:v11:capacity:game:capacity-node"),
+                                                                            "zlink:v12:capacity\0game\0"
+                                                                                    + descriptor
+                                                                                            .rid()
+                                                                                            .toHex()
+                                                                                    + "\0spots\0pending"),
                                                                     () -> false)
                                                             .toCompletableFuture()
                                                             .get();
-                                    assertTrue(
+                                    assertEquals(
+                                            "0",
                                             new String(
-                                                            row.value().bytes(),
-                                                            java.nio.charset.StandardCharsets.UTF_8)
-                                                    .contains(
-                                                            "\"pending\":{\"actors\":0,\"spots\":0"));
+                                                    row.value().bytes(),
+                                                    java.nio.charset.StandardCharsets.UTF_8));
                                     assertTrue(rootExists.compareAndSet(true, false));
                                     return CompletableFuture.completedFuture(
                                             ZLinkRelocationDeleteResult.DELETED);
@@ -1722,8 +1736,12 @@ final class ZLinkProviderAuthorityRepositoryTest {
             assertEquals(before.storeVersion(), after.storeVersion());
             assertArrayEquals(before.payload(), after.payload());
             assertEquals(before.allocation(), after.allocation());
-            assertCounterValue(fixture.provider(), OBJECT_COUNTER_KEY, "2");
-            assertCounterValue(fixture.provider(), AUTHORITY_OWNER_COUNTER_KEY, "2");
+            assertCounterValue(
+                    fixture.provider(), generationKey(OBJECT_COUNTER_KEY, fixture.key()), "2");
+            assertCounterValue(
+                    fixture.provider(),
+                    generationKey(AUTHORITY_OWNER_COUNTER_KEY, fixture.key()),
+                    "2");
         }
     }
 
@@ -1761,8 +1779,10 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(before.ownerLeaseGeneration(), after.ownerLeaseGeneration());
         assertEquals(before.allocation(), after.allocation());
         assertArrayEquals(new byte[] {3}, after.payload());
-        assertCounterValue(fixture.provider(), OBJECT_COUNTER_KEY, "3");
-        assertCounterValue(fixture.provider(), AUTHORITY_OWNER_COUNTER_KEY, "3");
+        assertCounterValue(
+                fixture.provider(), generationKey(OBJECT_COUNTER_KEY, fixture.key()), "3");
+        assertCounterValue(
+                fixture.provider(), generationKey(AUTHORITY_OWNER_COUNTER_KEY, fixture.key()), "3");
         assertInstanceOf(
                 ZLinkAuthorityConflict.class,
                 fixture.repository()
@@ -1816,7 +1836,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                     List.of(),
                                     List.of(
                                             new ZLinkStorePut(
-                                                    new ZLinkStoreKey(exhausted),
+                                                    new ZLinkStoreKey(
+                                                            generationKey(
+                                                                    exhausted, fixture.key())),
                                                     Long.toString(Long.MAX_VALUE)
                                                             .getBytes(
                                                                     java.nio.charset
@@ -1848,7 +1870,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
             for (String counter : List.of(OBJECT_COUNTER_KEY, AUTHORITY_OWNER_COUNTER_KEY)) {
                 assertCounterValue(
                         fixture.provider(),
-                        counter,
+                        generationKey(counter, fixture.key()),
                         counter.equals(exhausted) ? Long.toString(Long.MAX_VALUE) : "2");
             }
         }
@@ -1909,7 +1931,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                             authorityKey,
                             "7",
                             null,
-                            new ZLinkStoreKey(counterKey));
+                            new ZLinkStoreKey(generationKey(counterKey, fixture.key())));
             var repository = new ZLinkProviderAuthorityRepository(contended);
             var stored =
                     assertInstanceOf(
@@ -1924,7 +1946,10 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                     .get());
             assertTrue(contended.bumpedCounter);
             for (String key : List.of(OBJECT_COUNTER_KEY, AUTHORITY_OWNER_COUNTER_KEY)) {
-                assertCounterValue(fixture.provider(), key, key.equals(counterKey) ? "8" : "3");
+                assertCounterValue(
+                        fixture.provider(),
+                        generationKey(key, fixture.key()),
+                        key.equals(counterKey) ? "8" : "3");
             }
             var after =
                     assertInstanceOf(
@@ -1970,8 +1995,10 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 () -> false)
                         .toCompletableFuture()
                         .get());
-        assertCounterValue(fixture.provider(), OBJECT_COUNTER_KEY, "2");
-        assertCounterValue(fixture.provider(), AUTHORITY_OWNER_COUNTER_KEY, "2");
+        assertCounterValue(
+                fixture.provider(), generationKey(OBJECT_COUNTER_KEY, fixture.key()), "2");
+        assertCounterValue(
+                fixture.provider(), generationKey(AUTHORITY_OWNER_COUNTER_KEY, fixture.key()), "2");
         var after =
                 assertInstanceOf(
                         ZLinkAuthoritySnapshot.class,
@@ -2456,12 +2483,12 @@ final class ZLinkProviderAuthorityRepositoryTest {
             var relocation =
                     mapper.readTree(
                             """
-                {"relocationId":"%s","phase":"prepared",
-                 "source":{"nodeRid":"%s","nodeGeneration":"%s","ownerId":"%s","ownerLeaseGeneration":"%s"},
-                 "target":{"nodeRid":"%s","nodeGeneration":"%s","ownerId":"%s","ownerLeaseGeneration":"%s","attemptGeneration":"1"},
-                 "coordinator":{"nodeRid":"%s","nodeGeneration":"%s","ownerId":"%s","ownerLeaseGeneration":"%s","expectedStoreVersion":"%s"},
-                 "sourceInventorySha256":"%s","applicationVersion":"%s"}
-                """
+                            {"relocationId":"%s","phase":"prepared",
+                             "source":{"nodeRid":"%s","nodeGeneration":"%s","ownerId":"%s","ownerLeaseGeneration":"%s"},
+                             "target":{"nodeRid":"%s","nodeGeneration":"%s","ownerId":"%s","ownerLeaseGeneration":"%s","attemptGeneration":"1"},
+                             "coordinator":{"nodeRid":"%s","nodeGeneration":"%s","ownerId":"%s","ownerLeaseGeneration":"%s","expectedStoreVersion":"%s"},
+                             "sourceInventorySha256":"%s","applicationVersion":"%s"}
+                            """
                                     .formatted(
                                             request.aggregateId(),
                                             current.allocation().descriptor().rid().toHex(),
@@ -2672,6 +2699,17 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .toCompletableFuture()
                         .get()
                         .status());
+        provider.write(
+                        new ZLinkStoreWriteRequest(
+                                List.of(),
+                                List.of(
+                                        new ZLinkStorePut(
+                                                new ZLinkStoreKey("zlink:v12:generation-floor"),
+                                                new byte[] {'1', '7'},
+                                                null))),
+                        () -> false)
+                .toCompletableFuture()
+                .get();
         var repository = new ZLinkProviderAuthorityRepository(provider, descriptors);
         var first = capacityRequest(ZLinkAuthorityKeyCodec.spot("spot-a"), descriptor, owner);
         var second = capacityRequest(ZLinkAuthorityKeyCodec.spot("spot-b"), descriptor, owner);
@@ -2681,8 +2719,12 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 ZLinkObjectReserved.class,
                                 repository.reserve(first, () -> false).toCompletableFuture().get())
                         .reservation();
-        assertCounterValue(provider, OBJECT_COUNTER_KEY, "2");
-        assertCounterValue(provider, AUTHORITY_OWNER_COUNTER_KEY, "2");
+        assertEquals(17, reservation.objectGeneration());
+        assertEquals(17, reservation.authorityOwnerGeneration());
+        String objectCounter = generationKey(OBJECT_COUNTER_KEY, first.authorityKey());
+        String ownerCounter = generationKey(AUTHORITY_OWNER_COUNTER_KEY, first.authorityKey());
+        assertCounterValue(provider, objectCounter, "18");
+        assertCounterValue(provider, ownerCounter, "18");
         assertInstanceOf(
                 ZLinkPlacementCapacityExhausted.class,
                 repository.reserve(second, () -> false).toCompletableFuture().get());
@@ -2713,6 +2755,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 () -> false)
                         .toCompletableFuture()
                         .get());
+        assertCounterValue(provider, objectCounter, "18");
+        assertCounterValue(provider, ownerCounter, "18");
         assertInstanceOf(
                 ZLinkObjectReserved.class,
                 repository.reserve(second, () -> false).toCompletableFuture().get());
@@ -2981,8 +3025,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 List.of(),
                                 List.of(
                                         new ZLinkStoreDelete(
-                                                new ZLinkStoreKey(
-                                                        "zlink:v11:capacity:mesh:zone-rid-old")))),
+                                                actorCapacityKey(
+                                                        "mesh", "zone-rid-old", "active")))),
                         () -> false)
                 .toCompletableFuture()
                 .get();
@@ -3040,7 +3084,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         // The dead owner's capacity row was recreated from zero by the
         // replacement, so it no longer accounts for the committed allocation.
         // Decrementing it would underflow, which used to abort the reclaim.
-        zeroCapacityRow(provider, "zlink:v11:capacity:mesh:zone-rid-old");
+        zeroCapacityRow(provider, actorCapacityKey("mesh", "zone-rid-old", "active"));
         assertEquals(
                 ZLinkOwnerLeaseReleaseResult.RELEASED,
                 owners.release(oldOwner).toCompletableFuture().get());
@@ -3093,7 +3137,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .token();
         var liveDescriptor = capacityDescriptor(liveOwner, "mesh", RoutingId.from("zone-rid-live"));
         commitStaleAuthority(repository, descriptors, liveDescriptor, liveOwner, authorityKey);
-        zeroCapacityRow(provider, "zlink:v11:capacity:mesh:zone-rid-live");
+        zeroCapacityRow(provider, actorCapacityKey("mesh", "zone-rid-live", "active"));
 
         var otherOwner =
                 ((ZLinkOwnerLeaseClaimed)
@@ -3128,7 +3172,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
-    void capacityRowsUseTheNodeCppCanonicalKeyAndJsonShape() throws Exception {
+    void capacityCountersUseCanonicalHexKeyAndDecimalValue() throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var owner =
                 ((ZLinkOwnerLeaseClaimed)
@@ -3162,13 +3206,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         .toCompletableFuture()
                                         .get())
                         .reservation();
-        String key = "zlink:v11:capacity:mesh%20%2F%ED%95%9C:node%20%2F%23%3F";
-        assertCapacityRow(
-                provider,
-                key,
-                "{\"active\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}},"
-                        + "\"pending\":{\"actors\":0,\"spots\":1,\"spotTypes\":{"
-                        + "\"user_spot\\u0000room\":1}}}");
+        String prefix = "zlink:v12:capacity\0mesh /한\0" + "6e6f6465202f233f\0";
+        assertCounterValue(provider, prefix + "spots\0pending", "1");
+        assertCounterValue(provider, prefix + "spot-type\0userSpot\0room\0pending", "1");
 
         assertEquals(
                 ZLinkObjectCommitResult.COMMITTED,
@@ -3176,12 +3216,10 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .commit(reservation, new byte[] {2}, null, () -> false)
                         .toCompletableFuture()
                         .get());
-        assertCapacityRow(
-                provider,
-                key,
-                "{\"active\":{\"actors\":0,\"spots\":1,\"spotTypes\":{"
-                        + "\"user_spot\\u0000room\":1}},\"pending\":{\"actors\":0,"
-                        + "\"spots\":0,\"spotTypes\":{}}}");
+        assertCounterValue(provider, prefix + "spots\0pending", "0");
+        assertCounterValue(provider, prefix + "spots\0active", "1");
+        assertCounterValue(provider, prefix + "spot-type\0userSpot\0room\0pending", "0");
+        assertCounterValue(provider, prefix + "spot-type\0userSpot\0room\0active", "1");
     }
 
     @Test
@@ -3203,7 +3241,10 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .toCompletableFuture()
                         .get()
                         .status());
-        ZLinkStoreKey counterKey = new ZLinkStoreKey(OBJECT_COUNTER_KEY);
+        ZLinkStoreKey counterKey =
+                new ZLinkStoreKey(
+                        generationKey(
+                                OBJECT_COUNTER_KEY, ZLinkAuthorityKeyCodec.spot("spot-exhausted")));
         provider.write(
                         new ZLinkStoreWriteRequest(
                                 List.of(),
@@ -3266,7 +3307,11 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         List.of(),
                                         List.of(
                                                 new ZLinkStorePut(
-                                                        new ZLinkStoreKey(counterName),
+                                                        new ZLinkStoreKey(
+                                                                generationKey(
+                                                                        counterName,
+                                                                        ZLinkAuthorityKeyCodec.spot(
+                                                                                "spot-counter"))),
                                                         invalid.getBytes(
                                                                 java.nio.charset.StandardCharsets
                                                                         .UTF_8),
@@ -3289,89 +3334,54 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                                         () -> false)
                                                 .toCompletableFuture()
                                                 .get());
-                assertInstanceOf(IllegalStateException.class, failure.getCause());
+                assertEquals(
+                        ZLinkFrameworkErrorKind.DATA_LOST,
+                        assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
                 assertEquals("Location Store counter is invalid", failure.getCause().getMessage());
             }
         }
     }
 
     @Test
-    void nearCeilingAggregateCounterBlockReturnsTypedExhaustion() throws Exception {
-        var provider = new ZLinkInMemoryProviderLocationStore();
-        var owner =
-                ((ZLinkOwnerLeaseClaimed)
-                                new ZLinkProviderOwnerLeaseRepository(provider)
-                                        .claim("owner-a", Duration.ofMinutes(1))
-                                        .toCompletableFuture()
-                                        .get())
-                        .token();
-        publishAggregateTarget(provider, owner);
-        String authorityA = ZLinkAuthorityKeyCodec.actor("ceiling-a");
-        String authorityB = ZLinkAuthorityKeyCodec.actor("ceiling-b");
-        var keyA = authorityKey(authorityA);
-        var keyB = authorityKey(authorityB);
-        var seeded =
-                (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
-                        provider.write(
-                                        new ZLinkStoreWriteRequest(
-                                                List.of(),
-                                                List.of(
-                                                        new ZLinkStorePut(
-                                                                keyA,
-                                                                encodedAuthorityRecord(),
-                                                                null),
-                                                        new ZLinkStorePut(
-                                                                keyB,
-                                                                encodedAuthorityRecord(),
-                                                                null),
-                                                        new ZLinkStorePut(
-                                                                new ZLinkStoreKey(
-                                                                        AUTHORITY_OWNER_COUNTER_KEY),
-                                                                Long.toString(Long.MAX_VALUE - 1)
-                                                                        .getBytes(
-                                                                                java.nio.charset
-                                                                                        .StandardCharsets
-                                                                                        .UTF_8),
-                                                                null))),
-                                        () -> false)
+    void aggregateIssuesTheLastAvailableGenerationIndependentlyForEachId() throws Exception {
+        var fixture =
+                preparedFixture(
+                        2, new UUID(0, 12), 1, ZLinkAuthorityGenerationTransition.NEW_OWNER);
+        for (var participant : fixture.request().participants()) {
+            putCounter(
+                    fixture.store(),
+                    aggregateOwnerCounter(participant.authorityKey()),
+                    Long.MAX_VALUE - 1);
+        }
+
+        var prepared =
+                assertInstanceOf(
+                        ZLinkAggregatePrepared.class,
+                        fixture.repository()
+                                .prepareAggregate(fixture.request(), () -> false)
                                 .toCompletableFuture()
-                                .get();
-        var request =
-                new ZLinkAggregatePrepareRequest(
-                        new UUID(0, 12),
-                        1,
-                        List.of(
-                                new ZLinkAggregateParticipant(
-                                        authorityA,
-                                        1,
-                                        1,
-                                        seeded.putVersions().get(keyA).value(),
-                                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                                        new byte[] {1},
-                                        new byte[] {2}),
-                                new ZLinkAggregateParticipant(
-                                        authorityB,
-                                        1,
-                                        1,
-                                        seeded.putVersions().get(keyB).value(),
-                                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                                        new byte[] {3},
-                                        new byte[] {4})),
-                        new byte[32],
-                        new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
-                        1,
-                        ZLinkPlacementCapacityBundle.actor(1),
-                        owner);
-
-        var result =
-                new ZLinkProviderAuthorityRepository(provider)
-                        .prepareAggregate(request, () -> false)
+                                .join());
+        assertEquals(
+                ZLinkAggregateCommitResult.COMMITTED,
+                fixture.repository()
+                        .commitAggregate(prepared.fence(), () -> false)
                         .toCompletableFuture()
-                        .get();
+                        .join());
 
-        assertInstanceOf(ZLinkAggregateGenerationExhausted.class, result);
-        assertCounterValue(
-                provider, AUTHORITY_OWNER_COUNTER_KEY, Long.toString(Long.MAX_VALUE - 1));
+        for (var participant : fixture.request().participants()) {
+            var committed =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            fixture.repository()
+                                    .read(participant.authorityKey(), () -> false)
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(Long.MAX_VALUE - 1, committed.authorityOwnerGeneration());
+            assertCounterValue(
+                    fixture.store(),
+                    aggregateOwnerCounter(participant.authorityKey()).value(),
+                    Long.toString(Long.MAX_VALUE));
+        }
     }
 
     @Test
@@ -3671,6 +3681,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .join();
         publishAggregateTarget(delegate, owner.token());
         ZLinkStoreKey authority = authorityKey(authorityContractKey);
+        putCounter(delegate, aggregateOwnerCounter(authorityContractKey), 2);
         var seeded =
                 (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
                         delegate.write(
@@ -3730,273 +3741,123 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
-    void aggregatePrepareReentersAfterIndependentAuthorityCounterContention() {
-        String authorityContractKey = ZLinkAuthorityKeyCodec.actor("authority-counter-only-race");
-        var delegate = new ZLinkInMemoryProviderLocationStore();
-        ZLinkStoreKey authority = authorityKey(authorityContractKey);
-        var store = new IndependentCounterContentionStore(delegate, authority, "2", null);
-        var owner =
-                (ZLinkOwnerLeaseClaimed)
-                        new ZLinkProviderOwnerLeaseRepository(store)
-                                .claim("owner-a", Duration.ofHours(1))
-                                .toCompletableFuture()
-                                .join();
-        publishAggregateTarget(delegate, owner.token());
-        var seeded =
-                (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
-                        delegate.write(
-                                        new ZLinkStoreWriteRequest(
-                                                List.of(),
-                                                List.of(
-                                                        new ZLinkStorePut(
-                                                                authority,
-                                                                encodedAuthorityRecord(),
-                                                                null))),
-                                        () -> false)
-                                .toCompletableFuture()
-                                .join();
-        var participant =
-                new ZLinkAggregateParticipant(
-                        authorityContractKey,
-                        1,
-                        1,
-                        seeded.putVersions().get(authority).value(),
-                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                        new byte[] {11},
-                        new byte[] {12});
-        var request =
-                new ZLinkAggregatePrepareRequest(
-                        new UUID(0, 13),
-                        1,
-                        List.of(participant),
-                        new byte[32],
-                        new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
-                        1,
-                        ZLinkPlacementCapacityBundle.actor(1),
-                        owner.token());
+    void aggregatePrepareIgnoresAnotherIdsExhaustedCounter() throws Exception {
+        var fixture =
+                preparedFixture(
+                        1, new UUID(0, 13), 1, ZLinkAuthorityGenerationTransition.NEW_OWNER);
+        var actual =
+                aggregateOwnerCounter(fixture.request().participants().getFirst().authorityKey());
+        var unrelated = aggregateOwnerCounter(ZLinkAuthorityKeyCodec.actor("unrelated"));
+        putCounter(fixture.store(), unrelated, Long.MAX_VALUE);
 
-        var result =
-                new ZLinkProviderAuthorityRepository(store)
-                        .prepareAggregate(request, () -> false)
-                        .toCompletableFuture()
-                        .join();
-
-        assertTrue(store.bumpedCounter, "test store did not create counter contention");
-        assertTrue(
-                result instanceof ZLinkAggregatePrepared
-                        || result instanceof ZLinkAggregateAlreadyPrepared,
-                () -> "unchanged aggregate did not re-enter prepare: " + result);
-        var aggregate =
-                (ZLinkStoreReadFound)
-                        delegate.read(aggregateKey(request), () -> false)
+        var prepared =
+                assertInstanceOf(
+                        ZLinkAggregatePrepared.class,
+                        fixture.repository()
+                                .prepareAggregate(fixture.request(), () -> false)
                                 .toCompletableFuture()
-                                .join();
+                                .join());
+
+        assertCounterValue(fixture.store(), actual.value(), "3");
+        assertCounterValue(fixture.store(), unrelated.value(), Long.toString(Long.MAX_VALUE));
+        var repeated =
+                assertInstanceOf(
+                        ZLinkAggregateAlreadyPrepared.class,
+                        fixture.repository()
+                                .prepareAggregate(fixture.request(), () -> false)
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(prepared.fence(), repeated.fence());
+    }
+
+    @Test
+    void aggregatePrepareLeavesExhaustedParticipantUnchanged() throws Exception {
+        var fixture =
+                preparedFixture(
+                        1, new UUID(0, 15), 1, ZLinkAuthorityGenerationTransition.NEW_OWNER);
+        var participant = fixture.request().participants().getFirst();
+        var counter = aggregateOwnerCounter(participant.authorityKey());
+        putCounter(fixture.store(), counter, Long.MAX_VALUE);
+
         assertInstanceOf(
-                ZLinkAggregateAlreadyPrepared.class,
-                new ZLinkProviderAuthorityRepository(store)
-                        .prepareAggregate(request, () -> false)
+                ZLinkAggregateGenerationExhausted.class,
+                fixture.repository()
+                        .prepareAggregate(fixture.request(), () -> false)
                         .toCompletableFuture()
                         .join());
+        var current =
+                assertInstanceOf(
+                        ZLinkStoreReadFound.class,
+                        fixture.store()
+                                .read(authorityKey(participant.authorityKey()), () -> false)
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(participant.expectedStoreVersion(), current.value().version().value());
+        assertCounterValue(fixture.store(), counter.value(), Long.toString(Long.MAX_VALUE));
     }
 
     @Test
-    void aggregatePreparePropagatesCounterExhaustionFromReentry() {
-        String authorityContractKey = ZLinkAuthorityKeyCodec.actor("authority-counter-exhausted");
-        var delegate = new ZLinkInMemoryProviderLocationStore();
-        ZLinkStoreKey authority = authorityKey(authorityContractKey);
-        var store =
-                new IndependentCounterContentionStore(
-                        delegate, authority, Long.toString(Long.MAX_VALUE), null);
-        var owner =
-                (ZLinkOwnerLeaseClaimed)
-                        new ZLinkProviderOwnerLeaseRepository(store)
-                                .claim("owner-a", Duration.ofHours(1))
-                                .toCompletableFuture()
-                                .join();
-        publishAggregateTarget(delegate, owner.token());
-        var seeded =
-                (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
-                        delegate.write(
-                                        new ZLinkStoreWriteRequest(
-                                                List.of(),
-                                                List.of(
-                                                        new ZLinkStorePut(
-                                                                authority,
-                                                                encodedAuthorityRecord(),
-                                                                null))),
-                                        () -> false)
-                                .toCompletableFuture()
-                                .join();
-        var participant =
-                new ZLinkAggregateParticipant(
-                        authorityContractKey,
-                        1,
-                        1,
-                        seeded.putVersions().get(authority).value(),
-                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                        new byte[] {11},
-                        new byte[] {12});
-        var request =
-                new ZLinkAggregatePrepareRequest(
-                        new UUID(0, 15),
-                        1,
-                        List.of(participant),
-                        new byte[32],
-                        new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
-                        1,
-                        ZLinkPlacementCapacityBundle.actor(1),
-                        owner.token());
+    void adoptedAggregatePrepareClearsParticipantMarkerAfterLaterParticipantExhaustion()
+            throws Exception {
+        var fixture =
+                preparedFixture(
+                        2, new UUID(0, 16), 1, ZLinkAuthorityGenerationTransition.NEW_OWNER);
+        var first = fixture.request().participants().getFirst();
+        var second = fixture.request().participants().getLast();
+        var firstKey = authorityKey(first.authorityKey());
+        putCounter(fixture.store(), aggregateOwnerCounter(second.authorityKey()), Long.MAX_VALUE);
 
-        var result =
-                new ZLinkProviderAuthorityRepository(store)
-                        .prepareAggregate(request, () -> false)
-                        .toCompletableFuture()
-                        .join();
-
-        assertTrue(store.bumpedCounter, "test store did not exhaust the contended counter");
-        assertInstanceOf(ZLinkAggregateGenerationExhausted.class, result);
-    }
-
-    @Test
-    void adoptedAggregatePrepareClearsInstalledMarkersBeforePropagatingReentryTerminal() {
-        String authorityAContractKey = ZLinkAuthorityKeyCodec.actor("authority-adopted-a");
-        String authorityBContractKey = ZLinkAuthorityKeyCodec.actor("authority-adopted-b");
-        var delegate = new ZLinkInMemoryProviderLocationStore();
-        ZLinkStoreKey authorityA = authorityKey(authorityAContractKey);
-        ZLinkStoreKey authorityB = authorityKey(authorityBContractKey);
-        var store =
-                new IndependentCounterContentionStore(
-                        delegate, authorityB, Long.toString(Long.MAX_VALUE), null);
-        var owner =
-                (ZLinkOwnerLeaseClaimed)
-                        new ZLinkProviderOwnerLeaseRepository(store)
-                                .claim("owner-a", Duration.ofHours(1))
-                                .toCompletableFuture()
-                                .join();
-        publishAggregateTarget(delegate, owner.token(), 2);
-        var seeded =
-                (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
-                        delegate.write(
-                                        new ZLinkStoreWriteRequest(
-                                                List.of(),
-                                                List.of(
-                                                        new ZLinkStorePut(
-                                                                authorityA,
-                                                                encodedAuthorityRecord(),
-                                                                null),
-                                                        new ZLinkStorePut(
-                                                                authorityB,
-                                                                encodedAuthorityRecord(),
-                                                                null))),
-                                        () -> false)
-                                .toCompletableFuture()
-                                .join();
-        var participantA =
-                participant(
-                        authorityAContractKey,
-                        seeded.putVersions().get(authorityA).value(),
-                        new byte[] {11},
-                        new byte[] {12});
-        var participantB =
-                new ZLinkAggregateParticipant(
-                        authorityBContractKey,
-                        1,
-                        1,
-                        seeded.putVersions().get(authorityB).value(),
-                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                        new byte[] {21},
-                        new byte[] {22});
-        var request =
-                new ZLinkAggregatePrepareRequest(
-                        new UUID(0, 16),
-                        1,
-                        List.of(participantA, participantB),
-                        new byte[32],
-                        new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
-                        1,
-                        ZLinkPlacementCapacityBundle.actor(2),
-                        owner.token());
-        try (var paused = new PausedParticipantStore(delegate, authorityA)) {
-            paused.start(request);
-            var result =
-                    new ZLinkProviderAuthorityRepository(store)
-                            .prepareAggregate(request, () -> false)
+        try (var paused = new PausedParticipantStore(fixture.store(), firstKey)) {
+            paused.start(fixture.request());
+            assertInstanceOf(
+                    ZLinkAggregateGenerationExhausted.class,
+                    fixture.repository()
+                            .prepareAggregate(fixture.request(), () -> false)
                             .toCompletableFuture()
-                            .join();
-
-            assertInstanceOf(ZLinkAggregateGenerationExhausted.class, result);
-            var currentA =
-                    (ZLinkStoreReadFound)
-                            delegate.read(authorityA, () -> false).toCompletableFuture().join();
-            var visibleA =
+                            .join());
+            var current =
                     assertInstanceOf(
-                            ZLinkAuthoritySnapshot.class,
-                            new ZLinkProviderAuthorityRepository(delegate)
-                                    .read(authorityAContractKey, () -> false)
+                            ZLinkStoreReadFound.class,
+                            fixture.store()
+                                    .read(firstKey, () -> false)
                                     .toCompletableFuture()
                                     .join());
+            var visible =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            fixture.repository()
+                                    .read(first.authorityKey(), () -> false)
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(current.value().version().value(), visible.storeVersion());
             assertEquals(
-                    currentA.value().version().value(),
-                    visibleA.storeVersion(),
-                    "prepare left an installed participant marker");
+                    first.sourceAuthorityOwnerGeneration(), visible.authorityOwnerGeneration());
+            assertCounterValue(
+                    fixture.store(), aggregateOwnerCounter(first.authorityKey()).value(), "3");
         }
     }
 
     @Test
-    void aggregatePrepareStillConflictsWhenParticipantFenceChangesDuringCounterContention() {
-        String authorityContractKey = ZLinkAuthorityKeyCodec.actor("authority-fence-race");
-        var delegate = new ZLinkInMemoryProviderLocationStore();
-        ZLinkStoreKey authority = authorityKey(authorityContractKey);
+    void aggregatePrepareConflictsWhenTheParticipantFenceChangesDuringCounterContention() {
+        var fixture =
+                preparedFixture(
+                        1, new UUID(0, 14), 1, ZLinkAuthorityGenerationTransition.NEW_OWNER);
+        var participant = fixture.request().participants().getFirst();
         var store =
                 new IndependentCounterContentionStore(
-                        delegate, authority, "2", encodedAuthorityRecord());
-        var owner =
-                (ZLinkOwnerLeaseClaimed)
-                        new ZLinkProviderOwnerLeaseRepository(store)
-                                .claim("owner-a", Duration.ofHours(1))
-                                .toCompletableFuture()
-                                .join();
-        publishAggregateTarget(delegate, owner.token());
-        var seeded =
-                (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
-                        delegate.write(
-                                        new ZLinkStoreWriteRequest(
-                                                List.of(),
-                                                List.of(
-                                                        new ZLinkStorePut(
-                                                                authority,
-                                                                encodedAuthorityRecord(),
-                                                                null))),
-                                        () -> false)
-                                .toCompletableFuture()
-                                .join();
-        var participant =
-                new ZLinkAggregateParticipant(
-                        authorityContractKey,
-                        1,
-                        1,
-                        seeded.putVersions().get(authority).value(),
-                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                        new byte[] {11},
-                        new byte[] {12});
-        var request =
-                new ZLinkAggregatePrepareRequest(
-                        new UUID(0, 14),
-                        1,
-                        List.of(participant),
-                        new byte[32],
-                        new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
-                        1,
-                        ZLinkPlacementCapacityBundle.actor(1),
-                        owner.token());
+                        fixture.store(),
+                        authorityKey(participant.authorityKey()),
+                        "3",
+                        encodedAuthorityRecord(),
+                        aggregateOwnerCounter(participant.authorityKey()));
 
         var result =
                 new ZLinkProviderAuthorityRepository(store)
-                        .prepareAggregate(request, () -> false)
+                        .prepareAggregate(fixture.request(), () -> false)
                         .toCompletableFuture()
                         .join();
 
-        assertTrue(store.bumpedCounter, "test store did not create counter contention");
+        assertTrue(store.bumpedCounter);
         assertInstanceOf(ZLinkAggregateConflict.class, result);
     }
 
@@ -4306,19 +4167,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 new String(found.value().bytes(), java.nio.charset.StandardCharsets.UTF_8));
     }
 
-    private static void assertCapacityRow(ZLinkLocationStore provider, String key, String expected)
-            throws Exception {
-        var found =
-                assertInstanceOf(
-                        ZLinkStoreReadFound.class,
-                        provider.read(new ZLinkStoreKey(key), () -> false)
-                                .toCompletableFuture()
-                                .get());
-        assertEquals(
-                expected,
-                new String(found.value().bytes(), java.nio.charset.StandardCharsets.UTF_8));
-    }
-
     private static ZLinkObjectReservation commitStaleAuthority(
             ZLinkProviderAuthorityRepository repository,
             ZLinkProviderDescriptorRepository descriptors,
@@ -4377,20 +4225,11 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertArrayEquals(new byte[] {2}, observed.payload());
     }
 
-    private static void zeroCapacityRow(ZLinkLocationStore provider, String key) throws Exception {
+    private static void zeroCapacityRow(ZLinkLocationStore provider, ZLinkStoreKey key)
+            throws Exception {
         provider.write(
                         new ZLinkStoreWriteRequest(
-                                List.of(),
-                                List.of(
-                                        new ZLinkStorePut(
-                                                new ZLinkStoreKey(key),
-                                                ("{\"active\":{\"actors\":0,\"spots\":0,"
-                                                                + "\"spotTypes\":{}},\"pending\":{\"actors\":0,"
-                                                                + "\"spots\":0,\"spotTypes\":{}}}")
-                                                        .getBytes(
-                                                                java.nio.charset.StandardCharsets
-                                                                        .UTF_8),
-                                                null))),
+                                List.of(), List.of(new ZLinkStorePut(key, new byte[] {'0'}, null))),
                         () -> false)
                 .toCompletableFuture()
                 .get();
@@ -4540,7 +4379,36 @@ final class ZLinkProviderAuthorityRepositoryTest {
             ZLinkProviderAuthorityRepository repository,
             ZLinkAggregatePrepareRequest request) {}
 
+    private static ZLinkStoreKey aggregateOwnerCounter(String authorityKey) {
+        return new ZLinkStoreKey(generationKey(AUTHORITY_OWNER_COUNTER_KEY, authorityKey));
+    }
+
+    private static void putCounter(ZLinkLocationStore store, ZLinkStoreKey key, long count) {
+        assertInstanceOf(
+                ZLinkStoreWriteApplied.class,
+                store.write(
+                                new ZLinkStoreWriteRequest(
+                                        List.of(),
+                                        List.of(
+                                                new ZLinkStorePut(
+                                                        key,
+                                                        Long.toString(count)
+                                                                .getBytes(
+                                                                        java.nio.charset
+                                                                                .StandardCharsets
+                                                                                .UTF_8),
+                                                        null))),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join());
+    }
+
     private static AggregateFixture preparedFixture(int count, UUID id, long generation) {
+        return preparedFixture(count, id, generation, ZLinkAuthorityGenerationTransition.PRESERVE);
+    }
+
+    private static AggregateFixture preparedFixture(
+            int count, UUID id, long generation, ZLinkAuthorityGenerationTransition transition) {
         var store = new ZLinkInMemoryProviderLocationStore();
         var owner =
                 assertInstanceOf(
@@ -4550,7 +4418,12 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         .toCompletableFuture()
                                         .join())
                         .token();
-        publishAggregateTarget(store, owner, count + 1);
+        publishAggregateTarget(store, owner, count * 2);
+        var target = new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a"));
+        putCounter(
+                store,
+                actorCapacityKey(target.meshName(), target.rid().toString(), "active"),
+                count);
         byte[] seed = encodedAuthorityRecord();
         var participants = new ArrayList<ZLinkAggregateParticipant>();
         for (int index = 0; index < count; index++) {
@@ -4569,13 +4442,16 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                             () -> false)
                                     .toCompletableFuture()
                                     .join());
+            if (transition == ZLinkAuthorityGenerationTransition.NEW_OWNER) {
+                putCounter(store, aggregateOwnerCounter(key), 2);
+            }
             participants.add(
                     new ZLinkAggregateParticipant(
                             key,
                             1,
                             1,
                             stored.putVersions().get(authorityKey(key)).value(),
-                            ZLinkAuthorityGenerationTransition.PRESERVE,
+                            transition,
                             new byte[] {11},
                             new byte[] {12}));
         }
@@ -4587,7 +4463,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         generation,
                         participants,
                         new byte[32],
-                        new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
+                        target,
                         1,
                         ZLinkPlacementCapacityBundle.actor(count),
                         owner));
@@ -4840,17 +4716,20 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                                     mutation instanceof ZLinkStorePut put
                                                             && put.key()
                                                                     .value()
-                                                                    .equals(
-                                                                            AUTHORITY_OWNER_COUNTER_KEY));
+                                                                    .startsWith(
+                                                                            AUTHORITY_OWNER_COUNTER_KEY
+                                                                                    + '\0'));
             if (!reservesAuthorityOwnerGeneration) {
                 return delegate.write(request, cancellation);
             }
             publishedPeerMarker = true;
             return delegate.write(request, cancellation)
                     .thenApply(
-                            ignored ->
-                                    new systems.zlink.framework.locationprovider
-                                            .ZLinkStoreWriteConflict(Instant.now()));
+                            applied -> {
+                                assertInstanceOf(ZLinkStoreWriteApplied.class, applied);
+                                return new systems.zlink.framework.locationprovider
+                                        .ZLinkStoreWriteConflict(Instant.now());
+                            });
         }
 
         @Override
@@ -4868,19 +4747,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
         private final String counterValue;
         private final byte[] changedParticipant;
         private boolean bumpedCounter;
-
-        private IndependentCounterContentionStore(
-                ZLinkLocationStore delegate,
-                ZLinkStoreKey authorityKey,
-                String counterValue,
-                byte[] changedParticipant) {
-            this(
-                    delegate,
-                    authorityKey,
-                    counterValue,
-                    changedParticipant,
-                    new ZLinkStoreKey(AUTHORITY_OWNER_COUNTER_KEY));
-        }
 
         private IndependentCounterContentionStore(
                 ZLinkLocationStore delegate,
