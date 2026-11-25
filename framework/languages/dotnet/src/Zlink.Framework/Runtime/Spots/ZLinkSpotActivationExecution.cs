@@ -1391,28 +1391,34 @@ internal abstract partial class ZLinkSpotActivation
         DateTimeOffset deadline
     );
 
-    private ValueTask ExecuteSerializedAsync(
+    private async ValueTask ExecuteSerializedAsync(
         Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
         CancellationToken cancellationToken
     )
     {
-        return _serial.IsTargetPreparing
-            ? _serial.ExecuteTargetPreparationAsync(operation, cancellationToken)
-            : _serial.ExecuteAsync(operation, cancellationToken);
+        if (
+            !await _serial
+                .TryExecuteTargetPreparationAsync(operation, cancellationToken)
+                .ConfigureAwait(false)
+        )
+            await _serial.ExecuteAsync(operation, cancellationToken).ConfigureAwait(false);
     }
 
-    private ValueTask ExecuteSerializedAsync<TState>(
+    private async ValueTask ExecuteSerializedAsync<TState>(
         Func<ZLinkSpotActivation, TState, CancellationToken, ValueTask> operation,
         TState state,
         CancellationToken cancellationToken
     )
     {
-        return _serial.IsTargetPreparing
-            ? _serial.ExecuteTargetPreparationAsync(
-                (activation, ct) => operation(activation, state, ct),
-                cancellationToken
-            )
-            : _serial.ExecuteAsync(operation, state, cancellationToken);
+        if (
+            !await _serial
+                .TryExecuteTargetPreparationAsync(
+                    (activation, ct) => operation(activation, state, ct),
+                    cancellationToken
+                )
+                .ConfigureAwait(false)
+        )
+            await _serial.ExecuteAsync(operation, state, cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask ExecuteApplicationSerializedAsync<TState>(
@@ -2618,7 +2624,8 @@ internal abstract partial class ZLinkSpotActivation
 
     internal async ValueTask<bool> OpenRelocationTargetAdmissionAsync(
         ZLinkSpotRelocationSeal seal,
-        Action reserveBeforeApplicationAdmission
+        Action reserveBeforeApplicationAdmission,
+        Func<ValueTask> recordDispatchOpening
     )
     {
         ArgumentNullException.ThrowIfNull(seal);
@@ -2627,7 +2634,8 @@ internal abstract partial class ZLinkSpotActivation
             !await _serial
                 .TryOpenRelocationAfterMessageFollowAsync(
                     seal.QueueSeal,
-                    reserveBeforeApplicationAdmission
+                    reserveBeforeApplicationAdmission,
+                    recordDispatchOpening
                 )
                 .ConfigureAwait(false)
         )

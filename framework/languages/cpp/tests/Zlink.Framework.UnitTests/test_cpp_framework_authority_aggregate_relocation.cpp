@@ -2,9 +2,11 @@
 
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
+#include "runtime/locations/provider_relocation_repository.hpp"
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "../support/opaque_store_record_fixture.hpp"
 #include "../support/aggregate_page_read_fixture.hpp"
+#include "../support/stateful_object_sync.hpp"
 
 #include <fstream>
 
@@ -12,11 +14,17 @@ namespace
 {
 using namespace zlink::framework::test::opaque_store;
 using namespace zlink::framework::runtime::stateful;
+using stateful_relocation_reason_t = zlink::framework::runtime::stateful::relocation_reason_t;
+
+nlohmann::ordered_json golden_records ()
+{
+    std::ifstream fixture (ZLINK_AUTHORITY_AGGREGATE_RELOCATION_GOLDEN_PATH);
+    return nlohmann::ordered_json::parse (fixture);
+}
 
 TEST (AuthorityAggregateRelocation, SharedRecordsRoundTripAndMalformedRecordsFailClosed)
 {
-    std::ifstream fixture (ZLINK_AUTHORITY_AGGREGATE_RELOCATION_GOLDEN_PATH);
-    const auto golden = nlohmann::ordered_json::parse (fixture);
+    const auto golden = golden_records ();
     for (const auto &item : golden.at ("cases")) {
         SCOPED_TRACE (item.at ("name").get<std::string> ());
         const auto &aggregate = item.at ("aggregate");
@@ -35,70 +43,89 @@ TEST (AuthorityAggregateRelocation, SharedRecordsRoundTripAndMalformedRecordsFai
     }
 }
 
-TEST (AuthorityAggregateRelocation, ForeignCaptureHoldsItsOriginalSourceFence)
+TEST (AuthorityAggregateRelocation, ForeignPrecommitHoldsItsOriginalSourceFence)
 {
-    std::ifstream fixture (ZLINK_AUTHORITY_AGGREGATE_RELOCATION_GOLDEN_PATH);
-    const auto golden = nlohmann::json::parse (fixture);
+    const nlohmann::json golden = golden_records ();
     const auto &cases = golden.at ("cases");
-    const auto captured = std::find_if (cases.begin (), cases.end (), [] (const auto &item) {
-        return item.at ("name") == "relocation-only-captured";
-    });
-    ASSERT_NE (captured, cases.end ());
+    for (const auto phase : {"preparing", "captured", "prepared"}) {
+        SCOPED_TRACE (phase);
+        const auto match = std::find_if (cases.begin (), cases.end (), [phase] (const auto &item) {
+            return item.at ("name") == std::string ("relocation-only-") + phase;
+        });
+        ASSERT_NE (match, cases.end ());
+        auto aggregate = match->at ("aggregate");
+        const bool prepared = std::string_view (phase) == "prepared";
+        if (prepared)
+            aggregate["relocation"]["target"]["ownerLeaseGeneration"] = "8";
 
-    in_memory_location_store_t provider;
-    provider_location_repository_t repository (provider);
-    public_authority_store_adapter_t adapter (repository);
-    const store_key_t key{std::string{"authority\0actor\0golden-actor", 28}};
-    nlohmann::json row = {{"recordVersion", 1},
-                          {"payload", ""},
-                          {"objectGeneration", "1"},
-                          {"authorityOwnerGeneration", "1"},
-                          {"ownerId", "owner-src"},
-                          {"ownerLeaseGeneration", "7"},
-                          {"allocation",
-                           {{"state", "active"},
-                            {"objectKind", "actor"},
-                            {"stableType", "Game.Actor"},
-                            {"descriptor", {{"meshName", "mesh"}, {"routingIdHex", "0a0b"}}},
-                            {"descriptorLifecycleGeneration", "3"},
-                            {"capacity", {{"actors", 1}, {"spots", 0}, {"spotType", nullptr}}}}},
-                          {"pendingCreation", nullptr},
-                          {"aggregate", captured->at ("aggregate")}};
-    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
-      provider.write ({{}, {store_put_t{key, bytes (row.dump ()), std::nullopt}}})
-        .result ()
-        .value ()));
-    relocation_authority_fence_t fence{
-      object_kind_t::actor, "golden-actor",   "opaque-v1",
-      {"owner-src", 7},     {"owner-dst", 1}, {0x0f1e2d3c4b5a4968, 0x8778a1b2c3d4e5f6}};
-    EXPECT_EQ (adapter.observe_relocation (fence), relocation_authority_t::unsettled);
-    const auto authority_key = actor_authority_key ("golden-actor");
-    const auto read = repository.read_authority (authority_key).result ().value ();
-    const auto *authority = std::get_if<authority_snapshot_t> (&read);
-    ASSERT_NE (authority, nullptr);
-    const auto rewritten = repository
-                             .compare_exchange_authority (authority_key, authority->store_version,
-                                                          authority_restore_t{{}, {"owner-src", 7}})
-                             .result ()
-                             .value ();
-    EXPECT_TRUE (std::holds_alternative<authority_stored_t> (rewritten));
-    const auto persisted = std::get<store_found_t> (provider.read (key).result ().value ());
-    const auto &persisted_bytes = persisted.value.bytes;
-    const auto *persisted_data = reinterpret_cast<const char *> (persisted_bytes.data ());
-    const auto persisted_row =
-      nlohmann::json::parse (persisted_data, persisted_data + persisted_bytes.size ());
-    EXPECT_EQ (persisted_row.at ("aggregate"), captured->at ("aggregate"));
-    fence.source_node_generation = 4;
-    EXPECT_EQ (adapter.observe_relocation (fence), relocation_authority_t::source_preserved);
-    fence.source_node_generation = 3;
-    EXPECT_EQ (adapter.observe_relocation (fence), relocation_authority_t::unsettled);
-    fence.expected_store_version = "wrong-version";
-    EXPECT_EQ (adapter.observe_relocation (fence), relocation_authority_t::source_preserved);
+        in_memory_location_store_t provider;
+        provider_location_repository_t repository (provider);
+        public_authority_store_adapter_t adapter (repository);
+        const store_key_t key{std::string{"authority\0actor\0golden-actor", 28}};
+        nlohmann::json row = {
+          {"recordVersion", 1},
+          {"payload", ""},
+          {"objectGeneration", "1"},
+          {"authorityOwnerGeneration", "1"},
+          {"ownerId", "owner-src"},
+          {"ownerLeaseGeneration", "7"},
+          {"allocation",
+           {{"state", "active"},
+            {"objectKind", "actor"},
+            {"stableType", "Game.Actor"},
+            {"descriptor", {{"meshName", "mesh"}, {"routingIdHex", "0a0b"}}},
+            {"descriptorLifecycleGeneration", "3"},
+            {"capacity", {{"actors", 1}, {"spots", 0}, {"spotType", nullptr}}}}},
+          {"pendingCreation", nullptr},
+          {"aggregate", aggregate}};
+        ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+          provider.write ({{}, {store_put_t{key, bytes (row.dump ()), std::nullopt}}})
+            .result ()
+            .value ()));
+        relocation_authority_fence_t fence{object_kind_t::actor,
+                                           "golden-actor",
+                                           "opaque-v1",
+                                           {"owner-src", 7},
+                                           {"owner-tgt", 8},
+                                           {0x0f1e2d3c4b5a4968, 0x8778a1b2c3d4e5f6},
+                                           {0x0a, 0x0b},
+                                           3,
+                                           2};
+        EXPECT_EQ (adapter.observe_relocation (fence), relocation_authority_t::unsettled);
+        const auto authority_key = actor_authority_key ("golden-actor");
+        const auto read = repository.read_authority (authority_key).result ().value ();
+        const auto *authority = std::get_if<authority_snapshot_t> (&read);
+        ASSERT_NE (authority, nullptr);
+        const auto rewritten =
+          repository
+            .compare_exchange_authority (authority_key, authority->store_version,
+                                         authority_restore_t{{}, {"owner-src", 7}})
+            .result ()
+            .value ();
+        EXPECT_TRUE (std::holds_alternative<authority_stored_t> (rewritten));
+        const auto persisted = std::get<store_found_t> (provider.read (key).result ().value ());
+        const auto &persisted_bytes = persisted.value.bytes;
+        const auto *persisted_data = reinterpret_cast<const char *> (persisted_bytes.data ());
+        const auto persisted_row =
+          nlohmann::json::parse (persisted_data, persisted_data + persisted_bytes.size ());
+        EXPECT_EQ (persisted_row.at ("aggregate"), aggregate);
+        fence.source_node_generation = 4;
+        EXPECT_EQ (adapter.observe_relocation (fence), relocation_authority_t::source_preserved);
+        fence.source_node_generation = 3;
+        EXPECT_EQ (adapter.observe_relocation (fence), relocation_authority_t::unsettled);
+        if (prepared) {
+            ++fence.target_attempt_generation;
+            EXPECT_EQ (adapter.observe_relocation (fence),
+                       relocation_authority_t::source_preserved);
+            --fence.target_attempt_generation;
+        }
+        fence.expected_store_version = "wrong-version";
+        EXPECT_EQ (adapter.observe_relocation (fence), relocation_authority_t::source_preserved);
+    }
 }
 TEST (AuthorityAggregateRelocation, ForeignCommittedRecordFencesItsTargetAttempt)
 {
-    std::ifstream fixture (ZLINK_AUTHORITY_AGGREGATE_RELOCATION_GOLDEN_PATH);
-    const auto golden = nlohmann::json::parse (fixture);
+    const nlohmann::json golden = golden_records ();
     const auto &cases = golden.at ("cases");
     const auto committed = std::find_if (cases.begin (), cases.end (), [] (const auto &item) {
         return item.at ("name") == "marker-and-committed";
@@ -141,10 +168,383 @@ TEST (AuthorityAggregateRelocation, ForeignCommittedRecordFencesItsTargetAttempt
     EXPECT_EQ (adapter.observe_relocation (fence), relocation_authority_t::source_preserved);
 }
 
+class ActorAuthorityRelocation : public ::testing::Test
+{
+  protected:
+    const std::string actor_id = "relocating-actor";
+    const authority_key_t key = actor_authority_key (actor_id);
+    in_memory_location_store_t provider;
+    provider_location_repository_t repository{provider};
+    in_memory_relocation_store_t blob_provider;
+    provider_relocation_repository_t blobs{blob_provider};
+    std::shared_ptr<public_authority_store_adapter_t> authority =
+      std::make_shared<public_authority_store_adapter_t> (repository);
+    stateful_object_runtime_t objects;
+    maintenance_runtime_t runtime{objects, authority,
+                                  std::make_shared<public_relocation_store_adapter_t> (blobs)};
+    object_creation_target_t source;
+    object_creation_target_t target;
+    authority_snapshot_t original;
+    object_ref_t actor;
+    unsigned captures = 0;
+    unsigned prepares = 0;
+
+    object_creation_target_t host (const std::string &rid, std::uint64_t generation)
+    {
+        const auto lease = std::get<owner_lease_claimed_t> (
+                             repository.claim_owner_lease (rid, 30s).result ().value ())
+                             .token;
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "mesh";
+        descriptor.rid = zlink::routing_id_t::from (rid);
+        descriptor.lifecycle_generation = generation;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.owner_id = lease.owner_id;
+        descriptor.lease_generation = lease.lease_generation;
+        descriptor.object_role = object_role_t::server;
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.capacity.actors.limit = 2;
+        descriptor.object_capabilities = {{placement_object_kind_t::actor, "Game.Actor",
+                                           maintenance_policy_kind_t::recreate, false, 0}};
+        EXPECT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status,
+                   location_write_status_t::stored);
+        return {descriptor.mesh_name, node_rid_t::from_string (rid), generation, lease};
+    }
+
+    void SetUp () override
+    {
+        source = host ("s", 3);
+        target = host ("t", 4);
+        object_reserve_request_t request;
+        request.key = {placement_object_kind_t::actor, actor_id};
+        request.intent.stable_type = "Game.Actor";
+        request.target = source;
+        request.capacity_bundle.actor_slots = 1;
+        request.creating_payload = bytes ("creating");
+        const auto reserved = repository.reserve (request).result ().value ();
+        const auto *reservation = std::get_if<object_reserved_t> (&reserved);
+        ASSERT_NE (reservation, nullptr);
+        const auto committed =
+          repository.commit ({request.key, reservation->fence, payload_for (source)})
+            .result ()
+            .value ();
+        const auto *ready = std::get_if<object_committed_t> (&committed);
+        ASSERT_NE (ready, nullptr);
+        original = ready->ready;
+        actor = {object_kind_t::actor,
+                 actor_id,
+                 original.object_generation,
+                 original.authority_owner_generation,
+                 "mesh",
+                 "s"};
+        const auto created =
+          zlink::framework::test::begin_reserved_object (objects, actor, "Game.Actor", {});
+        ASSERT_EQ (created.error, stateful_error_t::none);
+        ASSERT_EQ (objects.commit_create (created.attempt), stateful_error_t::none);
+    }
+
+    std::vector<std::byte> payload_for (const object_creation_target_t &placement) const
+    {
+        return encode_actor_authority_payload (
+          {.stable_type = "Game.Actor",
+           .actor_id = actor_id,
+           .current_spot_id = "entry",
+           .current_spot_generation = placement.node_lifecycle_generation,
+           .current_spot_kind = actor_authority_spot_kind_t::entry,
+           .owner_id = placement.owner.owner_id,
+           .owner_lease_generation = static_cast<std::uint64_t> (placement.owner.lease_generation),
+           .mesh_name = placement.mesh_name,
+           .node_rid = placement.node_rid,
+           .node_generation = placement.node_lifecycle_generation});
+    }
+
+    authority_snapshot_t read ()
+    {
+        return std::get<authority_snapshot_t> (repository.read_authority (key).result ().value ());
+    }
+
+    eligible_relocation_unit_t::canonical_wire_context_t wire ()
+    {
+        return {.relocation = {1, 2},
+                .target_attempt_generation = 1,
+                .coordinator = {source.owner.owner_id,
+                                static_cast<std::uint64_t> (source.owner.lease_generation),
+                                {'s'},
+                                3,
+                                original.store_version},
+                .target_node_routing_id = {'t'},
+                .target_node_generation = 4,
+                .application_version = 1,
+                .prepare_target = [this] (const auto &,
+                                          const auto &) -> task_t<stateful_relocation_reason_t> {
+                    ++prepares;
+                    co_return stateful_relocation_reason_t::none;
+                },
+                .send_state_chunk = [] (const auto &) -> task_t<bool> { co_return true; },
+                .send_relocation_data = [] (const auto &, const auto &) -> task_t<bool> {
+                    co_return true;
+                },
+                .send_cutover = [] (const auto &) -> task_t<bool> { co_return true; },
+                .abort_target_before_cutover = [] { return true; }};
+    }
+
+    zlink::framework::runtime::protocol::relocation_prepare_t
+    target_prepare (const eligible_relocation_unit_t::canonical_wire_context_t &context) const
+    {
+        return {.relocation = context.relocation,
+                .target_attempt_generation = context.target_attempt_generation,
+                .coordinator = context.coordinator,
+                .target = {{'t'},
+                           4,
+                           target.owner.owner_id,
+                           static_cast<std::uint64_t> (target.owner.lease_generation)},
+                .source_node_routing_id = {'s'},
+                .source_node_generation = 3,
+                .application_version = context.application_version};
+    }
+
+    authority_publish_result_t
+    publish (const zlink::framework::runtime::protocol::relocation_prepare_t &attempt)
+    {
+        auto placed = actor;
+        placed.node_id = "t";
+        return authority->publish (actor, placed, target.owner, target, "direct-test", 0, {},
+                                   payload_for (target), original.store_version, attempt.relocation,
+                                   source.owner, &attempt);
+    }
+
+    void capture_until (bool fail)
+    {
+        objects.configure_relocation_state (
+          [this, fail] (const auto &, const auto &,
+                        std::stop_token) -> task_t<frozen_object_state_t> {
+              ++captures;
+              const auto snapshot = read ();
+              EXPECT_NE (snapshot.store_version, original.store_version);
+              EXPECT_EQ (snapshot.authority_owner_generation, original.authority_owner_generation);
+              EXPECT_EQ (snapshot.owner.owner_id, source.owner.owner_id);
+              if (snapshot.aggregate && snapshot.aggregate->relocation) {
+                  const auto &record = snapshot.aggregate->encoded.at ("relocation");
+                  EXPECT_EQ (record.at ("phase"), "preparing");
+                  EXPECT_TRUE (record.at ("target").is_null ());
+                  EXPECT_EQ (record.at ("coordinator").at ("expectedStoreVersion"),
+                             original.store_version);
+              } else {
+                  ADD_FAILURE () << "Capture began without a durable Preparing record";
+              }
+              if (fail)
+                  throw std::runtime_error ("scripted application capture failure");
+              co_return frozen_object_state_t{};
+          },
+          [] (const auto &, const auto &, std::stop_token) -> task_t<bool> { co_return true; });
+    }
+
+    void expect_source_preserved ()
+    {
+        const auto snapshot = read ();
+        EXPECT_EQ (snapshot.payload, original.payload);
+        EXPECT_EQ (snapshot.authority_owner_generation, original.authority_owner_generation);
+        EXPECT_EQ (snapshot.owner.owner_id, source.owner.owner_id);
+        EXPECT_FALSE (snapshot.aggregate);
+        EXPECT_EQ (objects.enqueue (actor, turn_domain_t::application, {2, {0x42}}),
+                   stateful_error_t::none);
+    }
+};
+
+TEST_F (ActorAuthorityRelocation, CaptureFailurePreservesPreparingOwner)
+{
+    ASSERT_EQ (objects.enqueue (actor, turn_domain_t::application, {1, {0x41}}),
+               stateful_error_t::none);
+    capture_until (true);
+    const auto result =
+      runtime.relocate (actor, "t", target.owner, 1024, {}, wire ()).result ().value ();
+    EXPECT_EQ (result.terminal, relocation_terminal_t::blocked);
+    EXPECT_EQ (captures, 1u);
+    EXPECT_EQ (prepares, 0u);
+    expect_source_preserved ();
+    const auto [claimed, pending] = objects.try_claim (actor, turn_domain_t::application);
+    ASSERT_EQ (claimed, stateful_error_t::none);
+    ASSERT_TRUE (pending);
+    EXPECT_EQ (pending->sequence, 1u);
+    EXPECT_EQ (objects.complete_claim (actor, turn_domain_t::application), stateful_error_t::none);
+}
+
+TEST_F (ActorAuthorityRelocation, PreparingConflictStopsCapture)
+{
+    capture_until (true);
+    auto stale = wire ();
+    stale.coordinator.expected_authority_store_version = "stale-version";
+    const auto result =
+      runtime.relocate (actor, "t", target.owner, 1024, {}, stale).result ().value ();
+    EXPECT_EQ (result.terminal, relocation_terminal_t::store_failed);
+    EXPECT_EQ (captures, 0u);
+    EXPECT_EQ (prepares, 0u);
+    EXPECT_EQ (read ().store_version, original.store_version);
+    expect_source_preserved ();
+}
+
+TEST_F (ActorAuthorityRelocation, CapturedUsesVersionReturnedByPreparing)
+{
+    objects.configure_relocation_state (
+      [this] (const auto &, const auto &, std::stop_token) -> task_t<frozen_object_state_t> {
+          ++captures;
+          const auto preparing = read ();
+          EXPECT_TRUE (preparing.aggregate && preparing.aggregate->relocation);
+          const auto intervening = co_await repository.compare_exchange_authority (
+            key, preparing.store_version, authority_put_t{preparing.payload});
+          EXPECT_TRUE (std::holds_alternative<authority_stored_t> (intervening));
+          co_return frozen_object_state_t{};
+      },
+      [] (const auto &, const auto &, std::stop_token) -> task_t<bool> { co_return true; });
+    const auto result =
+      runtime.relocate (actor, "t", target.owner, 1024, {}, wire ()).result ().value ();
+    EXPECT_EQ (result.terminal, relocation_terminal_t::store_failed);
+    EXPECT_EQ (captures, 1u);
+    EXPECT_EQ (prepares, 0u);
+    expect_source_preserved ();
+}
+
+TEST_F (ActorAuthorityRelocation, PreparedTargetFenceControlsCommit)
+{
+    capture_until (false);
+    auto context = wire ();
+    const auto prepare = target_prepare (context);
+    context.prepare_target = [&] (const auto &,
+                                  const auto &) -> task_t<stateful_relocation_reason_t> {
+        ++prepares;
+        const auto captured = read ();
+        if (!captured.aggregate || !captured.aggregate->relocation) {
+            ADD_FAILURE () << "PREPARE began without a durable Captured record";
+            co_return stateful_relocation_reason_t::restore_failed;
+        }
+        nlohmann::json expected = captured.aggregate->encoded.at ("relocation");
+        EXPECT_EQ (expected.at ("phase"), "captured");
+        EXPECT_TRUE (expected.at ("target").is_null ());
+        if (!co_await authority->record_target_prepared (actor, prepare)) {
+            ADD_FAILURE () << "Target could not write Prepared";
+            co_return stateful_relocation_reason_t::restore_failed;
+        }
+        const auto prepared = read ();
+        if (!prepared.aggregate || !prepared.aggregate->relocation) {
+            ADD_FAILURE () << "Target readiness returned without a durable Prepared record";
+            co_return stateful_relocation_reason_t::restore_failed;
+        }
+        expected["phase"] = "prepared";
+        expected["target"] = {
+          {"nodeRid", "74"},
+          {"nodeGeneration", "4"},
+          {"ownerId", target.owner.owner_id},
+          {"ownerLeaseGeneration", std::to_string (target.owner.lease_generation)},
+          {"attemptGeneration", "1"}};
+        const nlohmann::json actual = prepared.aggregate->encoded.at ("relocation");
+        EXPECT_EQ (actual, expected);
+        EXPECT_EQ (prepared.owner.owner_id, source.owner.owner_id);
+        EXPECT_EQ (prepared.authority_owner_generation, original.authority_owner_generation);
+        EXPECT_EQ (prepared.payload, original.payload);
+        EXPECT_NE (prepared.store_version, captured.store_version);
+        const auto repeated = co_await authority->record_target_prepared (actor, prepare);
+        EXPECT_TRUE (repeated);
+        EXPECT_EQ (read ().store_version, prepared.store_version);
+        co_return stateful_relocation_reason_t::none;
+    };
+    context.send_cutover = [&] (const auto &) -> task_t<bool> {
+        auto stale_attempt = prepare;
+        ++stale_attempt.target_attempt_generation;
+        EXPECT_EQ (publish (stale_attempt).status, authority_publish_status_t::conflict);
+        stale_attempt = prepare;
+        ++stale_attempt.target.target_node_generation;
+        EXPECT_EQ (publish (stale_attempt).status, authority_publish_status_t::conflict);
+        EXPECT_EQ (publish (prepare).status, authority_publish_status_t::published);
+        co_return true;
+    };
+    context.restore_deadline = std::chrono::steady_clock::time_point{};
+    const auto result =
+      runtime.relocate (actor, "t", target.owner, 1024, {}, context).result ().value ();
+    EXPECT_EQ (result.terminal, relocation_terminal_t::completed);
+    EXPECT_EQ (captures, 1u);
+    EXPECT_EQ (prepares, 1u);
+    const auto committed = read ();
+    ASSERT_TRUE (committed.aggregate && committed.aggregate->relocation);
+    EXPECT_EQ (committed.aggregate->relocation->phase, "committed");
+    EXPECT_EQ (committed.owner.owner_id, target.owner.owner_id);
+    EXPECT_EQ (committed.object_generation, original.object_generation);
+    EXPECT_GT (committed.authority_owner_generation, original.authority_owner_generation);
+}
+
+TEST_F (ActorAuthorityRelocation, SteadySourceCannotRecordPrepared)
+{
+    const auto before = read ();
+    ASSERT_FALSE (before.aggregate);
+    const auto written =
+      authority->record_target_prepared (actor, target_prepare (wire ())).result ().value ();
+    EXPECT_FALSE (written);
+    const auto after = read ();
+    EXPECT_EQ (after.store_version, before.store_version);
+    EXPECT_EQ (after.payload, before.payload);
+    EXPECT_FALSE (after.aggregate);
+}
+
+TEST_F (ActorAuthorityRelocation, FailedReadyPreservesPreparedSource)
+{
+    capture_until (false);
+    auto context = wire ();
+    const auto prepare = target_prepare (context);
+    context.prepare_target = [&] (const auto &,
+                                  const auto &) -> task_t<stateful_relocation_reason_t> {
+        ++prepares;
+        const auto written = co_await authority->record_target_prepared (actor, prepare);
+        EXPECT_TRUE (written);
+        co_return stateful_relocation_reason_t::restore_failed;
+    };
+    const auto result =
+      runtime.relocate (actor, "t", target.owner, 1024, {}, context).result ().value ();
+    EXPECT_EQ (result.terminal, relocation_terminal_t::blocked);
+    EXPECT_EQ (captures, 1u);
+    EXPECT_EQ (prepares, 1u);
+    expect_source_preserved ();
+}
+
+TEST_F (ActorAuthorityRelocation, ForeignPreparedTargetCanCommit)
+{
+    const auto golden = golden_records ();
+    const auto &cases = golden.at ("cases");
+    const auto match = std::find_if (cases.begin (), cases.end (), [] (const auto &item) {
+        return item.at ("name") == "relocation-only-prepared";
+    });
+    ASSERT_NE (match, cases.end ());
+    auto aggregate = match->at ("aggregate");
+    auto &record = aggregate.at ("relocation");
+    record["relocationId"] = authority_aggregate_codec::wire_uuid (1, 2);
+    record["source"] = {{"nodeRid", "73"},
+                        {"nodeGeneration", "3"},
+                        {"ownerId", source.owner.owner_id},
+                        {"ownerLeaseGeneration", std::to_string (source.owner.lease_generation)}};
+    record["coordinator"] = record.at ("source");
+    record["coordinator"]["expectedStoreVersion"] = original.store_version;
+    record["target"] = {{"nodeRid", "74"},
+                        {"nodeGeneration", "4"},
+                        {"ownerId", target.owner.owner_id},
+                        {"ownerLeaseGeneration", std::to_string (target.owner.lease_generation)},
+                        {"attemptGeneration", "1"}};
+    authority_put_t put{original.payload};
+    put.replace_aggregate = authority_aggregate_codec::read (std::move (aggregate));
+    const auto exchanged =
+      repository.compare_exchange_authority (key, original.store_version, std::move (put))
+        .result ()
+        .value ();
+    ASSERT_TRUE (std::holds_alternative<authority_stored_t> (exchanged));
+    auto context = wire ();
+    context.application_version = 42;
+    EXPECT_EQ (publish (target_prepare (context)).status, authority_publish_status_t::published);
+}
+
 TEST (AuthorityAggregateRelocation, SpotWideCommitConsumesForeignCapture)
 {
-    std::ifstream fixture (ZLINK_AUTHORITY_AGGREGATE_RELOCATION_GOLDEN_PATH);
-    const auto golden = nlohmann::ordered_json::parse (fixture);
+    const auto golden = golden_records ();
     const auto &cases = golden.at ("cases");
     const auto captured = std::find_if (cases.begin (), cases.end (), [] (const auto &item) {
         return item.at ("name") == "relocation-only-captured";
@@ -153,6 +553,19 @@ TEST (AuthorityAggregateRelocation, SpotWideCommitConsumesForeignCapture)
     in_memory_location_store_t provider;
     zlink::framework::test::aggregate_page_read_keeps_source_version_until_commit (
       provider, [] (std::string_view value) { return bytes (value); }, captured->at ("aggregate"));
+}
+
+TEST (AuthorityAggregateRelocation, SpotWideCommitConsumesForeignPrepared)
+{
+    const auto golden = golden_records ();
+    const auto &cases = golden.at ("cases");
+    const auto prepared = std::find_if (cases.begin (), cases.end (), [] (const auto &item) {
+        return item.at ("name") == "relocation-only-prepared";
+    });
+    ASSERT_NE (prepared, cases.end ());
+    in_memory_location_store_t provider;
+    zlink::framework::test::aggregate_page_read_keeps_source_version_until_commit (
+      provider, [] (std::string_view value) { return bytes (value); }, prepared->at ("aggregate"));
 }
 
 }

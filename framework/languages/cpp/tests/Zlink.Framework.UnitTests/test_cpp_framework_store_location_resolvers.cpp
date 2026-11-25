@@ -4495,6 +4495,7 @@ class ended_user_reclaim_client_t final : public zlink::framework::hosted_servic
         if (allowed) {
             EXPECT_TRUE (created) << (created.error () ? created.error ()->what () : "");
             if (created) {
+                EXPECT_EQ (created.value ().spot.node_rid ().value (), "factory-node");
                 EXPECT_GT (created.value ().spot.object_generation (), before.object_generation);
                 const auto after = std::get<fw::authority_snapshot_t> (
                   repository.read_authority (rt::spot_authority_key ("ended-user"))
@@ -4586,7 +4587,17 @@ static void verify_ended_user_policy_source (bool provider, unsigned policy)
         ->commit ({reserve.key, first.fence, rt::encode_user_spot_authority_payload (payload)})
         .result ()
         .value ()));
-    repository->release_owner_lease (owner).result ().value ();
+    if (policy == 2) {
+        constexpr auto final_lease_ttl = 1ms;
+        ASSERT_TRUE (std::holds_alternative<fw::owner_lease_renewed_t> (
+          repository->renew_owner_lease (owner, final_lease_ttl).result ().value ()));
+        std::this_thread::sleep_for (final_lease_ttl);
+        rt::live_location_reader_t reader (*repository);
+        ASSERT_FALSE (reader.owner_available (owner).result ().value ());
+    } else {
+        ASSERT_TRUE (std::holds_alternative<fw::owner_lease_released_t> (
+          repository->release_owner_lease (owner).result ().value ()));
+    }
     auto app = fw::app_t::create ();
     std::atomic_int factories{0};
     app.advanced ().services ().add_factory<fw::location_repository_t> (
@@ -4631,20 +4642,27 @@ static void verify_ended_user_policy_source (bool provider, unsigned policy)
                     factory.disable_relocation ();
             });
     });
-    auto client = std::make_unique<ended_user_reclaim_client_t> (app, policy == 0, factories);
+    auto client = std::make_unique<ended_user_reclaim_client_t> (app, policy != 0, factories);
     auto *observed = client.get ();
     app.add_hosted_service (std::move (client));
     EXPECT_EQ (app.run (0, nullptr), 0);
     EXPECT_TRUE (observed->observed);
 }
-TEST (ZLinkFrameworkStoreLocationResolvers, EndedEmptyUserProviderUsesRequestNodePolicy)
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      EndedUserGetOrCreateUsesFactoryTargetWithoutRequesterFactory)
 {
-    for (unsigned policy = 0; policy != 3; ++policy)
+    verify_ended_user_policy_source (true, 2);
+    verify_ended_user_policy_source (false, 2);
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, EndedEmptyUserProviderUsesFactoryTargetPolicy)
+{
+    for (unsigned policy = 0; policy != 2; ++policy)
         verify_ended_user_policy_source (true, policy);
 }
-TEST (ZLinkFrameworkStoreLocationResolvers, EndedEmptyUserInMemoryUsesRequestNodePolicy)
+TEST (ZLinkFrameworkStoreLocationResolvers, EndedEmptyUserInMemoryUsesFactoryTargetPolicy)
 {
-    for (unsigned policy = 0; policy != 3; ++policy)
+    for (unsigned policy = 0; policy != 2; ++policy)
         verify_ended_user_policy_source (false, policy);
 }
 

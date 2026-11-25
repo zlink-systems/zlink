@@ -1,3 +1,4 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
@@ -795,6 +796,53 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             )
                 && instance.State == ZLinkInstanceSpotAuthorityState.Closing
         );
+
+    internal static SpotRef? ProjectReadyUserSpot(string spotId, ZLinkAuthorityReadResult authority)
+    {
+        if (
+            authority is not ZLinkAuthorityReadResult.Found found
+            || found.Snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
+            || found.Snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
+            || found.Snapshot.OwnerLeaseGeneration <= 0
+        )
+            return null;
+
+        var snapshot = found.Snapshot;
+        var descriptor = snapshot.Allocation.Descriptor;
+        if (
+            snapshot.Relocation is not null
+            || !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var user)
+        )
+        {
+            if (
+                !TryReadCommittedCanonicalTarget(snapshot, out var canonical, out _)
+                || canonical.Phase < (byte)ServiceWireCodec.RelocationPhase.Activated
+                || canonical.TargetAttemptGeneration == 0
+                || canonical.TargetOwnerLeaseGeneration != (ulong)snapshot.OwnerLeaseGeneration
+                || canonical.State.TargetNodeGeneration
+                    != snapshot.Allocation.DescriptorLifecycleGeneration
+                || !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
+                    canonical.SteadyAuthorityPayload.Span,
+                    out user
+                )
+            )
+                return null;
+        }
+        else if (
+            user.OwnerId != snapshot.OwnerId
+            || user.OwnerLeaseGeneration != (ulong)snapshot.OwnerLeaseGeneration
+            || user.NodeRid != descriptor.Rid
+            || user.NodeGeneration != snapshot.Allocation.DescriptorLifecycleGeneration
+        )
+            return null;
+
+        return
+            user.State == ZLinkUserSpotAuthorityState.Ready
+            && user.SpotId == spotId
+            && user.MeshName == descriptor.MeshName
+            ? new SpotRef(spotId, snapshot.ObjectGeneration, descriptor.MeshName, descriptor.Rid)
+            : null;
+    }
 
     private static ZLinkResolvedSpotLocation? ProjectSpot(ZLinkAuthorityReadResult authority)
     {

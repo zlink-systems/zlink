@@ -72,7 +72,10 @@ export function dispatchErrorDetails(error: unknown): {
           })
     };
   }
-  const errorType = typeof error === 'object' ? error.constructor.name : typeof error;
+  const errorType =
+    typeof error === 'object'
+      ? ((error as { constructor?: { name?: string } }).constructor?.name ?? 'object')
+      : typeof error;
   const message =
     typeof error === 'string' ||
     typeof error === 'number' ||

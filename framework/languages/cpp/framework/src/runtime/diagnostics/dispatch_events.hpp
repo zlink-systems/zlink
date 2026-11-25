@@ -109,7 +109,8 @@ enum class dispatch_error_reason_t
     unexpected_reply = 5,
     backpressure = 6,
     stale_target = 7,
-    shutdown = 8
+    shutdown = 8,
+    session_creation_failed = 9
 };
 
 enum class dispatch_error_action_t

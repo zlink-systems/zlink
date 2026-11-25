@@ -3,6 +3,36 @@ namespace Zlink.Framework.Runtime.Configuration.Builders;
 internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registration)
     : IZLinkStreamNodeBuilder
 {
+    public string? AuthenticationPacketName
+    {
+        get => registration.AuthenticationAdmission.PacketName;
+        set =>
+            registration.AuthenticationAdmission = registration.AuthenticationAdmission with
+            {
+                PacketName = value,
+            };
+    }
+
+    public int MaxConcurrentAuthentications
+    {
+        get => registration.AuthenticationAdmission.Limit;
+        set =>
+            registration.AuthenticationAdmission = registration.AuthenticationAdmission with
+            {
+                Limit = value,
+            };
+    }
+
+    public TimeSpan AuthenticationRetryDelay
+    {
+        get => registration.AuthenticationAdmission.RetryDelay;
+        set =>
+            registration.AuthenticationAdmission = registration.AuthenticationAdmission with
+            {
+                RetryDelay = value,
+            };
+    }
+
     public IZLinkStreamNodeBuilder Bind(string endpoint)
     {
         if (string.IsNullOrWhiteSpace(endpoint))

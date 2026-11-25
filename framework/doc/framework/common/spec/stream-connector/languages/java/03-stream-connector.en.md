@@ -102,6 +102,7 @@ public interface ZLinkStreamConnector {
         Class<TPayload> payloadType,
         ZLinkStreamMessageHandler<TPayload> handler);
     AutoCloseable onRequestSending(ZLinkStreamRequestSendingHandler handler);
+    AutoCloseable onAdmissionWaiting(ZLinkStreamAdmissionWaitingHandler handler);
     AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler handler);
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
@@ -220,7 +221,8 @@ public record ZLinkStreamConnectorOptions(
     ZLinkStreamCompression compression,
     ZLinkStreamCompressionCodec compressionCodec,
     ZLinkStreamPacketNameResolver nameResolver, // the name resolver injection point of common spec §5.4
-    ZLinkStreamTypedCodec typedCodec) { // typed payload codec injection point from common spec §5.4
+    ZLinkStreamTypedCodec typedCodec,
+    Duration maxAdmissionWait) { // typed payload codec injection point from common spec §5.4
 
     // The named constant expressing the unlimited reconnect common spec §6 requires.
     public static final int UNLIMITED_RECONNECT_ATTEMPTS = -1;
@@ -365,6 +367,11 @@ are registered on the connector as
 returned value's `close()`.
 
 ```java
+public record ZLinkStreamAdmissionWaiting(String requestPacketName, String actorId, Duration retryAfter) {}
+public interface ZLinkStreamAdmissionWaitingHandler {
+    CompletionStage<Void> handle(ZLinkStreamAdmissionWaiting event);
+}
+
 public interface ZLinkStreamRequestSendingHandler {
     void handle(ZLinkStreamRequestSendingContext context);
 }
@@ -618,6 +625,7 @@ class ZLinkKotlinStreamConnector {
     inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>>
     fun <TPayload : Any> messages(packetName: String, payloadType: KClass<TPayload>): Flow<ZLinkStreamMessage<TPayload>>
     fun onRequestSending(handler: ZLinkStreamRequestSendingHandler): AutoCloseable
+    fun onAdmissionWaiting(handler: ZLinkStreamAdmissionWaitingHandler): AutoCloseable
     fun repliesReceived(): Flow<ZLinkStreamReplyReceivedContext>
     fun errors(): Flow<ZLinkStreamError>
     fun actors(): List<ZLinkKotlinStreamActor>
@@ -753,3 +761,5 @@ The Java connector has the tests below as a separate suite.
 <!-- framework-adapter-nav:bottom:start -->
 [Document list](../../../../../../README.en.md) | [Previous: Java STREAM](../../../server/languages/java/interfaces/stream-session.en.md)
 <!-- framework-adapter-nav:bottom:end -->
+
+Admission waiting and its default deadline are defined by [common spec §5.8](../../32-stream-connector.en.md#58-admission-wait-and-automatic-retry).

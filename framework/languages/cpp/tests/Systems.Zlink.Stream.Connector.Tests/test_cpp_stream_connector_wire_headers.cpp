@@ -269,17 +269,9 @@ int verify_flow_and_correlation_headers ()
             || (static_cast<std::uint8_t> (requested.value ().flags) & 0x18) != 0x08) {
             return fail (214);
         }
-        {
-            std::lock_guard<std::mutex> lock (state->transport_mutex);
-            for (auto &[seq, pending] : state->pending_requests) {
-                (void) seq;
-                if (pending.timeout_timer) {
-                    (void) pending.timeout_timer->cancel ();
-                }
-            }
-            state->pending_requests.clear ();
-        }
-        connection->shutdown_and_close ();
+        (void) zlink::stream_connector::detail::connection_ended (
+          state, {zlink::stream_connector::error_code_t::disconnected, "request fixture ended"},
+          connection);
 
         /* Exhaustion is permanent for this connector instance. The zero
      * sentinel cannot become a wire request sequence after u64 wraps. */

@@ -703,6 +703,16 @@ class DefaultClientServerChannelServerBuilder implements ZLinkClientServerChanne
 }
 
 class DefaultStreamNodeBuilder implements ZLinkStreamNodeBuilder {
+  setAuthenticationAdmission(
+    packetName: string,
+    maxConcurrentAuthentications?: number,
+    authenticationRetryDelayMs?: number
+  ): this {
+    this.streamNode.authenticationPacketName = packetName;
+    this.streamNode.maxConcurrentAuthentications = maxConcurrentAuthentications;
+    this.streamNode.authenticationRetryDelayMs = authenticationRetryDelayMs;
+    return this;
+  }
   setHeartbeat(intervalMs: number, timeoutMs: number): this {
     this.streamNode.heartbeatIntervalMs = intervalMs;
     this.streamNode.heartbeatTimeoutMs = timeoutMs;
@@ -1624,6 +1634,9 @@ interface MutablePublisherCapabilityOptions {
 }
 
 interface MutableStreamNodeOptions {
+  authenticationPacketName?: string;
+  maxConcurrentAuthentications?: number;
+  authenticationRetryDelayMs?: number;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
   idleTimeoutMs?: number;
