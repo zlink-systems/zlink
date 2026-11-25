@@ -336,6 +336,15 @@ class serializer_registry_t
     friend struct detail::serializer_registry_test_access_t;
     friend class codec_registration_context_t;
 
+    template <typename T>
+    [[noreturn]] static void throw_json_failure (detail::failure_origin_t origin,
+                                                 const std::string &error)
+    {
+        throw detail::make_origin_exception (framework_error_kind_t::protocol_error, origin,
+                                             "Message '" + detail::message_name<T> ()
+                                               + "': " + error);
+    }
+
     template <typename T> serializer_t<T> make_serializer () const
     {
         const auto type = std::type_index (typeid (T));
@@ -357,14 +366,25 @@ class serializer_registry_t
                         static_assert (zlink::detail::json_profile::validate_type<T> ());
                         return serializer_t<T> (
                           [] (const T &value) {
-                              return encoded_payload_t::from_text (
-                                zlink::detail::json_profile::encode (value));
+                              std::string error;
+                              auto encoded =
+                                zlink::detail::json_profile::try_encode (value, &error);
+                              if (!encoded)
+                                  throw_json_failure<T> (detail::failure_origin_t::payload_encode,
+                                                         error);
+                              return encoded_payload_t::from_text (std::move (*encoded));
                           },
                           [] (const encoded_payload_t &payload) {
                               const auto bytes = payload.bytes ();
                               const auto *begin = reinterpret_cast<const char *> (bytes.data ());
                               const auto *end = begin == nullptr ? begin : begin + bytes.size ();
-                              return zlink::detail::json_profile::decode<T> (begin, end);
+                              std::string error;
+                              auto decoded =
+                                zlink::detail::json_profile::try_decode<T> (begin, end, &error);
+                              if (!decoded)
+                                  throw_json_failure<T> (detail::failure_origin_t::payload_decode,
+                                                         error);
+                              return std::move (*decoded);
                           },
                           zlink::detail::json_profile::content_type);
                     } else {

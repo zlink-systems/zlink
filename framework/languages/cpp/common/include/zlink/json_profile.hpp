@@ -11,6 +11,7 @@
 #include <utility>
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <charconv>
 #include <cstddef>
 #include <limits>
@@ -639,7 +640,7 @@ bool write_value (const T &value, Output &out, std::string *error)
             write_integer (value, out);
     } else if constexpr (std::is_floating_point_v<T>) {
         if (!valid_float (value))
-            return fail (error, "non-finite number");
+            return fail (error, "non-finite number; use a finite JSON number");
         write_float (static_cast<double> (value), out);
     } else if constexpr (std::is_enum_v<T>) {
         bool written = false;
@@ -754,6 +755,8 @@ class typed_sax final
         destination next{nullptr, &skip_value};
         std::uint64_t seen = 0;
         std::vector<std::uint64_t> extra_seen;
+        std::string_view field_name;
+        std::size_t next_element = 0;
 
         std::uint64_t &seen_word (std::size_t index)
         {
@@ -766,10 +769,37 @@ class typed_sax final
     bool started = false;
     bool healthy = true;
 
-    bool reject (const char *message)
+    bool annotate_failure ()
     {
         healthy = false;
-        return fail (error, message);
+        if (!error)
+            return false;
+        std::string path;
+        for (const auto &parent : frames) {
+            if (!parent.field_name.empty ()) {
+                if (!path.empty ())
+                    path += '.';
+                path += parent.field_name;
+            } else if (parent.kind == sax_kind::array && parent.next_element != 0) {
+                path += '[';
+                path += std::to_string (parent.next_element - 1);
+                path += ']';
+            }
+        }
+        if (!path.empty ())
+            *error = std::move (path) + ": " + *error;
+        return false;
+    }
+    bool reject (const char *message)
+    {
+        fail (error, message);
+        return annotate_failure ();
+    }
+    bool reject_type (const sax_event &event, const char *message)
+    {
+        return reject (event.kind == sax_kind::null
+                         ? "does not allow null; declare std::optional<T> to allow null"
+                         : message);
     }
     static bool finish_container (typed_sax &, frame &) { return true; }
     static destination skipped_child (frame &) { return {nullptr, &skip_value}; }
@@ -835,6 +865,7 @@ class typed_sax final
         using layout = dto_layout<T>;
         const auto index = layout::find (key);
         parent.next = {nullptr, &skip_value};
+        parent.field_name = index == layout::count ? std::string_view{} : layout::names[index];
         if (!remember_key (parent, key,
                            index == layout::count ? std::numeric_limits<std::size_t>::max ()
                                                   : index))
@@ -854,8 +885,12 @@ class typed_sax final
         if constexpr (has_dto<T>) {
             constexpr auto required = dto_layout<T>::required_masks;
             for (std::size_t index = 0; index < required.size (); ++index) {
-                if ((parent.seen_word (index) & required[index]) != required[index])
+                const auto missing = required[index] & ~parent.seen_word (index);
+                if (missing != 0) {
+                    parent.field_name =
+                      dto_layout<T>::names[index * field_mask_bits + std::countr_zero (missing)];
                     return in.reject ("missing required property");
+                }
             }
         }
         return true;
@@ -863,7 +898,7 @@ class typed_sax final
     template <typename T> bool container (T &out, const sax_event &event, sax_kind expected)
     {
         if (event.kind != expected)
-            return reject ("unexpected JSON container");
+            return reject_type (event, "unexpected JSON container");
         frame next{expected, &out, &child<T>, &finish<T>, {}};
         if constexpr (has_dto<T>) {
             next.key = &dto_key<T>;
@@ -913,17 +948,17 @@ class typed_sax final
             }
         } else if constexpr (std::is_same_v<T, std::string>) {
             if (event.kind != sax_kind::string)
-                return in.reject ("expected string");
+                return in.reject_type (event, "expected string");
             out = event.text;
         } else if constexpr (std::is_same_v<T, bool>) {
             if (event.kind != sax_kind::boolean)
-                return in.reject ("expected boolean");
+                return in.reject_type (event, "expected boolean");
             out = event.boolean;
         } else if constexpr (std::is_integral_v<T>) {
             if constexpr (sizeof (T) == 8) {
                 if (event.kind != sax_kind::string)
-                    return in.reject ("expected 64-bit decimal string");
-                return in.healthy = read_decimal (event.text, out, in.error);
+                    return in.reject_type (event, "expected 64-bit decimal string");
+                return read_decimal (event.text, out, in.error) || in.annotate_failure ();
             } else {
                 using integer_type = std::conditional_t<std::is_signed_v<T>, std::make_signed_t<T>,
                                                         std::make_unsigned_t<T>>;
@@ -937,7 +972,7 @@ class typed_sax final
                     return assign (event.unsigned_integer);
                 if (event.kind == sax_kind::integer)
                     return assign (event.integer);
-                return in.reject ("expected integer number");
+                return in.reject_type (event, "expected integer number");
             }
         } else if constexpr (std::is_floating_point_v<T>) {
             double value{};
@@ -948,7 +983,7 @@ class typed_sax final
             else if (event.kind == sax_kind::floating)
                 value = event.floating;
             else
-                return in.reject ("expected finite number");
+                return in.reject_type (event, "expected finite number");
             // Number tokens have already passed the reader's finite decision.
             if (value < -static_cast<double> (std::numeric_limits<T>::max ())
                 || value > static_cast<double> (std::numeric_limits<T>::max ()))
@@ -956,13 +991,13 @@ class typed_sax final
             out = static_cast<T> (value);
         } else if constexpr (std::is_enum_v<T>) {
             if (event.kind != sax_kind::string)
-                return in.reject ("expected enum name string");
+                return in.reject_type (event, "expected enum name string");
             return visit_enum_entry<T> ([&] (auto entry) { return entry.name == event.text; },
                                         [&] (auto entry) { out = entry.value; })
                    || in.reject ("undeclared enum name");
         } else if constexpr (std::is_same_v<T, std::vector<std::byte>>) {
             return (event.kind == sax_kind::string && decode_bytes (event.text, out))
-                   || in.reject ("invalid base64");
+                   || in.reject_type (event, "invalid base64");
         } else if constexpr (vector_type<T>::value) {
             out.clear ();
             return in.container (out, event, sax_kind::array);
@@ -982,6 +1017,8 @@ class typed_sax final
             started = true;
         } else {
             auto &parent = frames.back ();
+            if (parent.kind == sax_kind::array)
+                ++parent.next_element;
             next = parent.child (parent);
         }
         return next.accept (*this, next.value, event);

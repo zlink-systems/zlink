@@ -10,7 +10,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <future>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -34,6 +36,7 @@ struct spot_message_t
 {
     static constexpr auto packet_name = "dispatch-failure.spot";
     bool fail{};
+    std::int64_t sequence{};
 };
 }
 
@@ -45,7 +48,9 @@ template <> struct zlink::json::dto_traits<snapshot_t>
 
 template <> struct zlink::json::dto_traits<spot_message_t>
 {
-    static constexpr auto fields = std::tuple{zlink::json::field ("fail", &spot_message_t::fail)};
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("fail", &spot_message_t::fail),
+                 zlink::json::field ("sequence", &spot_message_t::sequence)};
 };
 
 namespace
@@ -167,11 +172,11 @@ class DispatchFailureFlow : public testing::Test
   protected:
     void SetUp () override
     {
-        app.logging ().use_provider ("dispatch-failure-test",
-                                     [records = records] (const auto &event) {
-                                         if (!field (event, "packet").empty ())
-                                             records->record (event);
-                                     });
+        app.logging ().use_console ().use_provider ("dispatch-failure-test",
+                                                    [records = records] (const auto &event) {
+                                                        if (!field (event, "packet").empty ())
+                                                            records->record (event);
+                                                    });
         auto &options = app.add_zlink_framework ();
         options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
         options.add_location_store (std::make_shared<fw::runtime::in_memory_location_store_t> ());
@@ -244,13 +249,24 @@ TEST_F (DispatchFailureFlow, ActorEncodeFailureIsReportedBeforeSubmission)
     const fw::actor_id_t id ("player-1");
     ASSERT_TRUE (actors.get_or_create (id, "player").async ().result ());
 
+    testing::internal::CaptureStderr ();
     const auto rejected =
       client.send (id, snapshot_t{std::numeric_limits<double>::infinity ()}).async ().result ();
+    drain_records ();
+    std::clog.flush ();
+    const auto stderr_output = testing::internal::GetCapturedStderr ();
     ASSERT_FALSE (rejected);
     ASSERT_NE (rejected.error (), nullptr);
     EXPECT_EQ (rejected.error_kind (), fw::framework_error_kind_t::protocol_error);
-    EXPECT_STREQ (rejected.error ()->what (), "payload serialization failed");
-    drain_records ();
+    const std::string_view error = rejected.error ()->what ();
+    EXPECT_NE (error.find (snapshot_t::packet_name), std::string_view::npos);
+    EXPECT_NE (error.find ("winnerScore"), std::string_view::npos);
+    EXPECT_NE (error.find ("finite JSON number"), std::string_view::npos);
+    EXPECT_NE (stderr_output.find ("event_id=zlink.dispatch_error"), std::string::npos);
+    EXPECT_NE (stderr_output.find ("reason=encode_error"), std::string::npos);
+    EXPECT_NE (stderr_output.find ("outcome=failed"), std::string::npos);
+    EXPECT_NE (stderr_output.find ("action=fail_caller"), std::string::npos);
+    EXPECT_NE (stderr_output.find ("winnerScore"), std::string::npos);
     const auto rejected_events = records->snapshot ();
     const auto failures =
       matching (rejected_events, snapshot_t::packet_name, "event_id", "zlink.dispatch_error");
@@ -284,13 +300,23 @@ TEST_F (DispatchFailureFlow, AsyncSpotHandlerFailureRetainsReceivedFlow)
     ASSERT_TRUE (spots.get_or_create ("room-1", "room").async ().result ());
 
     auto worker_entered = observations->spot_worker_entered.get_future ();
+    testing::internal::CaptureStderr ();
     auto sending = route.send_to_spot ("room-1", spot_message_t{true}).async ();
     const auto entered = worker_entered.wait_for (wait_budget);
     observations->release_spot_worker.set_value ();
-    ASSERT_TRUE (sending.result ());
-    ASSERT_EQ (entered, std::future_status::ready);
-    EXPECT_TRUE (wait_for_event (spot_message_t::packet_name, "reason", "handler_exception"));
+    const auto result = sending.result ();
+    const auto failed = wait_for_event (spot_message_t::packet_name, "reason", "handler_exception");
     drain_records ();
+    std::clog.flush ();
+    const auto stderr_output = testing::internal::GetCapturedStderr ();
+    ASSERT_TRUE (result);
+    ASSERT_EQ (entered, std::future_status::ready);
+    EXPECT_TRUE (failed);
+    EXPECT_NE (stderr_output.find ("event_id=zlink.dispatch_error"), std::string::npos);
+    EXPECT_NE (stderr_output.find ("reason=handler_exception"), std::string::npos);
+    EXPECT_NE (stderr_output.find ("outcome=failed"), std::string::npos);
+    EXPECT_NE (stderr_output.find ("action=drop"), std::string::npos);
+    EXPECT_NE (stderr_output.find ("Spot handler failed after awaiting worker"), std::string::npos);
 
     const auto rejected_events = records->snapshot ();
     const auto received =
@@ -320,5 +346,25 @@ TEST_F (DispatchFailureFlow, AsyncSpotHandlerFailureRetainsReceivedFlow)
     EXPECT_TRUE (matching (records->snapshot (), spot_message_t::packet_name, "event_id",
                            "zlink.dispatch_error")
                    .empty ());
+}
+
+TEST (DispatchFailureCodec, DecodeExplainsNullAndIntegerViolations)
+{
+    const auto serializer = fw::serializer_registry_t ().get<spot_message_t> ();
+    for (auto [wire, field_name, advice] :
+         {std::tuple{R"({"fail":null,"sequence":"1"})", "fail", "std::optional"},
+          std::tuple{R"({"fail":false,"sequence":1})", "sequence", "64-bit decimal string"}}) {
+        try {
+            (void) serializer.deserialize (fw::encoded_payload_t::from_string (wire));
+            ADD_FAILURE () << "Invalid wire value was accepted for " << field_name;
+        }
+        catch (const fw::framework_exception_t &error) {
+            EXPECT_EQ (error.kind (), fw::framework_error_kind_t::protocol_error);
+            const std::string_view message = error.what ();
+            EXPECT_NE (message.find (spot_message_t::packet_name), std::string_view::npos);
+            EXPECT_NE (message.find (std::string (field_name) + ": "), std::string_view::npos);
+            EXPECT_NE (message.find (advice), std::string_view::npos);
+        }
+    }
 }
 }

@@ -3423,7 +3423,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     contract)
   target_use_zlink_gtest_main(test_cpp_framework_dispatch_failure_flow)
   set_property(TEST test_cpp_framework_dispatch_failure_flow APPEND PROPERTY
-    ENVIRONMENT "GTEST_FILTER=DispatchFailureFlow.ActorEncodeFailureIsReportedBeforeSubmission")
+    ENVIRONMENT "GTEST_FILTER=DispatchFailureFlow.ActorEncodeFailureIsReportedBeforeSubmission:DispatchFailureCodec.*")
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_spot_handler_failure_flow
     COMMAND test_cpp_framework_dispatch_failure_flow
