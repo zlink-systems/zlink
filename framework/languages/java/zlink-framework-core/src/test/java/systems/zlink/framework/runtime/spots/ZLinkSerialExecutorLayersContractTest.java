@@ -88,7 +88,7 @@ final class ZLinkSerialExecutorLayersContractTest {
                     List.of("actor", "lifecycle", "spot", "timer"),
                     executed.stream().sorted().toList());
             assertEquals(
-                    List.of("application", "control", "final", "infrastructure"),
+                    List.of("application", "control", "final"),
                     ZLinkSessionSerialExecutorContractProbe.executeEverySubmissionPath(
                                     fixture.executor)
                             .stream()

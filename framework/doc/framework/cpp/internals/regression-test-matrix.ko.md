@@ -31,7 +31,7 @@ structured dispatch-error record 변경은 최소한 contract header test 와 ch
 |----|------|-------------|-----------|
 | SYLD-001 | `contract` | `Zlink.Framework.ContractTests/test_cpp_framework_contract_headers.cpp` | request, actor join, bound session send, worker call에 `yield()`가 있고, route request와 일반 send/publish에는 노출되지 않는다. |
 | SYLD-002 | `unit` | `Zlink.Framework.UnitTests/test_cpp_framework_spot_runtime.cpp` | request와 worker의 기본 `submit()`은 serial gate를 유지하고, `yield()`는 다른 mailbox 작업을 실행하게 한 뒤 원래 continuation으로 돌아온다. Actor join은 `async()`로 같은 gate를 유지한다. |
-| SYLD-003 | `unit` | `Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp` | serial execution queue가 released turn과 normal completion을 구분한다. |
+| SYLD-003 | `unit` | `Zlink.Framework.UnitTests/test_cpp_framework_execution_request_turns.cpp` | serial execution queue가 released turn과 normal completion을 구분한다. |
 | SYLD-004 | `contract`, `sample` | `test_cpp_framework_sample_parity`, `test_cpp_framework_layout_contract` | C++ sample layout과 public contract 문서가 일치하고, Entry Spot actor handler 예제는 `yield()`에 의존하지 않는다. |
 | SYLD-005 | `unit` | `Zlink.Framework.UnitTests/test_cpp_framework_spot_runtime.cpp` | Entry Spot actor packet은 대상 actor mailbox에서 실행된다. 서로 다른 actor는 Entry Spot 단일 큐에 막히지 않고, 같은 actor의 연속 packet은 순서대로 처리된다. Entry Spot actor handler 안의 `yield()`는 timeout 없이 즉시 계약 오류가 된다. |
 

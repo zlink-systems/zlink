@@ -75,6 +75,23 @@ export declare enum ZLinkDisconnectReason {
  ContextTerminated = 5
 }
 
+export interface ZLinkStreamNodeOptions {
+    readonly authenticationPacketName?: string;
+    readonly maxConcurrentAuthentications?: number;
+    readonly authenticationRetryDelayMs?: number;
+    readonly heartbeatIntervalMs?: number;
+    readonly heartbeatTimeoutMs?: number;
+    readonly idleTimeoutMs?: number;
+    readonly bind?: string;
+    readonly bindHost?: string;
+    readonly advertiseHost?: string;
+    readonly port?: number;
+    readonly maxMessageSize?: number;
+    readonly actorDispatchEnabled?: boolean;
+    readonly tlsServer?: ZLinkStreamTlsServerOptions;
+    readonly session?: Type;
+}
+
 export interface ZLinkStreamNodeBuilder {
  bind(endpoint: string): this;
  bind(port?: number): this;
@@ -84,6 +101,7 @@ export interface ZLinkStreamNodeBuilder {
  enableActorDispatch(): this;
  setHeartbeat(intervalMs: number, timeoutMs: number): this;
  setIdleTimeout(timeoutMs: number): this;
+    setAuthenticationAdmission(packetName: string, maxConcurrentAuthentications?: number, authenticationRetryDelayMs?: number): this;
  setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
  registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
 }
@@ -190,3 +208,5 @@ the worker result comes out. `yield()` only returns the turn on a
 `SpotWide` User Spot or Instance Spot's shared turn. In a different
 execution context, it completes with `invalidConfiguration` without
 submitting the worker or returning the turn.
+
+Defaults and validation for authentication admission are defined by [authentication admission](../../../04-session/03-authentication-admission.en.md).

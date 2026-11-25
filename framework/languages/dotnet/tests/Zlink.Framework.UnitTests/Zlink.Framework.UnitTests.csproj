@@ -90,6 +90,7 @@
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberOwnershipTests.cs"/>
+        <Compile Include="Runtime/SpotTargetRelocationReleaseTests.cs"/>
         <Compile Include="Runtime/SpotActorDispatchErrorReasonTests.cs"/>
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
@@ -226,6 +227,7 @@
         <Compile Include="Runtime/LocationLifecycleTests.cs"/>
         <Compile Include="Runtime/LayeringConvergenceTests.cs"/>
         <Compile Include="Runtime/LocationResolverTests.cs"/>
+        <Compile Include="Runtime/ActorRouteCacheConfirmationTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeQueryTests.cs"/>
         <Compile Include="Runtime/InstanceSpotActivationJournalTests.cs"/>
         <Compile Include="Runtime/SameTargetInstanceActivationTests.cs"/>
@@ -293,6 +295,7 @@
         <Compile Include="Runtime/StreamWireInteropTests.cs"/>
         <Compile Include="Runtime/StreamSessionLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
+        <Compile Include="Runtime/StreamAuthenticationAdmissionTests.cs"/>
         <Compile Include="Runtime/StreamDisconnectProgressTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
         <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>

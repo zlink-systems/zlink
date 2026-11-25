@@ -301,16 +301,18 @@ test('unbound native fallback does not attempt a native bound-session send', asy
       }
     } as never,
     routedTransport: {} as never,
-    actorRefProvider: () => ({
-      actorId: 'actor-unbound',
-      objectGeneration: 2n,
-      meshName: 'mesh',
-      nodeRid: 'node-a',
-      bindingGeneration: 0n
+    targetProvider: () => ({
+      actorRef: {
+        actorId: 'actor-unbound',
+        objectGeneration: 2n,
+        meshName: 'mesh',
+        nodeRid: 'node-a',
+        bindingGeneration: 0n
+      },
+      remoteTarget: undefined
     }),
     nativeActorNodeProvider: () => ({}) as never,
     localActorProvider: () => true,
-    remoteBoundSessionTargetProvider: () => undefined,
     remoteActorPacketTargetProvider: () => undefined,
     actorId: 'actor-unbound',
     reportError: () => undefined
@@ -350,16 +352,18 @@ test('unbound native fallback disconnect reports session-not-bound without nativ
       }
     } as never,
     routedTransport: {} as never,
-    actorRefProvider: () => ({
-      actorId: 'actor-unbound',
-      objectGeneration: 2n,
-      meshName: 'mesh',
-      nodeRid: 'node-a',
-      bindingGeneration: 0n
+    targetProvider: () => ({
+      actorRef: {
+        actorId: 'actor-unbound',
+        objectGeneration: 2n,
+        meshName: 'mesh',
+        nodeRid: 'node-a',
+        bindingGeneration: 0n
+      },
+      remoteTarget: undefined
     }),
     nativeActorNodeProvider: () => ({}) as never,
     localActorProvider: () => true,
-    remoteBoundSessionTargetProvider: () => undefined,
     remoteActorPacketTargetProvider: () => undefined,
     actorId: 'actor-unbound',
     reportError: () => undefined
@@ -402,20 +406,22 @@ test('routed bound-session sends use infrastructure node routing after native bi
         return { status: ZLinkSubmitStatus.Submitted };
       }
     } as never,
-    actorRefProvider: () => ({
-      actorId: 'actor-a',
-      objectGeneration: 7n,
-      meshName: 'mesh',
-      nodeRid: 'node-a',
-      bindingGeneration: 3n
+    targetProvider: () => ({
+      actorRef: {
+        actorId: 'actor-a',
+        objectGeneration: 7n,
+        meshName: 'mesh',
+        nodeRid: 'node-a',
+        bindingGeneration: 3n
+      },
+      remoteTarget: {
+        routerChannelId: 'mesh',
+        targetNodeRid: 'gateway',
+        spotId: 'gateway'
+      }
     }),
     nativeActorNodeProvider: () => ({}) as never,
     localActorProvider: () => true,
-    remoteBoundSessionTargetProvider: () => ({
-      routerChannelId: 'mesh',
-      targetNodeRid: 'gateway',
-      spotId: 'gateway'
-    }),
     remoteActorPacketTargetProvider: () => undefined,
     actorId: 'actor-a',
     reportError: () => undefined

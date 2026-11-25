@@ -406,6 +406,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                                         received.requestSeq(),
                                                         context.spotId());
                                                 startSpotHandler();
+                                                received.requestProgress().handlerStarted();
                                                 return ZLinkFlowContext.propagate(
                                                         host.runWithOutbound(
                                                                         context.dispatchOutbound(),

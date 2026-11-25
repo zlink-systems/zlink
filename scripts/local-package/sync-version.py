@@ -917,30 +917,39 @@ def template_versions_path(language: str) -> str:
     return f"framework/languages/{language}/templates/TEMPLATE_VERSIONS"
 
 
-def template_versions() -> dict[str, dict[str, str]]:
-    """Read every TEMPLATE_VERSIONS file as {language: {"framework": v[, "binding": v]}}."""
-    result: dict[str, dict[str, str]] = {}
-    for language in FRAMEWORK_LANGUAGES:
-        relative = template_versions_path(language)
-        keys = {TEMPLATE_FRAMEWORK_KEY: "framework"}
-        if language in TEMPLATE_BINDING_LANGUAGES:
-            keys[TEMPLATE_BINDING_KEY] = "binding"
-        layout = ", ".join(f"{key}=X.Y.Z" for key in keys)
-        values: dict[str, str] = {}
-        for line in (REPO_ROOT / relative).read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.partition("=")
-            if (
-                not separator
-                or key not in keys
-                or keys[key] in values
-                or not re.fullmatch(SEMVER, value)
-            ):
-                raise SyncError(f"{relative} must contain exactly {layout}")
-            values[keys[key]] = value
-        if len(values) != len(keys):
+CONNECTOR_EXAMPLES = "framework/templates/connector-examples"
+CONNECTOR_EXAMPLE_VERSIONS = f"{CONNECTOR_EXAMPLES}/TEMPLATE_VERSIONS"
+
+
+def read_template_versions(relative: str, pins_binding: bool) -> dict[str, str]:
+    keys = {TEMPLATE_FRAMEWORK_KEY: "framework"}
+    if pins_binding:
+        keys[TEMPLATE_BINDING_KEY] = "binding"
+    layout = ", ".join(f"{key}=X.Y.Z" for key in keys)
+    values: dict[str, str] = {}
+    for line in (REPO_ROOT / relative).read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if (
+            not separator
+            or key not in keys
+            or keys[key] in values
+            or not re.fullmatch(SEMVER, value)
+        ):
             raise SyncError(f"{relative} must contain exactly {layout}")
-        result[language] = values
-    return result
+        values[keys[key]] = value
+    if len(values) != len(keys):
+        raise SyncError(f"{relative} must contain exactly {layout}")
+    return values
+
+
+def template_versions() -> dict[str, dict[str, str]]:
+    """Read the language-owned genre template pins."""
+    return {
+        language: read_template_versions(
+            template_versions_path(language), language in TEMPLATE_BINDING_LANGUAGES
+        )
+        for language in FRAMEWORK_LANGUAGES
+    }
 
 
 @dataclass(frozen=True)
@@ -1208,6 +1217,43 @@ def update_template_document(
     return result
 
 
+CONNECTOR_EXAMPLE_FIELDS = (
+    TemplateField("server/package.json", "framework", node_internal_dependency_pattern(), 2),
+    TemplateField("server/package.json", "binding", TEMPLATE_CONFIG_FIELDS["node"][1].pattern),
+    TemplateField("client/typescript/package.json", "framework", node_internal_dependency_pattern()),
+    TemplateField(
+        "client/csharp/ConnectorExample.csproj",
+        "framework",
+        rf'(<PackageReference Include="Zlink\.Stream\.Connector" Version=")(?P<version>{SEMVER})(")',
+    ),
+    TemplateField(
+        "client/java/build.gradle.kts",
+        "framework",
+        rf'("systems\.zlink:zlink-stream-connector:)(?P<version>{SEMVER})(")',
+    ),
+)
+CONNECTOR_EXAMPLE_LOCKS = ("server/package-lock.json", "client/typescript/package-lock.json")
+
+
+def synchronize_connector_examples(sync: Synchronizer, pins: dict[str, str], local_packages: bool) -> None:
+    for field in CONNECTOR_EXAMPLE_FIELDS:
+        version = pins[field.kind]
+        sync.regex(
+            f"{CONNECTOR_EXAMPLES}/{field.relative}",
+            field.pattern,
+            lambda match, version=version: replace_version_group(match, version),
+            field.expected,
+        )
+
+    for lock in CONNECTOR_EXAMPLE_LOCKS:
+        relative = f"{CONNECTOR_EXAMPLES}/{lock}"
+        update = update_template_node_lock if lock.startswith("server/") else (
+            lambda source, pins: update_node_registry_consumer_lock(source, pins["framework"])
+        )
+        sync.transform(relative, lambda source: update(source, pins))
+        synchronize_node_lock(sync, relative, regenerate=not local_packages)
+
+
 def synchronize_template_versions(
     write: bool, local_packages: bool = False,
 ) -> tuple[dict[str, dict[str, str]], list[Path]]:
@@ -1218,6 +1264,8 @@ def synchronize_template_versions(
         synchronize_node_lock(
             sync, f"{template}/my-game/package-lock.json", regenerate=not local_packages
         )
+    templates["connector-examples"] = read_template_versions(CONNECTOR_EXAMPLE_VERSIONS, True)
+    synchronize_connector_examples(sync, templates["connector-examples"], local_packages)
     return templates, sync.changed
 
 

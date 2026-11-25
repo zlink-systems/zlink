@@ -309,7 +309,18 @@ public sealed partial class EntrySpotActorDispatchTests
             locationTimeProvider: time,
             joinTimeProvider: time,
             locationStoreWrapper: inner =>
-                counter = new CountingIntentStore(inner, "ended-instance")
+                counter = new CountingIntentStore(inner, "ended-instance"),
+            configureNode: registration =>
+            {
+                if (policy == "recreate")
+                    registration.InstanceSpotRelocations["Tests.InstanceSpot"] =
+                        registration.InstanceSpotRelocations["Tests.InstanceSpot"] with
+                        {
+                            PolicyKind = ZLinkObjectRelocationRegistration.RecreatePolicy,
+                        };
+                if (policy == "unregistered")
+                    registration.InstanceSpotRelocations.Remove("Tests.InstanceSpot");
+            }
         );
         try
         {
@@ -333,6 +344,35 @@ public sealed partial class EntrySpotActorDispatchTests
                 LeaseGeneration = oldOwner.LeaseGeneration,
                 EntrySpotId = "old-instance-entry",
             };
+            if (policy == "unregistered")
+                oldDescriptor = oldDescriptor with
+                {
+                    ObjectCapabilities =
+                    [
+                        .. oldDescriptor.ObjectCapabilities,
+                        new ZLinkObjectCapability(
+                            ZLinkPlacementObjectKind.InstanceSpot,
+                            "Tests.InstanceSpot",
+                            ZLinkObjectMaintenancePolicyKind.Disabled,
+                            false,
+                            0
+                        ),
+                    ],
+                    Capacity = oldDescriptor.Capacity with
+                    {
+                        SpotTypes =
+                        [
+                            .. oldDescriptor.Capacity.SpotTypes,
+                            new ZLinkSpotTypeCapacity(
+                                ZLinkPlacementObjectKind.InstanceSpot,
+                                "Tests.InstanceSpot",
+                                0,
+                                0,
+                                0
+                            ),
+                        ],
+                    },
+                };
             _ = await store.UpdateMeshNodeAsync(oldDescriptor, ZLinkLocationWriteIntent.NewClaim);
             const string spotId = "ended-instance";
             var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId);
@@ -398,14 +438,6 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.Equal("Tests.InstanceSpot", canonical.InstanceSpotType);
             Assert.Null(resolution.Handle);
             var registration = runtime.Registration.SpotNodes["entry"];
-            if (policy == "recreate")
-                registration.InstanceSpotRelocations["Tests.InstanceSpot"] =
-                    registration.InstanceSpotRelocations["Tests.InstanceSpot"] with
-                    {
-                        PolicyKind = ZLinkObjectRelocationRegistration.RecreatePolicy,
-                    };
-            if (policy == "unregistered")
-                registration.InstanceSpotRelocations.Remove("Tests.InstanceSpot");
             var target = new ZLinkInstanceSpotActivationTarget(
                 store,
                 new ZLinkProviderRelocationRepository(blobs),

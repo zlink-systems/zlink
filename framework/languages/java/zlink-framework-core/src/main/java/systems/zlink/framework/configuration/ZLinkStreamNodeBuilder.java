@@ -19,6 +19,12 @@ public interface ZLinkStreamNodeBuilder {
 
     ZLinkStreamNodeBuilder idleTimeout(Duration timeout);
 
+    ZLinkStreamNodeBuilder authenticationPacketName(String packetName);
+
+    ZLinkStreamNodeBuilder maxConcurrentAuthentications(int limit);
+
+    ZLinkStreamNodeBuilder authenticationRetryDelay(Duration delay);
+
     ZLinkStreamSocketConfig configureSocket();
 
     ZLinkStreamNodeBuilder setTlsServer(String certificatePath, String keyPath);

@@ -12,7 +12,7 @@ from conan.tools.files import copy, get, save
 
 required_conan_version = ">=2.1"
 
-# gRPC 1.84.0 and vcpkg baseline 2ec0f1747d resolve comparable versions (#4077).
+# Conan and vcpkg use the protobuf 6.33 series with gRPC 1.84.0 (#4077).
 # vcpkg uses protobuf 6.33.4, the nearest version in the same series.
 ZLINK_FRAMEWORK_CPP_PROTOBUF_REQUIREMENT = "protobuf/6.33.5"
 
@@ -35,6 +35,7 @@ ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
     # not propagate libuv headers to consumers of async_redis.h. Require the same
     # compatible range directly so CMakeDeps exposes those headers to Framework.
     "redis-plus-plus/1.3.15",
+    "hiredis/1.3.0",
     "libuv/[>=1 <2]",
 )
 
@@ -58,7 +59,7 @@ def generate_framework_cmake(conanfile, toolchain):
 
 class ZlinkFrameworkConan(ConanFile):
     name = "zlink-framework"
-    version = "0.34.0"
+    version = "0.34.1"
     package_type = "static-library"
     license = "Elastic-2.0"
     homepage = "https://github.com/zlink-systems/zlink"

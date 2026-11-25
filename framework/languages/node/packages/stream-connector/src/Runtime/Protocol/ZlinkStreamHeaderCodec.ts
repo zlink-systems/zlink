@@ -13,6 +13,14 @@ import { validateName } from './ZlinkStreamPacketNameValidator';
 import { ZlinkStreamMetadataCodec } from './ZlinkStreamMetadataCodec';
 
 export class ZlinkStreamHeaderCodec {
+  static encodeRetryHeader(firstRequestHeader: Uint8Array, requestSeq: bigint): Uint8Array {
+    const header = firstRequestHeader.slice();
+    // The Request sequence follows the one-byte marker, kind, codec and flags (§4.2).
+    // Retain the encoded metadata and packet name byte for byte.
+    new DataView(header.buffer).setBigUint64(4, requestSeq);
+    return header;
+  }
+
   static encode(header: ZlinkStreamHeader): Uint8Array {
     const reply = isReplyKind(header.kind);
     if (!reply) validateName(header.name, header.kind === ZlinkStreamMessageKind.Control);

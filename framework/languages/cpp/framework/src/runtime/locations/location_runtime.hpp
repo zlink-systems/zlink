@@ -123,7 +123,10 @@ class location_runtime_t
                           // object cleanup after stop transfers cleanup to the Host.
                           return episode->owner->stop.load (std::memory_order_acquire)
                                    ? serial_execution_queue_t::execution_status_t::allowed
-                                   : execution_admission (episode, queue.execution_ready_at (), {});
+                                   : retained_execution_admission (episode,
+                                                                   queue.execution_ready_at (), {})
+                                       .value_or (
+                                         serial_execution_queue_t::execution_status_t::allowed);
                       });
                 terminal.complete (
                   result_t<serial_execution_queue_t::execution_operation_t>::success (
@@ -388,7 +391,9 @@ class location_runtime_t
         access->admit = [lease = _owner_lease, clock = _lease_now] {
             const auto snapshot =
               std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
-            return !snapshot->outage || owner_lease_usable (*snapshot, (*clock) ());
+            const bool awaiting_publication = snapshot->token && !snapshot->admission_deadline;
+            return (!snapshot->outage && !awaiting_publication)
+                   || owner_lease_usable (*snapshot, (*clock) ());
         };
         access->observe = [lane = _lane, observers = _execution_discard_requests] (
                             authority_key_t key, authority_snapshot_t snapshot) {
@@ -441,11 +446,12 @@ class location_runtime_t
                 if (const auto episode = retired.lock ();
                     retention_eligible (episode, queue.confirmed_execution_ready_at ()))
                     return serial_execution_queue_t::execution_status_t::ownership_lost;
-            if (!snapshot->outage)
-                return owner_lease_usable (*snapshot, (*now) ())
-                         ? serial_execution_queue_t::execution_status_t::allowed
-                         : serial_execution_queue_t::execution_status_t::stopped;
-            return execution_admission (snapshot->outage, queue.execution_ready_at (), *now);
+            if (const auto retained = retained_execution_admission (
+                  snapshot->outage, queue.execution_ready_at (), *now))
+                return *retained;
+            return owner_lease_usable (*snapshot, (*now) ())
+                     ? serial_execution_queue_t::execution_status_t::allowed
+                     : serial_execution_queue_t::execution_status_t::stopped;
         };
     }
 
@@ -632,6 +638,18 @@ class location_runtime_t
         if (!owner_lease_usable (*lease, (*_lease_now) ()))
             return {};
         return {lease, &*lease->token};
+    }
+
+    std::optional<location_owner_token_t> descriptor_publication_owner () const
+    {
+        const auto lease =
+          std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
+        if (!lease->token || !lease->last_successful_lease
+            || lease->last_successful_lease->token.lease_generation
+                 != lease->token->lease_generation
+            || (*_lease_now) () >= lease->last_successful_lease->admission_deadline)
+            return std::nullopt;
+        return lease->token;
     }
 
     auto bound_execution_owner () const
@@ -983,13 +1001,14 @@ class location_runtime_t
         return episode && ready_at && *ready_at < episode->observed_at;
     }
 
-    static serial_execution_queue_t::execution_status_t execution_admission (
+    static std::optional<serial_execution_queue_t::execution_status_t>
+    retained_execution_admission (
       const std::shared_ptr<store_outage_t> &episode,
       std::optional<std::chrono::steady_clock::time_point> ready_at,
       const std::function<std::chrono::steady_clock::time_point ()> &now) noexcept
     {
         if (!retention_eligible (episode, ready_at))
-            return serial_execution_queue_t::execution_status_t::allowed;
+            return std::nullopt;
         using status_t = serial_execution_queue_t::execution_status_t;
         if (episode->discarded.load (std::memory_order_acquire))
             return status_t::ownership_lost;
@@ -1557,7 +1576,7 @@ class location_runtime_t
                                           bool renewal = false)
     {
         auto *runtime = attempt->runtime;
-        const auto recovering =
+        const auto [recovering, publishing] =
           co_await lease_lane (attempt, [runtime, token, expires_at, store_now, started_at, renewal,
                                          requested_outage = attempt->requested_outage] {
               const auto admission_lifetime =
@@ -1569,39 +1588,72 @@ class location_runtime_t
                 + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
                   admission_lifetime);
               bool recovering = false;
+              bool publishing = false;
               runtime->update_owner_lease_on_lane ([&] (auto &lease) {
+                  publishing = runtime->_descriptor_publisher && lease.last_successful_lease
+                               && (lease.last_successful_lease->token.lease_generation
+                                     != token.lease_generation
+                                   || (lease.token && !lease.admission_deadline));
                   recovering = runtime->observe_successful_lease_on_lane (
                     lease, token, started_at, admission_deadline, renewal, requested_outage);
                   lease.token = token;
                   lease.healthy = true;
                   lease.renewed_at = store_now;
-                  lease.admission_deadline = admission_deadline;
+                  if (publishing)
+                      lease.admission_deadline.reset ();
+                  else
+                      lease.admission_deadline = admission_deadline;
               });
               runtime->_last_error.reset ();
-              return recovering;
+              return std::pair{recovering, publishing};
           });
-        if (recovering) {
-            const auto episode = attempt->requested_outage;
-            std::shared_ptr<task_t<bool>> publication;
-            if (episode->token.lease_generation != token.lease_generation) {
+        const auto episode = recovering ? attempt->requested_outage : nullptr;
+        std::shared_ptr<task_t<bool>> publication;
+        if (publishing || (episode && episode->token.lease_generation != token.lease_generation)) {
+            if (episode)
                 publication =
                   co_await lease_lane (attempt, [episode] { return episode->publication; });
-                if (!publication || (publication->await_ready () && [&] {
-                        const auto result = detail::task_result_access_t::read (*publication);
-                        return !result || !result.value ();
-                    }())) {
-                    auto submitted = std::make_shared<task_completion_source_t<void>> ();
-                    publication = std::make_shared<task_t<bool>> (runtime->republish_descriptors (
-                      location_write_intent_t::renew, attempt->cancellation, attempt->deadline_at,
-                      submitted));
-                    detail::observe_task_terminal (*publication, [submitted] (const auto &) {
-                        submitted->complete (result_t<void>::success ());
-                    });
-                    co_await submitted->task ();
+            if (!publication || (publication->await_ready () && [&] {
+                    const auto result = detail::task_result_access_t::read (*publication);
+                    return !result || !result.value ();
+                }())) {
+                auto submitted = std::make_shared<task_completion_source_t<void>> ();
+                auto write = runtime->republish_descriptors (location_write_intent_t::renew,
+                                                             attempt->cancellation,
+                                                             attempt->deadline_at, submitted);
+                detail::observe_task_terminal (write, [submitted] (const auto &) {
+                    submitted->complete (result_t<void>::success ());
+                });
+                publication = std::make_shared<task_t<bool>> (detail::project_task_terminal<bool> (
+                  write, [lane = runtime->_lane, owner_lease = runtime->_owner_lease,
+                          gate = runtime->_execution_gate, clock = runtime->_lease_now,
+                          observers = runtime->_execution_discard_requests,
+                          token] (const result_t<bool> &result) {
+                      if (result && result.value ())
+                          lane->run_sync ([&] {
+                              update_owner_lease_on_lane (
+                                owner_lease, gate, clock,
+                                [&] (auto &lease) {
+                                    if (lease.token && lease.last_successful_lease
+                                        && lease.token->lease_generation == token.lease_generation
+                                        && lease.token->owner_id == token.owner_id)
+                                        lease.admission_deadline =
+                                          lease.last_successful_lease->admission_deadline;
+                                },
+                                observers);
+                          });
+                      return result;
+                  }));
+                co_await submitted->task ();
+                if (episode)
                     co_await lease_lane (
                       attempt, [episode, publication] { episode->publication = publication; });
-                }
             }
+            if (!episode)
+                co_await detail::project_task_terminal<bool> (
+                  *publication, [] (const result_t<bool> &result) { return result; });
+        }
+        if (episode) {
             auto recovery = co_await lease_lane (attempt, [runtime, episode, token, publication] {
                 auto recoveries = std::make_shared<std::vector<task_t<void>>> ();
                 for (const auto &observer : *runtime->_execution_discard_requests)
@@ -1633,13 +1685,14 @@ class location_runtime_t
                 co_await finishing;
         }
         runtime->wake_owner_lease_observers ();
-        co_await lease_lane (attempt, [runtime, token, renewal, recovering] {
+        co_await lease_lane (attempt, [runtime, token, renewal, recovering, publishing] {
             for (const auto &operation : *runtime->_repository_operations) {
                 if (const auto failure = operation->failure ())
                     runtime->_last_error = *failure;
                 operation->progress (token);
             }
-            if (renewal && !recovering && !runtime->_draining && runtime->_descriptor_renewal)
+            if (renewal && !recovering && !publishing && !runtime->_draining
+                && runtime->_descriptor_renewal)
                 runtime->_descriptor_renewal ();
         });
     }
@@ -1802,11 +1855,11 @@ class location_runtime_t
                             if (!exact || lease->outage != attempt->requested_outage
                                 || !lease->token || lease->token->owner_id != owner_token->owner_id
                                 || lease->token->lease_generation != owner_token->lease_generation
-                                || !lease->admission_deadline)
+                                || !lease->last_successful_lease)
                                 return false;
                             // Admission is lifetime minus margin. A new claim needs
                             // lifetime plus margin, rechecked after the exact read.
-                            auto reclaim_after = *lease->admission_deadline;
+                            auto reclaim_after = lease->last_successful_lease->admission_deadline;
                             for (int margin = 0; margin != 2; ++margin) {
                                 const auto available =
                                   std::chrono::duration_cast<std::chrono::milliseconds> (

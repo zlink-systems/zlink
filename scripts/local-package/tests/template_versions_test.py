@@ -31,6 +31,18 @@ class TemplateVersionTests(unittest.TestCase):
         self.root = self.temp / 'repo'
         for parent in TEMPLATE_PARENTS:
             shutil.copytree(SOURCE / parent, self.root / parent)
+        bundle_files = {sync_version.CONNECTOR_EXAMPLE_VERSIONS}
+        bundle_files.update(
+            f'{sync_version.CONNECTOR_EXAMPLES}/{relative}'
+            for relative in [
+                *(field.relative for field in sync_version.CONNECTOR_EXAMPLE_FIELDS),
+                *sync_version.CONNECTOR_EXAMPLE_LOCKS,
+            ]
+        )
+        for relative in bundle_files:
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(SOURCE / relative, target)
         self.original = self.snapshot()
         previous = sync_version.REPO_ROOT
         sync_version.REPO_ROOT = self.root
@@ -148,6 +160,20 @@ class TemplateVersionTests(unittest.TestCase):
         self.assertIn('planned for 0.31.0', readme)
         self.assertIn('not observed in 0.31.0 validation', readme)
         self.assertIn('fixed in 0.32.0', text('node/templates/mmo-megaserver/my-game/README.md'))
+
+    def test_connector_bundle_has_independent_pins(self):
+        owner = sync_version.CONNECTOR_EXAMPLE_VERSIONS
+        previous = (self.root / owner).read_text(encoding='utf-8').splitlines()[0].split('=')[1]
+        self.edit(owner, previous, '9.8.7')
+        base = sync_version.CONNECTOR_EXAMPLES
+        expected = sorted(f'{base}/{relative}' for relative in (
+            'server/package.json', 'server/package-lock.json',
+            'client/typescript/package.json', 'client/typescript/package-lock.json',
+            'client/csharp/ConnectorExample.csproj', 'client/java/build.gradle.kts',
+        ))
+        self.assertEqual(self.changed(write=False), expected)
+        self.assertEqual(self.changed(write=True), expected)
+        self.assertEqual(self.changed(write=False), [])
 
     def test_unregistered_template_fails(self):
         shutil.copytree(

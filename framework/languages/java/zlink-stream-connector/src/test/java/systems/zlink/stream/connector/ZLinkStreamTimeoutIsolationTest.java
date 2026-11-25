@@ -112,7 +112,7 @@ class ZLinkStreamTimeoutIsolationTest {
                             configuration,
                             ZLinkStreamExecutionResources.timeouts(),
                             new ZLinkStreamDispatchQueue(),
-                            new ZLinkStreamPendingRequests(),
+                            ZLinkStreamPendingRequestsTest.pendingRequests(),
                             null,
                             ignored -> {},
                             () -> {},
@@ -132,7 +132,8 @@ class ZLinkStreamTimeoutIsolationTest {
                                     exited.countDown();
                                 }
                             },
-                            () -> {});
+                            ignored -> {},
+                            null);
             try {
                 lifecycle.connect().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 assertTrue(entered.await(5, TimeUnit.SECONDS));

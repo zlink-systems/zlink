@@ -62,8 +62,17 @@ struct store_value_condition_t
     std::vector<std::byte> expected;
 };
 
-using store_condition_t =
-  std::variant<store_missing_condition_t, store_version_condition_t, store_value_condition_t>;
+struct store_sum_at_most_condition_t
+{
+    std::vector<store_key_t> keys;
+    std::int64_t delta = 0;
+    std::int64_t limit = 0;
+};
+
+using store_condition_t = std::variant<store_missing_condition_t,
+                                       store_version_condition_t,
+                                       store_value_condition_t,
+                                       store_sum_at_most_condition_t>;
 
 struct store_put_t
 {
@@ -77,7 +86,13 @@ struct store_delete_t
     store_key_t key;
 };
 
-using store_mutation_t = std::variant<store_put_t, store_delete_t>;
+struct store_add_t
+{
+    store_key_t key;
+    std::int64_t delta = 0;
+};
+
+using store_mutation_t = std::variant<store_put_t, store_delete_t, store_add_t>;
 
 struct store_write_request_t
 {
@@ -102,7 +117,13 @@ struct store_write_conflict_t
     std::chrono::system_clock::time_point store_now{};
 };
 
-using store_write_result_t = std::variant<store_write_applied_t, store_write_conflict_t>;
+struct store_write_corrupt_t
+{
+    std::chrono::system_clock::time_point store_now{};
+};
+
+using store_write_result_t =
+  std::variant<store_write_applied_t, store_write_conflict_t, store_write_corrupt_t>;
 
 struct store_scan_cursor_t
 {

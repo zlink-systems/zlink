@@ -27,6 +27,10 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask>
     > _replyReceived = new();
 
+    private readonly ZlinkStreamHandlerList<
+        Func<ZlinkStreamAdmissionWaiting, CancellationToken, ValueTask>
+    > _admissionWaiting = new();
+
     private bool _accepting = true;
 
     public int PendingDispatchCount
@@ -61,6 +65,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         _errorReceived.Clear();
         _requestSending.Clear();
         _replyReceived.Clear();
+        _admissionWaiting.Clear();
     }
 
     public IDisposable AddErrorReceived(
@@ -77,6 +82,18 @@ internal sealed class ZlinkStreamConnectorCallbacks(
 
     public IDisposable AddRequestSending(Action<ZlinkStreamRequestSendingContext> handler) =>
         _requestSending.Add(handler);
+
+    public IDisposable AddAdmissionWaiting(
+        Func<ZlinkStreamAdmissionWaiting, CancellationToken, ValueTask> handler
+    ) => _admissionWaiting.Add(handler);
+
+    public ValueTask NotifyAdmissionWaitingAsync(ZlinkStreamAdmissionWaiting waiting) =>
+        DispatchSubscribersAsync(
+            _admissionWaiting.Snapshot(),
+            (handler, token) => handler(waiting, token),
+            CancellationToken.None,
+            true
+        );
 
     public IDisposable AddReplyReceived(
         Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler

@@ -15,7 +15,6 @@ import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
@@ -130,8 +129,7 @@ final class ZLinkUserSpotCreateCollisionTest {
                                                                         ZLinkPlacementObjectKind
                                                                                 .USER_SPOT,
                                                                         "room",
-                                                                        1),
-                                                                new RelocationPolicy.Disabled()),
+                                                                        1)),
                                                         () -> false)
                                                 .toCompletableFuture()
                                                 .get())
