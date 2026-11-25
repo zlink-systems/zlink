@@ -1,4 +1,6 @@
 #pragma once
+#include <iostream>
+#include <syncstream>
 #include "server/shared/config.hpp"
 #include <algorithm>
 #include <array>
@@ -20,8 +22,16 @@ class Session final : public fx::packet_stream_session_t
         config_ (config), actors_ (actors)
     {
     }
-    fx::task_t<void> on_connected (fx::stream_t &) override { co_return; }
-    fx::task_t<void> on_disconnected (fx::stream_t &) override { co_return; }
+    fx::task_t<void> on_connected (fx::stream_t &) override
+    {
+        std::osyncstream (std::cout) << "GAME Client connected" << std::endl;
+        co_return;
+    }
+    fx::task_t<void> on_disconnected (fx::stream_t &) override
+    {
+        std::osyncstream (std::cout) << "GAME Client disconnected" << std::endl;
+        co_return;
+    }
     fx::task_t<void> on_error (fx::stream_t &, const fx::stream_error_t &error) override
     {
         throw std::runtime_error (std::string (error.message ()));
@@ -51,6 +61,7 @@ class Session final : public fx::packet_stream_session_t
               },
               ensured);
             co_await stream.actors ().bind_or_get (ref).async ();
+            std::osyncstream (std::cout) << "GAME Player Actor bound" << std::endl;
             bound = stream.actors ().bound ();
         }
         if (bound.size () != 1)
