@@ -119,6 +119,11 @@ jobs:
       - uses: actions/checkout@v5
         if: ${{ !inputs.skip_tests }}
 
+      - name: Report oversized Framework C++ test sources
+        if: ${{ !inputs.skip_tests }}
+        continue-on-error: true
+        run: python3 scripts/ci/framework-cpp-build-report.py test-lines
+
       - name: Setup Node.js for conformance validation
         if: ${{ !inputs.skip_tests }}
         uses: actions/setup-node@v5
@@ -151,7 +156,7 @@ jobs:
             -o APT::Keep-Downloaded-Packages=true \
             -o Binary::apt::APT::Keep-Downloaded-Packages=true \
             install -y \
-              build-essential cmake ninja-build git pkg-config curl openssl libssl-dev
+              build-essential cmake ninja-build git pkg-config curl openssl libssl-dev time
 
       - name: Resolve the runner vcpkg
         if: ${{ !inputs.skip_tests }}
@@ -229,9 +234,15 @@ jobs:
           restore-keys: framework-cpp-sccache-${{ runner.os }}-${{ runner.arch }}-ubuntu24-gcc-sccache019-v1-
 
       - name: Configure and build Framework C++ tests
+        id: framework-cpp-build
         if: ${{ !inputs.skip_tests }}
         working-directory: framework/languages/cpp
         run: bash ../../../scripts/ci/framework-cpp-configure-build.sh
+
+      - name: Report Framework C++ compile RSS
+        if: ${{ always() && !cancelled() && steps.framework-cpp-build.outcome != 'skipped' && !inputs.skip_tests }}
+        continue-on-error: true
+        run: python3 scripts/ci/framework-cpp-build-report.py tu-rss "${RUNNER_TEMP}/framework-cpp-tu-rss.tsv"
 
       # Redis-backed tests fail instead of skipping once the job provides Redis (#4542).
       - name: Start Redis for Redis-backed tests
