@@ -2009,6 +2009,21 @@ serial_execution_queue_t::admit_native_application (std::function<void (bool)> p
     });
 }
 
+task_t<std::shared_ptr<stateful::relocation_seal_binding_t>>
+serial_execution_queue_t::hold_relocation_restore ()
+{
+    return control_async<std::shared_ptr<stateful::relocation_seal_binding_t>> ([this] {
+        std::unique_lock lock (_mutex, std::defer_lock);
+        if (!owns_shared_gate ())
+            lock.lock ();
+        if (!_relocation_seal) {
+            _relocation_seal = std::make_shared<stateful::relocation_seal_binding_t> ();
+            _relocation_seal->bound.store (true, std::memory_order_release);
+        }
+        return _relocation_seal;
+    });
+}
+
 task_t<bool> serial_execution_queue_t::release_relocation_seal (
   std::shared_ptr<stateful::relocation_seal_binding_t> binding)
 {

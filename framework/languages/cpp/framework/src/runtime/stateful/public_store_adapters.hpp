@@ -159,15 +159,23 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                            && snapshot->store_version != expected_store_version)
             return {authority_publish_status_t::conflict, decode_current (read)};
         const std::string cas_version = snapshot->store_version;
-        std::vector<std::byte> application_payload = target_application_payload;
-        authority_relocation_reference_t reference{
-          source,
-          source,
-          relocation_reference,
-          checksum_crc32c,
-          inventory_digest,
-          target_owner,
-          application_payload.empty () ? snapshot->payload : std::move (application_payload)};
+        if (source.kind == object_kind_t::instance_spot) {
+            auto payload =
+              target_authority_payload (source.kind, *snapshot, target.node_id, target_owner,
+                                        target_placement.node_lifecycle_generation);
+            if (!payload)
+                return {authority_publish_status_t::conflict, decode_current (read)};
+            target_application_payload = std::move (*payload);
+        }
+        authority_relocation_reference_t reference{source,
+                                                   source,
+                                                   relocation_reference,
+                                                   checksum_crc32c,
+                                                   inventory_digest,
+                                                   target_owner,
+                                                   target_application_payload.empty ()
+                                                     ? snapshot->payload
+                                                     : std::move (target_application_payload)};
         reference.target = target;
         if (source.kind == object_kind_t::actor) {
             const auto projection = runtime::decode_actor_authority_payload (
@@ -249,7 +257,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                             fence.source_node_generation, &participant == &primary))
                     co_return std::optional<std::string>{};
                 auto payload =
-                  target_authority_payload (participant.kind, snapshot->payload, target_node_id,
+                  target_authority_payload (participant.kind, *snapshot, target_node_id,
                                             fence.target_owner, target_node_generation);
                 if (!payload)
                     co_return std::optional<std::string>{};
@@ -693,14 +701,14 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
 
     static std::optional<std::vector<std::byte>>
     target_authority_payload (object_kind_t kind,
-                              const std::vector<std::byte> &source_payload,
+                              const authority_snapshot_t &source,
                               const std::string &target_node_id,
                               const location_owner_token_t &target_owner,
                               std::uint64_t target_node_generation)
     {
         const auto owner_lease = static_cast<std::uint64_t> (target_owner.lease_generation);
         if (kind == object_kind_t::actor) {
-            auto payload = runtime::decode_direct_actor_authority_payload (source_payload);
+            auto payload = runtime::decode_direct_actor_authority_payload (source.payload);
             if (!payload)
                 return std::nullopt;
             payload->owner_id = target_owner.owner_id;
@@ -710,7 +718,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             return runtime::encode_actor_authority_payload (*payload);
         }
         if (kind == object_kind_t::user_spot) {
-            auto payload = runtime::decode_direct_user_spot_authority_payload (source_payload);
+            auto payload = runtime::decode_direct_user_spot_authority_payload (source.payload);
             if (!payload)
                 return std::nullopt;
             payload->owner_id = target_owner.owner_id;
@@ -720,8 +728,11 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             return runtime::encode_user_spot_authority_payload (*payload);
         }
         if (kind == object_kind_t::instance_spot) {
-            auto payload = runtime::decode_instance_spot_authority_payload (source_payload);
-            if (!payload)
+            auto application = source;
+            authority_relocation_payload_codec_t::project_application_payload (application);
+            auto payload = runtime::decode_instance_spot_authority_payload (application.payload);
+            if (!payload || payload->state != runtime::instance_spot_authority_state_t::ready
+                || payload->activation_recovery)
                 return std::nullopt;
             payload->owner_id = target_owner.owner_id;
             payload->owner_lease_generation = owner_lease;
@@ -929,6 +940,9 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
     {
         if (source_owner.owner_id.empty () || source_owner.lease_generation <= 0
             || !same_owner (snapshot.owner, source_owner))
+            return false;
+        if (snapshot.allocation.object_kind == placement_object_kind_t::instance_spot
+            && runtime::decode_instance_closing_state (snapshot.payload))
             return false;
         const auto &placement = snapshot.allocation.target;
         const auto rid = placement.node_rid.value ();
@@ -1146,7 +1160,7 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
         participants.reserve (snapshots.size ());
         for (std::size_t index = 0; index != sources.size (); ++index) {
             auto payload = public_authority_store_adapter_t::target_authority_payload (
-              sources[index].kind, snapshots[index].payload, target_node_id, target_owner,
+              sources[index].kind, snapshots[index], target_node_id, target_owner,
               target_node->lifecycle_generation);
             if (!payload)
                 return {};

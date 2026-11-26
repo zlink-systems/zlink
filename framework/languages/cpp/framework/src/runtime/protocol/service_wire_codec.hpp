@@ -19,7 +19,9 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -363,12 +365,28 @@ struct relocation_object_t
     friend bool operator== (const relocation_object_t &left,
                             const relocation_object_t &right) noexcept
     {
-        return left.kind == right.kind && left.object_id == right.object_id
-               && left.object_generation == right.object_generation
-               && left.expected_authority_owner_generation
-                    == right.expected_authority_owner_generation
-               && (left.kind != relocation_object_kind_t::instance_spot
-                   || left.stable_type == right.stable_type);
+        return left.wire_identity () == right.wire_identity ();
+    }
+
+    friend bool operator< (const relocation_object_t &left,
+                           const relocation_object_t &right) noexcept
+    {
+        return left.wire_identity () < right.wire_identity ();
+    }
+
+  private:
+    using wire_identity_t = std::tuple<relocation_object_kind_t,
+                                       std::string_view,
+                                       std::uint64_t,
+                                       std::string_view,
+                                       std::uint64_t>;
+
+    wire_identity_t wire_identity () const noexcept
+    {
+        const bool instance = kind == relocation_object_kind_t::instance_spot;
+        return {kind, object_id, object_generation,
+                instance ? std::string_view{stable_type} : std::string_view{},
+                instance ? 0 : expected_authority_owner_generation};
     }
 };
 

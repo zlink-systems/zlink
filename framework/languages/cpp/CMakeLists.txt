@@ -1961,6 +1961,19 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_spot_admission_rejection PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
 
+  add_zlink_framework_test(test_cpp_framework_spot_host_relocation
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spotwide_host_relocation.cpp
+    "framework-unit;framework-contract;spot;relocation" contract)
+  target_sources(test_cpp_framework_spot_host_relocation PRIVATE
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_host_relocation.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_spot_host_relocation)
+  target_include_directories(test_cpp_framework_spot_host_relocation PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_spot_host_relocation PRIVATE opentelemetry-cpp::metrics)
+  target_compile_definitions(test_cpp_framework_spot_host_relocation PRIVATE ZLINK_TEST_CHECK_CORE_CONTEXTS)
+  set_tests_properties(test_cpp_framework_spot_host_relocation PROPERTIES
+    RESOURCE_LOCK zlink_cpp_heavy_runtime)
+
   add_zlink_framework_test(test_cpp_framework_spotwide_target_admission
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spotwide_target_admission.cpp
     "framework-unit;relocation;admission" unit)
@@ -3081,7 +3094,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/support/actor_maintenance_join_replay_access.cpp
     tests/support/actor_maintenance_join_stream_fixture.cpp
     tests/support/actor_maintenance_join_suffix_fixture.cpp
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_spotwide_host_relocation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp)
   target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)

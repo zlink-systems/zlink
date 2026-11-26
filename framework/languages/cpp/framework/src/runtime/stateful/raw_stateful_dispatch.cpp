@@ -130,17 +130,9 @@ bool valid_relocation_object (const protocol::relocation_object_t &value) noexce
         case protocol::relocation_object_kind_t::user_spot:
             return value.expected_authority_owner_generation != 0;
         case protocol::relocation_object_kind_t::instance_spot:
-            return !value.stable_type.empty () && value.expected_authority_owner_generation == 0;
+            return !value.stable_type.empty ();
     }
     return false;
-}
-
-protocol::relocation_object_t
-canonical_relocation_object_identity (protocol::relocation_object_t value)
-{
-    if (value.kind != protocol::relocation_object_kind_t::instance_spot)
-        value.stable_type.clear ();
-    return value;
 }
 
 std::array<std::byte, 32> digest_bytes (const std::vector<std::uint8_t> &bytes)
@@ -168,8 +160,11 @@ bool frozen_matches_registration (const protocol::frozen_record_t &frozen,
     if (!frozen.target)
         return false;
     const auto &target = *frozen.target;
-    return target.kind == registration.object.kind
-           && target.object_id == registration.object.object_id
+    // Frozen direct Spot records share one target-fence shape across Spot kinds.
+    const auto kind = registration.object.kind == protocol::relocation_object_kind_t::instance_spot
+                        ? protocol::relocation_object_kind_t::user_spot
+                        : registration.object.kind;
+    return target.kind == kind && target.object_id == registration.object.object_id
            && target.object_generation == registration.object.object_generation
            && target.authority_owner_generation
                 == registration.object.expected_authority_owner_generation;
@@ -1524,13 +1519,9 @@ raw_relocation_replay_coordinator_t::raw_relocation_replay_coordinator_t (
 
 bool raw_relocation_replay_coordinator_t::key_t::operator< (const key_t &other) const noexcept
 {
-    return std::tie (relocation.high, relocation.low, target_attempt_generation, object.kind,
-                     object.stable_type, object.object_id, object.object_generation,
-                     object.expected_authority_owner_generation)
+    return std::tie (relocation.high, relocation.low, target_attempt_generation, object)
            < std::tie (other.relocation.high, other.relocation.low, other.target_attempt_generation,
-                       other.object.kind, other.object.stable_type, other.object.object_id,
-                       other.object.object_generation,
-                       other.object.expected_authority_owner_generation);
+                       other.object);
 }
 
 bool raw_relocation_replay_coordinator_t::terminal_key_t::operator< (
@@ -1546,7 +1537,7 @@ raw_relocation_replay_coordinator_t::key (const protocol::relocation_id_t &reloc
                                           std::uint64_t target_attempt_generation,
                                           const protocol::relocation_object_t &object)
 {
-    return {relocation, target_attempt_generation, canonical_relocation_object_identity (object)};
+    return {relocation, target_attempt_generation, object};
 }
 
 raw_relocation_replay_coordinator_t::target_activity_guard_t::target_activity_guard_t (
@@ -1602,6 +1593,7 @@ bool raw_relocation_replay_coordinator_t::register_target (
         || !valid_coordinator (registration.coordinator)
         || registration.relocation_source_node_routing_id.empty ()
         || registration.relocation_source_node_generation == 0
+        || registration.object.expected_authority_owner_generation == 0
         || !valid_relocation_object (registration.object) || !registration.stage)
         return false;
     try {

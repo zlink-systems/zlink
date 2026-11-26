@@ -1953,13 +1953,17 @@ class spot_node_runtime_t
     struct spot_relocation_unit_t
     {
         spot_id_t spot_id;
+        placement_object_kind_t kind;
         std::string spot_type;
+        std::uint64_t object_generation;
         std::vector<actor_ref_t> actors;
     };
     struct relocation_units_t
     {
         std::vector<spot_relocation_unit_t> spots;
         std::vector<actor_ref_t> standalone_actors;
+
+        bool empty () const noexcept { return spots.empty () && standalone_actors.empty (); }
     };
     explicit spot_node_runtime_t (std::shared_ptr<spot_node_builder_state_t> state);
 
@@ -2102,7 +2106,7 @@ class spot_node_runtime_t
      * (graceful-drain-handoff §5.2). */
     std::vector<actor_ref_t> local_actor_refs () const;
     task_t<bool> relocation_ready_async () const;
-    task_t<relocation_units_t> relocation_units () const;
+    task_t<relocation_units_t> relocation_units (bool seal_inventory) const;
     void begin_relocation_readiness ();
     task_t<void> begin_relocation_readiness_async ();
     void end_relocation_readiness (const std::vector<spot_id_t> &relocated_spots);

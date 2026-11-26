@@ -837,6 +837,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     spot_handle_t entry_spot ();
     spot_handle_t get_or_create_spot (std::string spot_id);
     task_t<spot_handle_t> get_or_create_spot_async (std::string spot_id);
+    task_t<spot_handle_t> get_or_create_spot_async (std::string spot_id,
+                                                    std::optional<stateful::object_ref_t> reserved,
+                                                    std::string stable_type);
     actor_handle_t create_actor (std::string actor_type, std::string actor_id);
     task_t<actor_handle_t> create_reserved_actor_async (std::string actor_type,
                                                         stateful::object_ref_t reserved);
@@ -1264,6 +1267,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::vector<stateful::object_ref_t> targets;
         std::vector<std::optional<authority_snapshot_t>> ready;
         std::vector<protocol::relocation_object_t> wire_objects;
+        std::shared_ptr<stateful::relocation_seal_binding_t> spot_restore;
         std::optional<stateful::aggregate_relocation_fence_t> authority_fence;
         std::vector<session_route_state_t> session_routes;
         /* The only CAS/dispatch gate (28 §4.4-4.5): set once a received
@@ -1308,6 +1312,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::vector<protocol::relocation_object_t> wire_objects;
         std::vector<protocol::session_relocation_route_t> session_routes;
         stateful::relocation_restore_identity_t restore_identity;
+        std::shared_ptr<stateful::relocation_seal_binding_t> spot_restore;
     };
     std::map<relocation_attempt_key_t, pending_relocation_assembly_t> _relocation_assemblies;
     static constexpr auto relocation_assembly_retention = std::chrono::seconds (10);

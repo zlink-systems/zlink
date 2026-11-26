@@ -3744,15 +3744,6 @@ struct relocation_preflight_t
     std::int64_t source_application_version = 0;
 };
 
-/* Spec 05-host-relocation-flow §5.1: the unit inventory decides whether host
- * relocation needs a target. A MeshNode with no Actor, User Spot or Instance
- * Spot has nothing to move, so no target is searched for it. */
-task_t<bool> has_relocation_units (const detail::mesh_node_runtime_t &node)
-{
-    const auto [actors, spots] = co_await node.monitoring_counts_async ();
-    co_return spots != 0 || actors != 0;
-}
-
 std::int64_t relocation_target_application_version (const relocation_options_t &options,
                                                     std::int64_t source_version)
 {
@@ -3770,29 +3761,31 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
 {
     if (state.has_manual_service_topology && state.has_manual_service_topology ())
         co_return relocation_preflight_t{relocation_reason_t::manual_topology_unsupported, 0};
-    // A process with several Meshes must find a target on every Mesh once it
-    // owns a unit anywhere (§5.1), so the inventory is read for the whole host.
-    bool requires_target = false;
-    for (const auto &node : state.route_mesh_nodes) {
-        if (!node)
-            continue;
-        if (co_await has_relocation_units (*node)) {
-            requires_target = true;
-            break;
-        }
-    }
-    if (!requires_target) {
-        const auto source_version = mesh_node_descriptor_t{}.application_version;
-        co_return relocation_preflight_t{
-          std::nullopt, relocation_target_application_version (options, source_version),
-          source_version};
-    }
-    if (!state.services.contains (std::type_index (typeid (relocation_repository_t)))
-        || !state.services.contains (std::type_index (typeid (location_repository_t)))) {
-        co_return relocation_preflight_t{relocation_reason_t::store_unavailable, 0};
-    }
-
     try {
+        // A process with several Meshes must find a target on every Mesh once it
+        // owns a unit anywhere (§5.1), so the inventory is read for the whole host.
+        bool requires_target = false;
+        for (const auto &node : state.route_mesh_nodes) {
+            if (!node)
+                continue;
+            const auto runtime =
+              detail::spot_node_runtime_t::from (state.zlink, node->mesh_name ());
+            if (runtime && !(co_await runtime->relocation_units (false)).empty ()) {
+                requires_target = true;
+                break;
+            }
+        }
+        if (!requires_target) {
+            const auto source_version = mesh_node_descriptor_t{}.application_version;
+            co_return relocation_preflight_t{
+              std::nullopt, relocation_target_application_version (options, source_version),
+              source_version};
+        }
+        if (!state.services.contains (std::type_index (typeid (relocation_repository_t)))
+            || !state.services.contains (std::type_index (typeid (location_repository_t)))) {
+            co_return relocation_preflight_t{relocation_reason_t::store_unavailable, 0};
+        }
+
         auto provider = state.services.build_provider ();
         auto &store = provider.get_required<location_repository_t> ();
         auto &live = provider.get_required<runtime::live_location_reader_t> ();
@@ -4203,7 +4196,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
     /* 30 §13: units settled on both sides, or a source owner lease that
      * expired before its Preserve fence, end the host in Error. */
     std::size_t committed_units = 0;
-    bool authority_split = false;
+    bool source_authority_expired = false;
 
     auto shutdown_requested = [&] {
         std::lock_guard lock (operation.mutex);
@@ -4234,7 +4227,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
             if (result.outcome == relocation_outcome_t::relocated) {
                 state.runtime_state.store (framework_runtime_state_t::relocated,
                                            std::memory_order_release);
-            } else if (authority_split) {
+            } else if (committed_units != 0 || source_authority_expired) {
                 state.runtime_state.store (framework_runtime_state_t::error,
                                            std::memory_order_release);
             } else {
@@ -4264,45 +4257,46 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
         std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> relocation_nodes;
         for (const auto &service : state.hosted_services) {
             if (auto *lifecycle = detail::lifecycle_of (service.get ()))
-                lifecycle->visit_relocation_nodes ([&relocation_nodes] (const auto &node) {
-                    if (node)
-                        relocation_nodes.push_back (node);
+                lifecycle->visit_relocation_nodes ([&] (const auto &node) {
+                    if (!node)
+                        return;
+                    relocation_nodes.push_back (node);
+                    const auto mesh = node->mesh_name ();
+                    if (std::find (readiness_meshes.begin (), readiness_meshes.end (), mesh)
+                        == readiness_meshes.end ())
+                        readiness_meshes.push_back (mesh);
                 });
         }
 
+        struct mesh_relocation_plan_t
+        {
+            std::shared_ptr<detail::mesh_node_runtime_t> node;
+            std::string node_mesh;
+            std::optional<zlink::routing_id_t> local_rid;
+            detail::spot_node_runtime_t spot_runtime;
+            mesh_node_descriptor_t source_descriptor;
+            detail::spot_node_runtime_t::relocation_units_t units;
+        };
+
+        std::vector<mesh_relocation_plan_t> plans;
+        auto provider = state.services.build_provider ();
+        auto peers = provider.get<runtime::store_location_resolvers_t> ();
+        auto location_store = provider.get<location_repository_t> ();
+        const auto topology_poll_interval = relocation_topology_poll_interval (state);
         for (const auto &node : relocation_nodes) {
             const auto [node_mesh, local_rid] = co_await node->identity_async ();
             auto spot_runtime = detail::spot_node_runtime_t::from (state.zlink, node_mesh);
             if (!spot_runtime)
                 continue;
-            if (std::find (readiness_meshes.begin (), readiness_meshes.end (), node_mesh)
-                == readiness_meshes.end ()) {
-                co_await spot_runtime->begin_relocation_readiness_async ();
-                readiness_meshes.push_back (node_mesh);
-            }
-            while (!co_await spot_runtime->relocation_ready_async ()) {
-                if (shutdown_requested () || std::chrono::steady_clock::now () >= deadline_at) {
-                    terminal.reason = shutdown_requested ()
-                                        ? relocation_reason_t::shutdown_requested
-                                        : relocation_reason_t::deadline_exceeded;
-                    complete (terminal);
-                    co_return;
-                }
-                co_await detail::delay (state.delays, std::chrono::milliseconds (1));
-            }
-            // §5.1: with no unit on this Mesh there is no target to narrow.
-            if (!co_await has_relocation_units (*node))
+            auto units = co_await spot_runtime->relocation_units (true);
+            if (units.empty ())
                 continue;
 
-            auto provider = state.services.build_provider ();
-            auto peers = provider.get<runtime::store_location_resolvers_t> ();
-            auto location_store = provider.get<location_repository_t> ();
             if (!peers || !location_store) {
                 terminal.reason = relocation_reason_t::store_unavailable;
                 complete (terminal);
                 co_return;
             }
-            const auto topology_poll_interval = relocation_topology_poll_interval (state);
 
             // Source's own descriptor supplies the maintenance wave and the
             // declared relocation policy per capability for the candidate
@@ -4331,105 +4325,12 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 source_descriptor = *found;
             }
 
-            // Resolve the source lifecycle fence before acquiring current units;
-            // descriptor I/O must not retain an earlier Actor ownership snapshot.
-            const auto units = co_await spot_runtime->relocation_units ();
+            plans.push_back ({node, node_mesh, local_rid, std::move (*spot_runtime),
+                              std::move (source_descriptor), std::move (units)});
+        }
 
-            for (const auto &unit : units.spots) {
-                const auto target = co_await wait_for_relocation_target (
-                  peers->get (), state.delays, node_mesh, deadline_at, topology_poll_interval,
-                  shutdown_requested,
-                  [&] (const mesh_node_descriptor_t &peer) {
-                      if (local_rid && peer.rid.to_hex () == local_rid->to_hex ())
-                          return false;
-                      std::vector<std::string> actor_types;
-                      actor_types.reserve (unit.actors.size ());
-                      for (const auto &actor : unit.actors)
-                          actor_types.emplace_back (
-                            ::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
-                      // The actual target selection applies the same frozen
-                      // candidate narrowing the preflight applies
-                      // (supports_relocation_source): a serving Object Server on
-                      // the effective version, excluded from source's non-empty
-                      // maintenance wave, with relocation-policy/adapter
-                      // compatibility, positive placement weight, and
-                      // population/reservation capacity; and, like the preflight,
-                      // the candidate's RID/generation must be an admitted Core
-                      // peer.
-                      return relocation_unit_target_eligible (
-                               source_descriptor, peer,
-                               terminal.effective_target_application_version, unit.spot_type,
-                               actor_types)
-                             && node->has_admitted_peer (peer.rid, peer.lifecycle_generation);
-                  },
-                  terminal.reason);
-                if (!target) {
-                    complete (terminal);
-                    co_return;
-                }
-
-                std::vector<runtime::stateful::object_ref_t> sources;
-                std::vector<std::string> stable_types;
-                const auto spot_source =
-                  co_await node->native_node ().resolve_spot_async (std::string (unit.spot_id));
-                if (!spot_source) {
-                    terminal.reason = relocation_reason_t::state_incompatible;
-                    complete (terminal);
-                    co_return;
-                }
-                sources.push_back (*spot_source);
-                stable_types.push_back (unit.spot_type);
-                for (const auto &actor : unit.actors) {
-                    const auto source = co_await node->native_node ().resolve_actor_async (actor);
-                    if (!source) {
-                        terminal.reason = relocation_reason_t::state_incompatible;
-                        complete (terminal);
-                        co_return;
-                    }
-                    sources.push_back (*source);
-                    stable_types.emplace_back (
-                      ::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
-                }
-
-                std::vector<authority_snapshot_t> authorities;
-                for (std::size_t index = 0; index != sources.size (); ++index) {
-                    const auto &source = sources[index];
-                    const auto authority_key =
-                      source.kind == runtime::stateful::object_kind_t::actor
-                        ? runtime::actor_authority_key (source.key)
-                        : runtime::spot_authority_key (source.key);
-                    const auto authority_read =
-                      co_await location_store->get ().read_authority (authority_key);
-                    const auto *authority = std::get_if<authority_snapshot_t> (&authority_read);
-                    if (!authority
-                        || authority->allocation.state != placement_allocation_state_t::active
-                        || authority->allocation.stable_type != stable_types[index]
-                        || authority->object_generation != source.object_generation
-                        || authority->authority_owner_generation
-                             != source.authority_owner_generation) {
-                        terminal.reason = relocation_reason_t::state_incompatible;
-                        complete (terminal);
-                        co_return;
-                    }
-                    authorities.push_back (*authority);
-                }
-
-                const auto moved = co_await node->relocate_application_unit (
-                  sources, std::move (stable_types), *target, authorities, deadline_at);
-                if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
-                    authority_split =
-                      committed_units != 0
-                      || moved.reason
-                           == runtime::stateful::relocation_reason_t::owner_lease_expired;
-                    terminal.reason = relocation_reason_t::relocation_failed;
-                    complete (terminal);
-                    co_return;
-                }
-                co_await spot_runtime->retire_relocation_source (sources);
-                ++committed_units;
-                relocated_ready_spots[node_mesh].push_back (unit.spot_id);
-            }
-
+        // Host §7: all Actor units settle before any Spot aggregate starts.
+        for (auto &[node, node_mesh, local_rid, spot_runtime, source_descriptor, units] : plans) {
             for (const auto &actor : units.standalone_actors) {
                 if (shutdown_requested ()) {
                     terminal.reason = relocation_reason_t::shutdown_requested;
@@ -4490,17 +4391,161 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 const auto moved = co_await node->relocate_application_actor (
                   actor, *target, *authority, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
-                    authority_split =
-                      committed_units != 0
-                      || moved.reason
-                           == runtime::stateful::relocation_reason_t::owner_lease_expired;
+                    source_authority_expired =
+                      moved.reason == runtime::stateful::relocation_reason_t::owner_lease_expired;
                     terminal.reason = relocation_reason_t::relocation_failed;
                     complete (terminal);
                     co_return;
                 }
                 const std::vector<runtime::stateful::object_ref_t> source_unit{source.value ()};
-                co_await spot_runtime->retire_relocation_source (source_unit);
+                co_await spot_runtime.retire_relocation_source (source_unit);
                 ++committed_units;
+            }
+        }
+
+        for (auto &[node, node_mesh, local_rid, spot_runtime, source_descriptor, units] : plans) {
+            if (units.spots.empty ())
+                continue;
+            while (!co_await spot_runtime.relocation_ready_async ()) {
+                if (shutdown_requested () || std::chrono::steady_clock::now () >= deadline_at) {
+                    terminal.reason = shutdown_requested ()
+                                        ? relocation_reason_t::shutdown_requested
+                                        : relocation_reason_t::deadline_exceeded;
+                    complete (terminal);
+                    co_return;
+                }
+                co_await detail::delay (state.delays, std::chrono::milliseconds (1));
+            }
+            for (const auto &unit : units.spots) {
+                const auto spot_key = runtime::spot_authority_key (unit.spot_id);
+                const auto close_committed = [&] (const authority_read_result_t &read) {
+                    if (unit.kind != placement_object_kind_t::instance_spot)
+                        return false;
+                    const auto *authority = std::get_if<authority_snapshot_t> (&read);
+                    if (!authority)
+                        return true;
+                    const auto closing =
+                      runtime::decode_instance_closing_state (authority->payload);
+                    return closing && closing->stable_type == unit.spot_type
+                           && closing->spot_id == unit.spot_id
+                           && closing->object_generation == unit.object_generation
+                           && closing->authority_owner_generation
+                                == authority->authority_owner_generation
+                           && authority->allocation.target.node_rid.value ()
+                                == local_rid->to_string ()
+                           && authority->allocation.target.node_lifecycle_generation
+                                == source_descriptor.lifecycle_generation;
+                };
+                std::vector<std::string> actor_types;
+                actor_types.reserve (unit.actors.size ());
+                for (const auto &actor : unit.actors)
+                    actor_types.emplace_back (
+                      ::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
+                const auto target = co_await wait_for_relocation_target (
+                  peers->get (), state.delays, node_mesh, deadline_at, topology_poll_interval,
+                  shutdown_requested,
+                  [&] (const mesh_node_descriptor_t &peer) {
+                      if (local_rid && peer.rid.to_hex () == local_rid->to_hex ())
+                          return false;
+                      // The actual target selection applies the same frozen
+                      // candidate narrowing the preflight applies
+                      // (supports_relocation_source): a serving Object Server on
+                      // the effective version, excluded from source's non-empty
+                      // maintenance wave, with relocation-policy/adapter
+                      // compatibility, positive placement weight, and
+                      // population/reservation capacity; and, like the preflight,
+                      // the candidate's RID/generation must be an admitted Core
+                      // peer.
+                      return relocation_unit_target_eligible (
+                               source_descriptor, peer,
+                               terminal.effective_target_application_version,
+                               relocation_spot_requirement_t{unit.kind, unit.spot_type},
+                               actor_types)
+                             && node->has_admitted_peer (peer.rid, peer.lifecycle_generation);
+                  },
+                  terminal.reason);
+                if (!target) {
+                    if (terminal.reason == relocation_reason_t::target_unavailable
+                        && unit.kind == placement_object_kind_t::instance_spot
+                        && close_committed (
+                          co_await location_store->get ().read_authority (spot_key)))
+                        continue;
+                    complete (terminal);
+                    co_return;
+                }
+
+                auto spot_authority = co_await location_store->get ().read_authority (spot_key);
+                if (close_committed (spot_authority))
+                    continue;
+
+                std::vector<runtime::stateful::object_ref_t> sources;
+                std::vector<std::string> stable_types;
+                const auto spot_source =
+                  co_await node->native_node ().resolve_spot_async (std::string (unit.spot_id));
+                if (!spot_source) {
+                    if (unit.kind == placement_object_kind_t::instance_spot
+                        && close_committed (
+                          co_await location_store->get ().read_authority (spot_key)))
+                        continue;
+                    terminal.reason = relocation_reason_t::state_incompatible;
+                    complete (terminal);
+                    co_return;
+                }
+                sources.push_back (*spot_source);
+                stable_types.push_back (unit.spot_type);
+                for (const auto &actor : unit.actors) {
+                    const auto source = co_await node->native_node ().resolve_actor_async (actor);
+                    if (!source) {
+                        terminal.reason = relocation_reason_t::state_incompatible;
+                        complete (terminal);
+                        co_return;
+                    }
+                    sources.push_back (*source);
+                    stable_types.emplace_back (
+                      ::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
+                }
+
+                std::vector<authority_snapshot_t> authorities;
+                for (std::size_t index = 0; index != sources.size (); ++index) {
+                    const auto &source = sources[index];
+                    authority_read_result_t authority_read;
+                    if (index == 0)
+                        authority_read = std::move (spot_authority);
+                    else
+                        authority_read = co_await location_store->get ().read_authority (
+                          runtime::actor_authority_key (source.key));
+                    const auto *authority = std::get_if<authority_snapshot_t> (&authority_read);
+                    if (!authority
+                        || authority->allocation.state != placement_allocation_state_t::active
+                        || authority->allocation.object_kind
+                             != (index == 0 ? unit.kind : placement_object_kind_t::actor)
+                        || authority->allocation.stable_type != stable_types[index]
+                        || authority->object_generation != source.object_generation
+                        || authority->authority_owner_generation
+                             != source.authority_owner_generation) {
+                        terminal.reason = relocation_reason_t::state_incompatible;
+                        complete (terminal);
+                        co_return;
+                    }
+                    authorities.push_back (*authority);
+                }
+
+                const auto moved = co_await node->relocate_application_unit (
+                  sources, std::move (stable_types), *target, authorities, deadline_at);
+                if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
+                    if (unit.kind == placement_object_kind_t::instance_spot
+                        && close_committed (
+                          co_await location_store->get ().read_authority (spot_key)))
+                        continue;
+                    source_authority_expired =
+                      moved.reason == runtime::stateful::relocation_reason_t::owner_lease_expired;
+                    terminal.reason = relocation_reason_t::relocation_failed;
+                    complete (terminal);
+                    co_return;
+                }
+                co_await spot_runtime.retire_relocation_source (sources);
+                ++committed_units;
+                relocated_ready_spots[node_mesh].push_back (unit.spot_id);
             }
         }
         terminal.outcome = relocation_outcome_t::relocated;

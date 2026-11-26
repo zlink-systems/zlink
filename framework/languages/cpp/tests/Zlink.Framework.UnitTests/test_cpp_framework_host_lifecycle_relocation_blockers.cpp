@@ -495,6 +495,8 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
     using zlink::framework::object_role_t;
     using zlink::framework::placement_object_kind_t;
     using zlink::framework::relocation_unit_target_eligible;
+    const zlink::framework::relocation_spot_requirement_t room{placement_object_kind_t::user_spot,
+                                                               "room"};
 
     mesh_node_descriptor_t source;
     source.application_version = 7;
@@ -518,7 +520,7 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
         return candidate;
     };
 
-    if (!relocation_unit_target_eligible (source, make_eligible (), 7, "room", {"player"})) {
+    if (!relocation_unit_target_eligible (source, make_eligible (), 7, room, {"player"})) {
         std::cerr << "eligible relocation target was wrongly rejected\n";
         return false;
     }
@@ -547,7 +549,7 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
     for (const auto &item : rejection_cases) {
         auto candidate = make_eligible ();
         item.mutate (candidate);
-        if (relocation_unit_target_eligible (source, candidate, 7, "room", {"player"})) {
+        if (relocation_unit_target_eligible (source, candidate, 7, room, {"player"})) {
             std::cerr << "ineligible relocation target was accepted: " << item.name << "\n";
             return false;
         }
@@ -560,12 +562,12 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
         auto candidate = make_eligible ();
         candidate.object_capabilities[0].policy = maintenance_policy_kind_t::snapshot;
         candidate.object_capabilities[0].has_snapshot_adapter = false;
-        if (relocation_unit_target_eligible (snapshot_source, candidate, 7, "room", {"player"})) {
+        if (relocation_unit_target_eligible (snapshot_source, candidate, 7, room, {"player"})) {
             std::cerr << "snapshot candidate without adapter was accepted\n";
             return false;
         }
         candidate.object_capabilities[0].has_snapshot_adapter = true;
-        if (!relocation_unit_target_eligible (snapshot_source, candidate, 7, "room", {"player"})) {
+        if (!relocation_unit_target_eligible (snapshot_source, candidate, 7, room, {"player"})) {
             std::cerr << "snapshot candidate with adapter was rejected\n";
             return false;
         }
@@ -575,12 +577,12 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
     // still applies the per-candidate gates.
     {
         auto candidate = make_eligible ();
-        if (!relocation_unit_target_eligible (source, candidate, 7, "", {"player"})) {
+        if (!relocation_unit_target_eligible (source, candidate, 7, std::nullopt, {"player"})) {
             std::cerr << "eligible actor-only target was rejected\n";
             return false;
         }
         candidate.placement_weight = 0;
-        if (relocation_unit_target_eligible (source, candidate, 7, "", {"player"})) {
+        if (relocation_unit_target_eligible (source, candidate, 7, std::nullopt, {"player"})) {
             std::cerr << "ineligible actor-only target (zero weight) was accepted\n";
             return false;
         }

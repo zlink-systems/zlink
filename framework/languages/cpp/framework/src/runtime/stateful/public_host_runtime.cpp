@@ -2071,6 +2071,23 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
               return;
           }
           const auto *snapshot = std::get_if<authority_snapshot_t> (&current.value ());
+          const auto finish_if_moved =
+            [completion, stable_type, object_generation,
+             authority_owner_generation] (const authority_snapshot_t *read) {
+                if (!read || read->allocation.object_kind != placement_object_kind_t::instance_spot
+                    || read->allocation.stable_type != stable_type
+                    || read->object_generation != object_generation
+                    || read->authority_owner_generation <= authority_owner_generation)
+                    return false;
+                complete_close_step (
+                  completion,
+                  close_step_failure (
+                    framework_error_kind_t::unavailable, "Instance Spot owner is moving",
+                    static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving)));
+                return true;
+            };
+          if (finish_if_moved (snapshot))
+              return;
           if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
               || snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
               || snapshot->allocation.stable_type != stable_type
@@ -2116,7 +2133,9 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
               return;
           }
 
-          const auto ready = decode_instance_spot_authority_payload (snapshot->payload);
+          auto application = *snapshot;
+          stateful::authority_relocation_payload_codec_t::project_application_payload (application);
+          const auto ready = decode_instance_spot_authority_payload (application.payload);
           if (!ready || ready->state != instance_spot_authority_state_t::ready
               || ready->stable_type != stable_type || ready->spot_id != spot_id
               || ready->owner_id != instance_owner.owner_id
@@ -2135,14 +2154,18 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
               authority_put_t{encode_instance_closing_state (instance_closing_state_t{
                 stable_type, spot_id, object_generation, authority_owner_generation})}),
             {},
-            [completion, store, ready_payload = snapshot->payload,
-             authority_key] (result_t<authority_compare_exchange_result_t> sealed) {
+            [completion, store, ready_payload = std::move (application.payload), authority_key,
+             finish_if_moved] (result_t<authority_compare_exchange_result_t> sealed) {
                 if (!sealed) {
                     complete_close_step (completion, {close_store_failure (sealed), {}});
                     return;
                 }
                 const auto *closing = std::get_if<authority_stored_t> (&sealed.value ());
                 if (!closing) {
+                    if (const auto *conflict = std::get_if<authority_conflict_t> (&sealed.value ());
+                        conflict
+                        && finish_if_moved (std::get_if<authority_snapshot_t> (&conflict->current)))
+                        return;
                     complete_close_step (completion, {});
                     return;
                 }
@@ -3101,17 +3124,29 @@ spot_handle_t public_host_runtime_t::get_or_create_spot (std::string spot_id)
 
 task_t<spot_handle_t> public_host_runtime_t::get_or_create_spot_async (std::string spot_id)
 {
-    const auto &key = spot_id;
-    if (const auto existing = co_await _objects.resolve_spot_async (key))
-        co_return spot_handle_t (shared_from_this (), *existing);
-    auto created = co_await _objects.begin_create_async (
-      stateful::create_request_t{stateful::object_kind_t::user_spot,
-                                 key,
-                                 "framework.spot",
-                                 _options.mesh.descriptor.mesh_name,
-                                 {},
-                                 false,
-                                 false});
+    return get_or_create_spot_async (std::move (spot_id), {}, "framework.spot");
+}
+
+task_t<spot_handle_t> public_host_runtime_t::get_or_create_spot_async (
+  std::string spot_id, std::optional<stateful::object_ref_t> reserved, std::string stable_type)
+{
+    const auto kind = reserved ? reserved->kind : stateful::object_kind_t::user_spot;
+    stateful::create_result_t created;
+    if (reserved) {
+        created = co_await _objects.begin_reserved_object_async (std::move (*reserved),
+                                                                 std::move (stable_type), {});
+    } else {
+        if (const auto existing = co_await _objects.resolve_spot_async (spot_id))
+            co_return spot_handle_t (shared_from_this (), *existing);
+        created = co_await _objects.begin_create_async (
+          stateful::create_request_t{kind,
+                                     spot_id,
+                                     std::move (stable_type),
+                                     _options.mesh.descriptor.mesh_name,
+                                     {},
+                                     false,
+                                     false});
+    }
     if (created.error != stateful::stateful_error_t::none) {
         throw std::runtime_error ("framework Spot authority creation failed");
     }
@@ -3120,7 +3155,7 @@ task_t<spot_handle_t> public_host_runtime_t::get_or_create_spot_async (std::stri
         if (committed != stateful::stateful_error_t::none)
             throw std::runtime_error ("framework Spot Ready commit failed");
     }
-    auto object = co_await _objects.find_async (stateful::object_kind_t::user_spot, key);
+    auto object = co_await _objects.find_async (kind, spot_id);
     if (!object) {
         throw std::runtime_error ("framework Spot authority is unavailable");
     }
@@ -4387,6 +4422,16 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
         co_await discard_attempt ();
         co_return false;
     }
+    if (attempt.spot_restore) {
+        // The committed raw owner supplies the saved and relayed prefix to the
+        // same execution gate that admits new native Spot messages.
+        const auto &spot = stateful::relocation_primary (attempt.targets);
+        if (auto gate = co_await _relocation_gate (spot)) {
+            attempt.spot_restore->bound.store (false, std::memory_order_release);
+            (void) co_await dispatch_stateful_owner (spot, _relocation_resume, std::move (gate),
+                                                     attempt.spot_restore);
+        }
+    }
 
     if (attempt.targets.size () == 1
         && attempt.targets.front ().kind == stateful::object_kind_t::actor && _relocation_authority
@@ -4530,7 +4575,8 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
         std::vector<std::tuple<stateful::object_ref_t, protocol::relocation_data_t, std::uint64_t>>
           saved_application;
         for (std::size_t index = 0; index < restored_state.size (); ++index) {
-            if (staging->targets[index].kind != stateful::object_kind_t::actor)
+            if (!_stateful_dispatch
+                && staging->targets[index].kind != stateful::object_kind_t::actor)
                 continue;
             for (auto &turn : restored_state[index].pending_application)
                 saved_application.emplace_back (
@@ -4550,13 +4596,13 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
             : _objects.restore_relocation_aggregate (restored_state, staging->targets,
                                                      staging->restore_identity,
                                                      pending->cancellation->get_token ()));
-        // The Kernel restores Actor state; canonical raw intake installs each
+        // The Kernel restores object state; canonical raw intake installs each
         // saved payload together with its original terminal, before Ready.
         if (restored == stateful::stateful_error_t::none)
             for (const auto &[target, data, participant_id] : saved_application)
                 if (!co_await stage_relocation_record (target, data, participant_id))
                     throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                                 "Restored Actor application intake failed");
+                                                 "Restored application intake failed");
         if (restored == stateful::stateful_error_t::none
             || restored == stateful::stateful_error_t::already_exists) {
             // Restore owns the retirement of a previous moving source record.
@@ -4845,6 +4891,12 @@ task_t<void> public_host_runtime_t::finish_relocation_assembly (
     try {
         restored = co_await restore_relocation_assembly (pending, staging);
         if (restored) {
+            const auto &primary = stateful::relocation_primary (staging->targets);
+            if (primary.kind != stateful::object_kind_t::actor && _stateful_dispatch
+                && _relocation_gate && _relocation_resume) {
+                if (auto gate = co_await _relocation_gate (primary))
+                    staging->spot_restore = co_await gate->hold_relocation_restore ();
+            }
             co_await await_relocation_session_routes (pending, staging->session_routes);
             if (co_await activate_relocation_assembly (key, pending, staging))
                 co_return;
@@ -4913,6 +4965,7 @@ task_t<bool> public_host_runtime_t::activate_relocation_assembly (
         attempt.sources = std::move (staging->sources);
         attempt.targets = std::move (staging->targets);
         attempt.wire_objects = std::move (staging->wire_objects);
+        attempt.spot_restore = std::move (staging->spot_restore);
         for (auto &route : staging->session_routes) {
             attempt.session_routes.emplace_back ();
             attempt.session_routes.back ().route = std::move (route);
@@ -4999,13 +5052,8 @@ void public_host_runtime_t::complete_relocation_assembly (
             reply_failure ();
             return;
         }
-        if (envelope->object.kind != pending.prepare.object.kind
-            || envelope->object.object_id != pending.prepare.object.object_id
-            || envelope->object.object_generation != pending.prepare.object.object_generation
-            || envelope->application_version != pending.prepare.application_version
-            || (envelope->object.kind != protocol::relocation_object_kind_t::instance_spot
-                && envelope->object.expected_authority_owner_generation
-                     != pending.prepare.object.expected_authority_owner_generation)) {
+        if (envelope->object != pending.prepare.object
+            || envelope->application_version != pending.prepare.application_version) {
             trace_mesh_host ("relocation-assembly-failed",
                              "stage=principal-identity-or-application-version");
             reply_failure ();
@@ -5033,9 +5081,7 @@ void public_host_runtime_t::complete_relocation_assembly (
         principal_identity.owner.key = envelope->object.object_id;
         principal_identity.owner.object_generation = envelope->object.object_generation;
         principal_identity.owner.authority_owner_generation =
-          pending.prepare.object.expected_authority_owner_generation != 0
-            ? pending.prepare.object.expected_authority_owner_generation
-            : envelope->object.expected_authority_owner_generation;
+          pending.prepare.object.expected_authority_owner_generation;
         principal_identity.owner.mesh_name = _options.mesh.descriptor.mesh_name;
         principal_identity.owner.node_id =
           std::string (pending.prepare.source_node_routing_id.begin (),
@@ -5065,6 +5111,18 @@ void public_host_runtime_t::complete_relocation_assembly (
                     if (row.owner.kind != principal_kind
                         || row.owner.key != principal_identity.owner.key)
                         continue;
+                    // The Instance wire identity has no authority owner generation.
+                    // Its Store row supplies that generation under the coordinator fence.
+                    if (principal_kind == stateful::object_kind_t::instance_spot) {
+                        if (row.owner.object_generation
+                              != principal_identity.owner.object_generation
+                            || row.stable_type != principal_identity.stable_type) {
+                            reply_failure ();
+                            return;
+                        }
+                        principal_identity.owner.authority_owner_generation =
+                          row.owner.authority_owner_generation;
+                    }
                     if (!row.stable_type.empty ())
                         principal_identity.stable_type = row.stable_type;
                     if (!row.owner.mesh_name.empty ())
@@ -5074,8 +5132,16 @@ void public_host_runtime_t::complete_relocation_assembly (
                     break;
                 }
             }
+            if (principal_identity.owner.authority_owner_generation == 0) {
+                reply_failure (protocol::framework_error_code::requestFailed);
+                return;
+            }
             inventory.push_back (principal_identity);
         } else {
+            if (principal_kind != stateful::object_kind_t::user_spot) {
+                reply_failure ();
+                return;
+            }
             if (!rows) {
                 // Inventory enumeration unavailable — a staging failure, not a
                 // verified payload integrity failure.
@@ -5100,10 +5166,7 @@ void public_host_runtime_t::complete_relocation_assembly (
                     if (!row.owner.node_id.empty ())
                         principal_row.owner.node_id = row.owner.node_id;
                     inventory.push_back (std::move (principal_row));
-                } else if ((principal_kind == stateful::object_kind_t::user_spot
-                            || principal_kind == stateful::object_kind_t::instance_spot)
-                           && row.owner.kind == stateful::object_kind_t::actor
-                           && row.spot_membership
+                } else if (row.owner.kind == stateful::object_kind_t::actor && row.spot_membership
                            && row.spot_membership->first == principal_identity.owner.key
                            && row.spot_membership->second
                                 == principal_identity.owner.object_generation) {

@@ -1259,14 +1259,24 @@ std::shared_ptr<service::spot_t> detail::spot_node_runtime_t::attach_native_spot
             native = std::make_shared<service::spot_t> (plan.native_node->entry_spot ());
         } else {
             try {
-                auto spot =
-                  relocation_restore
-                    ? plan.native_node->bind_relocation_spot (runtime::stateful::object_ref_t{
-                        plan.instance_spot ? runtime::stateful::object_kind_t::instance_spot
-                                           : runtime::stateful::object_kind_t::user_spot,
-                        plan.rid, plan.object_generation, plan.authority_owner_generation,
-                        plan.mesh_name, plan.node_rid})
-                    : plan.native_node->get_or_create_spot (plan.rid);
+                auto spot = [&] {
+                    if (!relocation_restore && !plan.instance_spot)
+                        return plan.native_node->get_or_create_spot (plan.rid);
+                    runtime::stateful::object_ref_t object{
+                      plan.instance_spot ? runtime::stateful::object_kind_t::instance_spot
+                                         : runtime::stateful::object_kind_t::user_spot,
+                      plan.rid,
+                      plan.object_generation,
+                      plan.authority_owner_generation,
+                      plan.mesh_name,
+                      plan.node_rid};
+                    if (relocation_restore)
+                        return plan.native_node->bind_relocation_spot (std::move (object));
+                    return plan.native_node
+                      ->get_or_create_spot_async (plan.rid, std::move (object), plan.spot_name)
+                      .result ()
+                      .value ();
+                }();
                 native = std::make_shared<service::spot_t> (std::move (spot));
             }
             catch (const std::exception &error) {
@@ -3714,9 +3724,19 @@ task_t<bool> spot_context_t::close ()
 
 task_t<bool> spot_context_t::close_erased ()
 {
-    if (!_state || !_state->node)
-        return task_t<bool> (result_t<bool>::success (false));
     const auto state = _state;
+    if (!state)
+        return task_t<bool> (result_t<bool>::success (false));
+    if (state->is_instance_spot () && state->state_sync ([state] {
+            return state->closed == spot_close_reason_t::relocation_out;
+        })) {
+        return task_t<bool> (detail::result_access_t::failure<bool> (detail::with_failure_code (
+          detail::make_framework_origin_exception (framework_error_kind_t::unavailable,
+                                                   "Instance Spot owner is moving"),
+          static_cast<std::uint32_t> (runtime::protocol::framework_error_code::spotMoving))));
+    }
+    if (!state->node)
+        return task_t<bool> (result_t<bool>::success (false));
     state->ensure_relocation_turn_open ();
     if (state->serial_queue && state->serial_queue->is_current_lifecycle_turn ())
         throw framework_exception_t (framework_error_kind_t::invalid_operation,
@@ -8749,8 +8769,6 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                     }
                     continue;
                 }
-                if (target.kind != runtime::stateful::object_kind_t::user_spot)
-                    continue;
                 const auto context = _state->spot_contexts_by_id.find (target.key);
                 if (context != _state->spot_contexts_by_id.end () && context->second._state) {
                     ready.push_back (context->second._state);
@@ -8782,7 +8800,13 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                     const auto context = _state->spot_contexts_by_id.find (key);
                     if (context == _state->spot_contexts_by_id.end () || !context->second._state)
                         return false;
-                    // Restore predicted a generation; admission uses the committed authority.
+                    const auto node = _state->native_node.lock ();
+                    if (!node)
+                        return false;
+                    auto native = std::make_shared<service::spot_t> (
+                      node->bind_relocation_spot (authority->target));
+                    _state->native_spots_by_id.insert_or_assign (key, native);
+                    context->second._state->native_spot = native;
                     context->second._state->authority_owner_generation =
                       authority->target.authority_owner_generation;
                     return true;
@@ -15650,13 +15674,52 @@ task_t<bool> spot_node_runtime_t::relocation_ready_async () const
     });
 }
 
-task_t<spot_node_runtime_t::relocation_units_t> spot_node_runtime_t::relocation_units () const
+task_t<spot_node_runtime_t::relocation_units_t>
+spot_node_runtime_t::relocation_units (bool seal_inventory) const
 {
     const auto state = _state;
     const auto native =
       co_await state->lane.run_task ([state] { return state->native_node.lock (); });
     if (!native)
         co_return relocation_units_t{};
+    const auto collect = [state] (std::vector<runtime::stateful::object_inventory_t> inventory) {
+        return state->lane.run_task ([state, inventory = std::move (inventory)] () mutable {
+            filter_local_actor_inventory_on_lane (*state, inventory);
+            relocation_units_t result;
+            for (const auto &[_, context] : state->spot_contexts_by_id) {
+                const auto state = context._state;
+                if (!state || state->closed || state->native_spot.expired ()
+                    || state->is_entry_spot ()
+                    || (!state->is_instance_spot ()
+                        && state->execution_mode != user_spot_execution_mode_t::spot_wide))
+                    continue;
+                result.spots.push_back ({state->spot_id,
+                                         state->is_instance_spot ()
+                                           ? placement_object_kind_t::instance_spot
+                                           : placement_object_kind_t::user_spot,
+                                         state->spot_name,
+                                         state->object_generation,
+                                         {}});
+            }
+            for (const auto &actor : inventory) {
+                auto ref = ::zlink::framework::detail::actor_ref_access_t::make (
+                  node_rid_t::from_string (actor.owner.node_id), actor.stable_type, actor.owner.key,
+                  actor.owner.object_generation);
+                const auto spot =
+                  std::find_if (result.spots.begin (), result.spots.end (), [&] (const auto &unit) {
+                      return unit.spot_id == actor.membership;
+                  });
+                if (spot != result.spots.end ())
+                    spot->actors.push_back (std::move (ref));
+                else
+                    result.standalone_actors.push_back (std::move (ref));
+            }
+            return result;
+        });
+    };
+    if (!seal_inventory)
+        co_return co_await collect (co_await native->objects ().actor_inventory ());
+
     auto inventory = co_await native->objects ().try_begin_maintenance_inventory (true);
     if (!inventory)
         throw framework_exception_t (framework_error_kind_t::shutting_down,
@@ -15664,31 +15727,7 @@ task_t<spot_node_runtime_t::relocation_units_t> spot_node_runtime_t::relocation_
     relocation_units_t units;
     std::exception_ptr error;
     try {
-        units =
-          co_await state->lane.run_task ([state, inventory = std::move (*inventory)] () mutable {
-              filter_local_actor_inventory_on_lane (*state, inventory);
-              relocation_units_t result;
-              for (const auto &[_, context] : state->spot_contexts_by_id) {
-                  const auto state = context._state;
-                  if (!state || state->is_entry_spot () || state->is_instance_spot ()
-                      || state->execution_mode != user_spot_execution_mode_t::spot_wide)
-                      continue;
-                  result.spots.push_back ({state->spot_id, state->spot_name, {}});
-              }
-              for (const auto &actor : inventory) {
-                  auto ref = ::zlink::framework::detail::actor_ref_access_t::make (
-                    node_rid_t::from_string (actor.owner.node_id), actor.stable_type,
-                    actor.owner.key, actor.owner.object_generation);
-                  const auto spot = std::find_if (
-                    result.spots.begin (), result.spots.end (),
-                    [&] (const auto &unit) { return unit.spot_id == actor.membership; });
-                  if (spot != result.spots.end ())
-                      spot->actors.push_back (std::move (ref));
-                  else
-                      result.standalone_actors.push_back (std::move (ref));
-              }
-              return result;
-          });
+        units = co_await collect (std::move (*inventory));
     }
     catch (...) {
         error = std::current_exception ();

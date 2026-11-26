@@ -195,6 +195,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     // The native handoff and relocation cut share the actual execution owner.
     task_t<std::shared_ptr<stateful::relocation_seal_binding_t>>
     admit_native_application (std::function<void (bool)> publish);
+    task_t<std::shared_ptr<stateful::relocation_seal_binding_t>> hold_relocation_restore ();
     task_t<bool>
     release_relocation_seal (std::shared_ptr<stateful::relocation_seal_binding_t> binding);
     bool try_post (std::string name, std::function<void ()> work);
