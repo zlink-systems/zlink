@@ -651,7 +651,7 @@ public interface IZLinkMetadataCall<TSelf>
 ```
 
 Setting the same key multiple times sends the last value. The whole
-metadata's UTF-8 encoded size can't exceed 1024 bytes. A reply doesn't
+metadata size can't exceed 1024 bytes, measured by the single calculation in [Wire protocol §4](../../../02-channel-transport/06-wire-protocol.en.md#decode-validation-and-size-limits) (the sum of each entry's `ChannelHeader` field 13 encoding). A reply doesn't
 automatically copy request metadata, and a regular reply doesn't have a
 metadata setter. The allowlist applied to STREAM session and Actor relay
 is owned by the root's `ConfigureMetadata()`.

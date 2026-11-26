@@ -25,6 +25,13 @@
     },
     "serviceWireChanges": false
   },
+  "crossLanguage": {
+    "serverScenario": "over-limit-rejected-before-handler",
+    "control": "control",
+    "held": "held",
+    "contender": "contender",
+    "timeoutMs": 10000
+  },
   "terminalReasons": [
     "replySuccess",
     "replyFailure",

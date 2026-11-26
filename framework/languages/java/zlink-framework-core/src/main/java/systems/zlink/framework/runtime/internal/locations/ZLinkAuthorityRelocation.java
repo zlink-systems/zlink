@@ -44,24 +44,54 @@ public final class ZLinkAuthorityRelocation {
         text(value.get("coordinator").get("expectedStoreVersion"));
         sha(value.get("sourceInventorySha256"));
         integer(value.get("applicationVersion"));
-        if (value.has("completion")) {
-            JsonNode completion = value.get("completion");
-            object(completion);
-            long accepted = integer(completion.get("acceptedRequests"));
-            long completed = integer(completion.get("completedResults"));
-            long pending = integer(completion.get("pendingDeliveries"));
-            if (Long.compareUnsigned(completed, accepted) > 0
-                    || Long.compareUnsigned(pending, completed) > 0) throw invalid();
-            JsonNode reference = completion.get("reference");
-            JsonNode checksum = completion.get("sha256");
-            if (reference == null || checksum == null || reference.isNull() != checksum.isNull())
-                throw invalid();
-            if (!reference.isNull()) {
-                text(reference);
-                sha(checksum);
-            }
-        }
+        if (value.has("completion")) readCompletion(value.get("completion"));
         this.value = ((ObjectNode) value).deepCopy();
+    }
+
+    record Completion(
+            long acceptedRequests,
+            long completedResults,
+            long pendingDeliveries,
+            String reference,
+            String sha256) {}
+
+    Completion completion() {
+        JsonNode completion = value.get("completion");
+        return completion == null ? null : readCompletion(completion);
+    }
+
+    boolean publishesCompletionAfter(ZLinkAuthorityRelocation previous) {
+        JsonNode reference = value.path("completion").path("reference");
+        return reference.isTextual()
+                && (previous == null
+                        || !reference.equals(previous.value.path("completion").path("reference")));
+    }
+
+    ZLinkAuthorityRelocation withCompletion(Completion completion) {
+        ObjectNode next = json();
+        ObjectNode node = next.withObjectProperty("completion");
+        node.put("acceptedRequests", Long.toUnsignedString(completion.acceptedRequests()));
+        node.put("completedResults", Long.toUnsignedString(completion.completedResults()));
+        node.put("pendingDeliveries", Long.toUnsignedString(completion.pendingDeliveries()));
+        node.put("reference", completion.reference());
+        node.put("sha256", completion.sha256());
+        return new ZLinkAuthorityRelocation(next);
+    }
+
+    private static Completion readCompletion(JsonNode completion) {
+        object(completion);
+        long accepted = integer(completion.get("acceptedRequests"));
+        long completed = integer(completion.get("completedResults"));
+        long pending = integer(completion.get("pendingDeliveries"));
+        if (Long.compareUnsigned(completed, accepted) > 0
+                || Long.compareUnsigned(pending, completed) > 0) throw invalid();
+        JsonNode reference = completion.get("reference");
+        JsonNode checksum = completion.get("sha256");
+        if (reference == null || checksum == null || reference.isNull() != checksum.isNull())
+            throw invalid();
+        if (reference.isNull()) return new Completion(accepted, completed, pending, null, null);
+        sha(checksum);
+        return new Completion(accepted, completed, pending, text(reference), checksum.textValue());
     }
 
     public ObjectNode json() {
