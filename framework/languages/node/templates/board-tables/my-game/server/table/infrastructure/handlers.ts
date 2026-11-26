@@ -10,7 +10,7 @@ import {
   type ZLinkMessageContext,
   type ZLinkSpotManager
 } from '@zlink-systems/framework';
-import { Names, PacketNames } from '../../shared/constants';
+import { Names, PacketNames, Reasons } from '../../shared/constants';
 import {
   ActionRejected,
   BetRequest,
@@ -18,6 +18,7 @@ import {
   HandResult,
   JoinTableRequest,
   StartHandRequest,
+  TableAdmission,
   TableView,
   TableViewRequest
 } from '../../shared/messages';
@@ -38,12 +39,25 @@ export class EntryJoin {
     request: JoinTableRequest
   ): Promise<void> {
     if (actor.context.actorId !== request.playerId) throw new Error('Player identity mismatch');
+    if (request.reconnect) {
+      await actor.reject(Reasons.seated);
+      return;
+    }
+    if (actor.match) {
+      await actor.reject(Reasons.matchPending);
+      return;
+    }
+    if (request.tableId.startsWith(Names.matchRoomPrefix)) {
+      await actor.reject(Reasons.full);
+      return;
+    }
     const created = await this.spots
       .getOrCreate(request.tableId, Names.table)
       .inMesh(Names.mesh)
       .submit();
     if (created.state === ZLinkSpotCreateState.Rejected) throw new Error('Table creation rejected');
-    actor.context.joinSpot(request.tableId, request).defer();
+    const chips = await actor.loadPlayer();
+    actor.context.joinSpot(request.tableId, new TableAdmission(request, chips)).defer();
   }
 }
 @Injectable()
@@ -96,7 +110,7 @@ export class Start {
     _context: ZLinkMessageContext,
     _request: StartHandRequest
   ): Promise<void> {
-    const reason = spot.state.start(actor.context.actorId);
+    const reason = spot.canPlay ? spot.state.start(actor.context.actorId) : Reasons.matchPending;
     if (reason) await actor.context.boundSession.send(new ActionRejected(reason, 0)).submit();
     else await spot.deal();
   }
@@ -114,7 +128,9 @@ export class Bet {
     _context: ZLinkMessageContext,
     request: BetRequest
   ): Promise<void> {
-    const result = spot.state.bet(actor.context.actorId, request.handNumber, request.amount);
+    const result = spot.canPlay
+      ? spot.state.bet(actor.context.actorId, request.handNumber, request.amount)
+      : Reasons.matchPending;
     if (typeof result === 'string')
       await actor.context.boundSession.send(new ActionRejected(result, 0)).submit();
     else await spot.publish(result ?? null);
@@ -138,6 +154,13 @@ export class Deliver {
   ): Promise<void> {
     const type = deliveryPackets.get(context.packetName);
     if (!type) throw new Error(`Unregistered table push: ${context.packetName}`);
+    if (context.packetName === PacketNames.handResult) {
+      const seat = (message as HandResult).seats.find(
+        (seat) => seat.playerId === actor.context.actorId
+      );
+      if (!seat) throw new Error('Player is missing from round settlement');
+      actor.state.chips = seat.chips;
+    }
     // Preserve the registered public DTO type when forwarding the received fields.
     await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
   }
