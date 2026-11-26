@@ -471,12 +471,13 @@ public sealed partial class StreamSessionForcedCleanupTests
         time.Advance(TimeSpan.FromSeconds(5) - TimeSpan.FromSeconds(1));
         session.EnqueueConnected("duplicate-local", "duplicate-remote");
         time.Advance(TimeSpan.FromSeconds(1));
+        await session.AdvanceLivenessAsync(time.GetTimestamp(), confirmExpiry: true);
         await socket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         AssertHeartbeatTimeoutFrame(socket.SentFrames.Last());
     }
 
     [Fact]
-    public async Task Stream_heartbeat_timers_wake_only_the_due_session_and_keep_connection_phase()
+    public async Task Stream_reader_sends_only_due_heartbeats_and_keeps_connection_phase()
     {
         var registration = new ZLinkFrameworkRegistration();
         ZLinkFrameworkRuntime runtime = null!;
@@ -498,31 +499,44 @@ public sealed partial class StreamSessionForcedCleanupTests
         time.Advance(TimeSpan.FromMilliseconds(300));
         await using var late = await CreateSessionAsync(lateSocket, "late");
         late.EnqueueConnected("local", "remote");
-        time.Advance(TimeSpan.FromMilliseconds(599));
+        await AdvanceAsync(TimeSpan.FromMilliseconds(599));
         Assert.Empty(earlySocket.SentFrames);
         Assert.Empty(lateSocket.SentFrames);
-        time.Advance(TimeSpan.FromMilliseconds(1));
+        await AdvanceAsync(TimeSpan.FromMilliseconds(1));
         Assert.Single(earlySocket.SentFrames);
         Assert.Empty(lateSocket.SentFrames);
-        time.Advance(TimeSpan.FromMilliseconds(400));
+        await AdvanceAsync(TimeSpan.FromMilliseconds(400));
         Assert.Single(lateSocket.SentFrames);
 
-        await time.AdvanceMonotonicAndFireTimerAsync(
-            TimeSpan.FromMilliseconds(1850),
-            TimeSpan.FromMilliseconds(600)
-        );
+        await AdvanceAsync(TimeSpan.FromMilliseconds(1850));
         Assert.Equal(2, earlySocket.SentFrames.Count);
-        Assert.Single(lateSocket.SentFrames);
-        time.Advance(TimeSpan.FromMilliseconds(749));
+        Assert.Equal(2, lateSocket.SentFrames.Count);
+        await AdvanceAsync(TimeSpan.FromMilliseconds(149));
         Assert.Equal(2, earlySocket.SentFrames.Count);
-        time.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Equal(2, lateSocket.SentFrames.Count);
+        await AdvanceAsync(TimeSpan.FromMilliseconds(1));
+        Assert.Equal(2, earlySocket.SentFrames.Count);
+        Assert.Equal(3, lateSocket.SentFrames.Count);
+        await AdvanceAsync(TimeSpan.FromMilliseconds(599));
+        Assert.Equal(2, earlySocket.SentFrames.Count);
+        Assert.Equal(3, lateSocket.SentFrames.Count);
+        await AdvanceAsync(TimeSpan.FromMilliseconds(1));
         Assert.Equal(3, earlySocket.SentFrames.Count);
+        Assert.Equal(3, lateSocket.SentFrames.Count);
 
-        time.Advance(TimeSpan.FromMilliseconds(999));
+        await AdvanceAsync(TimeSpan.FromMilliseconds(999));
         Assert.Equal(0, earlySocket.DisconnectCount);
-        time.Advance(TimeSpan.FromMilliseconds(1));
+        await AdvanceAsync(TimeSpan.FromMilliseconds(1));
         await earlySocket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         AssertHeartbeatTimeoutFrame(earlySocket.SentFrames.Last());
+
+        async Task AdvanceAsync(TimeSpan elapsed)
+        {
+            time.Advance(elapsed);
+            var timestamp = time.GetTimestamp();
+            await early.AdvanceLivenessAsync(timestamp, confirmExpiry: true);
+            await late.AdvanceLivenessAsync(timestamp, confirmExpiry: true);
+        }
 
         ValueTask<ZLinkStreamSessionRuntime> CreateSessionAsync(
             TestStreamSocket socket,
@@ -3774,7 +3788,10 @@ public sealed partial class StreamSessionForcedCleanupTests
 
         public ValueTask ResumeAsync() => _source.ResumeAsync();
 
-        internal void Wake() => _source.Wake();
+        public void Wake() => _source.Wake();
+
+        public ValueTask WaitForWakeAsync(CancellationToken cancellationToken) =>
+            _source.WaitForWakeAsync(cancellationToken);
 
         public ValueTask DisposeAsync() => _source.DisposeAsync();
     }
