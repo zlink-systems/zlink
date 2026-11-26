@@ -200,6 +200,65 @@ internal static class ZLinkMeshMetadataCodec
         return true;
     }
 
+    // Validates a received metadata frame with the same rules as TryDecode
+    // (version, bounds, non-NUL strict UTF-8, unique keys, ChannelHeader field 13
+    // size) without building the handler-facing view. Receive paths that only
+    // forward the frame bytes use this to avoid a per-request allocation.
+    internal static bool TryValidate(ReadOnlySpan<byte> frame)
+    {
+        if (frame.Length == 0)
+            return true;
+
+        if (frame.Length > ServiceWireConstants.MetadataBytes || frame.Length < 2)
+            return false;
+        if (frame[0] != Version)
+            return false;
+
+        int count = frame[1];
+        // At most 255 keys of at most 255 bytes: keep (offset, length) pairs on
+        // the stack and compare earlier keys linearly.
+        Span<int> keys = stackalloc int[count * 2];
+        var offset = 2;
+        var remaining = ServiceWireConstants.MetadataBytes;
+        for (var entry = 0; entry < count; entry++)
+        {
+            if (offset + 1 > frame.Length)
+                return false;
+            int keyLength = frame[offset];
+            offset += 1;
+            if (keyLength == 0 || offset + keyLength > frame.Length)
+                return false;
+            var keySpan = frame.Slice(offset, keyLength);
+            if (!IsValidText(keySpan))
+                return false;
+            for (var previous = 0; previous < entry; previous++)
+            {
+                if (frame.Slice(keys[previous * 2], keys[previous * 2 + 1]).SequenceEqual(keySpan))
+                    return false;
+            }
+            keys[entry * 2] = offset;
+            keys[entry * 2 + 1] = keyLength;
+            offset += keyLength;
+
+            if (offset + 2 > frame.Length)
+                return false;
+            int valueLength = (frame[offset] << 8) | frame[offset + 1];
+            offset += 2;
+            if (offset + valueLength > frame.Length)
+                return false;
+            if (!TryAddChannelHeaderEntry(ref remaining, keyLength, valueLength))
+                return false;
+            if (!IsValidText(frame.Slice(offset, valueLength)))
+                return false;
+            offset += valueLength;
+        }
+
+        return offset == frame.Length;
+    }
+
+    private static bool IsValidText(ReadOnlySpan<byte> bytes) =>
+        bytes.IndexOf((byte)0) < 0 && System.Text.Unicode.Utf8.IsValid(bytes);
+
     private static int ValidateKey(string key)
     {
         if (string.IsNullOrEmpty(key))

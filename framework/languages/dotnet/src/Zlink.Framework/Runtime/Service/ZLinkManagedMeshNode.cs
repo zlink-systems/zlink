@@ -8888,7 +8888,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (
             (
                 record.HasMetadata
-                && !ZLinkMeshMetadataCodec.TryDecode(received.Parts[1].AsReadOnlySpan(), out _)
+                && !ZLinkMeshMetadataCodec.TryValidate(received.Parts[1].AsReadOnlySpan())
             )
             || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
                 received.Parts[payloadOffset],
@@ -9092,7 +9092,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             received.Parts.Count != payloadOffset + 1
             || (
                 stateful.HasMetadata
-                && !ZLinkMeshMetadataCodec.TryDecode(received.Parts[1].AsReadOnlySpan(), out _)
+                && !ZLinkMeshMetadataCodec.TryValidate(received.Parts[1].AsReadOnlySpan())
             )
         )
         {

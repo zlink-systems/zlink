@@ -75,7 +75,8 @@ public sealed class ApplicationMetadataSizeTests
                 {
                     Assert.True(ZLinkMeshMetadataCodec.TryDecode(receivedFrame, out var decoded));
                     Assert.Equal(values, decoded.Values);
-                }
+                },
+                () => Assert.True(ZLinkMeshMetadataCodec.TryValidate(receivedFrame))
             );
         }
         else
@@ -90,9 +91,28 @@ public sealed class ApplicationMetadataSizeTests
                     Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
                         ZLinkEnvelopeCodec.DecodeHeader(receivedHeader)
                     ),
-                () => Assert.False(ZLinkMeshMetadataCodec.TryDecode(receivedFrame, out _))
+                () => Assert.False(ZLinkMeshMetadataCodec.TryDecode(receivedFrame, out _)),
+                () => Assert.False(ZLinkMeshMetadataCodec.TryValidate(receivedFrame))
             );
         }
+    }
+
+    // TryValidate is the allocation-free receive check; it must accept and
+    // reject exactly the frames TryDecode accepts and rejects.
+    [Theory]
+    [InlineData("01 01 01 6b 00 01 76", true)] // k=v
+    [InlineData("01 02 01 6b 00 00 01 6b 00 00", false)] // duplicate key
+    [InlineData("01 01 01 00 00 00", false)] // NUL key byte
+    [InlineData("01 01 01 6b 00 01 ff", false)] // invalid UTF-8 value
+    [InlineData("01 01 01 6b 00 02 76", false)] // truncated value
+    [InlineData("01 01 01 6b 00 01 76 00", false)] // trailing byte
+    [InlineData("02 00", false)] // unknown version
+    [InlineData("", true)] // absent frame
+    public void TryValidate_matches_TryDecode(string hex, bool valid)
+    {
+        var frame = Convert.FromHexString(hex.Replace(" ", "", StringComparison.Ordinal));
+        Assert.Equal(valid, ZLinkMeshMetadataCodec.TryDecode(frame, out _));
+        Assert.Equal(valid, ZLinkMeshMetadataCodec.TryValidate(frame));
     }
 
     private static byte[] CreatePackedFrame(Dictionary<string, string> values)
