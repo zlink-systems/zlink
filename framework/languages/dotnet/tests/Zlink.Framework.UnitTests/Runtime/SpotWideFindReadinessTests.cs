@@ -221,7 +221,10 @@ public sealed partial class RelocationBehaviorConformanceTests
                         out var raw
                     )
                 );
-                Assert.Equal(original.NodeRid, raw.NodeRid);
+                // Location runtime §8.2·§8.3: the owner-changing commit projects the target
+                // route recorded on the aggregate into the authority payload; the sealed
+                // source values stay in the aggregate inventory record.
+                Assert.Equal(target.LocalNodeRid, raw.NodeRid);
                 if (!retainSourceActivation)
                 {
                     sourceObservation.ReleaseLocalFence.TrySetResult();
