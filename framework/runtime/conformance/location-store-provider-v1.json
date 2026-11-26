@@ -588,6 +588,14 @@
       },
       "expectedObservation": "인식하지 못하는 format tag나 `recordVersion`은 명시적으로 실패하며, 옛 key·value 형식을 읽어 새 opaque record로 변환하는 하위 호환 경로가 없다.",
       "reason": "이 항목은 Redis provider 또는 Redis 배치만 지정하며 etcd provider에는 적용하지 않는다."
+    },
+    {
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "v11 MeshNode 수용 공간 record가 그대로 남아 있고 그 record의 대상 counter key 하나가 이미 있는 Store로 v12 node를 시작하면, startup이 configuration error로 끝나고 옛 record와 counter key는 바뀌지 않는다.",
+      "reason": "이 항목은 Redis provider 또는 Redis 배치만 지정하며 etcd provider에는 적용하지 않는다."
     }
   ]
 }
