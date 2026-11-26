@@ -306,10 +306,15 @@ handshake만 admission한다.
 admitted 기록과 liveness admission을 지운다. REJECT는 connection intent를 제거하지 않으며, 그 뒤는 위의 ADMIT 대기
 규칙(HELLO를 liveness 관리 주기마다 다시 보냄)을 그대로 따른다. REJECT를 위한 별도 peer 상태나 timer는 두지 않는다.
 
-**선택 route에서 handshake로 admission을 확인하기 전에 그 route로 받은 handshake 밖의 record는 처리하지
-않고 버리며, 응답을 보내지 않는다.** 선택 route가 바뀐 뒤 상대가 새 route의 handshake보다 먼저 보낸
-record도 같다. 이렇게 잃은 request는 다시 보내지 않는다. 송신 측은 상대의 ADMIT를 받은 선택 route에서만
-request를 시작하므로([Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)) 이 손실은 선택 route가 바뀌는
+**수신 측은 선택 route에서 상대의 HELLO를 자신이 admit한 뒤 그 route로 받은 handshake 밖의 record를
+처리한다. 그 전에 받은 record는 처리하지 않고 버리며, 응답을 보내지 않는다.** 수신 판정에는 상대가 보낸
+ADMIT의 수신을 요구하지 않는다. 상대의 ADMIT 수신은 송신 측이 그 route를 쓸 수 있는지를 정하는 조건이다.
+송신 측은 상대의 ADMIT를 받은 선택 route에서만 request를 시작하고([Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)),
+상대는 HELLO를 admit한 뒤에만 ADMIT를 보낸다. 그래서 송신 측이 보낸 record는 수신 측이 admit한 뒤에
+도착한다. 수신 측이 자기 HELLO에 대한 ADMIT를 아직 받지 못했어도 그 record는 처리한다.
+
+선택 route가 바뀐 뒤 상대가 새 route의 handshake보다 먼저 보낸 record는 수신 측이 새 route에서 아직
+admit하지 않았으므로 버린다. 이렇게 잃은 request는 다시 보내지 않는다. 이 손실은 선택 route가 바뀌는
 경계에서만 생기며, 그 request는 binding의 typed 결과나 deadline으로 끝난다.
 
 Lifecycle generation은 0이 아닌 opaque equality token이다. 숫자 크기로 어느
@@ -513,6 +518,10 @@ runtime snapshot과 event)만으로 다음을 확인한다.
   endpoint에 다시 connect하면, 상대 node가 새 RID의 Hello를 받아 admission을 완료한다.
 - Intent를 제거한 peer의 endpoint·RID로 늦은 READY가 도착해도 그 peer가 다시 admitted 상태로
   보고되지 않는다.
+- 수신 node가 상대의 HELLO를 admit했지만 자기 HELLO에 대한 상대의 ADMIT를 아직 받지 못한 동안, 상대가
+  그 route로 보낸 Spot·Actor send와 Logical Multicast는 수신 node의 handler에 각각 한 번 전달된다.
+- 선택 route가 바뀐 뒤 새 route의 handshake보다 먼저 도착한 application record는 handler에 전달되지 않고
+  응답도 오지 않는다.
 
 ---
 
