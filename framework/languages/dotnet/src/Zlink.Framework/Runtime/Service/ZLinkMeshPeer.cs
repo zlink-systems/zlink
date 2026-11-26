@@ -5,13 +5,15 @@ internal sealed class ZLinkMeshConnectionIntent(
     ulong id,
     string endpoint,
     RoutingId? expectedRid,
-    string expectedSecurityIdentity
+    string expectedSecurityIdentity,
+    bool automatic
 )
 {
     internal ulong Id { get; } = id;
     internal string Endpoint { get; } = endpoint;
     internal RoutingId? ExpectedRid { get; } = expectedRid;
     internal string ExpectedSecurityIdentity { get; } = expectedSecurityIdentity;
+    internal bool Automatic { get; } = automatic;
     internal RoutingId ResolvedRid { get; set; }
     internal ulong LastChangedMs { get; set; } = checked((ulong)Environment.TickCount64);
 

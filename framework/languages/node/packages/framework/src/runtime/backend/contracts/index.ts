@@ -347,6 +347,9 @@ export interface ZLinkBackendMeshNode {
   setActorJoinIngressRouter?(
     route: import('../../foundation/service-stateful-runtime').ZLinkActorJoinIngressRouter
   ): void;
+  setRelocationRequestAdmission?(
+    resolve: import('../../foundation/service-stateful-runtime').ServiceRelocationRequestAdmissionResolver
+  ): void;
   setActorMessageFollowResolver?(
     resolver: (
       fence: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence
@@ -695,8 +698,8 @@ export interface ZLinkBackendSubscriberSocket extends ZLinkBackendConnectableSoc
 }
 
 export interface ZLinkBackendReadablePoller {
-  wait(timeoutMs: number): boolean;
-  waitForReadable(signal?: AbortSignal): Promise<boolean>;
+  wait(timeoutMs: number, refresh?: boolean): boolean;
+  waitForReadable(signal?: AbortSignal, wakeOnly?: boolean): Promise<boolean>;
   wake(): void;
   markDrained(): void;
   dispose(): void;

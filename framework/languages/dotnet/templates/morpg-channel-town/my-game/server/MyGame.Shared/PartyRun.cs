@@ -9,7 +9,8 @@ public sealed class PartyRun
 
     public string? Enter(string player)
     {
-        if (Members.Count == 0 || Members[0] != player) return Rejection.NotLeader;
+        if (Members.Count == 0 || Members[0] != player)
+            return Rejection.NotLeader;
         if (Phase is RunPhase.Forming or RunPhase.Completed)
         {
             RunId = "run-" + Guid.NewGuid().ToString("N");
@@ -44,10 +45,12 @@ public sealed class PartyRun
 
     public void Leave(string player)
     {
-        if (Phase == RunPhase.Forming) Members.Remove(player);
+        if (Phase == RunPhase.Forming)
+            Members.Remove(player);
     }
 
     public string? ChangeChannel() => Phase == RunPhase.Forming ? null : Rejection.RunInProgress;
+
     public PartyView View() => new(PartyId, Members.ToArray(), Phase, RunId);
 }
 
@@ -64,15 +67,23 @@ public sealed class DungeonState
     public string? Prepare(string dungeonId, PrepareDungeon request)
     {
         if (RunId.Length != 0)
-            return RunId == request.RunId && PartyId == request.PartyId
+            return
+                RunId == request.RunId
+                && PartyId == request.PartyId
                 && OwnerSpotId == request.OwnerSpotId
-                && Members.SequenceEqual(request.Members) ? null : Rejection.RunMismatch;
-        if (!ValidId(request.RunId, "run-") || !ValidId(request.PartyId, "party-")
+                && Members.SequenceEqual(request.Members)
+                ? null
+                : Rejection.RunMismatch;
+        if (
+            !ValidId(request.RunId, "run-")
+            || !ValidId(request.PartyId, "party-")
             || string.IsNullOrWhiteSpace(request.OwnerSpotId)
             || GameNames.DungeonId(request.RunId) != dungeonId
             || request.Members.Length is < 1 or > GameNames.MaximumPartyMembers
             || request.Members.Distinct().Count() != request.Members.Length
-            || request.Members.Any(string.IsNullOrWhiteSpace)) return Rejection.RunMismatch;
+            || request.Members.Any(string.IsNullOrWhiteSpace)
+        )
+            return Rejection.RunMismatch;
         RunId = request.RunId;
         PartyId = request.PartyId;
         OwnerSpotId = request.OwnerSpotId;
@@ -81,7 +92,8 @@ public sealed class DungeonState
         return null;
     }
 
-    public static bool ValidId(string value, string prefix) => value.StartsWith(prefix, StringComparison.Ordinal)
+    public static bool ValidId(string value, string prefix) =>
+        value.StartsWith(prefix, StringComparison.Ordinal)
         && value.Length == prefix.Length + 32
         && value.AsSpan(prefix.Length).IndexOfAnyExcept("0123456789abcdef") < 0;
 
@@ -90,19 +102,24 @@ public sealed class DungeonState
 
     public bool Join(string actor)
     {
-        if (!Members.Contains(actor)) return false;
+        if (!Members.Contains(actor))
+            return false;
         Joined.Add(actor);
-        if (Phase != RunPhase.Entering || Joined.Count != Members.Length) return false;
+        if (Phase != RunPhase.Entering || Joined.Count != Members.Length)
+            return false;
         Phase = RunPhase.Active;
         return true;
     }
 
     public string? Advance()
     {
-        if (Stage < 0 || Stage >= GameNames.MaximumInteger) return Rejection.IntegerOutOfRange;
-        if (Phase != RunPhase.Active) return Rejection.RunNotActive;
+        if (Stage < 0 || Stage >= GameNames.MaximumInteger)
+            return Rejection.IntegerOutOfRange;
+        if (Phase != RunPhase.Active)
+            return Rejection.RunNotActive;
         Stage++;
-        if (Stage == GameNames.FinalStage) Phase = RunPhase.Completed;
+        if (Stage == GameNames.FinalStage)
+            Phase = RunPhase.Completed;
         return null;
     }
 }
@@ -112,5 +129,6 @@ public static class ChannelRules
     public static string? Validate(long channel) =>
         channel > GameNames.MaximumInteger || channel < -GameNames.MaximumInteger
             ? Rejection.IntegerOutOfRange
-            : channel < 1 || channel > GameNames.ChannelCount ? Rejection.InvalidChannel : null;
+        : channel < 1 || channel > GameNames.ChannelCount ? Rejection.InvalidChannel
+        : null;
 }

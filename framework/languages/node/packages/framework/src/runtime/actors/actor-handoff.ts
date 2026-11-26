@@ -157,7 +157,8 @@ export type ZLinkActorHandoffPrefixQueue = (
 interface PendingPacket {
   withdraw?: () => boolean;
   readonly origin: ApplicationJobOrigin;
-  readonly packet: ZLinkActorHandoffPacket;
+  packet: ZLinkActorHandoffPacket;
+  confirmation?: Promise<void>;
   readonly resolve?: (value: unknown) => void;
   readonly reject?: (reason: unknown) => void;
 }
@@ -575,10 +576,8 @@ export class ZLinkActorHandoffCoordinator {
       handoff.pendingBytes += packetBytes(packet);
     }
     for (const record of temporary) {
-      handoff.pending.push({
-        ...record,
-        packet: { ...record.packet, index: handoff.nextIndex++ }
-      });
+      record.packet = { ...record.packet, index: handoff.nextIndex++ };
+      handoff.pending.push(record);
     }
     return this.admitHandoffPrefix(actorId, handoff, queue, preparation, start);
   }
@@ -676,7 +675,10 @@ export class ZLinkActorHandoffCoordinator {
     };
     return {
       onWithdrawable: (withdraw) => {
-        pending.withdraw = withdraw;
+        pending.withdraw =
+          pending.confirmation === undefined
+            ? withdraw
+            : () => pending.confirmation === undefined && withdraw();
       },
       payloadBytes: packetBytes(pending.packet),
       reject: (error) => this.failReleasedPending(pending, error),
@@ -684,6 +686,8 @@ export class ZLinkActorHandoffCoordinator {
         prepare: async (signal) => {
           try {
             await waitForHandoffReplayStart(release.start, signal);
+            if (pending.confirmation !== undefined)
+              await waitForHandoffReplayStart(pending.confirmation, signal);
             if (release.preparation !== undefined) {
               const next = await release.preparation(signal, pending.origin);
               if (signal.aborted) {
@@ -842,7 +846,10 @@ export class ZLinkActorHandoffCoordinator {
         return admission === undefined ? operation() : admission(operation);
       }
     );
-    if (pending.packet.source !== undefined) {
+    if (
+      pending.packet.source !== undefined &&
+      pending.packet.messageFollowOrigin?.requestSource === undefined
+    ) {
       this.removeReplyRoute(pending.packet.source.replyRouteId);
     }
     const result = results[0]!;
@@ -865,7 +872,10 @@ export class ZLinkActorHandoffCoordinator {
   }
 
   private failReleasedPending(pending: PendingPacket, error: unknown): void {
-    if (pending.packet.source !== undefined) {
+    if (
+      pending.packet.source !== undefined &&
+      pending.packet.messageFollowOrigin?.requestSource === undefined
+    ) {
       this.removeReplyRoute(pending.packet.source.replyRouteId);
     }
     pending.reject?.(error);
@@ -904,7 +914,8 @@ export class ZLinkActorHandoffCoordinator {
     messageFollowOrigin?: ZLinkMessageFollowOrigin,
     provisionalReplay?: ZLinkActorHandoffDispatch,
     onAdmitted?: () => void,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    confirmTarget?: () => Promise<void>
   ): Promise<unknown> | undefined {
     let incomingContext = actorMessageFollowContext(fallbackActorRef);
     const originalDeadlineUnixMs =
@@ -917,6 +928,7 @@ export class ZLinkActorHandoffCoordinator {
     // An exact departed tenure belongs to its committed route, even while the
     // same Actor incarnation is performing a later Join on this node.
     const handoff = followRoute === undefined ? this.active.get(actorId) : undefined;
+    if (confirmTarget !== undefined && handoff === undefined) return undefined;
     if (
       incomingContext === undefined &&
       followRoute !== undefined &&
@@ -1005,20 +1017,26 @@ export class ZLinkActorHandoffCoordinator {
         return Promise.resolve(undefined);
       }
       const result = new Promise((resolve, reject) => {
-        const original = messageFollowOrigin?.requestSource;
-        const originalRidHex =
-          original === undefined ? undefined : routingIdWireHex(original.nodeRid);
+        if (confirmTarget !== undefined) {
+          const pending: PendingPacket = { packet, origin, resolve, reject };
+          handoff.pending.push(pending);
+          // The pending slot already owns its position. Store and request-source
+          // I/O run outside the Actor FIFO, even if activation is still sealed.
+          const confirmation = Promise.resolve()
+            .then(confirmTarget)
+            .then(() => {
+              const source = originalHandoffRequestSource(messageFollowOrigin);
+              if (source !== undefined) Object.assign(pending.packet, { source });
+              onAdmitted?.();
+              pending.confirmation = undefined;
+            });
+          pending.confirmation = confirmation;
+          void confirmation.catch(reject);
+          return;
+        }
+        const original = originalHandoffRequestSource(messageFollowOrigin);
         const source =
-          original === undefined
-            ? this.captureRequestSource(handoff.sourceEvidence, context.replyRouteId)
-            : {
-                ownerId: original.ownerId,
-                ownerLeaseGeneration: original.leaseGeneration.toString(),
-                nodeRid: String(original.nodeRid),
-                ...(originalRidHex === undefined ? {} : { nodeRidHex: originalRidHex }),
-                nodeGeneration: original.nodeGeneration.toString(),
-                replyRouteId: messageFollowOrigin!.originalReplyRouteId.toString()
-              };
+          original ?? this.captureRequestSource(handoff.sourceEvidence, context.replyRouteId);
         const requestPacket = { ...packet, source };
         if (original !== undefined) {
           handoff.pending.push({ packet: requestPacket, origin, resolve, reject });
@@ -1050,7 +1068,7 @@ export class ZLinkActorHandoffCoordinator {
         });
       });
       releaseApplicationJobPermitForDurableHandoff();
-      onAdmitted?.();
+      if (confirmTarget === undefined) onAdmitted?.();
       if (handoff.prefixRelease !== undefined) {
         try {
           this.admitPendingPrefix(actorId, handoff, handoff.prefixRelease);
@@ -2035,6 +2053,22 @@ function encodePacket(
       configurable: true
     });
   return packet;
+}
+
+function originalHandoffRequestSource(
+  origin: ZLinkMessageFollowOrigin | undefined
+): ZLinkActorHandoffRequestSource | undefined {
+  const source = origin?.requestSource;
+  if (source === undefined) return undefined;
+  const nodeRidHex = routingIdWireHex(source.nodeRid);
+  return {
+    ownerId: source.ownerId,
+    ownerLeaseGeneration: source.leaseGeneration.toString(),
+    nodeRid: String(source.nodeRid),
+    ...(nodeRidHex === undefined ? {} : { nodeRidHex }),
+    nodeGeneration: source.nodeGeneration.toString(),
+    replyRouteId: origin!.originalReplyRouteId.toString()
+  };
 }
 
 function optionalBigInt(value: string | undefined): bigint | undefined {

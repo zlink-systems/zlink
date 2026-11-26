@@ -15836,7 +15836,10 @@ public sealed partial class EntrySpotActorDispatchTests
         )
         {
             _dispatchHandler = handler;
+            DispatchAttached?.Invoke();
         }
+
+        public Action? DispatchAttached { get; init; }
 
         public bool DispatchHandlerAttached => _dispatchHandler is not null;
 
@@ -16839,6 +16842,13 @@ public sealed partial class EntrySpotActorDispatchTests
             string endpoint,
             string expectedSecurityIdentity
         ) { }
+
+        public bool TryConnectPeerAuto(
+            RoutingId? peerRid,
+            string endpoint,
+            string expectedSecurityIdentity,
+            ulong? expectedLifecycleGeneration
+        ) => true;
 
         public void SetPeerExpectation(
             RoutingId peerRid,

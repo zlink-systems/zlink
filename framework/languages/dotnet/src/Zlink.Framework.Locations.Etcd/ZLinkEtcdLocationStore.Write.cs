@@ -1,29 +1,13 @@
 using Etcdserverpb;
 using Google.Protobuf;
 using Mvccpb;
+using Zlink.Framework.Internal;
 using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.Locations.Etcd;
 
 public sealed partial class ZLinkEtcdLocationStore
 {
-    private static ZLinkStoreKey ConditionKey(ZLinkStoreCondition condition) =>
-        condition switch
-        {
-            ZLinkStoreCondition.Missing value => value.Key,
-            ZLinkStoreCondition.Version value => value.Key,
-            ZLinkStoreCondition.Value value => value.Key,
-            _ => throw new ArgumentException("Unknown Store condition."),
-        };
-
-    private static ZLinkStoreKey MutationKey(ZLinkStoreMutation mutation) =>
-        mutation switch
-        {
-            ZLinkStoreMutation.Put value => value.Key,
-            ZLinkStoreMutation.Delete value => value.Key,
-            _ => throw new ArgumentException("Unknown Store mutation."),
-        };
-
     private static void Validate(ZLinkStoreWriteRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -34,10 +18,14 @@ public sealed partial class ZLinkEtcdLocationStore
         long size = 0;
         foreach (var condition in request.Conditions)
         {
-            var key = ConditionKey(condition);
-            size += EtcdEncoding.ValidateKey(key.Value).Length;
-            if (!conditions.Add(key))
-                throw new ArgumentException("Duplicate condition key.");
+            foreach (var key in ZLinkStoreBatchKeys.ForCondition(condition))
+            {
+                size += EtcdEncoding.ValidateKey(key.Value).Length;
+                if (!conditions.Add(key))
+                    throw new ArgumentException("Duplicate condition key.");
+            }
+            if (condition is ZLinkStoreCondition.SumAtMost)
+                size += 16;
             if (condition is ZLinkStoreCondition.Version version)
             {
                 if (string.IsNullOrEmpty(version.Expected.Value))
@@ -56,10 +44,12 @@ public sealed partial class ZLinkEtcdLocationStore
         }
         foreach (var mutation in request.Mutations)
         {
-            var key = MutationKey(mutation);
+            var key = ZLinkStoreBatchKeys.ForMutation(mutation);
             size += EtcdEncoding.ValidateKey(key.Value).Length;
             if (!mutations.Add(key))
                 throw new ArgumentException("Duplicate mutation key.");
+            if (mutation is ZLinkStoreMutation.Add)
+                size += 8;
             if (mutation is ZLinkStoreMutation.Put put)
             {
                 if (put.Bytes.Length > EtcdEncoding.MaxPayload)
@@ -97,9 +87,22 @@ public sealed partial class ZLinkEtcdLocationStore
     )
     {
         Validate(request);
-        var keys = request
-            .Conditions.Select(condition => EtcdEncoding.ValidateKey(ConditionKey(condition).Value))
+        var counterKeys = request
+            .Conditions.OfType<ZLinkStoreCondition.SumAtMost>()
+            .SelectMany(sum => sum.Keys)
+            .Concat(request.Mutations.OfType<ZLinkStoreMutation.Add>().Select(add => add.Key))
+            .ToHashSet();
+        var valueConditions = request
+            .Conditions.OfType<ZLinkStoreCondition.Value>()
+            .ToDictionary(value => value.Key);
+        var logicalKeys = request
+            .Conditions.SelectMany(ZLinkStoreBatchKeys.ForCondition)
+            .Union(counterKeys)
             .ToArray();
+        var positions = logicalKeys
+            .Select((key, index) => (key, index))
+            .ToDictionary(pair => pair.key, pair => pair.index);
+        var keys = logicalKeys.Select(key => EtcdEncoding.ValidateKey(key.Value)).ToArray();
         while (true)
         {
             operation.Check();
@@ -119,11 +122,16 @@ public sealed partial class ZLinkEtcdLocationStore
                 .ToArray();
             var payloadRequests = new TxnRequest();
             var payloadPositions = new List<int>();
-            for (var i = 0; i < request.Conditions.Count; i++)
+            for (var i = 0; i < keys.Length; i++)
                 if (
-                    request.Conditions[i] is ZLinkStoreCondition.Value value
-                    && info[i] is { } item
-                    && item.PayloadLength == value.Expected.Length
+                    info[i] is { } item
+                    && (
+                        counterKeys.Contains(logicalKeys[i])
+                            && !item.IsExpired(now)
+                            && item.PayloadLength is >= 1 and <= ZLinkStoreCounter.MaximumDigits
+                        || valueConditions.TryGetValue(logicalKeys[i], out var value)
+                            && item.PayloadLength == value.Expected.Length
+                    )
                 )
                 {
                     payloadRequests.Success.Add(
@@ -153,11 +161,31 @@ public sealed partial class ZLinkEtcdLocationStore
                     payloads.Add(i, payload!);
                 }
             }
-            long? minimumExpiry = null;
-            for (var i = 0; i < request.Conditions.Count; i++)
+            var storeNow = DateTimeOffset.FromUnixTimeMilliseconds(now);
+            ReadOnlyMemory<byte>? ReadCounter(ZLinkStoreKey key)
             {
+                var i = positions[key];
+                if (info[i] is not { } item || item.IsExpired(now))
+                    return null;
+                return payloads.TryGetValue(i, out var payload)
+                    ? payload.Value.Memory
+                    : ReadOnlyMemory<byte>.Empty;
+            }
+
+            foreach (var condition in request.Conditions)
+            {
+                if (condition is ZLinkStoreCondition.SumAtMost sum)
+                {
+                    if (!ZLinkStoreCounter.TrySumWithinLimit(sum, ReadCounter, out var withinLimit))
+                        return new ZLinkStoreWriteResult.Corrupt(storeNow);
+                    if (!withinLimit)
+                        return new ZLinkStoreWriteResult.Conflict(storeNow);
+                    continue;
+                }
+
+                var i = positions[ZLinkStoreBatchKeys.ForCondition(condition)[0]];
                 var live = info[i] is { } record && !record.IsExpired(now);
-                var matches = request.Conditions[i] switch
+                var matches = condition switch
                 {
                     ZLinkStoreCondition.Missing => !live,
                     ZLinkStoreCondition.Version value => live
@@ -169,19 +197,14 @@ public sealed partial class ZLinkEtcdLocationStore
                     _ => false,
                 };
                 if (!matches)
-                    return new ZLinkStoreWriteResult.Conflict(
-                        DateTimeOffset.FromUnixTimeMilliseconds(now)
-                    );
-                if (
-                    live
-                    && info[i]!.Value.HasExpiry
-                    && request.Conditions[i] is not ZLinkStoreCondition.Missing
-                )
-                    minimumExpiry = Math.Min(
-                        minimumExpiry ?? long.MaxValue,
-                        info[i]!.Value.ExpiresAt
-                    );
+                    return new ZLinkStoreWriteResult.Conflict(storeNow);
             }
+
+            long? minimumExpiry = null;
+            foreach (var record in info)
+                if (record is { HasExpiry: true } live && !live.IsExpired(now))
+                    minimumExpiry = Math.Min(minimumExpiry ?? long.MaxValue, live.ExpiresAt);
+
             var apply = new TxnRequest();
             apply.Compare.Add(Exists(clock, true));
             if (minimumExpiry is { } expiry)
@@ -208,8 +231,15 @@ public sealed partial class ZLinkEtcdLocationStore
                 );
             foreach (var mutation in request.Mutations)
             {
-                var key = EtcdEncoding.ValidateKey(MutationKey(mutation).Value);
-                if (mutation is ZLinkStoreMutation.Put put)
+                var logicalKey = ZLinkStoreBatchKeys.ForMutation(mutation);
+                var key = EtcdEncoding.ValidateKey(logicalKey.Value);
+                var put = mutation as ZLinkStoreMutation.Put;
+                if (
+                    mutation is ZLinkStoreMutation.Add add
+                    && !ZLinkStoreCounter.TryAdd(add, ReadCounter(logicalKey), out put)
+                )
+                    return new ZLinkStoreWriteResult.Corrupt(storeNow);
+                if (put is not null)
                 {
                     var expires = put.Retention is { } retention
                         ? checked(now + Retention(retention))
@@ -263,17 +293,14 @@ public sealed partial class ZLinkEtcdLocationStore
             var applied = await client.Txn(apply, operation).ConfigureAwait(false);
             if (!applied.Succeeded)
                 continue;
-            var versions = request
-                .Mutations.OfType<ZLinkStoreMutation.Put>()
-                .ToDictionary(
-                    put => put.Key,
-                    _ => new ZLinkStoreVersion(
-                        EtcdEncoding.Version(applied.Header.ClusterId, applied.Header.Revision)
-                    )
-                );
+            var version = new ZLinkStoreVersion(
+                EtcdEncoding.Version(applied.Header.ClusterId, applied.Header.Revision)
+            );
             return new ZLinkStoreWriteResult.Applied(
-                versions,
-                DateTimeOffset.FromUnixTimeMilliseconds(now)
+                request
+                    .Mutations.Where(mutation => mutation is not ZLinkStoreMutation.Delete)
+                    .ToDictionary(ZLinkStoreBatchKeys.ForMutation, _ => version),
+                storeNow
             );
         }
     }

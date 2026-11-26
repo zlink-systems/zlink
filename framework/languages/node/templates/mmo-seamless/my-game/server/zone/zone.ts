@@ -11,7 +11,16 @@ import type {
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
 import { Names, Game, adjacentZones, borderTopic } from '../shared/constants';
-import { BorderPresence, EnterZone, PlayerAppeared, PlayerLeft, PlayerMoved, type PlayerLeftReason, Position, WorldState } from '../shared/messages';
+import {
+  BorderPresence,
+  EnterZone,
+  PlayerAppeared,
+  PlayerLeft,
+  PlayerMoved,
+  type PlayerLeftReason,
+  Position,
+  WorldState
+} from '../shared/messages';
 import { Player } from './player';
 import { BorderHandler } from './handlers';
 import { ZonePositionDomain, type PlayerView, type ZoneSnapshot } from './domain';
@@ -42,15 +51,34 @@ export class Zone implements ZLinkSpot<Player> {
   async onActorJoin(actorId: string, request: ZLinkMessage) {
     const arrival = request.decode(EnterZone);
     const rejection = this.positions.queueArrival(actorId, arrival);
-    return rejection ? { accepted: false, reply: rejection } : { accepted: true, reply: new WorldState(String(this.context.spotId), this.config.id, arrival.position.x, arrival.sequence) };
+    return rejection
+      ? { accepted: false, reply: rejection }
+      : {
+          accepted: true,
+          reply: new WorldState(
+            String(this.context.spotId),
+            this.config.id,
+            arrival.position.x,
+            arrival.sequence
+          )
+        };
   }
   async onJoinedActor(actor: Player): Promise<void> {
     const arrival = this.positions.takeArrival(actor.context.actorId);
     if (!arrival) throw new Error('Zone admission has no movement intent');
     this.positions.addPlayer(actor.context.actorId, arrival);
-    await this.publishLocal(actor.context.actorId, new PlayerAppeared(actor.context.actorId, arrival.position, String(this.context.spotId)));
+    await this.publishLocal(
+      actor.context.actorId,
+      new PlayerAppeared(actor.context.actorId, arrival.position, String(this.context.spotId))
+    );
     if (this.positions.isInBorder(arrival.position))
-      await this.publishBorder(actor.context.actorId, arrival.position, arrival.sequence, 'appeared', null);
+      await this.publishBorder(
+        actor.context.actorId,
+        arrival.position,
+        arrival.sequence,
+        'appeared',
+        null
+      );
   }
   async onLeaveActor(actor: Player): Promise<void> {
     void actor;
@@ -78,36 +106,79 @@ export class Zone implements ZLinkSpot<Player> {
     const state = this.positions.removePlayer(actorId);
     if (state) await this.publishLeft(actorId, state, 'left-zone');
   }
-  async publishLocal(playerId: string, event: PlayerAppeared | PlayerMoved | PlayerLeft): Promise<void> {
+  async publishLocal(
+    playerId: string,
+    event: PlayerAppeared | PlayerMoved | PlayerLeft
+  ): Promise<void> {
     for (const [observerId] of this.positions.connectedPlayers())
       if (observerId !== playerId) await this.actors.sendToActor(observerId, event).submit();
   }
-  async publishBorder(playerId: string, position: Position, sequence: bigint, kind: BorderPresence['kind'], reason: PlayerLeftReason | null): Promise<void> {
+  async publishBorder(
+    playerId: string,
+    position: Position,
+    sequence: bigint,
+    kind: BorderPresence['kind'],
+    reason: PlayerLeftReason | null
+  ): Promise<void> {
     const id = String(this.context.spotId);
     for (const target of adjacentZones(id))
-      await this.context.outbound.publish(Names.border, borderTopic(id, target), new BorderPresence(id, playerId, position, sequence, kind, reason)).submit();
+      await this.context.outbound
+        .publish(
+          Names.border,
+          borderTopic(id, target),
+          new BorderPresence(id, playerId, position, sequence, kind, reason)
+        )
+        .submit();
   }
   async publishLeft(playerId: string, state: PlayerView, reason: PlayerLeftReason): Promise<void> {
-    await this.publishLocal(playerId, new PlayerLeft(playerId, reason, String(this.context.spotId)));
+    await this.publishLocal(
+      playerId,
+      new PlayerLeft(playerId, reason, String(this.context.spotId))
+    );
     if (this.positions.isInBorder(state.position))
       await this.publishBorder(playerId, state.position, state.sequence, 'left', reason);
   }
   async showBorder(presence: BorderPresence): Promise<void> {
     for (const [observerId, observer] of this.positions.connectedPlayers()) {
-      if (observerId === presence.playerId || (presence.kind !== 'left' && Math.abs(observer.position.x - presence.position.x) > Game.borderRadius)) continue;
-      const event = presence.kind === 'appeared' ? new PlayerAppeared(presence.playerId, presence.position, String(this.context.spotId)) : presence.kind === 'moved' ? new PlayerMoved(presence.playerId, presence.position, presence.sequence,
-                String(this.context.spotId)) : new PlayerLeft(presence.playerId, presence.reason ?? 'left-zone',
-                String(this.context.spotId));
+      if (
+        observerId === presence.playerId ||
+        (presence.kind !== 'left' &&
+          Math.abs(observer.position.x - presence.position.x) > Game.borderRadius)
+      )
+        continue;
+      const event =
+        presence.kind === 'appeared'
+          ? new PlayerAppeared(presence.playerId, presence.position, String(this.context.spotId))
+          : presence.kind === 'moved'
+            ? new PlayerMoved(
+                presence.playerId,
+                presence.position,
+                presence.sequence,
+                String(this.context.spotId)
+              )
+            : new PlayerLeft(
+                presence.playerId,
+                presence.reason ?? 'left-zone',
+                String(this.context.spotId)
+              );
       await this.actors.sendToActor(observerId, event).submit();
     }
   }
-  capture(): ZoneSnapshot { return this.positions.capture(); }
-  restore(snapshot: ZoneSnapshot): void { this.positions.restore(snapshot); }
+  capture(): ZoneSnapshot {
+    return this.positions.capture();
+  }
+  restore(snapshot: ZoneSnapshot): void {
+    this.positions.restore(snapshot);
+  }
 }
 @Injectable()
 export class ZoneRelocation implements ZLinkSpotRelocationAdapter<Zone> {
   async capture(spot: Zone): Promise<Uint8Array> {
-    return Buffer.from(JSON.stringify(spot.capture(), (_, value) => typeof value === 'bigint' ? value.toString() : value));
+    return Buffer.from(
+      JSON.stringify(spot.capture(), (_, value) =>
+        typeof value === 'bigint' ? value.toString() : value
+      )
+    );
   }
   async restore(spot: Zone, payload: Uint8Array): Promise<void> {
     spot.restore(JSON.parse(Buffer.from(payload).toString('utf8')) as ZoneSnapshot);

@@ -52,7 +52,7 @@ internal static class Scenarios
         await using var a = await GameClient.ConnectAsync(
             run.Outcome,
             run.Endpoints["A"],
-            "worlds-player",
+            run.PlayerId("worlds-player"),
             ct
         );
         var initial = await a.EnterAsync(ct);
@@ -71,7 +71,10 @@ internal static class Scenarios
         );
         Require(
             await a.ViewAsync(initial with { Gold = EarnedGold }, ct)
-                == initial with { Gold = EarnedGold },
+                == initial with
+                {
+                    Gold = EarnedGold,
+                },
             "A rejected earn changed the gold balance."
         );
         await Task.Delay(TimeSpan.FromMilliseconds(rejected.RetryAfterMs), ct);
@@ -102,13 +105,13 @@ internal static class Scenarios
         await using var alice = await GameClient.ConnectAsync(
             run.Outcome,
             run.Endpoints["A"],
-            "channel-player",
+            run.PlayerId("channel-player"),
             ct
         );
         await using var charlie = await GameClient.ConnectAsync(
             run.Outcome,
             run.Endpoints["A"],
-            "channel-mover",
+            run.PlayerId("channel-mover"),
             ct
         );
         var initial = await alice.EnterAsync(ct);
@@ -117,12 +120,14 @@ internal static class Scenarios
             "Initial Zone is not channelA1."
         );
         Task<ChannelView>? afterDisconnect = null;
-        await using (var bob = await GameClient.ConnectAsync(
-            run.Outcome,
-            run.Endpoints["A"],
-            "channel-observer",
-            ct
-        ))
+        await using (
+            var bob = await GameClient.ConnectAsync(
+                run.Outcome,
+                run.Endpoints["A"],
+                run.PlayerId("channel-observer"),
+                ct
+            )
+        )
         {
             var visibleToAlice = alice.ReceiveAsync<ChannelView>(
                 view =>
@@ -171,7 +176,12 @@ internal static class Scenarios
             );
             Require(
                 afterOversizedChannel.ChannelId == GameNames.FirstChannel
-                    && HasPlayers(afterOversizedChannel, alice.PlayerId, bob.PlayerId, charlie.PlayerId),
+                    && HasPlayers(
+                        afterOversizedChannel,
+                        alice.PlayerId,
+                        bob.PlayerId,
+                        charlie.PlayerId
+                    ),
                 "Oversized channel request changed membership."
             );
             var movedFromFirstChannel = alice.ReceiveAsync<ChannelView>(
@@ -201,7 +211,8 @@ internal static class Scenarios
                 "A player in another channel was visible."
             );
             afterDisconnect = alice.ReceiveAsync<ChannelView>(
-                view => view.ChannelId == GameNames.FirstChannel && HasPlayers(view, alice.PlayerId),
+                view =>
+                    view.ChannelId == GameNames.FirstChannel && HasPlayers(view, alice.PlayerId),
                 ct
             );
         }
@@ -228,8 +239,8 @@ internal static class Scenarios
     }
 
     private static bool HasPlayers(ChannelView view, params string[] expected) =>
-        view.PlayerIds
-            .OrderBy(playerId => playerId, StringComparer.Ordinal)
+        view
+            .PlayerIds.OrderBy(playerId => playerId, StringComparer.Ordinal)
             .SequenceEqual(expected.OrderBy(playerId => playerId, StringComparer.Ordinal));
 
     private static async Task ReconnectAsync(WorldRun run, CancellationToken ct)
@@ -267,12 +278,11 @@ internal static class Scenarios
         await using var a = await GameClient.ConnectAsync(
             run.Outcome,
             run.Endpoints["A"],
-            "update-player",
+            run.PlayerId("update-player"),
             ct
         );
         var initialChannelView = a.ReceiveAsync<ChannelView>(
-            view =>
-                view.ChannelId == GameNames.FirstChannel && HasPlayers(view, a.PlayerId),
+            view => view.ChannelId == GameNames.FirstChannel && HasPlayers(view, a.PlayerId),
             ct
         );
         await a.EnterAsync(ct);
@@ -327,7 +337,7 @@ internal static class Scenarios
         await using var newcomer = await GameClient.ConnectAsync(
             run.Outcome,
             run.Endpoints["A"],
-            "replacement-player",
+            run.PlayerId("replacement-player"),
             ct
         );
         Require(
@@ -347,43 +357,32 @@ internal static class Scenarios
         );
     }
 
-    public static async Task RunAsync(WorldRun run, string[] selected, CancellationToken ct)
+    public static async Task RunAsync(
+        WorldRun run,
+        string[] selected,
+        RunLog log,
+        CancellationToken ct
+    )
     {
-        var passed = 0;
         foreach (var scenario in selected)
         {
-            try
+            log.Start(scenario);
+            switch (scenario)
             {
-                switch (scenario)
-                {
-                    case "worlds":
-                        await WorldsAsync(run, ct);
-                        break;
-                    case "channel":
-                        await ChannelAsync(run, ct);
-                        break;
-                    case "reconnect":
-                        await ReconnectAsync(run, ct);
-                        break;
-                    case "update":
-                        await UpdateAsync(run, ct);
-                        break;
-                }
-                passed++;
-                Console.WriteLine($"✓ {scenario}");
+                case "worlds":
+                    await WorldsAsync(run, ct);
+                    break;
+                case "channel":
+                    await ChannelAsync(run, ct);
+                    break;
+                case "reconnect":
+                    await ReconnectAsync(run, ct);
+                    break;
+                case "update":
+                    await UpdateAsync(run, ct);
+                    break;
             }
-            catch (Exception error)
-            {
-                Console.WriteLine($"✗ {scenario}");
-                Console.Error.WriteLine($"First failure ({scenario}): {error}");
-                foreach (var skipped in selected.SkipWhile(id => id != scenario).Skip(1))
-                    Console.WriteLine($"✗ {skipped} (not executed after first failure)");
-                // Preserve the first failure instead of repeating a blocked admission path.
-                break;
-            }
+            log.Pass(scenario);
         }
-        Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed");
-        if (passed != selected.Length)
-            throw new InvalidOperationException("Scenario verification failed.");
     }
 }

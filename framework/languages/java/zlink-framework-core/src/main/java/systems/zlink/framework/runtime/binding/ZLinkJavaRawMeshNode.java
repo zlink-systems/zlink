@@ -74,6 +74,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescript
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRequestProgress;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRequestProgress.InstanceReply;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
@@ -777,7 +778,25 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             byte[] metadata,
             List<Message> parts,
             Long replyRouteId) {
-        ZLinkInternalMeshNode.PeerAuthorityFence local = localAuthorityFence;
+        var message =
+                localSpotMessage(
+                        sourceSpotId, targetSpotId, targetSpotGeneration, metadata, replyRouteId);
+        return message == null ? new byte[0] : encodeLocalSpotAccepted(message, metadata, parts);
+    }
+
+    byte[] encodeLocalSpotAccepted(
+            ZLinkServiceM6BWireCodec.SpotMessage message, byte[] metadata, List<Message> parts) {
+        var local = localAuthorityFence;
+        return ZLinkServiceFrozenRecordCodec.encodeSpot(
+                local, local, message, metadata, wire.encodeFrameworkMultipartFrame(parts));
+    }
+
+    ZLinkServiceM6BWireCodec.SpotMessage localSpotMessage(
+            String sourceSpotId,
+            String targetSpotId,
+            long targetSpotGeneration,
+            byte[] metadata,
+            Long replyRouteId) {
         ZLinkServiceNodeDescriptor descriptor = localDescriptor;
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long ownerGeneration =
@@ -785,33 +804,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         long ownerLeaseGeneration =
                 spots.spotAuthorityOwnerLeaseGeneration(
                         routingId, targetSpotId, targetSpotGeneration);
-        if (local == null
+        if (localAuthorityFence == null
                 || descriptor == null
                 || ownerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
-            return new byte[0];
+            return null;
         }
         UUID operation = UUID.randomUUID();
-        var message =
-                new ZLinkServiceM6BWireCodec.SpotMessage(
-                        replyRouteId != null,
-                        metadata == null || metadata.length == 0
-                                ? 0
-                                : ServiceWireConstants.FLAG_METADATA,
-                        replyRouteId,
-                        operation.getMostSignificantBits(),
-                        operation.getLeastSignificantBits(),
-                        0,
-                        sourceSpotId,
-                        new ZLinkServiceM6BWireCodec.SpotRouteFence(
-                                targetSpotId,
-                                targetSpotGeneration,
-                                routingId,
-                                descriptor.lifecycleGeneration(),
-                                ownerGeneration,
-                                ownerLeaseGeneration));
-        return ZLinkServiceFrozenRecordCodec.encodeSpot(
-                local, local, message, metadata, wire.encodeFrameworkMultipartFrame(parts));
+        return new ZLinkServiceM6BWireCodec.SpotMessage(
+                replyRouteId != null,
+                metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA,
+                replyRouteId,
+                operation.getMostSignificantBits(),
+                operation.getLeastSignificantBits(),
+                0,
+                sourceSpotId,
+                new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                        targetSpotId,
+                        targetSpotGeneration,
+                        routingId,
+                        descriptor.lifecycleGeneration(),
+                        ownerGeneration,
+                        ownerLeaseGeneration));
     }
 
     ZLinkServiceM6BWireCodec.ActorMessage localActorMessage(
@@ -2215,6 +2229,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "Entry Spot descriptor lifecycle changed"));
+        var caller =
+                ZLinkServiceOperationRegistry
+                        .<ZLinkInternalMeshNode.CanonicalActorJoinReply>prepareRequestOperation(
+                                ZLinkServiceOperationIds.next());
+        caller.requestProgress()
+                .routeSelected(
+                        meshName,
+                        request.targetNodeRid(),
+                        correlation,
+                        request.targetNodeGeneration(),
+                        false);
         return requestDurable(
                 request.targetNodeRid(),
                 () -> canRequestCanonicalActorJoin(request) ? frames : null,
@@ -2225,7 +2250,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 request,
                                 reply.stream().map(Message::toByteArray).toList()),
                 null,
-                request.targetNodeGeneration());
+                request.targetNodeGeneration(),
+                caller);
     }
 
     private static boolean hasCompleteCanonicalActorJoinFence(
@@ -2832,12 +2858,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                     admitRequest(
                                             targetNodeRid,
                                             operationOwner,
-                                            operationId,
                                             completion,
                                             terminal,
                                             frames,
                                             requestAdmission,
-                                            admittedTimeout ->
+                                            (admittedTimeout, progress) ->
                                                     port.requestMessagesTo(
                                                             requireStarted(),
                                                             targetNodeRid,
@@ -3478,8 +3503,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     admitRequest(
                             route.targetNodeRid(),
                             operations,
-                            operationId,
-                            operation.completion(),
+                            operation,
                             (reply, failure) -> {
                                 if (failure != null)
                                     operations.completeExceptionally(operationId, failure);
@@ -3487,9 +3511,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             },
                             List.of(),
                             requestAdmission,
-                            admittedTimeout -> {
-                                var progress = operation.requestProgress();
-                                progress.peerAdmitted();
+                            (admittedTimeout, progress) -> {
                                 BiConsumer<List<byte[]>, Throwable> finished =
                                         (replyFrames, failure) ->
                                                 finishInstanceSpotRequest(
@@ -3561,7 +3583,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             failure));
             return;
         }
-        operation.requestProgress().replyReceived();
         try {
             var header = wire.decodeReplyHeader(replies.getFirst());
             if (header.correlation() != correlation) {
@@ -3860,13 +3881,25 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 requestAdmission);
     }
 
+    void observeLocalActorRoute(
+            ZLinkServiceOperationRegistry.Operation<?> operation, long generation) {
+        operation
+                .requestProgress()
+                .routeSelected(
+                        meshName,
+                        routingId,
+                        operation.id().getLeastSignificantBits(),
+                        generation,
+                        true);
+    }
+
     CompletionStage<List<Message>> requestActor(
             ZLinkServiceM6BWireCodec.ActorRouteFence target,
             List<Message> parts,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
         var completion =
-                ZLinkServiceOperationRegistry.<List<Message>>prepareOperation(
+                ZLinkServiceOperationRegistry.<List<Message>>prepareRequestOperation(
                         ZLinkServiceOperationIds.next());
         var retained = ZLinkJavaRawSpot.copy(parts);
         operations
@@ -3902,6 +3935,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             ZLinkServiceOperationRegistry.Operation<T> completion) {
         ZLinkBackendActorRef actor = target.actor();
         long correlation = allocateCorrelation();
+        completion
+                .requestProgress()
+                .routeSelected(
+                        meshName,
+                        actor.nodeRid(),
+                        correlation,
+                        target.targetNodeGeneration(),
+                        false);
         UUID operationId = completion.id();
         RouterSocket current = requireStarted();
         List<Message> frames =
@@ -3936,12 +3977,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                     return admitRequest(
                                                             actor.nodeRid(),
                                                             operations,
-                                                            operationId,
                                                             completion,
                                                             receiver,
                                                             frames,
                                                             requestAdmission,
-                                                            admittedTimeout ->
+                                                            (admittedTimeout, progress) ->
                                                                     port.requestMessagesTo(
                                                                             current,
                                                                             actor.nodeRid(),
@@ -3956,7 +3996,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                                             null,
                                                                             receiver,
                                                                             null,
-                                                                            requestAdmission),
+                                                                            requestAdmission,
+                                                                            progress),
                                                             target.targetNodeGeneration());
                                                 },
                                                 discardReply)
@@ -4812,8 +4853,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     admitRequest(
                             targetNodeRid,
                             operations,
-                            operation.id(),
-                            operation.completion(),
+                            operation,
                             (value, failure) -> {
                                 if (failure != null)
                                     operations.completeExceptionally(operation.id(), failure);
@@ -4821,7 +4861,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             },
                             List.of(),
                             null,
-                            admittedTimeout ->
+                            (admittedTimeout, progress) ->
                                     port.requestTo(
                                             requireStarted(),
                                             targetNodeRid,
@@ -4975,8 +5015,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     admitRequest(
                             targetNodeRid,
                             operations,
-                            operation.id(),
-                            operation.completion(),
+                            operation,
                             (value, failure) -> {
                                 if (failure != null)
                                     operations.completeExceptionally(operation.id(), failure);
@@ -4984,7 +5023,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             },
                             List.of(),
                             null,
-                            admittedTimeout ->
+                            (admittedTimeout, progress) ->
                                     port.requestTo(
                                             requireStarted(),
                                             targetNodeRid,
@@ -5466,7 +5505,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             operationId = completion.id();
         }
         var registry = operationOwner;
-        var requestId = operationId;
         operationOwner
                 .<ZLinkBackendReceived>submitTerminal(
                         operationId,
@@ -5475,12 +5513,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 admitRequest(
                                         target,
                                         registry,
-                                        requestId,
                                         completion,
                                         terminal,
                                         frames,
                                         requestAdmission,
-                                        admittedTimeout ->
+                                        (admittedTimeout, progress) ->
                                                 port.requestMessagesTo(
                                                         router,
                                                         target,
@@ -9267,6 +9304,24 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             Function<List<Message>, T> decodeReply,
             CompletableFuture<Void> admission,
             long targetLifecycleGeneration) {
+        return requestDurable(
+                target,
+                prepare,
+                timeout,
+                decodeReply,
+                admission,
+                targetLifecycleGeneration,
+                ZLinkServiceOperationRegistry.prepareOperation(ZLinkServiceOperationIds.next()));
+    }
+
+    private <T> CompletionStage<T> requestDurable(
+            RoutingId target,
+            Supplier<List<byte[]>> prepare,
+            Duration timeout,
+            Function<List<Message>, T> decodeReply,
+            CompletableFuture<Void> admission,
+            long targetLifecycleGeneration,
+            ZLinkServiceOperationRegistry.Operation<T> caller) {
         return ZLinkJavaDurableRequest.request(
                 () -> {
                     requireStarted();
@@ -9277,7 +9332,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 "remote request target fence is no longer valid");
                     return frames;
                 },
-                (frames, remaining, bindingAdmission, terminal) ->
+                (frames, remaining, bindingAdmission, terminal, progress) ->
                         port.requestTo(
                                 requireStarted(),
                                 target,
@@ -9285,14 +9340,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 remaining,
                                 decodeReply,
                                 bindingAdmission,
-                                terminal),
+                                terminal,
+                                progress),
                 () -> observePeerRoute(target, targetLifecycleGeneration),
                 (changed, ended) -> onPeerStateChanged(target, changed, ended),
                 this::runAdmissionTurn,
                 timeout,
                 operations,
                 admission,
-                () -> connectionAttemptsFor(target));
+                () -> connectionAttemptsFor(target),
+                caller);
     }
 
     private CompletionStage<List<byte[]>> requestApplication(
@@ -9346,25 +9403,23 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private <T> CompletionStage<?> admitRequest(
             RoutingId target,
             ZLinkServiceOperationRegistry registry,
-            UUID id,
-            CompletionStage<?> caller,
+            ZLinkServiceOperationRegistry.Operation<?> caller,
             BiConsumer<T, Throwable> terminal,
             List<Message> frames,
             CompletableFuture<Void> requestAdmission,
-            Function<Duration, CompletionStage<?>> submit) {
+            BiFunction<Duration, ZLinkServiceRequestProgress, CompletionStage<?>> submit) {
         return admitRequest(
-                target, registry, id, caller, terminal, frames, requestAdmission, submit, 0);
+                target, registry, caller, terminal, frames, requestAdmission, submit, 0);
     }
 
     private <T> CompletionStage<?> admitRequest(
             RoutingId target,
             ZLinkServiceOperationRegistry registry,
-            UUID id,
-            CompletionStage<?> caller,
+            ZLinkServiceOperationRegistry.Operation<?> caller,
             BiConsumer<T, Throwable> terminal,
             List<Message> frames,
             CompletableFuture<Void> requestAdmission,
-            Function<Duration, CompletionStage<?>> submit,
+            BiFunction<Duration, ZLinkServiceRequestProgress, CompletionStage<?>> submit,
             long targetLifecycleGeneration) {
         if (requestAdmission != null)
             caller.whenComplete(
@@ -9373,16 +9428,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     });
         return ZLinkJavaDurableRequest.attempt(
                 List::of,
-                (ignored, remaining, admission, completed) -> submit.apply(remaining),
+                (ignored, remaining, admission, completed, progress) ->
+                        submit.apply(remaining, progress),
                 () -> observePeerRoute(target, targetLifecycleGeneration),
                 () -> connectionAttemptsFor(target),
                 (changed, ended) -> onPeerStateChanged(target, changed, ended),
                 this::runAdmissionTurn,
                 registry,
-                id,
+                caller,
                 terminal,
                 requestAdmission,
-                caller,
                 () -> Message.closeAll(frames));
     }
 

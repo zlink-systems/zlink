@@ -6,6 +6,7 @@ import { PlayerFactory, PlayerRelocation } from './infrastructure/zlink/player';
 import {
   EnterRegion,
   NextRegion,
+  LeaveRegion,
   ReconnectRegion,
   Move,
   View,
@@ -23,6 +24,7 @@ runHost((_builder, config, mesh) => {
   });
   return {
     providers: [
+      LeaveRegion,
       Entry,
       Region,
       RegionRelocation,

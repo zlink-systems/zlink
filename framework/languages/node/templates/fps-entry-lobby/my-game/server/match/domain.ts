@@ -171,13 +171,23 @@ export class RoomState {
     shooter.nextFireMs = now + Game.fireIntervalMs;
     return {
       rejected: null,
-      result: new ShotResult(outcome, outcome === ShotOutcome.hit ? target!.playerId : null, shot.sequence)
+      result: new ShotResult(
+        outcome,
+        outcome === ShotOutcome.hit ? target!.playerId : null,
+        shot.sequence
+      )
     };
   }
 
   view(): PlayerView[] {
     return this.players.map(
-      (player) => new PlayerView(player.playerId, new Vec3(player.position.x, player.position.y, player.position.z), player.hp, player.sequence)
+      (player) =>
+        new PlayerView(
+          player.playerId,
+          new Vec3(player.position.x, player.position.y, player.position.z),
+          player.hp,
+          player.sequence
+        )
     );
   }
 
@@ -191,9 +201,7 @@ export class RoomState {
         sequence: player.sequence,
         fireRemainingMs: player.nextFireMs === null ? 0 : Math.max(0, player.nextFireMs - now),
         moveRemainingMs:
-          player.lastMoveMs === null
-            ? 0
-            : Math.max(0, MovementWindowMs - (now - player.lastMoveMs))
+          player.lastMoveMs === null ? 0 : Math.max(0, MovementWindowMs - (now - player.lastMoveMs))
       })),
       phase: this.currentPhase,
       winner: this.currentWinner

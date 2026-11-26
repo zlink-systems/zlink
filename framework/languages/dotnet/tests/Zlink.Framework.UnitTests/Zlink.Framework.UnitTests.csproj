@@ -57,6 +57,7 @@
     <ItemGroup>
         <Compile Include="Runtime/CanonicalSessionBindCrossLanguageTests.cs" Condition="'$(ZLinkCrossLanguageBind)' == 'true'"/>
         <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
+        <Compile Include="Runtime/LocationStoreFormatMigrationTests.cs"/>
         <Compile Include="Runtime/OrderedBoundSessionPushTests.cs"/>
         <Compile Include="Runtime/BoundSessionRelayPushOrderTests.cs"/>
         <Compile Include="Runtime/OrderedBoundSessionSendTests.cs"/>
@@ -195,6 +196,7 @@
         <Compile Include="Runtime/DescriptorOwnerLeaseSelectionTests.cs"/>
         <Compile Include="Runtime/ActorCreationEntryCandidateTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
+        <Compile Include="Runtime/SpotCreationShutdownTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.RequestSubmissionFailure.cs"/>
         <Compile Include="Runtime/EntrySpotActorFifoActivationTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.SessionSealTerminal.cs"/>
@@ -228,6 +230,11 @@
         <Compile Include="Runtime/HandlerResultAwaiterTests.cs"/>
         <Compile Include="Runtime/HttpExecutionSchedulerTests.cs"/>
         <Compile Include="Runtime/InMemoryLocationStoreTests.cs"/>
+        <Compile Include="Runtime/InMemoryLocationStoreCounterTests.cs"/>
+        <Compile Include="../Common/LocationStoreCounterContract.cs" Link="Common/LocationStoreCounterContract.cs"/>
+        <Compile Include="../Common/LocationCreationContentionContract.cs" Link="Common/LocationCreationContentionContract.cs"/>
+        <Compile Include="../Common/LocationContentionFixture.cs" Link="Common/LocationContentionFixture.cs"/>
+        <Compile Include="Runtime/InMemoryLocationCreationContentionTests.cs"/>
         <Compile Include="Runtime/LocationLifecycleTests.cs"/>
         <Compile Include="Runtime/LayeringConvergenceTests.cs"/>
         <Compile Include="Runtime/LocationResolverTests.cs"/>
@@ -257,10 +264,15 @@
         <Compile Include="Runtime/OwnerLeaseTrackerTests.cs"/>
         <Compile Include="Runtime/SpotNodeInitializerTests.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
+        <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.AggregatePublication.cs"/>
+        <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.CapacityReservation.cs"/>
+        <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.FormatMigration.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.OwnerTokenReleaseWait.cs"/>
         <Compile Include="Runtime/ProviderRelocationRepositoryTests.cs"/>
         <Compile Include="Runtime/MessageFlowTracerTests.cs"/>
         <Compile Include="Runtime/MessageFlowDeliveryTests.cs"/>
+        <Compile Include="Runtime/MessageFlowFailureTests.cs"/>
+        <Compile Include="Runtime/MessageFlowFailureTests.NodeSend.cs"/>
         <Compile Include="Runtime/MessageFollowSuppressionRegistryTests.cs"/>
         <Compile Include="Runtime/MessagePayloadOwnershipConvergenceTests.cs"/>
         <Compile Include="Runtime/MeshCompletionTableConvergenceTests.cs"/>
@@ -298,6 +310,7 @@
         <Compile Include="Runtime/SessionActorCoordinatorTests.CloseOrder.cs"/>
         <Compile Include="Runtime/StreamWireInteropTests.cs"/>
         <Compile Include="Runtime/StreamSessionLivenessTests.cs"/>
+        <Compile Include="Runtime/StreamPermitLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
         <Compile Include="Runtime/StreamAuthenticationAdmissionTests.cs"/>
         <Compile Include="Runtime/StreamDisconnectProgressTests.cs"/>
@@ -341,6 +354,8 @@
         <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationPrecommitTests.cs"/>
+        <Compile Include="Runtime/RelocationCompletionRecordTests.cs"/>
+        <Compile Include="Runtime/RelocationCompletionStoreTests.cs"/>
         <Compile Include="Runtime/AuthorityAggregateRelocationTests.cs"/>
         <Compile Include="Runtime/CanonicalActorAcceptedJournalTests.cs"/>
         <Compile Include="Runtime/CanonicalAuthorityAggregateGenerationTests.cs"/>

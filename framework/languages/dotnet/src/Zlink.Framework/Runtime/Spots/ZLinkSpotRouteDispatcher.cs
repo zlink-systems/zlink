@@ -138,25 +138,36 @@ internal sealed class ZLinkSpotRouteDispatcher(
 
             if (!descriptor.IsRequest)
             {
-                try
-                {
-                    await handlerInvoker()
-                        .InvokeMessageAsync(
+                await scope
+                    .RunOneWayHandlerAsync(
+                        dispatchErrors,
+                        (
+                            handlerInvoker,
+                            scope,
+                            dispatchErrors,
                             descriptor,
                             message,
                             header,
                             received,
                             cancellationToken
-                        )
-                        .ConfigureAwait(false);
-
-                    scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
-                }
-                catch (Exception ex)
-                {
-                    scope.HandlerException(dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
-                }
-
+                        ),
+                        static state =>
+                        {
+                            var invoker = state.handlerInvoker();
+                            state.scope.Trace(
+                                state.dispatchErrors,
+                                ZLinkMessageFlowOutcome.Dispatched
+                            );
+                            return invoker.InvokeMessageAsync(
+                                state.descriptor,
+                                state.message,
+                                state.header,
+                                state.received,
+                                state.cancellationToken
+                            );
+                        }
+                    )
+                    .ConfigureAwait(false);
                 return;
             }
 

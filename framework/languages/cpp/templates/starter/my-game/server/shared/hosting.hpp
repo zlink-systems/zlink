@@ -4,6 +4,7 @@
 #include <zlink/locations/redis.hpp>
 #include <atomic>
 #include <iostream>
+#include <syncstream>
 #include <thread>
 
 namespace MyGame
@@ -72,7 +73,7 @@ class NodeControl final : public fx::hosted_service_t
         output["streamEndpoint"] =
           runtime.listener_status (fx::listener_kind_t::stream, Names::stream)
             .endpoint;
-        std::cout << Control::ready << output.dump () << std::endl;
+        std::osyncstream (std::cout) << Control::ready << output.dump () << std::endl;
         co_return;
     }
 
@@ -89,7 +90,7 @@ class NodeControl final : public fx::hosted_service_t
                     std::string command;
                     while (std::getline (std::cin, command)) {
                         if (command == Control::drain) {
-                            std::cout << Control::requested << std::endl;
+                            std::osyncstream (std::cout) << Control::requested << std::endl;
                             fx::relocation_options_t options;
                             options.mode = fx::relocation_mode_t::planned_maintenance;
                             options.deadline = Limits::relocation;
@@ -99,7 +100,7 @@ class NodeControl final : public fx::hosted_service_t
                                 throw std::runtime_error (
                                   "Host relocation blocked: "
                                   + std::to_string (static_cast<int> (relocated.reason)));
-                            std::cout << Control::relocated << std::endl;
+                            std::osyncstream (std::cout) << Control::relocated << std::endl;
                             // Availability of this public observation is required; state is not inferred.
                             (void) safe_to_shutdown (runtime.status ());
                             auto safe =
@@ -115,7 +116,7 @@ class NodeControl final : public fx::hosted_service_t
                               });
                             await_host (safe->task (), Limits::safe);
                             observation->close ();
-                            std::cout << Control::safe << std::endl;
+                            std::osyncstream (std::cout) << Control::safe << std::endl;
                         } else if (command == Control::shutdown) {
                             const auto stopped =
                               await_host (app_.shutdown (Limits::shutdown), Limits::shutdown);
@@ -124,7 +125,7 @@ class NodeControl final : public fx::hosted_service_t
                                 throw std::runtime_error (
                                   "Host shutdown failed: "
                                   + std::to_string (static_cast<int> (stopped.reason)));
-                            std::cout << Control::stopped << std::endl;
+                            std::osyncstream (std::cout) << Control::stopped << std::endl;
                             app_.request_stop ();
                             return;
                         } else
@@ -161,7 +162,10 @@ inline fx::zlink_framework_options_t &configure_host (fx::app_t &app, const Node
           nlohmann::json line{{"category", record.category}, {"message", record.message}};
           for (const auto &field : record.fields)
               line[field.key] = field.value;
-          std::cerr << line.dump () << std::endl;
+          if (line.value ("event_id", "") == std::string_view ("zlink.message_flow"))
+              std::osyncstream (std::cout) << "FLOW " << line.dump () << std::endl;
+          else
+              std::osyncstream (std::cerr) << line.dump () << std::endl;
       });
     auto &options = app.add_zlink_framework ();
     options.set_message_follow_duration (Limits::message_follow);

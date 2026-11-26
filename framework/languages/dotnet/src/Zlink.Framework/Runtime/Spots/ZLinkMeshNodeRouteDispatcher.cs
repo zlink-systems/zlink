@@ -638,46 +638,22 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         {
             try
             {
-                if (actorRelay is not null)
-                    await _routeInvoker
-                        .InvokeDecodedSendAsync(
-                            descriptor,
-                            _meshName.Value,
-                            sourceRid,
-                            header,
-                            actorRelay,
-                            cancellationToken,
-                            received.Metadata,
-                            received.ReceivedAt
-                        )
-                        .ConfigureAwait(false);
-                else if (payloadView is { } sendView)
-                    await _routeInvoker
-                        .InvokeSendAsync(
-                            descriptor,
-                            _meshName.Value,
-                            sourceRid,
-                            header,
-                            sendView,
-                            cancellationToken,
-                            received.Metadata,
-                            received.ReceivedAt
-                        )
-                        .ConfigureAwait(false);
-                else
-                    await _routeInvoker
-                        .InvokeSendAsync(
-                            descriptor,
-                            _meshName.Value,
-                            sourceRid,
-                            header,
-                            parts,
-                            cancellationToken,
-                            received.Metadata,
-                            received.ReceivedAt
-                        )
-                        .ConfigureAwait(false);
-                scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
+                await _routeInvoker
+                    .InvokeSendAsync(
+                        descriptor,
+                        _meshName.Value,
+                        sourceRid,
+                        header,
+                        parts,
+                        payloadView,
+                        actorRelay,
+                        cancellationToken,
+                        received.Metadata,
+                        received.ReceivedAt,
+                        scope,
+                        _dispatchErrors
+                    )
+                    .ConfigureAwait(false);
             }
             catch (Exception ex)
             {
