@@ -880,6 +880,8 @@ export class ZLinkFrameworkRuntimeHost
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       registration: options.registration,
       targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
+      targetOwnerAdmissionOpen: () =>
+        this.locationOwner.currentRuntime?.ownerAdmissionOpen === true,
       ensureEntryActivation: (meshName) => {
         const runtime = this.spotNodeRuntime;
         if (runtime === undefined) throw new Error('Relocation target runtime is not started.');

@@ -276,6 +276,7 @@ interface ZLinkHostRelocationOptions {
   readonly relocationStore?: ZLinkRelocationStore;
   readonly currentOwner: () => ZLinkLocationOwnerToken | undefined;
   readonly targetAdmissionSealed?: () => boolean;
+  readonly targetOwnerAdmissionOpen?: () => boolean;
   readonly requestPeerReconcile?: (meshName: string, peerRid: string) => Promise<void>;
   readonly sourceQuiescenceChanged?: () => void;
   readonly liveDescriptors: (
@@ -3659,6 +3660,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const targetStatus = this.requireMeshNode(meshName).status();
     const targetOwner = this.options.currentOwner();
     const targetDescriptor = this.options.localDescriptor?.(meshName);
+    if (
+      this.options.targetOwnerAdmissionOpen?.() === false ||
+      (this.options.localDescriptor !== undefined &&
+        targetDescriptor?.state !== ZLinkFrameworkRuntimeState.Serving)
+    ) {
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.Unavailable,
+        'Relocation target is not accepting Restore requests.'
+      );
+    }
     if (
       targetOwner === undefined ||
       !routingIdsEqual(targetStatus.routingId, request.target.nodeRid) ||

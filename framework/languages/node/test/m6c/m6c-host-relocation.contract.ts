@@ -1,3 +1,4 @@
+import { ZLinkLocationRuntime } from '../../packages/framework/src/runtime/locations/runtime';
 import { relocationAuthorityPayloadForTarget } from '../../packages/framework/src/runtime/locations/relocation-authority-payload';
 import {
   commitAuthorityRelocation,
@@ -597,6 +598,64 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
     await runtime.dispose();
   }
 });
+
+for (const state of ['live', 'expired', 'relocating'] as const) {
+  test(`Restore admission checks the ${state} target before Store prepare`, async () => {
+    let now = 0;
+    const store = new ZLinkInMemoryLocationStore();
+    const lease = new ZLinkLocationRuntime({
+      stores: {
+        locationStore: store,
+        authorityStore: store,
+        peerStore: store,
+        spotStore: store,
+        actorStore: store,
+        routeStore: store,
+        ownerLeaseStore: store
+      },
+      ownerId: 'target-owner',
+      monotonicNowMs: () => now,
+      setTimer: () => 0,
+      clearTimer() {}
+    });
+    await lease.start('target' as never);
+    const harness = createActorJoinHostHarness({
+      targetOwnerAdmissionOpen: () => lease.ownerAdmissionOpen,
+      targetDescriptorState:
+        state === 'relocating'
+          ? ZLinkFrameworkRuntimeState.Relocating
+          : ZLinkFrameworkRuntimeState.Serving
+    });
+    let prepares = 0;
+    const prepare = harness.location.prepareAggregate.bind(harness.location);
+    harness.location.prepareAggregate = async (request) => {
+      prepares++;
+      return prepare(request);
+    };
+    try {
+      assert.equal(lease.ownerAdmissionOpen, true);
+      if (state === 'expired') {
+        now = 60_000;
+        assert.equal(lease.ownerAdmissionOpen, false);
+        assert.ok(
+          lease.currentOwnerToken,
+          'the expired token remains until the deadline timer runs'
+        );
+      }
+      if (state === 'live') {
+        await harness.relocate();
+        assert.equal(prepares, 1);
+      } else {
+        await assert.rejects(harness.relocate());
+        assert.equal(prepares, 0);
+        assert.equal(harness.events.includes('restore:hidden'), false);
+      }
+    } finally {
+      await harness.dispose();
+      await lease.stop();
+    }
+  });
+}
 
 test('exact duplicate Prepare shares restore while Data and Cutover stay one-way', async () => {
   const harness = createActorJoinHostHarness({ dropCutover: true });
@@ -2904,6 +2963,8 @@ interface NativeRouteChangePeers {
 }
 
 interface ActorJoinHarnessOptions {
+  readonly targetOwnerAdmissionOpen?: () => boolean;
+  readonly targetDescriptorState?: ZLinkFrameworkRuntimeState;
   readonly realSourceCapture?: boolean;
   readonly sourceQuiescenceChanged?: (safe: boolean) => void;
   readonly explicitFailureCode?: number;
@@ -2955,6 +3016,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     lifecycleGeneration: 6n,
     ownerId: 'target-owner',
     leaseGeneration: 14n,
+    state: options.targetDescriptorState ?? ZLinkFrameworkRuntimeState.Serving,
     applicationVersion: 4n,
     entrySpotId: 'entry-target'
   };
@@ -3939,6 +4001,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     activationAdmission: options.activationAdmission,
     currentOwner: () => ({ ownerId: 'target-owner', leaseGeneration: 14n }),
     localDescriptor: () => targetDescriptor,
+    targetOwnerAdmissionOpen: options.targetOwnerAdmissionOpen,
     meshNode: () => targetNode,
     spotManager: () => targetSpotManager,
     actorManager: () => targetActorManager,
