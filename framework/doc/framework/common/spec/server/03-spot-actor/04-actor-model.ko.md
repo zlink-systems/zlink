@@ -513,6 +513,11 @@ Framework는 current `ActorRef`를 다시 찾아 새 incarnation을 종료하지
 단계가 실패해도 authority는 `Closing`으로 남아 새 작업을 받지 않으며, record 해제는
 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)이 정한다.
 
+**1단계 `Closing` CAS가 실패하면 그 destroy는 그 실패로 끝나고 incarnation은 destroy 전 상태로 돌아간다.**
+authority는 그대로 `Ready`이며 Actor는 새 작업을 계속 받는다. 이 시도가 닫은 admission과 teardown 표시는 되돌리고,
+같은 incarnation에 대한 다음 destroy 호출은 이 실패에 합류하지 않고 1단계부터 새로 시도한다. 시도를 되돌리기 전에
+합류한 호출은 같은 실패를 받는다.
+
 Destroy는 Actor의 owner node만 실행한다. Owner가 아닌 node에서 destroy를 호출하면 그 node는
 authority record가 가리키는 owner에게 command 27 `actorDestroy`
 ([wire command 표](../02-channel-transport/06-wire-protocol.ko.md#3-command-space))를 보낸다.
