@@ -1728,6 +1728,11 @@ and `level` are decimal integers without leading zeros.
 | A participant's new authority payload | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:authorityPayload` |
 | A participant's membership change | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
 
+**Relocation key values.** When a relocation (`aggregate.relocation` of §9.1) writes the records of
+this section, `aggregateId` is its `relocationId` and `aggregateGeneration` is `1`. The source writes
+this inventory once at seal, before it chooses a target, and keeps using the same inventory when the
+target attempt (`target.attemptGeneration`) changes.
+
 **Participant change bytes.** A participant's new authority payload record and membership change
 record store bytes as they are, not JSON. The new authority payload record is the
 application-defined opaque bytes that become the participant authority's `payload` at commit, and
