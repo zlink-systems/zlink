@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 
@@ -795,12 +796,13 @@ internal sealed class ZLinkSpotRuntimeManager(
     internal async ValueTask<bool> CloseFromContextAsync(
         ZLinkFrameworkComponentState state,
         ZLinkSpotActivation activation,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkSerialTurn? callerTurn
     )
     {
         return state.SpotNodes.TryGetValue(activation.SpotNodeName, out var node)
             && await node
-                .Catalog.CloseFromContextAsync(activation, cancellationToken)
+                .Catalog.CloseFromContextAsync(activation, cancellationToken, callerTurn)
                 .ConfigureAwait(false);
     }
 

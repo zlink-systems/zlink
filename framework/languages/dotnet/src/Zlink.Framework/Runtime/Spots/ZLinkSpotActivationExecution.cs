@@ -488,16 +488,12 @@ internal abstract partial class ZLinkSpotActivation
             throw new InvalidOperationException(
                 "Spot context Close requires a handler or timer turn."
             );
-        return turn.YieldFrameworkCallAsync(
-            ct => _runtime.CloseCurrentSpotAsync(this, ct),
-            cancellationToken
-        );
+        return _runtime.CloseCurrentSpotAsync(this, cancellationToken, turn);
     }
 
     internal Task<T>? PostLifecycleOperation<T>(
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation,
-        Action? terminalRelease = null
-    ) => _serial.PostLifecycleOperation(operation, terminalRelease);
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation
+    ) => _serial.PostLifecycleOperation(operation);
 
     internal void AttachNativeDispatch()
     {

@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Execution;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -177,10 +178,16 @@ internal sealed partial class ZLinkFrameworkRuntime
 
     internal ValueTask<bool> CloseCurrentSpotAsync(
         ZLinkSpotActivation activation,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkSerialTurn? callerTurn = null
     )
     {
-        return _spots.CloseFromContextAsync(GetOrStartState(), activation, cancellationToken);
+        return _spots.CloseFromContextAsync(
+            GetOrStartState(),
+            activation,
+            cancellationToken,
+            callerTurn
+        );
     }
 
     private static string RequireSpotType(string value)
