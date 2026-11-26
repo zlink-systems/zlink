@@ -1,8 +1,10 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
+using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.UnitTests.Runtime;
@@ -11,6 +13,86 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed partial class LocationRuntimeTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GenerationShutdown_Waits_For_Discarded_Actor_Destroy(bool force)
+    {
+        const string actorId = "shutdown-discard";
+        var time = new ControllableTimeProvider();
+        var store = new OutageLeaseStore(new ZLinkInMemoryLocationStore(time));
+        await using var host = await DiscardedAuthorityHost.Start(store, time);
+        var runtime = host.Runtime;
+        var locations = host.Locations;
+        await host
+            .Provider.GetRequiredService<IZLinkActorManager>()
+            .GetOrCreate(actorId, "outage-actor")
+            .InMesh("discarded-authority")
+            .Async();
+        Assert.True(runtime.TryGetActorState(actorId, out var actor));
+        var nativeActor = Assert.IsType<ZLinkBackendActorRef>(actor.NativeActorRef);
+        var node = Assert.IsAssignableFrom<IZLinkBackendLocalActorAuthorityReader>(
+            runtime.GetSpotNodeRuntime("discarded-authority").Node
+        );
+        Assert.True(node.TryGetLocalActorAuthority(nativeActor, out _, out _));
+
+        var errors = new ConcurrentQueue<Exception>();
+        runtime.ErrorSink.UnhandledCallbackException += errors.Enqueue;
+        var shutdownToken = runtime.ShutdownToken;
+        var closing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var closingRegistration = shutdownToken.Register(() => closing.TrySetResult());
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var discard = locations.DiscardExecutionsAsync!;
+        var actorDestroyedWhileOpen = false;
+        locations.DiscardExecutionsAsync = async executions =>
+        {
+            entered.TrySetResult();
+            await release.Task;
+            await discard(executions);
+            actorDestroyedWhileOpen =
+                !shutdownToken.IsCancellationRequested
+                && !node.TryGetLocalActorAuthority(nativeActor, out _, out _);
+        };
+
+        Task stopping;
+        Task discarding;
+        bool closedWhileHeld;
+        bool stoppedWhileHeld;
+        try
+        {
+            store.Stale = true;
+            Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            discarding = runtime.DiscardLocationExecutionAsync(actor).AsTask();
+            stopping = (
+                force
+                    ? runtime.ForceStopAsync(CancellationToken.None)
+                    : runtime.StopAsync(CancellationToken.None)
+            ).AsTask();
+            // Component shutdown signals its token before starting SpotNode disposal.
+            await Task.WhenAny(closing.Task, stopping, Task.Delay(TimeSpan.FromSeconds(1)));
+            closedWhileHeld = shutdownToken.IsCancellationRequested;
+            stoppedWhileHeld = stopping.IsCompleted;
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        var failure = await Record.ExceptionAsync(() =>
+            Task.WhenAll(discarding, stopping).WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.False(
+            closedWhileHeld,
+            "Generation started closing transport while discard was held."
+        );
+        Assert.False(stoppedWhileHeld, "Generation stopped while discard was held.");
+        Assert.Null(failure);
+        Assert.True(actorDestroyedWhileOpen, "Discard did not destroy the Actor before shutdown.");
+        Assert.Empty(errors);
+    }
+
     [Theory]
     [InlineData(false, true)]
     [InlineData(true, false)]
