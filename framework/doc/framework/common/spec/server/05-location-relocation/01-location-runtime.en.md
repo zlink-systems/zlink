@@ -1506,7 +1506,9 @@ new relocations.
 source Spot ID, so converting the message to them would change the operation ID or drop the original
 sender. Command 55 keeps the operation ID at 0 and carries the original source node RID and lifecycle
 generation, the source Spot ID when present, the metadata, and the payload unchanged. It has no reply
-route. The previous owner applies the route, hop, and fence checks above unchanged.
+route. The previous owner applies the route, hop, and fence checks above unchanged. Command 55 is used
+only for a forwarded message, so its hop is `1..8`. The receiver rejects a command 55 with hop 0 as a
+protocol error.
 
 - **A forward with operation ID 0 creates no deduplication key.** This keeps different sends from the
   same sender from merging under one key. No new operation ID is issued during forwarding.
