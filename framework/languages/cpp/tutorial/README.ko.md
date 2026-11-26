@@ -84,7 +84,7 @@ Core `zlink.dll`과 서드파티 DLL이 실행 파일 옆에 함께 복사된다
 Redis가 `127.0.0.1:6379`에서 실행 중이어야 한다. Spot·Actor·Location 단계는 이를 Location Store로 사용한다.
 아래 블록은 Redis를 Docker로 실행하고 Server와 Client를 시작한 뒤 두 process의 `/ops/ready`가
 HTTP 200을 반환할 때까지 기다린다. Actor 요청은 두 host가 `Serving` 상태에 도달한 뒤 보낸다.
-비어 있는 Redis에서 Server는 `Serving`까지 약 20초가 걸린다. 고정 routing id를 쓰므로 fencing margin의
+비어 있는 Redis에서 두 host는 `Serving`까지 약 20초가 걸린다. 고정 routing id를 쓰므로 fencing margin의
 세 배(기본 15초)를 기다린 뒤 그 id를 claim하고, 다음 lease 갱신 때 descriptor를 게시하기 때문이다.
 handler와 filter의 로그는 **stderr**로 기록된다.
 
@@ -336,7 +336,7 @@ channel을 거치지 않는 경로다. 받는 쪽은 `mesh.add_route_request_han
 
 ```console
 $ curl http://127.0.0.1:5180/ops/nodes/game-server-1/status
-{"calledBy":"game-1552add6-0517-4bf3-bd6b-a18306bc7ae3","channelName":"","meshName":"game","uptime":"10s"}
+{"calledBy":"game-client-1","channelName":"","meshName":"game","uptime":"10s"}
 
 $ curl -i http://127.0.0.1:5180/ops/nodes/no-such-node/status
 HTTP/1.1 404 Not Found
@@ -344,7 +344,7 @@ HTTP/1.1 404 Not Found
 ```
 
 `channelName`이 비어 있는 것이 요점이다. channel이 관여하지 않았다는 뜻이다. `calledBy`는
-부른 쪽 node의 routing id이고(Client는 mesh가 정한 id를 쓰므로 실행마다 다르다), `uptime`은 답한 process 하나의 것이다. channel 호출과 달리
+부른 쪽 node의 routing id이고, `uptime`은 답한 process 하나의 것이다. channel 호출과 달리
 후보를 고르지 않으므로, 없는 node를 적으면 그대로 실패한다.
 
 이 호출에는 등록 조건이 더 있다. 받는 node는 `set_routing_id`로 id를 고정해야 하고

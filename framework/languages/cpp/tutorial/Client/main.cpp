@@ -374,9 +374,11 @@ int main (int argc, char **argv)
 
         // --8<-- [start:channel-client-register]
         // This node opens an endpoint too. Both sides listen to become peers.
-        // No routing id is set: nothing addresses this node directly, so the mesh
-        // assigns one at startup.
-        auto mesh = options.add_route_mesh ("game").listen ("tcp://127.0.0.1:7402");
+        zlink::routing_id_t client_rid = zlink::routing_id_t::from ("game-client-1");
+        auto mesh = options.add_route_mesh ("game")
+                      .listen ("tcp://127.0.0.1:7402")
+                      .set_routing_id (client_rid)
+                      .set_advertise_host ("127.0.0.1");
 
         // client() means this node exposes no handler for the channel; it only calls.
         mesh.channel ("profile").client ();
