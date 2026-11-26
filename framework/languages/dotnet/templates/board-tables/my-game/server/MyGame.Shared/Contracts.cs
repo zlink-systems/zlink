@@ -87,7 +87,12 @@ public sealed record HandResult(
 
 public sealed record ActionRejected(string Reason, int RetryAfterMs);
 
-public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEndpoint);
+public sealed record NodeReady(
+    string Id,
+    string? MeshEndpoint,
+    string? StreamEndpoint,
+    string? ApiEndpoint
+);
 
 public static class HostTiming
 {
