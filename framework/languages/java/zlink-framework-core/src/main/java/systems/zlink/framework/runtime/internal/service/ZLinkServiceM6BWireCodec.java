@@ -656,6 +656,64 @@ public final class ZLinkServiceM6BWireCodec {
                 replyRouteId);
     }
 
+    public List<byte[]> encodeInstanceSpotFollow(
+            InstanceSpotFollow follow, SpotRouteFence target, byte[] metadata, byte[] payload) {
+        var context = generatedContext();
+        try {
+            return ServiceWireCodec.encodeCommandFrames(
+                    new ServiceWireCodec.InstanceSpotFollowCommand(
+                            follow.flags(),
+                            new ServiceWireCodec.U64(0),
+                            new ServiceWireCodec.U64(0),
+                            new ServiceWireCodec.NonzeroU64(follow.sourceNodeGeneration()),
+                            new ServiceWireCodec.Rid(follow.sourceNodeRid().toBytes()),
+                            new ServiceWireCodec.OptionalText8(follow.sourceSpotId()),
+                            new ServiceWireCodec.U8(follow.hop() + 1),
+                            new ServiceWireCodec.SpotRouteFence(
+                                    new ServiceWireCodec.SpotRef(
+                                            new ServiceWireCodec.Text8(target.spotId()),
+                                            new ServiceWireCodec.NonzeroU64(
+                                                    target.spotGeneration())),
+                                    new ServiceWireCodec.Rid(target.targetNodeRid().toBytes()),
+                                    new ServiceWireCodec.NonzeroU64(target.targetNodeGeneration()),
+                                    new ServiceWireCodec.NonzeroU64(
+                                            target.authorityOwnerGeneration()),
+                                    new ServiceWireCodec.NonzeroU64(target.ownerLeaseGeneration())),
+                            (follow.flags() & ServiceWireConstants.FLAG_METADATA) == 0
+                                    ? null
+                                    : ServiceWireCodec.decodeMetadataFrame(metadata, context),
+                            ServiceWireCodec.decodeApplicationPayloadEnvelopeV1(payload, context)),
+                    context);
+        } catch (IOException failure) {
+            throw protocol("invalid Instance Spot Follow: " + failure.getMessage());
+        }
+    }
+
+    public InstanceSpotFollow decodeInstanceSpotFollow(List<byte[]> frames) {
+        try {
+            if (!(ServiceWireCodec.decodeCommand(frames, generatedContext())
+                    instanceof ServiceWireCodec.InstanceSpotFollowCommand follow)) {
+                throw protocol("command is not Instance Spot Follow");
+            }
+            var target = follow.targetSpot();
+            return new InstanceSpotFollow(
+                    follow.flags(),
+                    follow.sourceNodeGeneration().value(),
+                    RoutingId.from(follow.sourceNodeRid().value()),
+                    follow.sourceSpotId().value(),
+                    follow.messageFollowHopCount().value(),
+                    new SpotRouteFence(
+                            target.spot().spotId().value(),
+                            target.spot().objectGeneration().value(),
+                            RoutingId.from(target.targetNodeRid().value()),
+                            target.targetNodeGeneration().value(),
+                            target.expectedAuthorityOwnerGeneration().value(),
+                            target.expectedOwnerLeaseGeneration().value()));
+        } catch (IOException failure) {
+            throw protocol("invalid Instance Spot Follow: " + failure.getMessage());
+        }
+    }
+
     public byte[] encodeUserSpotCreateHeader(UserSpotCreate message) {
         Objects.requireNonNull(message, "message");
         validateTerminalOperation(
@@ -1756,6 +1814,16 @@ public final class ZLinkServiceM6BWireCodec {
             long leaseGeneration,
             String storeVersion)
             implements InstanceRoute {
+        public SpotRouteFence spotFence() {
+            return new SpotRouteFence(
+                    targetSpotId,
+                    objectGeneration,
+                    targetNodeRid,
+                    targetNodeGeneration,
+                    authorityOwnerGeneration,
+                    leaseGeneration);
+        }
+
         public InstanceRouteFence {
             Objects.requireNonNull(targetNodeRid, "targetNodeRid");
             Objects.requireNonNull(targetSpotId, "targetSpotId");
@@ -1774,6 +1842,14 @@ public final class ZLinkServiceM6BWireCodec {
         }
     }
 
+    public record InstanceSpotFollow(
+            int flags,
+            long sourceNodeGeneration,
+            RoutingId sourceNodeRid,
+            String sourceSpotId,
+            int hop,
+            SpotRouteFence target) {}
+
     public record InstanceSpotMessage(
             int flags,
             InstanceRoute route,
@@ -1784,7 +1860,33 @@ public final class ZLinkServiceM6BWireCodec {
             boolean request,
             long operationHigh,
             long operationLow,
-            Long replyRouteId) {
+            Long replyRouteId,
+            boolean followed) {
+        public InstanceSpotMessage(
+                int flags,
+                InstanceRoute route,
+                boolean instanceIntent,
+                long sourceNodeGeneration,
+                RoutingId sourceNodeRid,
+                String sourceSpotId,
+                boolean request,
+                long operationHigh,
+                long operationLow,
+                Long replyRouteId) {
+            this(
+                    flags,
+                    route,
+                    instanceIntent,
+                    sourceNodeGeneration,
+                    sourceNodeRid,
+                    sourceSpotId,
+                    request,
+                    operationHigh,
+                    operationLow,
+                    replyRouteId,
+                    false);
+        }
+
         public InstanceSpotMessage {
             Objects.requireNonNull(route, "route");
             Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");

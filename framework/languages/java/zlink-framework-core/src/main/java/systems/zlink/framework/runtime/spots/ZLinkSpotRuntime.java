@@ -913,7 +913,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                     .service
                                                                                     .ZLinkServiceM6BWireCodec
                                                                                     .InstanceRouteFence)
-                                                                            message.route());
+                                                                            message.route(),
+                                                                    message.followed());
                                                     if (rejection != null) {
                                                         received.close();
                                                         return CompletableFuture.failedFuture(
@@ -1087,7 +1088,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .InstanceRouteFence
                     requested) {
-        if (current.objectGeneration() < requested.objectGeneration()) {
+        return instanceApplicationAdmissionFailure(current, requested, false);
+    }
+
+    private static RuntimeException instanceApplicationAdmissionFailure(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    current,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    requested,
+            boolean followed) {
+        if (followed
+                ? !current.spotFence().equals(requested.spotFence())
+                : current.objectGeneration() < requested.objectGeneration()) {
             return ZLinkFrameworkErrorOrigin.framework(
                     ZLinkFrameworkErrorKind.INVALID_OPERATION,
                     "Instance Spot is behind the requested generation",

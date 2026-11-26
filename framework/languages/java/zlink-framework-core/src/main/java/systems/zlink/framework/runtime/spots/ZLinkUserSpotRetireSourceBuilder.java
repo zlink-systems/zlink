@@ -1473,7 +1473,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             var node = relocationReplies.nodeByRid(stageRequest.sourceNodeRid());
             Duration retention = relocationReplies.relocationForwardRetention();
             Owned spot = captured.inventory().spot();
-            node.installRelocationSpotForward(
+            node.stageRelocationSpotForward(
                     spotRoute(spot, false, targetOwnerGenerations),
                     spotRoute(spot, true, targetOwnerGenerations),
                     retention);

@@ -91,16 +91,20 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                 ZLinkServiceM6BWireCodec.InstanceRouteFence instanceRoute);
     }
 
-    /**
-     * Redirects an exact stale Spot route to the staged target through the existing application
-     * wire. The redirect expires with Message Follow and never changes a different generation or
-     * authority fence.
-     */
+    /** Publishes a committed Spot Message Follow route for one incarnation. */
     default void installRelocationSpotForward(
             ZLinkServiceM6BWireCodec.SpotRouteFence source,
             ZLinkServiceM6BWireCodec.SpotRouteFence target,
             Duration retention) {
         throw new UnsupportedOperationException("raw Spot relocation forwarding is unavailable");
+    }
+
+    /** Installs a provisional route for the existing Spot relay into target staging. */
+    default void stageRelocationSpotForward(
+            ZLinkServiceM6BWireCodec.SpotRouteFence source,
+            ZLinkServiceM6BWireCodec.SpotRouteFence target,
+            Duration retention) {
+        throw new UnsupportedOperationException("raw Spot relocation staging is unavailable");
     }
 
     /**

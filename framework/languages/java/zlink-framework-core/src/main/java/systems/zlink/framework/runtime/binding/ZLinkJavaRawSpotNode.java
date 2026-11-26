@@ -111,10 +111,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     volatile ZLinkInternalSpotNode.MessageFollowRelayHandler messageFollowRelayHandler;
     volatile ZLinkInternalSpotNode.RelocationStagingIngressHandler relocationStagingIngressHandler;
     private volatile ZLinkInternalSpotNode.SpotAdmissionResolver spotAdmissionResolver;
-    private final Map<
-                    ZLinkServiceM6BWireCodec.SpotRouteFence,
-                    ZLinkServiceM6BWireCodec.SpotRouteFence>
-            relocationSpotForwards = new ConcurrentHashMap<>();
+    private final Map<ZLinkServiceM6BWireCodec.SpotRouteFence, SpotForward> relocationSpotForwards =
+            new ConcurrentHashMap<>();
 
     ZLinkJavaRawSpotNode(ZLinkJavaRawMeshNode owner) {
         this(owner, new ZLinkStateLane());
@@ -249,7 +247,21 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             ZLinkServiceM6BWireCodec.SpotRouteFence source,
             ZLinkServiceM6BWireCodec.SpotRouteFence target,
             Duration retention) {
-        installRelocationForward(relocationSpotForwards, source, target, retention);
+        if (!source.spotId().equals(target.spotId())
+                || source.spotGeneration() != target.spotGeneration()
+                || source.targetNodeRid().equals(target.targetNodeRid())
+                || source.authorityOwnerGeneration() >= target.authorityOwnerGeneration()) {
+            throw new IllegalArgumentException("invalid committed Spot Message Follow fence");
+        }
+        publishSpotForward(source, target, retention, true);
+    }
+
+    @Override
+    public void stageRelocationSpotForward(
+            ZLinkServiceM6BWireCodec.SpotRouteFence source,
+            ZLinkServiceM6BWireCodec.SpotRouteFence target,
+            Duration retention) {
+        publishSpotForward(source, target, retention, false);
     }
 
     @Override
@@ -260,20 +272,49 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return owner.forwardMessageFollowActor(stale, target, parts);
     }
 
-    private static <T> void installRelocationForward(
-            Map<T, T> forwards, T source, T target, Duration retention) {
-        Objects.requireNonNull(source, "source");
-        Objects.requireNonNull(target, "target");
-        Objects.requireNonNull(retention, "retention");
-        if (retention.isNegative() || retention.isZero()) {
+    private void publishSpotForward(
+            ZLinkServiceM6BWireCodec.SpotRouteFence source,
+            ZLinkServiceM6BWireCodec.SpotRouteFence target,
+            Duration retention,
+            boolean committed) {
+        long retentionNanos = retention.toNanos();
+        if (retentionNanos <= 0) {
             throw new IllegalArgumentException("relocation forward retention must be positive");
         }
-        T previous = forwards.putIfAbsent(source, target);
-        if (previous != null && !previous.equals(target)) {
-            throw new IllegalStateException("relocation forward source already has another target");
+        long now = System.nanoTime();
+        var forward = new SpotForward(target, now + retentionNanos, committed);
+        var forwards = relocationSpotForwards;
+        var published =
+                forwards.compute(
+                        source,
+                        (ignored, previous) -> {
+                            if (previous == null
+                                    || previous.expired(now)
+                                    || committed && !previous.committed()) {
+                                return forward;
+                            }
+                            if (!previous.target().equals(target)) {
+                                throw new IllegalStateException(
+                                        "relocation forward source already has another target");
+                            }
+                            return previous;
+                        });
+        if (published == forward) {
+            CompletableFuture.delayedExecutor(retentionNanos, TimeUnit.NANOSECONDS)
+                    .execute(() -> forwards.remove(source, forward));
         }
-        CompletableFuture.delayedExecutor(retention.toMillis(), TimeUnit.MILLISECONDS)
-                .execute(() -> forwards.remove(source, target));
+    }
+
+    private SpotForward spotForward(ZLinkServiceM6BWireCodec.SpotRouteFence source) {
+        var forward = relocationSpotForwards.get(source);
+        return forward == null || forward.expired(System.nanoTime()) ? null : forward;
+    }
+
+    private record SpotForward(
+            ZLinkServiceM6BWireCodec.SpotRouteFence target, long expiresAt, boolean committed) {
+        boolean expired(long now) {
+            return now - expiresAt >= 0;
+        }
     }
 
     @Override
@@ -2035,11 +2076,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             terminalRelease.run();
             return true;
         }
-        ZLinkServiceM6BWireCodec.SpotRouteFence forwarded =
-                relocationSpotForwards.get(header.target());
+        var forwarded = spotForward(header.target());
         if (forwarded != null) {
             boolean accepted =
-                    owner.forwardRelocationSpot(header, forwarded, metadata, parts, reply, failure);
+                    owner.forwardRelocationSpot(
+                            header, forwarded.target(), metadata, parts, reply, failure);
             if (accepted) {
                 terminalRelease.run();
             }
@@ -3459,6 +3500,37 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return terminal;
     }
 
+    ZLinkServiceM6BWireCodec.SpotRouteFence committedSpotForward(
+            ZLinkServiceM6BWireCodec.InstanceRouteFence source) {
+        return relocationSpotForwards.isEmpty() ? null : committedSpotForward(source.spotFence());
+    }
+
+    ZLinkServiceM6BWireCodec.SpotRouteFence committedSpotForward(
+            ZLinkServiceM6BWireCodec.SpotRouteFence source) {
+        var forward = spotForward(source);
+        return forward != null && forward.committed() ? forward.target() : null;
+    }
+
+    ZLinkServiceM6BWireCodec.InstanceSpotMessage readyInstanceFollow(
+            ZLinkServiceM6BWireCodec.InstanceSpotFollow follow) {
+        var authority = instanceAuthorities.get(follow.target().spotId());
+        if (authority == null || !authority.route().spotFence().equals(follow.target())) {
+            return null;
+        }
+        return new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
+                follow.flags(),
+                authority.route(),
+                true,
+                follow.sourceNodeGeneration(),
+                follow.sourceNodeRid(),
+                follow.sourceSpotId(),
+                false,
+                0,
+                0,
+                null,
+                true);
+    }
+
     boolean enqueueRemoteInstanceSpot(
             RoutingId sourceNodeRid,
             ZLinkServiceM6BWireCodec.InstanceSpotMessage header,
@@ -3596,7 +3668,15 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             InstanceReply reply,
             Consumer<Throwable> failure) {
         InstanceAuthority authority = instanceAuthorities.get(header.route().targetSpotId());
-        if (authority == null) {
+        if (authority == null
+                || header.followed()
+                        && !authority
+                                .route()
+                                .spotFence()
+                                .equals(
+                                        ((ZLinkServiceM6BWireCodec.InstanceRouteFence)
+                                                        header.route())
+                                                .spotFence())) {
             return false;
         }
         try {
