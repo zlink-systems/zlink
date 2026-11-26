@@ -21,6 +21,8 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMutation;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
@@ -29,6 +31,7 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
+import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 
@@ -40,6 +43,8 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Predicate;
 
 final class ZLinkActorDestroyContractTest {
     private static final String ACTOR_ID = "destroy-player";
@@ -151,28 +156,66 @@ final class ZLinkActorDestroyContractTest {
     }
 
     @Test
+    void closingCasFailureRestoresAdmissionAndAllowsNewDestroy() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var delegate = new ZLinkProviderLocationRepository(locations);
+        String key = ZLinkAuthorityKeyCodec.actor(ACTOR_ID);
+        var rejectClosing = new AtomicBoolean(true);
+        var closingFailure = new IllegalStateException("injected Actor Closing CAS failure");
+        var codec = new ZLinkActorAuthorityPayloadCodec();
+        var repository =
+                rejectActorMutation(
+                        delegate,
+                        mutation ->
+                                rejectClosing.get()
+                                        && mutation instanceof ZLinkAuthorityPut put
+                                        && codec.decode(put.payload())
+                                                .filter(
+                                                        payload ->
+                                                                payload.state()
+                                                                        == ZLinkActorAuthorityPayloadCodec
+                                                                                .State.CLOSING)
+                                                .isPresent(),
+                        closingFailure);
+        var construction =
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .locationStores(ZLinkRegisteredLocationStores.fromUnified(repository));
+        try (var runtime = start(locations, "destroy-owner", null, construction)) {
+            var actor = create(runtime);
+            var manager = runtime.actorManager();
+            var first = manager.destroy(actor).toCompletableFuture();
+            var failure = assertThrows(CompletionException.class, first::join);
+            assertSame(closingFailure, failure.getCause());
+            var snapshot =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class, await(delegate.read(key, () -> false)));
+            assertTrue(snapshot.steadyReady());
+            assertEquals(actor.objectGeneration(), snapshot.objectGeneration());
+            assertEquals(
+                    actor.objectGeneration(),
+                    await(
+                            runtime.actorClient()
+                                    .requestToActor(ACTOR_ID, new ReadGeneration())
+                                    .submit(Long.class)));
+
+            rejectClosing.set(false);
+            var following = manager.destroy(actor).toCompletableFuture();
+            assertNotSame(first, following);
+            assertTrue(await(following));
+        }
+    }
+
+    @Test
     void destroyFailureRemainsClosingAndIsSharedWithLaterOwnerCalls() throws Exception {
         var locations = new ZLinkInMemoryLocationStore();
         var delegate = new ZLinkProviderLocationRepository(locations);
         String key = ZLinkAuthorityKeyCodec.actor(ACTOR_ID);
         var deleteFailure = new IllegalStateException("injected Actor destroy Delete failure");
         var repository =
-                (ZLinkLocationRepository)
-                        Proxy.newProxyInstance(
-                                ZLinkLocationRepository.class.getClassLoader(),
-                                new Class<?>[] {ZLinkLocationRepository.class},
-                                (proxy, method, arguments) -> {
-                                    if (method.getName().equals("compareExchange")
-                                            && key.equals(arguments[0])
-                                            && arguments[2] instanceof ZLinkAuthorityDelete) {
-                                        return CompletableFuture.failedFuture(deleteFailure);
-                                    }
-                                    try {
-                                        return method.invoke(delegate, arguments);
-                                    } catch (InvocationTargetException failure) {
-                                        throw failure.getCause();
-                                    }
-                                });
+                rejectActorMutation(
+                        delegate,
+                        mutation -> mutation instanceof ZLinkAuthorityDelete,
+                        deleteFailure);
         var construction =
                 new ZLinkFrameworkRuntimeTestAccess.Construction()
                         .locationStores(ZLinkRegisteredLocationStores.fromUnified(repository));
@@ -229,6 +272,29 @@ final class ZLinkActorDestroyContractTest {
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             assertEquals(current, await(manager.find(ACTOR_ID)).orElseThrow());
         }
+    }
+
+    private static ZLinkLocationRepository rejectActorMutation(
+            ZLinkLocationRepository delegate,
+            Predicate<ZLinkAuthorityMutation> reject,
+            RuntimeException failure) {
+        String key = ZLinkAuthorityKeyCodec.actor(ACTOR_ID);
+        return (ZLinkLocationRepository)
+                Proxy.newProxyInstance(
+                        ZLinkLocationRepository.class.getClassLoader(),
+                        new Class<?>[] {ZLinkLocationRepository.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals("compareExchange")
+                                    && key.equals(arguments[0])
+                                    && reject.test((ZLinkAuthorityMutation) arguments[2])) {
+                                return CompletableFuture.failedFuture(failure);
+                            }
+                            try {
+                                return method.invoke(delegate, arguments);
+                            } catch (InvocationTargetException invocationFailure) {
+                                throw invocationFailure.getCause();
+                            }
+                        });
     }
 
     private static void withClosingActor(ClosingCheck check) throws Exception {
@@ -319,6 +385,8 @@ final class ZLinkActorDestroyContractTest {
 
     public record Destroy() {}
 
+    public record ReadGeneration() {}
+
     public record Player(ZLinkActorContext context) implements ZLinkActor {}
 
     public static final class Factory implements ZLinkActorFactory {
@@ -343,6 +411,7 @@ final class ZLinkActorDestroyContractTest {
         @Override
         public void configure() {
             context.handlers().addHandler(DestroyHandler.class);
+            context.handlers().addHandler(ReadGenerationHandler.class);
         }
 
         @Override
@@ -353,6 +422,15 @@ final class ZLinkActorDestroyContractTest {
         @Override
         public CompletionStage<Void> onLeaveActor(Player actor) {
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class ReadGenerationHandler
+            implements ZLinkEntrySpotActorRequestHandler<Lobby, Player, ReadGeneration, Long> {
+        @Override
+        public CompletionStage<Long> handle(
+                Lobby spot, Player actor, ZLinkMessageContext context, ReadGeneration message) {
+            return CompletableFuture.completedFuture(actor.context().objectGeneration());
         }
     }
 

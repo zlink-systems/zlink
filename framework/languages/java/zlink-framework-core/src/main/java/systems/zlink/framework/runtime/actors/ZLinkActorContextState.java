@@ -318,6 +318,10 @@ final class ZLinkActorContextState {
                 new ZLinkConfigurationException("actor was destroyed while moving: " + actorId));
     }
 
+    void reopenDestroyAdmission() {
+        destroying = false;
+    }
+
     void closeDestroyAdmission(RoutingId entryNodeRid, String actorId, BooleanSupplier seal) {
         if (actorRef == null) {
             throw new ZLinkConfigurationException(

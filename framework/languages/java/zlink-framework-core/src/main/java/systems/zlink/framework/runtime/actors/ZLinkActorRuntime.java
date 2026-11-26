@@ -2476,6 +2476,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                         return null;
                                                     }),
                                     () ->
+                                            inOwnerTurn(
+                                                    () -> {
+                                                        context.state.reopenDestroyAdmission();
+                                                        return null;
+                                                    }),
+                                    () ->
                                             context.disconnectBoundSessionForDestroy()
                                                     .thenCompose(
                                                             ignored ->

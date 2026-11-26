@@ -503,7 +503,7 @@ final class ZLinkActorDispatchSerials {
             Object incarnation,
             Supplier<CompletionStage<Void>> beforeStart,
             Supplier<CompletionStage<Void>> cleanup) {
-        return registerTeardown(actorId, incarnation, beforeStart, cleanup, null, false);
+        return registerTeardown(actorId, incarnation, beforeStart, cleanup, null, null, false);
     }
 
     CompletionStage<Void> destroy(
@@ -512,9 +512,16 @@ final class ZLinkActorDispatchSerials {
             boolean ownTurn,
             Supplier<CompletionStage<Void>> publishClosing,
             Consumer<BooleanSupplier> closeAdmission,
+            Supplier<CompletionStage<Void>> reopenAdmission,
             Supplier<CompletionStage<Void>> cleanup) {
         return registerTeardown(
-                        actorId, incarnation, publishClosing, cleanup, closeAdmission, ownTurn)
+                        actorId,
+                        incarnation,
+                        publishClosing,
+                        cleanup,
+                        closeAdmission,
+                        reopenAdmission,
+                        ownTurn)
                 .thenCompose(terminal -> terminal);
     }
 
@@ -524,6 +531,7 @@ final class ZLinkActorDispatchSerials {
             Supplier<CompletionStage<Void>> beforeStart,
             Supplier<CompletionStage<Void>> cleanup,
             Consumer<BooleanSupplier> closeAdmission,
+            Supplier<CompletionStage<Void>> reopenAdmission,
             boolean ownTurn) {
         return onRegistry(
                         () -> {
@@ -637,20 +645,19 @@ final class ZLinkActorDispatchSerials {
                                                                             resolved.barrier(),
                                                                             accepted);
                                                             return onRegistry(
-                                                                            () -> {
-                                                                                actorTargets.put(
-                                                                                        actorId,
-                                                                                        new QueuedTurn(
-                                                                                                actorId,
-                                                                                                claimed
-                                                                                                        .target(),
-                                                                                                claimed
-                                                                                                        .incarnation(),
-                                                                                                accepted));
-                                                                                return null;
-                                                                            })
+                                                                            () ->
+                                                                                    actorTargets
+                                                                                            .put(
+                                                                                                    actorId,
+                                                                                                    new QueuedTurn(
+                                                                                                            actorId,
+                                                                                                            claimed
+                                                                                                                    .target(),
+                                                                                                            claimed
+                                                                                                                    .incarnation(),
+                                                                                                            accepted)))
                                                                     .thenCompose(
-                                                                            ignored ->
+                                                                            previousTurn ->
                                                                                     closeAdmission
                                                                                                     != null
                                                                                             ? publishDestroy(
@@ -659,6 +666,8 @@ final class ZLinkActorDispatchSerials {
                                                                                                     setup,
                                                                                                     beforeStart,
                                                                                                     closeAdmission,
+                                                                                                    reopenAdmission,
+                                                                                                    previousTurn,
                                                                                                     cleanup)
                                                                                             : startRegisteredTeardown(
                                                                                                     actorId,
@@ -675,7 +684,9 @@ final class ZLinkActorDispatchSerials {
                                                         completeTeardown(
                                                                 actorId, setup, null, failure);
                                                     } else {
-                                                        rejectDestroy(actorId, setup, failure);
+                                                        rejectDestroy(
+                                                                actorId, setup, failure, COMPLETED,
+                                                                () -> {});
                                                     }
                                                 }
                                                 return teardownResult(setup, ownTurn);
@@ -687,8 +698,27 @@ final class ZLinkActorDispatchSerials {
         return ownTurn && setup.accepted() != null ? setup.accepted() : setup.teardown();
     }
 
-    private void rejectDestroy(String actorId, TeardownSetup setup, Throwable failure) {
-        onRegistry(() -> teardowns.remove(actorId, setup))
+    private void rejectDestroy(
+            String actorId,
+            TeardownSetup setup,
+            Throwable failure,
+            CompletionStage<Void> reopenAdmission,
+            Runnable rollbackOnRegistry) {
+        reopenAdmission
+                .handle(
+                        (ignored, rollbackFailure) -> {
+                            if (rollbackFailure != null && rollbackFailure != failure) {
+                                failure.addSuppressed(rollbackFailure);
+                            }
+                            return null;
+                        })
+                .thenCompose(
+                        ignored ->
+                                onRegistry(
+                                        () -> {
+                                            rollbackOnRegistry.run();
+                                            return teardowns.remove(actorId, setup);
+                                        }))
                 .whenComplete(
                         (removed, error) -> {
                             if (error != null && error != failure) {
@@ -731,19 +761,37 @@ final class ZLinkActorDispatchSerials {
             TeardownSetup registered,
             Supplier<CompletionStage<Void>> publishClosing,
             Consumer<BooleanSupplier> closeAdmission,
+            Supplier<CompletionStage<Void>> reopenAdmission,
+            QueuedTurn previousTurn,
             Supplier<CompletionStage<Void>> cleanup) {
         var lane = claimed.activation().relocationLane();
-        closeAdmission.accept(() -> ZLinkSpotCloseCallAccess.sealActorDestroyAdmission(lane));
+        var attempt = registered.terminal();
+        closeAdmission.accept(
+                () -> ZLinkSpotCloseCallAccess.sealActorDestroyAdmission(lane, attempt));
         var previous = registered.activation();
         if (previous != null && previous.relocationLane() != lane) {
-            previous.relocationLane().sealClosingAdmission();
+            ZLinkSpotCloseCallAccess.sealActorDestroyAdmission(previous.relocationLane(), attempt);
         }
         return ZLinkHandlerStages.fromStageSupplier(publishClosing)
                 .handle(
                         (ignored, failure) -> {
                             if (failure != null) {
-                                claimed.accepted().completeExceptionally(failure);
-                                claimed.terminal().completeExceptionally(failure);
+                                rejectDestroy(
+                                        actorId,
+                                        registered,
+                                        failure,
+                                        ZLinkHandlerStages.fromStageSupplier(reopenAdmission),
+                                        () -> {
+                                            // The previous dispatch target still owns its barrier.
+                                            actorTargets.compute(
+                                                    actorId, (id, turn) -> previousTurn);
+                                            for (var closingLane :
+                                                    closingLanes(claimed, registered)) {
+                                                ZLinkSpotCloseCallAccess
+                                                        .reopenActorDestroyAdmission(
+                                                                closingLane, attempt);
+                                            }
+                                        });
                             } else {
                                 if (registered.barrier() != null) {
                                     registered.barrier().complete(null);
@@ -941,9 +989,7 @@ final class ZLinkActorDispatchSerials {
             Supplier<CompletionStage<Void>> cleanup) {
         try {
             var lanes = closingLanes(setup, previous);
-            if (setup.accepted() == null) {
-                lanes.forEach(ZLinkSerialExecutionQueue::sealClosingAdmission);
-            }
+            lanes.forEach(ZLinkSerialExecutionQueue::sealClosingAdmission);
             ZLinkHandlerStages.completeAll(
                             lanes.stream()
                                     .<Supplier<? extends CompletionStage<Void>>>map(

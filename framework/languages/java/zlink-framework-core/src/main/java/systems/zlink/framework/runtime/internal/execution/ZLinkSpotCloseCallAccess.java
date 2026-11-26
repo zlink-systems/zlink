@@ -29,7 +29,9 @@ public final class ZLinkSpotCloseCallAccess {
 
         void requireExecution(ZLinkSerialExecutionQueue queue, boolean application);
 
-        boolean sealActorDestroyAdmission(ZLinkSerialExecutionQueue queue);
+        boolean sealActorDestroyAdmission(ZLinkSerialExecutionQueue queue, Object attempt);
+
+        void reopenActorDestroyAdmission(ZLinkSerialExecutionQueue queue, Object attempt);
 
         CompletionStage<Void> enqueueActorWithPayloadBytes(
                 ZLinkSerialExecutionQueue queue,
@@ -70,8 +72,20 @@ public final class ZLinkSpotCloseCallAccess {
         selectedAccess().requireExecution(Objects.requireNonNull(queue, "queue"), application);
     }
 
-    public static boolean sealActorDestroyAdmission(ZLinkSerialExecutionQueue queue) {
-        return selectedAccess().sealActorDestroyAdmission(Objects.requireNonNull(queue, "queue"));
+    public static boolean sealActorDestroyAdmission(
+            ZLinkSerialExecutionQueue queue, Object attempt) {
+        return selectedAccess()
+                .sealActorDestroyAdmission(
+                        Objects.requireNonNull(queue, "queue"),
+                        Objects.requireNonNull(attempt, "attempt"));
+    }
+
+    public static void reopenActorDestroyAdmission(
+            ZLinkSerialExecutionQueue queue, Object attempt) {
+        selectedAccess()
+                .reopenActorDestroyAdmission(
+                        Objects.requireNonNull(queue, "queue"),
+                        Objects.requireNonNull(attempt, "attempt"));
     }
 
     /** Enqueues accepted Actor work whose payload is released when the work ends. */
