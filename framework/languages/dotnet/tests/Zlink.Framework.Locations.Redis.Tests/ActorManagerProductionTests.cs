@@ -16,7 +16,7 @@ using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Locations.Redis.Tests;
 
-public sealed class ActorManagerProductionTests
+public sealed partial class ActorManagerProductionTests
 {
     [Fact]
     public async Task ConcurrentActorCreationRetriesCompletionWithoutRepeatingCallbacks()
