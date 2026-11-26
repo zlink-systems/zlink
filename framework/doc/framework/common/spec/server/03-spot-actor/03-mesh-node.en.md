@@ -327,6 +327,12 @@ changes, Core discards the pending records of the standby pipe right before prom
 the peer. HELLO is idempotent for the same identity. No separate timer is added for this, and HELLO
 is not sent again once ADMIT has been received.
 
+**Sending and accepting HELLO close only at the host's [admission seal](../00-foundation/02-glossary.en.md#admission-seal)
+(shutdown or drain).** A node that lost its owner lease and can't take new owner work still sends and
+accepts HELLO, because replies, relays, and recovery requests for work it already accepted still need the
+connection. Whether new work is taken is decided by the Location runtime's owner admission, and mesh
+admission doesn't decide it again.
+
 **A node that receives REJECT on the selected route leaves that route not admitted.** If the peer was admitted,
 the node removes its admitted record and liveness admission. REJECT does not remove the connection intent; after it
 the node follows the ADMIT wait rule above (HELLO is sent again every liveness management cycle). No separate peer
