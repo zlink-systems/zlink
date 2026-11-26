@@ -41,14 +41,20 @@ export class PartyRun {
   }
 
   started(runId: string): string | null {
-    if (this.runId !== runId || (this.phase !== RunPhase.Entering && this.phase !== RunPhase.Active))
+    if (
+      this.runId !== runId ||
+      (this.phase !== RunPhase.Entering && this.phase !== RunPhase.Active)
+    )
       return Rejection.runMismatch;
     this.phase = RunPhase.Active;
     return null;
   }
 
   completed(runId: string): string | null {
-    if (this.runId !== runId || (this.phase !== RunPhase.Active && this.phase !== RunPhase.Completed))
+    if (
+      this.runId !== runId ||
+      (this.phase !== RunPhase.Active && this.phase !== RunPhase.Completed)
+    )
       return Rejection.runMismatch;
     this.phase = RunPhase.Completed;
     return null;
@@ -79,11 +85,6 @@ export class PartyRun {
   }
 
   static restore(snapshot: PartyRunSnapshot): PartyRun {
-    return new PartyRun(
-      snapshot.partyId,
-      [...snapshot.members],
-      snapshot.phase,
-      snapshot.runId
-    );
+    return new PartyRun(snapshot.partyId, [...snapshot.members], snapshot.phase, snapshot.runId);
   }
 }

@@ -105,43 +105,68 @@ export class Field implements ZLinkSpot<Player> {
   async move(actor: Player, request: MoveRequest): Promise<void> {
     const result = this.state.move(actor.context.actorId, request);
     if (result instanceof ActionRejected) {
-      await actor.context.boundSession.send(result).submit(); return;
+      await actor.context.boundSession.send(result).submit();
+      return;
     }
     if (fieldId(result.x) !== String(this.context.spotId)) actor.move(result);
-    else { actor.apply(result); await actor.sendState(); }
+    else {
+      actor.apply(result);
+      await actor.sendState();
+    }
   }
   async party(actor: Player, partyId: string, create: boolean): Promise<void> {
-    if (actor.partyId !== null || (!create && (!validId(partyId, 'party-')
-      || !(await this.spots.find(partyId))))) {
-      await actor.context.boundSession.send(new ActionRejected('invalid-party')).submit(); return;
+    if (
+      actor.partyId !== null ||
+      (!create && (!validId(partyId, 'party-') || !(await this.spots.find(partyId))))
+    ) {
+      await actor.context.boundSession.send(new ActionRejected('invalid-party')).submit();
+      return;
     }
     if (create) {
       partyId = newId('party-');
       const result = await this.spots.getOrCreate(partyId, Names.party).inMesh(Names.mesh).submit();
-      if (result.state === ZLinkSpotCreateState.Rejected) throw new Error('Party creation rejected');
+      if (result.state === ZLinkSpotCreateState.Rejected)
+        throw new Error('Party creation rejected');
     }
-    const response = await this.context.outbound.requestToSpot(partyId,
-      new PartyCommand(actor.context.actorId, true)).submit<PartyCommandResult>();
-    if (response.rejection) await actor.context.boundSession.send(restoreNotification(PacketNames.actionRejected, response.rejection)).submit();
+    const response = await this.context.outbound
+      .requestToSpot(partyId, new PartyCommand(actor.context.actorId, true))
+      .submit<PartyCommandResult>();
+    if (response.rejection)
+      await actor.context.boundSession
+        .send(restoreNotification(PacketNames.actionRejected, response.rejection))
+        .submit();
     else actor.partyId = partyId;
   }
   async enter(actor: Player): Promise<void> {
     if (!actor.partyId) {
-      await actor.context.boundSession.send(new ActionRejected('not-leader')).submit(); return;
+      await actor.context.boundSession.send(new ActionRejected('not-leader')).submit();
+      return;
     }
-    const result = await this.context.outbound.requestToSpot(actor.partyId,
-      new PartyCommand(actor.context.actorId, false, true)).submit<PartyCommandResult>();
-    if (result.rejection) await actor.context.boundSession.send(restoreNotification(PacketNames.actionRejected, result.rejection)).submit();
+    const result = await this.context.outbound
+      .requestToSpot(actor.partyId, new PartyCommand(actor.context.actorId, false, true))
+      .submit<PartyCommandResult>();
+    if (result.rejection)
+      await actor.context.boundSession
+        .send(restoreNotification(PacketNames.actionRejected, result.rejection))
+        .submit();
   }
   async show(actor: Player): Promise<void> {
     await actor.sendState();
     if (!actor.partyId) return;
-    const result = await this.context.outbound.requestToSpot(actor.partyId,
-      new PartyCommand(actor.context.actorId)).submit<PartyCommandResult>();
-    if (result.view) await actor.context.boundSession.send(restoreNotification(PacketNames.partyView, result.view)).submit();
+    const result = await this.context.outbound
+      .requestToSpot(actor.partyId, new PartyCommand(actor.context.actorId))
+      .submit<PartyCommandResult>();
+    if (result.view)
+      await actor.context.boundSession
+        .send(restoreNotification(PacketNames.partyView, result.view))
+        .submit();
   }
   capture(): Uint8Array {
-    return Buffer.from(JSON.stringify(this.state.capture(), (_, value) => typeof value === 'bigint' ? value.toString() : value));
+    return Buffer.from(
+      JSON.stringify(this.state.capture(), (_, value) =>
+        typeof value === 'bigint' ? value.toString() : value
+      )
+    );
   }
   restore(payload: Uint8Array): void {
     this.state.restore(JSON.parse(Buffer.from(payload).toString('utf8')));

@@ -55,7 +55,14 @@ class PlayerClient {
       requestTimeoutMs: Limits.messageMs,
       reconnect: { enabled: false }
     });
-    for (const packetType of [RoomView, MatchFound, MoveResult, ShotResult, MatchEnded, ActionRejected])
+    for (const packetType of [
+      RoomView,
+      MatchFound,
+      MoveResult,
+      ShotResult,
+      MatchEnded,
+      ActionRejected
+    ])
       this.connector.on(packetType, (message) => {
         const name = packetType.name;
         this.messages.push({ name, payload: message.payload });
@@ -368,7 +375,11 @@ async function input(a: PlayerClient, b: PlayerClient): Promise<void> {
   assert.equal(playerView(afterMoveB, mover.playerId).lastSequence, moveSequence + 1n);
   assert.equal(playerView(afterMoveB, mover.playerId).x, source.x + moveDelta * 2);
   assert.equal(playerView(afterMoveB, other.playerId).hp, target.hp);
-  await rejectAction(mover, new MoveRequest(moveDelta, 0, moveSequence + 1n), Rejection.staleSequence);
+  await rejectAction(
+    mover,
+    new MoveRequest(moveDelta, 0, moveSequence + 1n),
+    Rejection.staleSequence
+  );
 
   const beforeShot = await a.view();
   const shotSequence = playerView(beforeShot, a.playerId).lastSequence + 1n;
@@ -430,7 +441,7 @@ export async function scenario(
   endpoint: string,
   runId: string,
   logDir: string,
-  control: NodeControl
+  control?: NodeControl
 ): Promise<void> {
   const clients: PlayerClient[] = [];
   const create = (suffix: string, playerId = `${name}-${runId}-${suffix}`): PlayerClient => {
@@ -560,6 +571,7 @@ export async function scenario(
         assert.equal(restoredFinished.winner, a.playerId);
         assert.equal(playerView(restoredFinished, again.playerId).lastSequence, 2n);
       } else if (name === 'update') {
+        assert(control, 'update requires an isolated run');
         await control.drain(before.nodeId);
         assert.deepEqual(await a.sessionInfo(), sessionA);
         assert.deepEqual(await b.sessionInfo(), sessionB);
