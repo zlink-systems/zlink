@@ -370,9 +370,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             return CompletableFuture.completedFuture(null);
         }
         ZLinkFlowContext.State inboundFlow =
-                captureFlow && packet.header() != null
-                        ? ZLinkSpotFlowFrame.fromEnvelopeHeader(packet.header())
-                        : null;
+                captureFlow ? ZLinkSpotFlowFrame.fromEnvelopeHeader(packet.header()) : null;
         var flowScope =
                 captureFlow
                         ? ZLinkFlowContext.enterOrCreate(inboundFlow, ZLinkFlowOrigin.INBOUND)
@@ -386,16 +384,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                     packet.packetName(),
                     received.requestSeq(),
                     backendSpot.spotId());
-            if (ZLinkActorSpotRoutePackets.BOUND_SESSION_SEND_PACKET_NAME.equals(
-                    packet.packetName())) {
-                CompletionStage<?> stage =
-                        received.requestSeq().isPresent()
-                                ? handleRoutedBoundSessionSendRequestParts(received.parts())
-                                        .thenAccept(received::reply)
-                                : handleRoutedBoundSessionSendParts(received.parts());
-                return stage.thenApply(ignored -> (Void) null)
-                        .whenComplete((ignored, error) -> closeRouteReceived(received));
-            }
             if (ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(packet.packetName())) {
                 return handleRoutedActorPacketParts(received.parts(), received.receivedAt())
                         .thenAccept(
