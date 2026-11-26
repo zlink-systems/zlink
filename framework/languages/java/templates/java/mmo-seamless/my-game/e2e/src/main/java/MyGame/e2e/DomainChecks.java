@@ -22,7 +22,11 @@ public final class DomainChecks {
     }
 
     private void requireRejected(
-            ZonePositionDomain domain, double delta, long sequence, String reason, String playerId) {
+            ZonePositionDomain domain,
+            double delta,
+            long sequence,
+            String reason,
+            String playerId) {
         var before = domain.state(playerId);
         var result = domain.move(playerId, new MoveRequest(delta, sequence));
         require(result.rejection() != null, "Expected " + reason + " rejection");
@@ -39,12 +43,16 @@ public final class DomainChecks {
     }
 
     private void stepLimit() {
-        requireRejected(create(new AtomicLong()), Rules.MAX_STEP + 1, 1, "step-too-large", "player");
+        requireRejected(
+                create(new AtomicLong()), Rules.MAX_STEP + 1, 1, "step-too-large", "player");
     }
 
     private void worldBoundary() {
         var domain = new ZonePositionDomain("zone-6", () -> 0);
-        domain.addPlayer("edge", new EnterZone(new Position(Rules.ZONE_WIDTH * (double) Rules.ZONE_COUNT - 1), 0, 0));
+        domain.addPlayer(
+                "edge",
+                new EnterZone(
+                        new Position(Rules.ZONE_WIDTH * (double) Rules.ZONE_COUNT - 1), 0, 0));
         requireRejected(domain, 1, 1, "outside-world", "edge");
     }
 
@@ -52,16 +60,26 @@ public final class DomainChecks {
         var now = new AtomicLong();
         var domain = create(now);
         var first = domain.move("player", new MoveRequest(Rules.MAX_STEP, 1));
-        require(first.accepted() && first.position().x() == 110, "First move must have MaxStep budget");
+        require(
+                first.accepted() && first.position().x() == 110,
+                "First move must have MaxStep budget");
         var before = domain.state("player");
         var rejected = domain.move("player", new MoveRequest(Rules.MAX_STEP, 2));
         require(rejected.rejection() != null, "Expected movement budget rejection");
-        require("move-budget".equals(rejected.rejection().reason()), "Expected move-budget rejection");
-        require(rejected.rejection().retryAfterMs() > 0, "move-budget must report a positive retry delay");
-        require(before.equals(domain.state("player")), "Rejected move changed position, sequence or budget");
+        require(
+                "move-budget".equals(rejected.rejection().reason()),
+                "Expected move-budget rejection");
+        require(
+                rejected.rejection().retryAfterMs() > 0,
+                "move-budget must report a positive retry delay");
+        require(
+                before.equals(domain.state("player")),
+                "Rejected move changed position, sequence or budget");
         now.addAndGet(rejected.rejection().retryAfterMs());
         var accepted = domain.move("player", new MoveRequest(Rules.MAX_STEP, 2));
-        require(accepted.accepted() && accepted.position().x() == 120, "Server retry delay was insufficient");
+        require(
+                accepted.accepted() && accepted.position().x() == 120,
+                "Server retry delay was insufficient");
     }
 
     private void sequenceRange() {
@@ -70,7 +88,9 @@ public final class DomainChecks {
         requireRejected(domain, 1, Rules.MAX_SAFE_INTEGER + 1, "integer-out-of-range", "player");
         require(Rules.MAX_SAFE_INTEGER == 9_007_199_254_740_991L, "Contract integer limit changed");
         var gap = domain.move("player", new MoveRequest(1, 2));
-        require(gap.accepted() && gap.sequence() == 2, "A newer sequence greater than the previous value was rejected");
+        require(
+                gap.accepted() && gap.sequence() == 2,
+                "A newer sequence greater than the previous value was rejected");
 
         var maxDomain = new ZonePositionDomain("zone-2", () -> 0);
         maxDomain.addPlayer("last", new EnterZone(new Position(100), Rules.MAX_SAFE_INTEGER, 0));
@@ -78,32 +98,52 @@ public final class DomainChecks {
         requireRejected(maxDomain, 1, Long.MAX_VALUE, "integer-out-of-range", "last");
 
         var safeArrival = new ZonePositionDomain("zone-2", () -> 0);
-        require(safeArrival.queueArrival("safe", new EnterZone(new Position(100), Rules.MAX_SAFE_INTEGER, 0)) == null,
+        require(
+                safeArrival.queueArrival(
+                                "safe", new EnterZone(new Position(100), Rules.MAX_SAFE_INTEGER, 0))
+                        == null,
                 "Maximum safe sequence was rejected during admission");
         var unsafeArrival = new ZonePositionDomain("zone-2", () -> 0);
-        var arrivalRejection = unsafeArrival.queueArrival(
-                "unsafe", new EnterZone(new Position(100), Rules.MAX_SAFE_INTEGER + 1, 0));
-        require(arrivalRejection != null && "integer-out-of-range".equals(arrivalRejection.reason())
+        var arrivalRejection =
+                unsafeArrival.queueArrival(
+                        "unsafe", new EnterZone(new Position(100), Rules.MAX_SAFE_INTEGER + 1, 0));
+        require(
+                arrivalRejection != null
+                        && "integer-out-of-range".equals(arrivalRejection.reason())
                         && unsafeArrival.takeArrival("unsafe") == null,
                 "Out-of-range admission sequence was accepted or stored");
     }
 
     private void initialLocation() {
         var valid = ZonePositionDomain.resolveLocation(299);
-        require("zone-3".equals(valid.zoneId()) && valid.rejection() == null,
+        require(
+                "zone-3".equals(valid.zoneId()) && valid.rejection() == null,
                 "In-world initial position resolved to the wrong Zone");
-        require("non-finite".equals(ZonePositionDomain.resolveLocation(Double.NaN).rejection().reason()),
+        require(
+                "non-finite"
+                        .equals(
+                                ZonePositionDomain.resolveLocation(Double.NaN)
+                                        .rejection()
+                                        .reason()),
                 "NaN initial position was not rejected");
-        require("non-finite".equals(ZonePositionDomain.resolveLocation(Double.POSITIVE_INFINITY).rejection().reason()),
+        require(
+                "non-finite"
+                        .equals(
+                                ZonePositionDomain.resolveLocation(Double.POSITIVE_INFINITY)
+                                        .rejection()
+                                        .reason()),
                 "Infinite initial position was not rejected");
-        require("outside-world".equals(ZonePositionDomain.resolveLocation(600).rejection().reason()),
+        require(
+                "outside-world"
+                        .equals(ZonePositionDomain.resolveLocation(600).rejection().reason()),
                 "World-limit initial position was not rejected");
     }
 
     private void remainingTimeSnapshot() {
         var sourceNow = new AtomicLong();
         var source = create(sourceNow);
-        require(source.move("player", new MoveRequest(Rules.MAX_STEP, 1)).accepted(),
+        require(
+                source.move("player", new MoveRequest(Rules.MAX_STEP, 1)).accepted(),
                 "Expected initial move to be accepted");
         sourceNow.addAndGet(75);
         var snapshot = source.capture();
@@ -112,8 +152,12 @@ public final class DomainChecks {
         destination.restore(snapshot);
         var rejected = destination.move("player", new MoveRequest(5, 2));
         require(rejected.rejection() != null, "Expected a budget rejection after relocation");
-        require("move-budget".equals(rejected.rejection().reason()), "Relocation lost movement budget");
-        require(rejected.rejection().retryAfterMs() == 25, "Relocation did not preserve remaining ms");
+        require(
+                "move-budget".equals(rejected.rejection().reason()),
+                "Relocation lost movement budget");
+        require(
+                rejected.rejection().retryAfterMs() == 25,
+                "Relocation did not preserve remaining ms");
     }
 
     private void presenceLifecycle() {
@@ -122,34 +166,65 @@ public final class DomainChecks {
         require(domain.connectedPlayers().size() == 2, "Connected players were not tracked");
         var before = domain.state("player");
         var disconnected = domain.setConnected("player", false);
-        require(disconnected != null && !disconnected.connected(), "Disconnect did not end visibility");
+        require(
+                disconnected != null && !disconnected.connected(),
+                "Disconnect did not end visibility");
         require(domain.connectedPlayers().size() == 1, "Disconnected player remained visible");
-        require(before.position().equals(domain.state("player").position()), "Disconnect erased position");
+        require(
+                before.position().equals(domain.state("player").position()),
+                "Disconnect erased position");
         var reconnected = domain.setConnected("player", true);
-        require(reconnected != null && reconnected.connected(), "Reconnect did not restore visibility");
-        require(before.position().equals(domain.state("player").position()), "Reconnect changed position");
+        require(
+                reconnected != null && reconnected.connected(),
+                "Reconnect did not restore visibility");
+        require(
+                before.position().equals(domain.state("player").position()),
+                "Reconnect changed position");
         var left = domain.removePlayer("player");
-        require(left != null && left.position().equals(before.position()), "Zone leave lost last position");
+        require(
+                left != null && left.position().equals(before.position()),
+                "Zone leave lost last position");
         require(domain.connectedPlayers().size() == 1, "Zone leave retained player");
     }
 
     private void jsonContract() throws Exception {
-        var left = Json.MAPPER.writeValueAsString(new PlayerLeft("player", PlayerLeftReason.LEFT_ZONE));
-        require(left.contains("\"reason\":\"left-zone\""), "PlayerLeft enum was not serialized by name");
-        var outOfRange = Json.MAPPER.writeValueAsString(
-                new PlayerLeft("player", PlayerLeftReason.OUT_OF_RANGE));
-        require(outOfRange.contains("\"reason\":\"out-of-range\""),
+        var left =
+                Json.MAPPER.writeValueAsString(
+                        new PlayerLeft("player", PlayerLeftReason.LEFT_ZONE));
+        require(
+                left.contains("\"reason\":\"left-zone\""),
+                "PlayerLeft enum was not serialized by name");
+        var outOfRange =
+                Json.MAPPER.writeValueAsString(
+                        new PlayerLeft("player", PlayerLeftReason.OUT_OF_RANGE));
+        require(
+                outOfRange.contains("\"reason\":\"out-of-range\""),
                 "OutOfRange enum was not serialized by name");
-        var border = Json.MAPPER.writeValueAsString(new BorderPresence(
-                "zone-2", "player", new Position(10), 1, BorderPresenceKind.MOVED, null));
-        require(border.contains("\"kind\":\"moved\""), "Border event kind was not serialized by name");
+        var border =
+                Json.MAPPER.writeValueAsString(
+                        new BorderPresence(
+                                "zone-2",
+                                "player",
+                                new Position(10),
+                                1,
+                                BorderPresenceKind.MOVED,
+                                null));
+        require(
+                border.contains("\"kind\":\"moved\""),
+                "Border event kind was not serialized by name");
         require(border.contains("\"reason\":null"), "Nullable border reason was omitted");
-        require(Json.MAPPER.readValue(border, BorderPresence.class).reason() == null,
+        require(
+                Json.MAPPER.readValue(border, BorderPresence.class).reason() == null,
                 "Nullable border reason did not round-trip");
         var rejected = Json.MAPPER.writeValueAsString(new ActionRejected("outside-world", 0));
-        require(rejected.contains("\"reason\":\"outside-world\""), "ActionRejected reason field changed");
-        require(rejected.contains("\"retryAfterMs\":0"), "ActionRejected retryAfterMs field changed");
-        require(ActionRejected.class.getRecordComponents()[1].getType() == int.class,
+        require(
+                rejected.contains("\"reason\":\"outside-world\""),
+                "ActionRejected reason field changed");
+        require(
+                rejected.contains("\"retryAfterMs\":0"),
+                "ActionRejected retryAfterMs field changed");
+        require(
+                ActionRejected.class.getRecordComponents()[1].getType() == int.class,
                 "RetryAfterMs must be a 32-bit integer");
     }
 
@@ -162,21 +237,28 @@ public final class DomainChecks {
 
     private void borderMovementTransitions() {
         var entered = moveFrom(181, 10);
-        require(entered.accepted() && entered.position().x() == 191
+        require(
+                entered.accepted()
+                        && entered.position().x() == 191
                         && entered.borderKind() == BorderPresenceKind.APPEARED,
                 "Movement into the border band did not produce Appeared");
         var remained = moveFrom(191, 1);
-        require(remained.borderKind() == BorderPresenceKind.MOVED,
+        require(
+                remained.borderKind() == BorderPresenceKind.MOVED,
                 "Movement inside the border band did not produce Moved");
         var left = moveFrom(191, -10);
-        require(left.accepted() && left.position().x() == 181
+        require(
+                left.accepted()
+                        && left.position().x() == 181
                         && left.borderKind() == BorderPresenceKind.LEFT,
                 "Movement from the border band into the Zone did not produce Left");
         var outside = moveFrom(181, 1);
-        require(outside.borderKind() == null,
+        require(
+                outside.borderKind() == null,
                 "Movement outside the border band produced a border publication");
         var boundaries = new ZonePositionDomain("zone-2", () -> 0);
-        require(boundaries.isInBorder(new Position(90))
+        require(
+                boundaries.isInBorder(new Position(90))
                         && !boundaries.isInBorder(new Position(89.9))
                         && !boundaries.isInBorder(new Position(10))
                         && boundaries.isInBorder(new Position(9.9)),

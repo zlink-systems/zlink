@@ -33,6 +33,7 @@ class Zone(
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {
+        println("EVENT Channel zone joined: ${context.spotId()}")
         playerIds.add(actor.context.actorId())
         actors.kotlin().sendToActor(actor.context.actorId(), view(actor)).await()
         publishPlayers()

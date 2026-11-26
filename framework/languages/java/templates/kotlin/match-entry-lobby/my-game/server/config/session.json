@@ -3,5 +3,5 @@
   "redisEndpoint": "127.0.0.1:6379",
   "keyPrefix": "my-game-arena:",
   "meshEndpoint": "tcp://127.0.0.1:0",
-  "streamEndpoint": "tcp://127.0.0.1:0"
+  "streamEndpoint": "ws://127.0.0.1:0"
 }

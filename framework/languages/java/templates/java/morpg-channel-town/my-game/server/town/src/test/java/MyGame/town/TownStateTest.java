@@ -46,5 +46,4 @@ class TownStateTest {
         restored.leave("a");
         assertEquals(List.of("b"), restored.parties.get(partyId).members);
     }
-
 }
