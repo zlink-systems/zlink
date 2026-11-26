@@ -49,17 +49,65 @@ using namespace std::chrono_literals;
 using lease_access = location_runtime_test_access_t;
 using monotonic_time = std::chrono::steady_clock::time_point;
 
+inline unsigned outage_authority_bit (std::string_view key,
+                                      const std::array<std::string, 3> &expected_keys)
+{
+    for (std::size_t i = 0; i < expected_keys.size (); ++i)
+        if (key == expected_keys[i])
+            return 1u << i;
+    ADD_FAILURE () << "CAS submission: unknown authority key "
+                   << ::testing::PrintToString (std::string (key));
+    return 0;
+}
+
+struct outage_operation_t
+{
+    const char *name;
+    std::shared_ptr<serial_execution_queue_t> queue;
+    task_t<serial_execution_queue_t::execution_operation_t> terminal;
+};
+
+inline ::testing::AssertionResult
+wait_outage_operations (std::vector<outage_operation_t> &operations,
+                        int loss,
+                        const char *stage,
+                        std::chrono::milliseconds timeout = auto_connect_wait)
+{
+    for (auto &operation : operations) {
+        if (operation.terminal.result_for (timeout))
+            continue;
+        const char *status = "unknown";
+        switch (operation.queue->execution_status ()) {
+            case serial_execution_queue_t::execution_status_t::allowed:
+                status = "allowed";
+                break;
+            case serial_execution_queue_t::execution_status_t::stopped:
+                status = "stopped";
+                break;
+            case serial_execution_queue_t::execution_status_t::ownership_lost:
+                status = "ownership_lost";
+                break;
+        }
+        return ::testing::AssertionFailure ()
+               << stage << ": " << operation.name << ", execution_status=" << status
+               << ", loss=" << loss;
+    }
+    return ::testing::AssertionSuccess ();
+}
+
 class outage_provider_t final : public location_store_t
 {
   public:
     in_memory_location_store_t inner;
     std::vector<store_read_result_t> injected_owner_reads;
+    std::optional<task_completion_source_t<store_key_t>> capture_read_key;
     bool hold_publication = false;
     std::atomic_uint descriptor_submissions = 0;
     task_completion_source_t<void> descriptors_submitted;
     task_completion_source_t<void> publication_release;
     bool hold_cas = false, fail_cas = false;
-    std::atomic_uint preserve_writes = 0;
+    std::atomic_uint preserve_writes = 0, submitted_authorities = 0;
+    std::optional<std::array<std::string, 3>> expected_authorities;
     task_completion_source_t<void> cas_release;
     bool fail = false;
     std::atomic_int forbidden_calls{0};
@@ -74,6 +122,8 @@ class outage_provider_t final : public location_store_t
     task_completion_source_t<void> resume;
     task_t<store_read_result_t> read (store_key_t key) override
     {
+        if (capture_read_key)
+            capture_read_key->complete (result_t<store_key_t>::success (key));
         if (key.value.starts_with (std::string_view ("authority\0", 10)))
             ++authority_reads;
         if (!failed_authority.empty () && key.value == failed_authority)
@@ -128,8 +178,18 @@ class outage_provider_t final : public location_store_t
                 },
                 mutation);
           });
-        if (authority)
+        if (authority) {
             ++preserve_writes;
+            if (expected_authorities)
+                for (const auto &mutation : request.mutations)
+                    std::visit (
+                      [&] (const auto &value) {
+                          if (value.key.value.starts_with (std::string_view ("authority\0", 10)))
+                              submitted_authorities.fetch_or (
+                                outage_authority_bit (value.key.value, *expected_authorities));
+                      },
+                      mutation);
+        }
         if (authority && (hold_cas || fail_cas)) {
             if (fail_cas)
                 return task_t<store_write_result_t> (result_t<store_write_result_t>::failure (
@@ -179,7 +239,8 @@ class outage_memory_t final : public in_memory_location_repository_t
           [committed = std::move (committed)] () mutable { return std::move (committed); });
     }
     bool hold_cas = false, fail_cas = false;
-    std::atomic_uint preserve_writes = 0;
+    std::atomic_uint preserve_writes = 0, submitted_authorities = 0;
+    std::optional<std::array<std::string, 3>> expected_authorities;
     task_completion_source_t<void> cas_release;
     bool fail = false;
     std::atomic_int forbidden_calls{0};
@@ -229,8 +290,12 @@ class outage_memory_t final : public in_memory_location_repository_t
                 framework_error_kind_t::internal_failure, "injected outage authority CAS"));
         }
         const auto *put = std::get_if<authority_put_t> (&mutation);
-        if (put && put->preservation)
+        if (put && put->preservation) {
             ++preserve_writes;
+            if (expected_authorities)
+                submitted_authorities.fetch_or (
+                  outage_authority_bit (key.value, *expected_authorities));
+        }
         if (put && put->preservation && (hold_cas || fail_cas)) {
             if (fail_cas)
                 return task_t<authority_compare_exchange_result_t> (
