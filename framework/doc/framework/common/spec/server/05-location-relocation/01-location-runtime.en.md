@@ -1501,6 +1501,24 @@ preserved. An absent or expired route or a loop is `Unavailable`; a generation m
 restricting a regular message's target. A runtime change to `MessageFollowDuration` applies to
 new relocations.
 
+**A Ready Instance Spot one-way (command 39, operation ID 0) is forwarded as command 55
+`instanceSpotFollow`.** The Spot forwarding commands 21 and 22 require a non-zero operation ID and a
+source Spot ID, so converting the message to them would change the operation ID or drop the original
+sender. Command 55 keeps the operation ID at 0 and carries the original source node RID and lifecycle
+generation, the source Spot ID when present, the metadata, and the payload unchanged. It has no reply
+route. The previous owner applies the route, hop, and fence checks above unchanged.
+
+- **A forward with operation ID 0 creates no deduplication key.** This keeps different sends from the
+  same sender from merging under one key. No new operation ID is issued during forwarding.
+- **The previous owner doesn't send the location-cache invalidation notice (command 50) after forwarding
+  command 55.** Command 50 identifies a notice by the non-zero original operation ID. The sender's cache
+  expires within `RouteCacheMaxAge`, and sends in the meantime are forwarded on the same route.
+- **When the route is absent, expired, or loops, the previous owner discards the message and records one
+  diagnostic.** A one-way completes at outbound admission, so no result can be returned to the sender. A
+  generation mismatch is handled the same way.
+- The target processes command 55 on the same Instance Spot path as a Ready one-way command 39 and treats
+  the original source node RID and lifecycle generation as the sender (not the forwarding previous owner).
+
 ### 7.4 Querying the Current Location from Operational Tools
 
 Operational tools can query the current location by ActorId or SpotId. A list per object

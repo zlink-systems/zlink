@@ -1323,6 +1323,22 @@ source·target `AuthorityOwnerGeneration`과 owner fence를 검증한다. Owner 
 target 제한이 아니라 같은 incarnation의 이동인지 확인한다. 실행 중 변경한
 `MessageFollowDuration`은 새 relocation부터 적용한다.
 
+**Ready Instance Spot one-way(command 39, operation ID 0)는 command 55 `instanceSpotFollow`로 전달한다.**
+Spot 전달 command 21·22는 0이 아닌 operation ID와 source Spot ID를 요구하므로, 이 message를 그
+command로 바꾸면 operation ID가 바뀌거나 원래 발신자 정보가 사라진다. Command 55는 operation ID를 0으로
+두고, 원래 source node RID·실행 세대, 있으면 source Spot ID, metadata와 payload를 그대로 싣는다. Reply
+route는 없다. 이전 owner는 위의 route·hop·fence 검증을 그대로 적용한다.
+
+- **Operation ID가 0인 전달은 중복 제거 key를 만들지 않는다.** 같은 발신자의 서로 다른 send가 같은 key로
+  합쳐지지 않게 하기 위해서다. 전달 중에 새 operation ID를 발급하지 않는다.
+- **이전 owner는 command 55를 전달한 뒤 위치 cache 무효화 통지(command 50)를 보내지 않는다.** Command 50은
+  0이 아닌 원래 operation ID로 통지를 구분한다. 발신자의 cache는 `RouteCacheMaxAge` 안에 만료되고, 그 사이의
+  send도 같은 route로 전달된다.
+- **Route가 없거나 만료됐거나 순환하면 이전 owner는 그 message를 버리고 진단을 한 번 남긴다.** One-way는
+  outbound admission에서 완료되므로 발신자에게 돌려줄 결과가 없다. Generation 불일치도 같다.
+- Target은 command 55를 command 39의 Ready one-way와 같은 Instance Spot 경로로 처리하며, 원래 source node
+  RID·실행 세대를 발신자로 본다(전달한 이전 owner가 아니다).
+
 ### 7.4 운영 도구에서 현재 위치를 조회한다
 
 운영 도구는 ActorId 또는 SpotId로 현재 위치를 조회할 수 있다. Object 종류와 stable type별
