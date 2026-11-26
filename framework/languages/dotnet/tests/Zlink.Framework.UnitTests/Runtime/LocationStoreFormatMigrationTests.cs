@@ -276,9 +276,17 @@ public sealed class LocationStoreFormatMigrationTests
         {
             ZLinkStoreMutation mutation = scenario switch
             {
-                "counter" or "counter-zero" => new ZLinkStoreMutation.Put(counter, Encoding.UTF8.GetBytes("7"), null),
+                "counter" or "counter-zero" => new ZLinkStoreMutation.Put(
+                    counter,
+                    Encoding.UTF8.GetBytes("7"),
+                    null
+                ),
                 "removed" or "zero" => new ZLinkStoreMutation.Delete(legacy),
-                _ => new ZLinkStoreMutation.Put(legacy, Encoding.UTF8.GetBytes(Capacity(2, 0, 0)), null),
+                _ => new ZLinkStoreMutation.Put(
+                    legacy,
+                    Encoding.UTF8.GetBytes(Capacity(2, 0, 0)),
+                    null
+                ),
             };
             await store.Inner.WriteAsync(new ZLinkStoreWriteRequest([], [mutation]));
         };
@@ -287,7 +295,8 @@ public sealed class LocationStoreFormatMigrationTests
         if (scenario is "counter" or "counter-zero")
         {
             await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
-                runtime.StartAsync(RoutingId.From("host"), deadline.Token).AsTask());
+                runtime.StartAsync(RoutingId.From("host"), deadline.Token).AsTask()
+            );
             await AssertValueAsync(store, legacy, initial);
             await AssertValueAsync(store, counter, "7");
             return;

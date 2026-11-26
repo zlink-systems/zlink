@@ -226,10 +226,17 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             cancellationToken.ThrowIfCancellationRequested();
             var counters = DecodeLegacyCapacity(oldKey, found.Value.Bytes)
-                .Counters.Select(counter => (
-                    Key: CapacityCounterKey(mesh, ridHex, counter.Key.Dimension, counter.Key.Pending),
-                    Count: counter.Value.Count
-                ))
+                .Counters.Select(counter =>
+                    (
+                        Key: CapacityCounterKey(
+                            mesh,
+                            ridHex,
+                            counter.Key.Dimension,
+                            counter.Key.Pending
+                        ),
+                        Count: counter.Value.Count
+                    )
+                )
                 .ToArray();
             if (counters.Length >= ZLinkLocationStoreLimits.MaximumUniqueKeys)
                 throw new ZLinkConfigurationException(
@@ -244,7 +251,13 @@ internal sealed partial class ZLinkProviderLocationRepository
             {
                 conditions.Add(new ZLinkStoreCondition.Missing(counter.Key));
                 if (counter.Count != 0)
-                    mutations.Add(new ZLinkStoreMutation.Put(counter.Key, EncodeGenerationCounter((ulong)counter.Count), null));
+                    mutations.Add(
+                        new ZLinkStoreMutation.Put(
+                            counter.Key,
+                            EncodeGenerationCounter((ulong)counter.Count),
+                            null
+                        )
+                    );
             }
             mutations.Add(new ZLinkStoreMutation.Delete(oldKey));
             if (
@@ -254,7 +267,10 @@ internal sealed partial class ZLinkProviderLocationRepository
                 return;
 
             old = await _provider.ReadAsync(oldKey, cancellationToken).ConfigureAwait(false);
-            if (old is ZLinkStoreReadResult.Found current && current.Value.Bytes.Span.SequenceEqual(found.Value.Bytes.Span))
+            if (
+                old is ZLinkStoreReadResult.Found current
+                && current.Value.Bytes.Span.SequenceEqual(found.Value.Bytes.Span)
+            )
             {
                 foreach (var counter in counters)
                     if (
