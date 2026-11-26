@@ -32,6 +32,9 @@ public final class Rules {
             FINISHED = "match-finished",
             PACKET_NOT_ALLOWED = "packet-not-allowed";
     public static final String PLAYING = "Playing", FINISHED_PHASE = "Finished";
+
     public record Wall(double x, double minY, double maxY) {}
-    public static final java.util.List<Wall> WALLS = java.util.List.of(new Wall(WALL_X, WALL_MIN_Y, WALL_MAX_Y));
+
+    public static final java.util.List<Wall> WALLS =
+            java.util.List.of(new Wall(WALL_X, WALL_MIN_Y, WALL_MAX_Y));
 }

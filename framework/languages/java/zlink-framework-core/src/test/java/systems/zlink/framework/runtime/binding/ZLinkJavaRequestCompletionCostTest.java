@@ -336,7 +336,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
     }
 
     /** Runs allocation assertions with TLAB disabled, including under the normal Gradle JVM. */
-    public static void launchAllocationProbe(Class<?> testClass, String mode) throws Exception {
+    private static void launchAllocationProbe(Class<?> testClass, String mode) throws Exception {
         ChildJvm.runInJvm(
                 testClass,
                 List.of(

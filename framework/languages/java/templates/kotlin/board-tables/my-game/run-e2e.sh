@@ -16,23 +16,25 @@ for argument in "$@"; do
 done
 cd "$ROOT"
 mkdir -p "$ROOT/.logs"
+. "$ROOT/scripts/run-helpers.sh"
+if ! $build_only && [[ " ${arguments[*]} " != *" --check-structure "* ]] && server_running; then
+  java=$(local_java)
+  exec "$java" "${java_flags[@]}" -cp "$e2e_classpath" MyGame.e2e.ProgramKt --attach "${arguments[@]}"
+fi
 if $local_mode; then
   if ! $no_build; then
-    if ! ./gradlew --no-daemon installDist :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
-      tail -n 35 "$ROOT/.logs/build.log" >&2
-      exit 1
-    fi
+    build_local
   fi
   $build_only && exit 0
-  java_home_path=$(cat .logs/java-home.txt)
+  java=$(local_java)
   check_domain=true
   for argument in "${arguments[@]}"; do
     [[ "$argument" == "--check-structure" ]] && check_domain=false
   done
   if $check_domain; then
-    "$java_home_path/bin/java" --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.ProgramKt --check-domain
+    "$java" "${java_flags[@]}" -cp 'server/table/build/install/table/lib/*' MyGame.table.ProgramKt --check-domain
   fi
-  exec "$java_home_path/bin/java" --enable-native-access=ALL-UNNAMED -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.ProgramKt "${arguments[@]}"
+  exec "$java" "${java_flags[@]}" -cp "$e2e_classpath" MyGame.e2e.ProgramKt "${arguments[@]}"
 fi
 if $no_build; then
   echo '--no-build requires --local; Docker builds reuse the layer cache automatically.' >&2
