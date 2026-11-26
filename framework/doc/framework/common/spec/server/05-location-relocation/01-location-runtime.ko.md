@@ -1494,6 +1494,7 @@ User Spot membership을 바꾸지 않는 Actor 이동은 `NewOwner` CAS 한 번�
 같은 target process에서 준비를 다시 하면 target 시도 번호와 준비 정보만 교체한다. 다른
 target으로 교체하지 않는다. 이전 시도는 owner를 바꿀 수 없다.
 
+- **같은 relocation의 첫 target 시도 번호는 `1`이고, 시도를 바꿀 때마다 1씩 늘린다.** 비교는 equality로만 한다.
 - **Target 시도 번호는 대표 authority 하나가 소유한다.** `Prepared` 뒤 같은 target의 새 시도는 대표
   authority의 `target.attemptGeneration`을 그 `StoreVersion` 조건 CAS 한 번으로 바꾼다. Aggregate 기록은
   준비 요청 내용이 같으므로 바꾸지 않고(`AlreadyPrepared`), participant record와 이동 대상 목록도 바꾸지 않는다.
@@ -1558,6 +1559,9 @@ authority `payload`가 될 application 정의 opaque bytes이고, membership 변
 쓰고 target 시도가 바뀌어도 그대로 쓰기 때문이다. Target node·route·target 쪽 membership처럼 target 선택에
 따라 정해지는 값은 aggregate 기록의 target field(`targetDescriptor`, `targetDescriptorLifecycleGeneration`,
 `targetOwner`)와 Restore 요청(command 40)이 소유하고, commit은 그 값으로 target 쪽 변경을 만든다.
+
+**Membership 변경 bytes는 opaque이며 다른 runtime은 내용을 해석하지 않고 SHA-256만 비교한다.** Membership 변경이
+없는 participant의 본문은 UTF-8 `[]`(2 bytes)다. 빈 본문은 쓰지 않는다.
 
 **본문 공통 규칙.** Aggregate 기록, 목록 root와 page의 본문은 UTF-8 JSON object이며
 [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)(JSON Canonicalization Scheme, JCS)로
