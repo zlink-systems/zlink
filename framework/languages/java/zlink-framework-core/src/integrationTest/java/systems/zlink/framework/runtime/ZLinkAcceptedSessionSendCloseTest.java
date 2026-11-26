@@ -312,6 +312,8 @@ final class ZLinkAcceptedSessionSendCloseTest {
         private final CompletableFuture<RoutingId> disconnected = new CompletableFuture<>();
         private final AtomicReference<ZLinkBackendStreamReceived> latePacket =
                 new AtomicReference<>();
+        private final AtomicReference<ZLinkBackendStreamSocket> streamSocket =
+                new AtomicReference<>();
 
         CompletionStage<Void> injectLatePacket(RoutingId peer) {
             var header =
@@ -335,6 +337,8 @@ final class ZLinkAcceptedSessionSendCloseTest {
                                 body.close();
                                 closed.complete(null);
                             }));
+            // The reader waits for the next native event; wake it to pull the injected packet.
+            streamSocket.get().wakeReceive();
             return closed;
         }
 
@@ -367,6 +371,7 @@ final class ZLinkAcceptedSessionSendCloseTest {
             var adapter = DELEGATE.createStreamAdapter(options);
             return (context, mesh) -> {
                 var socket = adapter.createStreamSocket(context, mesh);
+                streamSocket.set(socket);
                 return (ZLinkBackendStreamSocket)
                         Proxy.newProxyInstance(
                                 ZLinkBackendStreamSocket.class.getClassLoader(),
@@ -383,7 +388,8 @@ final class ZLinkAcceptedSessionSendCloseTest {
                                                 });
                                         return null;
                                     }
-                                    if (method.getName().equals("waitForReadable")
+                                    if ((method.getName().equals("waitForReadable")
+                                                    || method.getName().equals("waitForReceive"))
                                             && latePacket.get() != null) {
                                         return true;
                                     }
