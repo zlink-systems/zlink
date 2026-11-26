@@ -23,6 +23,7 @@ internal sealed class ZLinkStreamSessionTable(
     private const int RejectedCreationLimit = 4096;
     private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<RoutingId, ZLinkStreamSessionRuntime> _sessions = [];
+    private readonly Queue<ZLinkStreamSessionRuntime.LivenessTimer> _dueLiveness = [];
     private readonly Dictionary<
         RoutingId,
         TaskCompletionSource<ZLinkStreamSessionRuntime?>
@@ -125,7 +126,8 @@ internal sealed class ZLinkStreamSessionTable(
                     actorDispatchEnabled,
                     requireConnectionReady: true,
                     livenessOptions: livenessOptions,
-                    readerLiveness: readerLiveness
+                    readerLiveness: readerLiveness,
+                    markLivenessDue: readerLiveness is null ? null : MarkLivenessDue
                 )
                 .ConfigureAwait(false);
         }
@@ -234,8 +236,33 @@ internal sealed class ZLinkStreamSessionTable(
     public ValueTask<ZLinkStreamSessionRuntime?> TryGetAsync(RoutingId routingId) =>
         _lane.RunAsync(() => _sessions.GetValueOrDefault(routingId));
 
-    public ValueTask<ZLinkStreamSessionRuntime[]> SnapshotAsync() =>
-        _lane.RunAsync(() => _sessions.Values.ToArray());
+    private void MarkLivenessDue(ZLinkStreamSessionRuntime.LivenessTimer timer) =>
+        _lane.TryPost(
+            due =>
+            {
+                if (_stopping)
+                    return;
+                _dueLiveness.Enqueue(due);
+                readerLiveness!.Wake();
+            },
+            timer
+        );
+
+    // Notifications added while the reader consumes this prefix belong to the next wake.
+    public ValueTask<int> TakeDueLivenessWakeAsync() =>
+        _lane.RunAsync(() => readerLiveness!.TakeWake() ? _dueLiveness.Count : 0);
+
+    public ValueTask<ZLinkStreamSessionRuntime.LivenessTimer?> DequeueDueLivenessAsync() =>
+        _lane.RunAsync(static queue => queue.TryDequeue(out var due) ? due : null, _dueLiveness);
+
+    public ValueTask<ZLinkStreamSessionRuntime[]> RestartLivenessAsync() =>
+        _lane.RunAsync(() =>
+        {
+            // The permit grant resets receive deadlines for every session on this reader.
+            readerLiveness!.TakeWake();
+            _dueLiveness.Clear();
+            return _sessions.Values.ToArray();
+        });
 
     public async ValueTask<bool> DrainSessionsAsync(CancellationToken cancellationToken)
     {
@@ -314,6 +341,7 @@ internal sealed class ZLinkStreamSessionTable(
     private ZLinkStreamSessionRuntime[] StopCore()
     {
         _stopping = true;
+        _dueLiveness.Clear();
         var sessions = _sessions.Values.ToArray();
         _sessions.Clear();
         return sessions;

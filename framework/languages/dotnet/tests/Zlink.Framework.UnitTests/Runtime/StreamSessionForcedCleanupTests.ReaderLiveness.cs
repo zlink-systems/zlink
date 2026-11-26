@@ -124,6 +124,106 @@ public sealed partial class StreamSessionForcedCleanupTests
         }
     }
 
+    [Fact]
+    public async Task Stream_reader_evaluates_only_sessions_reported_by_their_timers()
+    {
+        const string nodeName = "reader-liveness-due";
+        var registration = new ZLinkFrameworkRegistration();
+        var lifetime = new SessionOrderingLifetime();
+        ZLinkFrameworkRuntime runtime = null!;
+        await using var provider = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(lifetime)
+            .AddSingleton(_ => runtime)
+            .BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket();
+        var monitor = new TestSocketMonitor();
+        var time = new ControllableTimeProvider();
+        var runner = new ZLinkRuntimeTaskRunner(
+            runtime.ErrorSink,
+            CancellationToken.None,
+            runtime.ExecutionOwner
+        );
+        await using var node = new ZLinkStreamNodeRuntime(
+            nodeName,
+            provider,
+            socket,
+            monitor,
+            typeof(SessionOrderingSession),
+            runner,
+            "test",
+            time
+        );
+        var setupRound = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var firstRound = new TaskCompletionSource<byte[][]>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondRound = new TaskCompletionSource<byte[]>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        socket.BeforePoll = () =>
+        {
+            if (socket.DequeuedPacketCount > 0)
+                setupRound.TrySetResult();
+            var frames = socket.SentFrames.ToArray();
+            if (frames.Length > 0)
+                firstRound.TrySetResult(frames);
+            if (frames.Length > 1)
+                secondRound.TrySetResult(frames[1]);
+        };
+
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        node.Start();
+        await ConnectAsync("early");
+        time.Advance(TimeSpan.FromMilliseconds(300));
+        var late = await ConnectAsync("late");
+        var pong = ZLinkStreamProtocolDefaults.EncodeHeader(
+            new(
+                ZlinkStreamMessageKind.Control,
+                ZlinkStreamCodec.Raw,
+                ZlinkStreamHeaderFlags.None,
+                null,
+                ZlinkStreamControlProtocol.HeartbeatPongName,
+                ZlinkStreamMetadata.Empty
+            )
+        );
+        socket.EnqueuePacket(late, pong.Span, []);
+        await setupRound.Task.WaitAsync(deadline.Token);
+
+        // Both ping phases have passed, but the late session's timer callback has not run.
+        var firstTimer = time.AdvanceMonotonicAndFireTimerAsync(
+            TimeSpan.FromMilliseconds(1100),
+            TimeSpan.FromMilliseconds(700)
+        );
+        var firstPing = Assert.Single(await firstRound.Task.WaitAsync(deadline.Token));
+        Assert.Equal(ZlinkStreamControlProtocol.HeartbeatPingName, ReadFrameName(firstPing));
+        await firstTimer.WaitAsync(deadline.Token);
+
+        time.Advance(TimeSpan.Zero);
+        var secondPing = await secondRound.Task.WaitAsync(deadline.Token);
+        Assert.Equal(ZlinkStreamControlProtocol.HeartbeatPingName, ReadFrameName(secondPing));
+
+        async Task<RoutingId> ConnectAsync(string peer)
+        {
+            var routingId = RoutingId.From(peer);
+            monitor.Emit(
+                new ZLinkBackendSocketMonitorEvent(
+                    ZLinkSocketNativeEventType.ConnectionReady,
+                    routingId,
+                    "local",
+                    "remote",
+                    1,
+                    MonitorEventFlags.ConnectionReadyEdge
+                )
+            );
+            await lifetime.WaitConnectedAsync(routingId).WaitAsync(deadline.Token);
+            return routingId;
+        }
+    }
+
     private static void EnqueueWireBytes(
         TestStreamSocket socket,
         RoutingId routingId,

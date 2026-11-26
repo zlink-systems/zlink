@@ -72,8 +72,6 @@ internal sealed class ZLinkStreamSessionLiveness
         _lastApplicationInbound = _createdAt;
     }
 
-    internal void WakeReader() => _reader?.Wake();
-
     public void RecordApplicationInbound()
     {
         Interlocked.Exchange(ref _lastApplicationInbound, _time.GetTimestamp());

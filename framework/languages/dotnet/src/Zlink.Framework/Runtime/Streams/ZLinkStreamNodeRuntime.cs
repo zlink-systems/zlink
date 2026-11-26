@@ -266,7 +266,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             runtimeToken
         );
         var poller = _receivePoller!;
-        using var timer = CreateLivenessTimer();
         var failureBackoff = new ZLinkPollingBackoff();
         try
         {
@@ -290,16 +289,18 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                         .WaitAsync(TimeSpan.Zero, stop.Token)
                         .ConfigureAwait(false);
                 }
+                var permitResumedAt = _readerLiveness.PermitResumedAt;
                 if (
                     CanReceive(readiness)
-                    && !await ReceivePacketsAsync(stop.Token, failureBackoff, timer)
-                        .ConfigureAwait(false)
+                    && !await ReceivePacketsAsync(stop.Token, failureBackoff).ConfigureAwait(false)
                 )
                     return;
                 if (stop.IsCancellationRequested)
                     return;
-                if (_readerLiveness.TakeWake())
-                    await AdvanceLivenessAsync(timer, confirmExpiry: true).ConfigureAwait(false);
+                if (permitResumedAt != _readerLiveness.PermitResumedAt)
+                    await RestartLivenessAsync().ConfigureAwait(false);
+                else if (_readerLiveness.WakeRequested)
+                    await AdvanceDueLivenessAsync(confirmExpiry: true).ConfigureAwait(false);
             }
         }
         catch (Exception) when (stop.IsCancellationRequested) { }
@@ -319,62 +320,53 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             )
         ) != 0;
 
-    private ITimer CreateLivenessTimer()
+    private async ValueTask AdvanceDueLivenessAsync(bool confirmExpiry)
     {
-        if (ExecutionContext.IsFlowSuppressed())
-            return CreateTimer();
-
-        using (ExecutionContext.SuppressFlow())
-            return CreateTimer();
-
-        ITimer CreateTimer() =>
-            _timeProvider.CreateTimer(
-                static state => ((ZLinkStreamSessionLiveness.Reader)state!).Wake(),
-                _readerLiveness,
-                Timeout.InfiniteTimeSpan,
-                Timeout.InfiniteTimeSpan
-            );
+        var count = await _sessions.TakeDueLivenessWakeAsync().ConfigureAwait(false);
+        var timestamp = _timeProvider.GetTimestamp();
+        for (var index = 0; index < count; index++)
+        {
+            var timer = await _sessions.DequeueDueLivenessAsync().ConfigureAwait(false);
+            if (timer is null)
+                break; // The session table stopped while the reader was processing the wake.
+            await AdvanceLivenessAsync(timer.Session, timestamp, confirmExpiry, timer)
+                .ConfigureAwait(false);
+        }
     }
 
-    private async ValueTask AdvanceLivenessAsync(ITimer timer, bool confirmExpiry)
+    private async ValueTask RestartLivenessAsync()
     {
-        var sessions = await _sessions.SnapshotAsync().ConfigureAwait(false);
+        var sessions = await _sessions.RestartLivenessAsync().ConfigureAwait(false);
         var timestamp = _timeProvider.GetTimestamp();
-        var next = TimeSpan.MaxValue;
         foreach (var session in sessions)
-        {
-            try
-            {
-                var delay = await session
-                    .AdvanceLivenessAsync(timestamp, confirmExpiry)
-                    .ConfigureAwait(false);
-                if (delay != Timeout.InfiniteTimeSpan && delay < next)
-                    next = delay;
-            }
-            catch (Exception exception)
-            {
-                _runtime.ErrorSink.ReportRuntimeTaskException(
-                    $"stream-liveness:{session.Stream.SessionId}",
-                    exception
-                );
-            }
-        }
+            await AdvanceLivenessAsync(session, timestamp, confirmExpiry: true)
+                .ConfigureAwait(false);
+    }
 
-        if (next == TimeSpan.MaxValue)
+    private async ValueTask AdvanceLivenessAsync(
+        ZLinkStreamSessionRuntime session,
+        long timestamp,
+        bool confirmExpiry,
+        ZLinkStreamSessionRuntime.LivenessTimer? dueTimer = null
+    )
+    {
+        try
         {
-            timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-            return;
+            await session
+                .AdvanceLivenessAsync(timestamp, confirmExpiry, dueTimer)
+                .ConfigureAwait(false);
         }
-
-        // System.Threading.Timer accepts millisecond deadlines up to uint.MaxValue - 1.
-        var remaining = next - _timeProvider.GetElapsedTime(timestamp);
-        var due = Math.Clamp(Math.Ceiling(remaining.TotalMilliseconds), 0, uint.MaxValue - 1);
-        timer.Change(TimeSpan.FromMilliseconds(due), Timeout.InfiniteTimeSpan);
+        catch (Exception exception)
+        {
+            _runtime.ErrorSink.ReportRuntimeTaskException(
+                $"stream-liveness:{session.Stream.SessionId}",
+                exception
+            );
+        }
     }
 
     private async ValueTask<ZLinkApplicationJobQueueLease> WaitForPermitAsync(
         ValueTask<ZLinkApplicationJobQueueLease> permit,
-        ITimer timer,
         CancellationToken stopToken
     )
     {
@@ -387,8 +379,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
             while (!pending.IsCompleted && !stopToken.IsCancellationRequested)
             {
-                if (_readerLiveness.TakeWake())
-                    await AdvanceLivenessAsync(timer, confirmExpiry: false).ConfigureAwait(false);
+                if (_readerLiveness.WakeRequested)
+                    await AdvanceDueLivenessAsync(confirmExpiry: false).ConfigureAwait(false);
                 if (!pending.IsCompleted)
                     await poller.WaitForWakeAsync(stopToken).ConfigureAwait(false);
             }
@@ -403,10 +395,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             throw;
         }
 
-        var lease = await pending.ConfigureAwait(false);
-        // Permit grant restarts both receive deadlines for every session on this reader.
-        _readerLiveness.Wake();
-        return lease;
+        return await pending.ConfigureAwait(false);
 
         async ValueTask ReleasePendingPermitAsync()
         {
@@ -420,8 +409,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
     private async ValueTask<bool> ReceivePacketsAsync(
         CancellationToken stopToken,
-        ZLinkPollingBackoff failureBackoff,
-        ITimer timer
+        ZLinkPollingBackoff failureBackoff
     )
     {
         var batchStartedAt = Stopwatch.GetTimestamp();
@@ -442,7 +430,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 ZLinkApplicationJobOrigin.Remote
             );
             if (!permit.IsCompleted)
-                permit = WaitForPermitAsync(permit, timer, stopToken);
+                permit = WaitForPermitAsync(permit, stopToken);
             ZLinkApplicationJobQueueLease? admission = await permit.ConfigureAwait(false);
             try
             {
