@@ -56,6 +56,7 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 import systems.zlink.framework.streams.ZLinkStreamSessionError;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -112,7 +113,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private static final String SESSION_CREATION_FAILED = "STREAM session creation failed";
 
     private static final Duration BOUND_SESSION_REPLACEMENT_CLOSE_DELAY = Duration.ofMillis(100);
-    private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
     private final ZLinkFrameworkRegistration registration;
@@ -1234,6 +1234,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private final StreamNodeRegistration streamNode;
         private final ZLinkBackendStreamSocket stream;
         private volatile boolean closed;
+        private volatile boolean livenessWakePending;
         private final java.util.concurrent.atomic.AtomicReference<
                         CompletableFuture<ZLinkApplicationJobQueue.Permit>>
                 pendingAcquire = new java.util.concurrent.atomic.AtomicReference<>();
@@ -1258,6 +1259,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         public void close() {
             closed = true;
             ZLinkApplicationJobQueue.cancelPendingAcquire(pendingAcquire);
+            stream.wakeReceive();
         }
 
         /**
@@ -1268,53 +1270,23 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkApplicationJobQueue.Permit first = granted;
             while (!isClosed()) {
                 try {
-                    if (first == null && !stream.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
-                        continue;
-                    }
+                    boolean readable = first != null || stream.waitForReceive();
                     if (isClosed()) {
                         break;
                     }
-                    ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
-                    while (batch.canReceiveNext()) {
-                        boolean resumed = first != null;
-                        ZLinkApplicationJobQueue.Permit permit = first;
+                    if (!readable && livenessWakePending) {
+                        // A wake can race a poll result that contained only a completion.
+                        readable = stream.waitForReadable(Duration.ZERO);
+                    }
+                    if (readable) {
+                        var reserved = first;
                         first = null;
-                        if (permit == null) {
-                            permit = acquirePermit();
-                            if (isClosed()) {
-                                ZLinkApplicationJobQueue.cancelPendingAcquire(pendingAcquire);
-                                if (permit != null) {
-                                    permit.abandonReservation();
-                                }
-                                return;
-                            }
-                            if (permit == null) {
-                                return;
-                            }
+                        if (!receiveBatch(reserved)) {
+                            return;
                         }
-                        ZLinkBackendStreamReceived received = null;
-                        boolean transferred = false;
-                        try {
-                            if (resumed) {
-                                inStateLane(
-                                        () -> {
-                                            permitResumedNanos = nanoTime.getAsLong();
-                                            return null;
-                                        });
-                            }
-                            received = stream.recv();
-                            if (received == null) {
-                                break;
-                            }
-                            transferred = processReceived(received, permit, batch);
-                        } finally {
-                            if (!transferred) {
-                                if (received != null) {
-                                    received.close();
-                                }
-                                permit.abandonReservation();
-                            }
-                        }
+                    }
+                    if (livenessWakePending) {
+                        inStateLane(this::checkLivenessOnLane).forEach(Runnable::run);
                     }
                 } catch (RuntimeException | Error failure) {
                     if (!isClosed()) {
@@ -1331,6 +1303,52 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             }
         }
 
+        private boolean receiveBatch(ZLinkApplicationJobQueue.Permit first) {
+            ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
+            while (batch.canReceiveNext()) {
+                boolean resumed = first != null;
+                ZLinkApplicationJobQueue.Permit permit = first;
+                first = null;
+                if (permit == null) {
+                    permit = acquirePermit();
+                    if (isClosed()) {
+                        ZLinkApplicationJobQueue.cancelPendingAcquire(pendingAcquire);
+                        if (permit != null) {
+                            permit.abandonReservation();
+                        }
+                        return false;
+                    }
+                    if (permit == null) {
+                        return false;
+                    }
+                }
+                ZLinkBackendStreamReceived received = null;
+                boolean transferred = false;
+                try {
+                    if (resumed) {
+                        inStateLane(
+                                () -> {
+                                    permitResumedNanos = nanoTime.getAsLong();
+                                    return null;
+                                });
+                    }
+                    received = stream.recv();
+                    if (received == null) {
+                        break;
+                    }
+                    transferred = processReceived(received, permit, batch);
+                } finally {
+                    if (!transferred) {
+                        if (received != null) {
+                            received.close();
+                        }
+                        permit.abandonReservation();
+                    }
+                }
+            }
+            return true;
+        }
+
         private ZLinkApplicationJobQueue.Permit acquirePermit() {
             // A free permit takes no state-lane turn. Only a wait is recorded, and a grant that
             // already started the next turn keeps its later resume time.
@@ -1343,12 +1361,14 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             ZLinkApplicationJobQueue.Origin.REMOTE);
             if (permit == null) {
                 inStateLane(
-                        () -> {
-                            if (permitGrants.get() == grantsBefore) {
-                                permitResumedNanos = WAITING_FOR_PERMIT;
-                            }
-                            return null;
-                        });
+                                () -> {
+                                    if (permitGrants.get() != grantsBefore) {
+                                        return List.<Runnable>of();
+                                    }
+                                    permitResumedNanos = WAITING_FOR_PERMIT;
+                                    return checkLivenessOnLane();
+                                })
+                        .forEach(Runnable::run);
             }
             return permit;
         }
@@ -1356,6 +1376,42 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private void resumeTurn(ZLinkApplicationJobQueue.Permit granted) {
             permitGrants.incrementAndGet();
             runTurn(granted);
+        }
+
+        private boolean requestLivenessCheckOnLane() {
+            if (livenessWakePending) {
+                return false;
+            }
+            livenessWakePending = true;
+            return true;
+        }
+
+        private List<Runnable> checkLivenessOnLane() {
+            if (!livenessWakePending) {
+                return List.of();
+            }
+            livenessWakePending = false;
+            Map<RoutingId, SessionState> streamSessions = sessions.get(streamNode.name());
+            if (streamSessions == null || closed) {
+                return List.of();
+            }
+            long now = nanoTime.getAsLong();
+            List<Runnable> actions = new ArrayList<>();
+            for (SessionState state : streamSessions.values()) {
+                // The timer releases its existing slot when it hands the check to the reader.
+                if (state.livenessTimer != null || state.serials().admissionSealed()) {
+                    continue;
+                }
+                int reason = state.expiryReason(now);
+                if (reason != 0) {
+                    if (state.serials().sealAdmission()) {
+                        actions.add(() -> closeExpiredSession(state, reason));
+                    }
+                } else if (scheduleNextLiveness(state, now)) {
+                    actions.add(() -> sendHeartbeatPing(state));
+                }
+            }
+            return actions;
         }
 
         private long inboundRemainingNanos(long now, long lastActivity, long timeout) {
@@ -1373,6 +1429,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 ZLinkBackendStreamReceived received,
                 ZLinkApplicationJobQueue.Permit permit,
                 ZLinkReceiveBatchBudget batch) {
+            long messageBytes = received.header().size() + (long) received.body().size();
+            batch.record(messageBytes);
             RoutingId routingId = received.routingId().orElse(null);
             if (routingId == null) {
                 LOGGER.warning(
@@ -1385,7 +1443,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             try {
                 ZLinkStreamHeader header =
                         ZLinkStreamHeaderCodec.decodeOrPlain(received.header().toByteArray());
-                long messageBytes = received.header().size() + (long) received.body().size();
                 long maxMessageSize = streamNode.socketConfig().maxMessageSize();
                 if (maxMessageSize > 0 && messageBytes > maxMessageSize) {
                     throw new ZLinkStreamMessageTooLargeException(
@@ -1399,7 +1456,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 } finally {
                     permit.abandonReservation();
                 }
-                batch.record(messageBytes);
                 return true;
             } catch (RuntimeException | Error failure) {
                 isolatePeer(routingId, failure);
@@ -2382,58 +2438,54 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private void scheduleSessionLiveness(SessionState state, long now) {
-        long delay =
-                Math.min(
-                        state.pingRemainingNanos(now),
-                        Math.min(state.inboundRemainingNanos(now), state.idleRemainingNanos(now)));
+        long pingDelay = state.pingRemainingNanos(now);
+        long expiryDelay =
+                Math.min(state.inboundRemainingNanos(now), state.idleRemainingNanos(now));
+        boolean wakeReader = expiryDelay <= pingDelay;
         state.livenessTimer =
                 livenessExecutor.schedule(
-                        () -> checkSessionLiveness(state),
-                        Math.max(0, delay),
+                        () -> onSessionLivenessTimer(state, wakeReader),
+                        Math.max(0, wakeReader ? expiryDelay : pingDelay),
                         TimeUnit.NANOSECONDS);
     }
 
-    private void checkSessionLiveness(SessionState state) {
-        Integer reason =
+    private void onSessionLivenessTimer(SessionState state, boolean wakeReader) {
+        Runnable action =
                 inStateLane(
                         () -> {
                             if (findSessionState(state.streamNode.name(), state.routingId())
-                                    != state) {
+                                            != state
+                                    || state.serials().admissionSealed()) {
                                 return null;
                             }
                             state.livenessTimer = null;
-                            if (state.serials().admissionSealed()) {
-                                return null;
+                            if (wakeReader
+                                    && state.reader.permitResumedNanos
+                                            != StreamReceiveLoop.WAITING_FOR_PERMIT) {
+                                return state.reader.requestLivenessCheckOnLane()
+                                        ? state.stream()::wakeReceive
+                                        : null;
                             }
-                            long now = nanoTime.getAsLong();
-                            int expired = 0;
-                            if (state.inboundRemainingNanos(now) <= 0) {
-                                expired = ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT;
-                            } else if (state.idleRemainingNanos(now) <= 0) {
-                                expired = ZLinkSessionClosingControl.IDLE_TIMEOUT;
-                            }
-                            if (expired != 0) {
-                                // Seal instead of removing: the Session stays registered until
-                                // its previously accepted packets and terminal callback finish.
-                                return state.serials().sealAdmission() ? expired : null;
-                            }
-
-                            boolean sendPing = state.pingRemainingNanos(now) <= 0;
-                            if (sendPing) {
-                                long elapsed = now - state.lastHeartbeatPhaseNanos;
-                                state.lastHeartbeatPhaseNanos =
-                                        now - elapsed % state.heartbeatIntervalNanos;
-                            }
-                            scheduleSessionLiveness(state, now);
-                            return sendPing ? 0 : null;
+                            return scheduleNextLiveness(state, nanoTime.getAsLong())
+                                    ? () -> sendHeartbeatPing(state)
+                                    : null;
                         });
-        if (reason == null) {
-            return;
+        if (action != null) {
+            action.run();
         }
-        if (reason == 0) {
-            sendHeartbeatPing(state);
-            return;
+    }
+
+    private boolean scheduleNextLiveness(SessionState state, long now) {
+        boolean sendPing = state.pingRemainingNanos(now) <= 0;
+        if (sendPing) {
+            long elapsed = now - state.lastHeartbeatPhaseNanos;
+            state.lastHeartbeatPhaseNanos = now - elapsed % state.heartbeatIntervalNanos;
         }
+        scheduleSessionLiveness(state, now);
+        return sendPing;
+    }
+
+    private void closeExpiredSession(SessionState state, int reason) {
         sendSessionClosing(
                 state.stream(),
                 state.routingId(),
@@ -2690,6 +2742,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
         long idleRemainingNanos(long now) {
             return reader.inboundRemainingNanos(now, lastApplicationNanos, idleTimeoutNanos);
+        }
+
+        int expiryReason(long now) {
+            if (inboundRemainingNanos(now) <= 0) {
+                return ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT;
+            }
+            return idleRemainingNanos(now) <= 0 ? ZLinkSessionClosingControl.IDLE_TIMEOUT : 0;
         }
 
         void cancelLivenessTimer() {
