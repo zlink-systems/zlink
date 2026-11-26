@@ -1,0 +1,300 @@
+{
+  "fixture": "zlink.framework.actor-destroy",
+  "version": 1,
+  "status": "draft",
+  "contractSources": {
+    "getOrCreate": "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md:448",
+    "find": "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md:462",
+    "ownerDestroy": "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md:490",
+    "remoteDestroy": "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md:521",
+    "authorityRecord": "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md:479",
+    "conditionalRelease": "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md:1041",
+    "releaseBatch": "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md:1066",
+    "closingCreation": "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md:1178",
+    "routeAdmission": "framework/doc/framework/common/spec/server/03-spot-actor/03-mesh-node.ko.md:309",
+    "routeReadiness": "framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md:244",
+    "submissionErrors": "framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md:199",
+    "destroyErrors": "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md:952",
+    "oneWayUnavailable": "framework/doc/framework/common/spec/server/00-foundation/07-framework-error-model.ko.md:83"
+  },
+  "wire": {
+    "schema": "framework/runtime/protocol/service-wire-v1.schema.json",
+    "actorAuthorityPayload": {
+      "Ready": { "object.state": 1, "operationKind": 0 },
+      "Closing": { "object.state": 2, "operationKind": 3 }
+    },
+    "actorDestroy": {
+      "command": 27,
+      "flags": 0,
+      "payload": "forbidden",
+      "reply": "none",
+      "correlation": "nonzero-u64",
+      "fence": {
+        "actor.actorId": "authority.payload.object.actorId",
+        "actor.objectGeneration": "authority.objectGeneration",
+        "targetNodeRid": "authority.payload.ownerNodeRid",
+        "targetNodeGeneration": "authority.payload.ownerNodeGeneration",
+        "expectedAuthorityOwnerGeneration": "authority.authorityOwnerGeneration",
+        "expectedOwnerLeaseGeneration": "authority.ownerLeaseGeneration"
+      }
+    }
+  },
+  "authority": {
+    "oldReady": {
+      "read": "Found",
+      "storeVersion": "vReady",
+      "objectGeneration": "g",
+      "authorityOwnerGeneration": "ownerGenerationA",
+      "ownerId": "ownerIdA",
+      "ownerLeaseGeneration": "leaseGenerationA",
+      "allocation": {
+        "state": "active",
+        "objectKind": "actor",
+        "stableType": "T",
+        "descriptor": { "meshName": "mesh", "routingIdHex": "ridAHex" },
+        "descriptorLifecycleGeneration": "nodeGenerationA",
+        "capacity": { "actors": 1, "spots": 0, "spotType": null }
+      },
+      "pendingCreation": null,
+      "payload": {
+        "operationKind": 0,
+        "object": { "actorId": "id", "actorType": "T", "state": 1, "currentSpot": "entrySpotA", "currentSpotKind": "entry" },
+        "ownerId": "ownerIdA",
+        "ownerLeaseGeneration": "leaseGenerationA",
+        "ownerMeshName": "mesh",
+        "ownerNodeRid": "ridA",
+        "ownerNodeGeneration": "nodeGenerationA"
+      }
+    },
+    "oldClosing": {
+      "sameAs": "oldReady",
+      "changes": { "storeVersion": "vClosing", "payload.object.state": 2, "payload.operationKind": 3 },
+      "storeVersionDiffersFrom": "vReady"
+    },
+    "missing": { "read": "Missing" },
+    "newReady": {
+      "read": "Found",
+      "storeVersion": "vNewReady",
+      "objectGeneration": "gNext",
+      "objectGenerationGreaterThan": "g",
+      "authorityOwnerGeneration": "ownerGenerationB",
+      "ownerId": "ownerIdB",
+      "ownerLeaseGeneration": "leaseGenerationB",
+      "allocation": {
+        "state": "active",
+        "objectKind": "actor",
+        "stableType": "T",
+        "descriptor": { "meshName": "mesh", "routingIdHex": "ridBHex" },
+        "descriptorLifecycleGeneration": "nodeGenerationB",
+        "capacity": { "actors": 1, "spots": 0, "spotType": null }
+      },
+      "pendingCreation": null,
+      "payload": {
+        "operationKind": 0,
+        "object": { "actorId": "id", "actorType": "T", "state": 1, "currentSpot": "entrySpotB", "currentSpotKind": "entry" },
+        "ownerId": "ownerIdB",
+        "ownerLeaseGeneration": "leaseGenerationB",
+        "ownerMeshName": "mesh",
+        "ownerNodeRid": "ridB",
+        "ownerNodeGeneration": "nodeGenerationB"
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "name": "remote-destroy-hides-closing-and-get-or-create-reincarnates",
+      "specClauses": ["getOrCreate", "find", "ownerDestroy", "remoteDestroy", "closingCreation"],
+      "given": { "authority": "oldReady", "ownerLease": "valid", "routeBToA": "admitted", "nextPlacement": "B" },
+      "steps": [
+        {
+          "act": "B finds id",
+          "expect": { "kind": "return", "value": { "actorId": "id", "objectGeneration": "g" }, "authority": "oldReady" }
+        },
+        {
+          "act": "B starts Destroy(oldRef); hold A's final owner Delete before provider submission",
+          "expect": { "kind": "pending", "authority": "oldClosing", "command27Sends": 1, "command27Replies": 0, "closingCommitsByA": 1 }
+        },
+        {
+          "act": "B finds id while Delete is held",
+          "expect": { "kind": "return", "value": null, "authority": "oldClosing" }
+        },
+        {
+          "act": "B starts GetOrCreate(id, T) and reads Closing while Delete is held",
+          "expect": { "kind": "pending", "authority": "oldClosing", "newFactoryCalls": 0 }
+        },
+        {
+          "act": "Resume A's Delete and collect both API completions",
+          "expect": {
+            "kind": "return",
+            "value": {
+              "destroy": true,
+              "getOrCreate": { "kind": "Created", "actorRef": { "actorId": "id", "objectGeneration": "gNext" } }
+            },
+            "authority": "newReady",
+            "ownerDeleteCommitsByA": 1,
+            "authorityReleaseCommitsByB": 0,
+            "newFactoryCalls": 1,
+            "command27Sends": 1,
+            "command27Replies": 0
+          }
+        },
+        {
+          "act": "B finds id again",
+          "expect": { "kind": "return", "value": { "actorId": "id", "objectGeneration": "gNext" }, "authority": "newReady" }
+        }
+      ],
+      "requiredOrder": [
+        ["ownerDeleteCommitted", "destroyReturned"],
+        ["ownerDeleteCommitted", "newFactoryStarted"],
+        ["newReadyCommitted", "getOrCreateReturned"]
+      ],
+      "observe": ["publicApiResults", "exactAuthorityReads", "providerReadAndCommitEvents", "factoryEvents", "transportFrames"]
+    },
+    {
+      "name": "owner-duplicate-destroy-joins-terminal",
+      "specClauses": ["ownerDestroy", "remoteDestroy"],
+      "given": {
+        "authority": "oldClosing",
+        "ownerLease": "valid",
+        "initialDestroy": "B's admitted command 27 initiated A's destroy of g",
+        "ownerDelete": "held before provider submission",
+        "recreation": "disabled during this scenario"
+      },
+      "steps": [
+        {
+          "act": "A starts local Destroy(oldRef) outside the Actor's handler turn and reaches the in-flight destroy",
+          "expect": { "kind": "pending", "authority": "oldClosing", "additionalCommand27Sends": 0, "closingCommitsByA": 1 }
+        },
+        {
+          "act": "Resume the held Delete and collect A's duplicate result and B's original result",
+          "expect": {
+            "kind": "return",
+            "value": { "ownerDuplicateDestroy": true, "remoteDestroy": true },
+            "authority": "missing",
+            "closingCommitsByA": 1,
+            "ownerDeleteCommitsByA": 1,
+            "cleanupCallsByA": 1,
+            "additionalCommand27Sends": 0,
+            "command27Replies": 0
+          }
+        }
+      ],
+      "requiredOrder": [
+        ["ownerDuplicatePending", "ownerDeleteResumed"],
+        ["ownerDeleteCommitted", "ownerDuplicateReturned"]
+      ],
+      "observe": ["publicApiResults", "exactAuthorityReads", "providerReadAndCommitEvents", "cleanupEvents", "transportFrames"]
+    },
+    {
+      "name": "stale-actor-ref-destroy-is-invalid-operation",
+      "specClauses": ["find", "ownerDestroy", "remoteDestroy"],
+      "given": { "authority": "newReady", "ownerLease": "valid", "routeAToB": "admitted", "destroyRef": { "actorId": "id", "objectGeneration": "g" } },
+      "steps": [
+        {
+          "act": "A finds id and confirms B is the owner of gNext through the Store",
+          "expect": { "kind": "return", "value": { "actorId": "id", "objectGeneration": "gNext" }, "authority": "newReady" }
+        },
+        {
+          "act": "B calls Destroy(oldRef) locally",
+          "expect": { "kind": "InvalidOperation", "authority": "newReady", "authorityWrites": 0, "command27Sends": 0 }
+        },
+        {
+          "act": "A calls Destroy(oldRef) with B as the current owner",
+          "expect": { "kind": "InvalidOperation", "authority": "newReady", "authorityWrites": 0, "command27Sends": 0 }
+        },
+        {
+          "act": "B finds id and sends a public probe to the returned ActorRef",
+          "expect": { "kind": "return", "value": { "actorId": "id", "objectGeneration": "gNext", "probeHandled": true }, "authority": "newReady" }
+        }
+      ],
+      "observe": ["publicApiResults", "exactAuthorityReads", "providerReadAndCommitEvents", "probeHandlerEvents", "transportFrames"]
+    },
+    {
+      "name": "expired-owner-closing-is-released-before-recreation",
+      "specClauses": ["getOrCreate", "find", "remoteDestroy", "conditionalRelease", "releaseBatch", "closingCreation"],
+      "given": {
+        "authority": "oldClosing",
+        "ownerLease": "valid",
+        "initialDestroy": "B's admitted command 27 initiated A's destroy of g",
+        "ownerDelete": "held before provider submission",
+        "nextPlacement": "B",
+        "actorIdDistinctFromOtherScenarios": true
+      },
+      "steps": [
+        {
+          "act": "Keep Delete held and A's lease renewed until B's initial Destroy reaches its existing deadline",
+          "expect": { "kind": "deadline", "authority": "oldClosing", "ownerLease": "valid", "command27Sends": 1, "command27Replies": 0 }
+        },
+        {
+          "act": "Terminate A without graceful teardown; exact-read authority and owner lease while the original token is still valid",
+          "expect": { "kind": "observation", "authority": "oldClosing", "ownerLease": "valid", "releaseCommits": 0 }
+        },
+        {
+          "act": "Observe natural expiration of the original owner lease using Store time",
+          "expect": { "kind": "observation", "authority": "oldClosing", "ownerLease": "expired", "releaseCommits": 0 }
+        },
+        {
+          "act": "B finds id before starting creation",
+          "expect": { "kind": "return", "value": null, "authority": "oldClosing", "releaseCommits": 0 }
+        },
+        {
+          "act": "B starts GetOrCreate(id, T) and observes the conditional release commit",
+          "expect": {
+            "kind": "observation",
+            "authority": "missing",
+            "releaseCommitsByB": 1,
+            "ownerDeleteCommitsByA": 0,
+            "releaseBatch": {
+              "conditions": ["vClosing", "invalidLeaseForOriginalOwnerToken", "ownerDescriptorState", "ownerCapacityRecord"],
+              "oldMembershipRemoved": true,
+              "oldActiveActorCapacityDelta": -1,
+              "requiresRelocationPolicy": false
+            },
+            "additionalCommand27Sends": 0
+          }
+        },
+        {
+          "act": "Collect B's GetOrCreate result and find id again",
+          "expect": {
+            "kind": "return",
+            "value": {
+              "getOrCreate": { "kind": "Created", "actorRef": { "actorId": "id", "objectGeneration": "gNext" } },
+              "find": { "actorId": "id", "objectGeneration": "gNext" }
+            },
+            "authority": "newReady",
+            "newFactoryCalls": 1
+          }
+        }
+      ],
+      "requiredOrder": [
+        ["ownerLeaseExpired", "releaseCommitted"],
+        ["releaseCommitted", "newFactoryStarted"],
+        ["newReadyCommitted", "getOrCreateReturned"]
+      ],
+      "observe": ["processExit", "exactAuthorityReads", "exactLeaseReadsWithStoreTime", "publicApiResults", "providerReadAndCommitEvents", "factoryEvents", "transportFrames"]
+    },
+    {
+      "name": "remote-destroy-without-admitted-owner-is-unavailable",
+      "specClauses": ["remoteDestroy", "routeAdmission", "routeReadiness", "submissionErrors", "destroyErrors", "oneWayUnavailable"],
+      "given": { "authority": "oldReady", "ownerLease": "valid", "routeBToA": "connectedButNotAdmittedForOwnerLifecycle", "destroyRef": { "actorId": "id", "objectGeneration": "g" } },
+      "steps": [
+        {
+          "act": "B calls Destroy(oldRef) while A's ADMIT is withheld",
+          "expect": {
+            "kind": "Unavailable",
+            "authority": "oldReady",
+            "command27Submissions": 0,
+            "command27Sends": 0,
+            "command27Replies": 0,
+            "authorityWrites": 0
+          }
+        }
+      ],
+      "requiredOrder": [
+        ["destroyReturned", "destroyDeadline"],
+        ["destroyReturned", "admissionAllowed"]
+      ],
+      "observe": ["publicApiResults", "routeAdmissionEvents", "exactAuthorityReads", "providerReadAndCommitEvents", "transportSubmissions", "transportFrames"]
+    }
+  ]
+}

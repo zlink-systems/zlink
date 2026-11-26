@@ -47,6 +47,57 @@ Actor membership, Closing 확정 전 실패, `OnClosing` 실패 기록, 먼저 �
 대상이다. Context Close는 manager Close와 같은 완료 결과를 반환한다.
 네 언어의 unit test가 이 fixture를 읽고 scenario마다 실제 runtime 결과를 대조한다.
 
+`actor-destroy-v1.json`은 #4397의 교차언어 Actor destroy 시험이 대조할 기대값 초안이다.
+`given`은 전제 상태, `steps[].act`와 `steps[].expect`는 시험 동작과 기대 관찰이다.
+`requiredOrder`의 각 쌍은 앞 사건이 뒤 사건보다 먼저 발생해야 한다는 뜻이다. 같은 단계에서
+수집하는 독립 호출의 반환 순서는 자유다. `return`은 정상 반환, `pending`은 해당 관찰 지점에서
+미완료, `observation`은 API 반환을 요구하지 않는 관찰이다. `deadline`은 destroy의 기존
+deadline 결과이고, `InvalidOperation`과 `Unavailable`은 공개 오류 종류다. `null`은 Find가
+ref를 반환하지 않았음을 나타낸다. 시험 호스트는 C++·Java·.NET 후속 변경이 main에 반영된 뒤 구현한다.
+
+서로 다른 언어로 실행하는 A와 B는 같은 Mesh와 Redis Location Store를 사용한다. A에서
+Entry Spot Actor를 만들고 B에서 새 incarnation을 만들 때는 B만 배치 후보가 되도록 제어한다.
+`authority`는 exact read 관찰에 필요한 필드만 적는다. `g`와 `gNext` 등은 실행 중 확보한
+값에 대응하며 64비트 generation은 10진 문자열로 기록한다. `vReady`, `vClosing`, `vNewReady`는
+Provider가 반환한 불투명한 StoreVersion이며 동일 여부만 비교한다. 같은 snapshot 이름이 다시
+나오면 그 StoreVersion을 포함해 대조한다. `sameAs`는 `changes`에 적힌 필드만 바꿔 대조한다.
+Provider metadata와 디코딩한 authority payload는 각자의 스키마로 읽는다. Command 27의
+fence는 송신 직전에 읽은 authority를 기준으로 확인하고 reply는 같은 correlation으로 확인한다.
+[Authority record §3.4](../../doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법) ·
+[service-wire schema](../protocol/service-wire-v1.schema.json)
+
+| 시나리오 | 관측 방법 |
+|---|---|
+| a. 원격 destroy와 재생성 | A의 최종 owner Delete를 provider 제출 직전에 보류한다. 실제 Redis exact read로 Closing을 확인한 뒤 B의 Find와 GetOrCreate를 시작한다. GetOrCreate가 Closing을 읽은 사건과 호출의 미완료 상태를 확인하고 Delete를 재개한다. A의 삭제 commit과 B의 첫 factory 진입 순서를 기록한다. B의 Destroy는 삭제 뒤 Missing 또는 더 큰 generation을 관찰해 완료할 수 있다. |
+| b. Owner 중복 destroy | A의 첫 destroy는 B의 command 27로 시작한다. 별도 ActorId에서 같은 Delete 보류를 만들고, A의 독립 호출이 진행 중인 destroy에 합류한 뒤 Delete를 재개한다. 보류 중 미완료와 해제 뒤 정상 반환을 기록하고, cleanup·Closing 게시·Delete commit이 각각 한 번인지 확인한다. |
+| c. 이전 ActorRef | a에서 확보한 이전 ref를 B와 A에 그대로 전달한다. A는 현재 owner가 B임을 확인하고 A → B route를 admit한 뒤 호출한다. 두 호출의 송신과 Store 쓰기 관측 범위를 각각 열고, B의 새 Actor가 공개 probe를 처리하는지 확인한다. |
+| d. Owner lease가 만료된 Closing | 별도 ActorId에서 실제 Closing을 만든다. 초기 원격 호출의 deadline까지 A의 lease를 유지한 채 Delete를 보류한다. A만 비정상 종료하고 정확한 lease token이 Store 시각 기준으로 자연 만료되는지 확인한다. B의 Find 이후 GetOrCreate가 시작한 조건부 batch로 이전 authority, 해당 membership과 사용 중이던 Actor 수용 공간이 함께 해제되는지 provider commit에서 확인한다. 다음 Reserve가 이미 시작됐어도 해당 commit으로 Missing 전이를 검증할 수 있다. |
+| e. Admission 전 원격 destroy | A의 Ready authority, 유효 lease와 현재 선택 route를 유지한 채 B에서 A의 해당 lifecycle에 대한 ADMIT가 처리되지 않도록 한다. B의 결과가 deadline과 admission 허용보다 앞서는지 기록한다. Command 27의 transport 제출 건수와 실제 송신 건수를 모두 센다. |
+
+보류 및 재개 순서는 Store와 API 사건으로 제어한다. Command 27 송신 건수는 송신 측에서
+해당 command를 식별할 수 있는 trace 또는 수동 관측으로 확인한다. c와 e는 대상 호출의 시작 전부터
+송신을 관측하며, 수신 측에서 프레임이 없었다는 사실만으로 송신 0을 판정할 수 없다.
+Closing 관찰을 건너뛴 실행은 a의 전제에 실패하고, 유효 lease가 남은 Closing은 d의 해제 대상에
+들어갈 수 없다. 자기 turn의 조기 반환과 1단계 Closing CAS 실패의 되돌림(`bb461c1bfc`),
+그리고 owner 합류의 실패 전달은 별도 owner focused 시험에서 대조할 항목이다.
+[Actor model §6.8](../../doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md#68-종료와-destroy)
+
+### Actor destroy 언어 쌍
+
+각 셀에서 B가 caller이고 A가 최초 owner다. 각 언어가 한 번씩 command 27을 송신하고
+한 번씩 처리하도록 모든 셀에서 a–e를 실행한다. c에서 이전 owner A의 원격 호출은 같은
+셀 안에서 A → B로 진행한다.
+
+| B → A | 시나리오 |
+|---|---|
+| C++ → .NET | a, b, c, d, e |
+| .NET → Java | a, b, c, d, e |
+| Java → Node | a, b, c, d, e |
+| Node → C++ | a, b, c, d, e |
+
+기존 runtime conformance 검증기는 등록된 fixture를 파일명으로 읽는다. 이 초안의 검증기 등록과
+실제 교차언어 실행 결과는 시험 구현 시 추가한다.
+
 `relocation-behavior-v1.json`은 Actor와 Spot relocation에서 application과 runtime port가
 관찰하는 lifecycle, traffic identity, terminal settlement를 정의한다. `actorJoin`,
 `actorHostHandoff`, `perActorUserSpot`, `spotWideUserSpot`, `instanceSpot` profile은 공통 사건을
