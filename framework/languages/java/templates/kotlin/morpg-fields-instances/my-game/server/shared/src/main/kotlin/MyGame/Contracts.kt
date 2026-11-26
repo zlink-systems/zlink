@@ -16,7 +16,7 @@ object Names {
     const val DUNGEON_SCENARIO = "dungeon"
     const val RECONNECT = "reconnect"
     const val UPDATE = "update"
-    val SCENARIOS = listOf(FIELD_SCENARIO, DUNGEON_SCENARIO, RECONNECT, UPDATE)
+    val SCENARIOS = listOf(FIELD_SCENARIO, DUNGEON_SCENARIO, RECONNECT, UPDATE, "dungeon-leave")
 }
 
 object Rules {
@@ -61,7 +61,15 @@ enum class RunPhase {
     Completed,
 }
 
-@JsonSerialize class SessionInfoRequest
+@JsonSerialize class LeaveDungeonRequest
+
+data class DungeonLeft(
+    val dungeonId: String,
+    val objectGeneration: Long,
+    val remainingPlayers: Int,
+)
+
+class SessionInfoRequest
 
 data class SessionInfo(
     val sessionId: String = "",
@@ -156,7 +164,11 @@ object Rejection {
     const val MOVE_BUDGET = "move-budget"
 }
 
-data class PartyCommand(val actorId: String = "", val join: Boolean = false, val enter: Boolean = false)
+data class PartyCommand(
+    val actorId: String = "",
+    val join: Boolean = false,
+    val enter: Boolean = false,
+)
 
 data class PartyCommandResult(val view: PartyView? = null, val rejection: ActionRejected? = null)
 

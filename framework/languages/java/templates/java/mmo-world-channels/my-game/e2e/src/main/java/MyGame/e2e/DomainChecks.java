@@ -14,7 +14,9 @@ final class DomainChecks {
         var balance = new GoldBalance(0, 0, now::get);
 
         var first = balance.previewEarn();
-        require(first.accepted() && first.gold() == GameRules.EARN_AMOUNT, "Initial earn was rejected");
+        require(
+                first.accepted() && first.gold() == GameRules.EARN_AMOUNT,
+                "Initial earn was rejected");
         checks++;
         require(balance.gold() == 0, "Gold changed before persistence completed");
         checks++;
@@ -37,15 +39,16 @@ final class DomainChecks {
 
         now.set(250_000_000L);
         var snapshot = balance.capture();
-        require(snapshot.cooldownRemainingMs() == 750, "Snapshot did not store remaining milliseconds");
+        require(
+                snapshot.cooldownRemainingMs() == 750,
+                "Snapshot did not store remaining milliseconds");
         checks++;
 
         now.set(10_000_000_000L);
         var relocated = new GoldBalance(snapshot.gold(), snapshot.cooldownRemainingMs(), now::get);
         var restored = relocated.previewEarn();
         require(
-                !restored.accepted()
-                        && restored.rejection().retryAfterMs() == 750,
+                !restored.accepted() && restored.rejection().retryAfterMs() == 750,
                 "Relocation did not preserve remaining cooldown");
         checks++;
 
@@ -71,7 +74,9 @@ final class DomainChecks {
                         && atCap.rejection().retryAfterMs() == 0,
                 "Gold limit was not rejected");
         checks++;
-        require(atLimit.gold() == GameRules.MAX_INTEGER, "Gold limit rejection changed the balance");
+        require(
+                atLimit.gold() == GameRules.MAX_INTEGER,
+                "Gold limit rejection changed the balance");
         checks++;
 
         var overLimit =

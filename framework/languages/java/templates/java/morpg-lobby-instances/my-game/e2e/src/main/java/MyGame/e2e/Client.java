@@ -82,6 +82,14 @@ public final class Client implements AutoCloseable {
         return next(DungeonView.class);
     }
 
+    DungeonLeft leaveDungeon() {
+        return connector
+                .request(new LeaveDungeonRequest())
+                .submit(DungeonLeft.class)
+                .toCompletableFuture()
+                .join();
+    }
+
     SessionInfo sessionInfo() {
         return connector
                 .request(new SessionInfoRequest())

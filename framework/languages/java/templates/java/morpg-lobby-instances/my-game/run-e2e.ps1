@@ -1,3 +1,4 @@
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Local,
     [switch]$NoBuild,
@@ -7,28 +8,43 @@ param(
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
 )
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 Set-StrictMode -Version Latest
-if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
 $root = $PSScriptRoot
+. (Join-Path $root 'scripts/run-helpers.ps1')
+Assert-PowerShellVersion
 Set-Location $root
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+if (-not $Local -and -not $BuildOnly -and -not $NoBuild -and
+    $RunnerArguments -cnotcontains '--check-structure' -and
+    $RunnerArguments -cnotcontains '--check-domain' -and (Test-RunningServer)) {
+    Write-Host 'Using the running server (.logs/server.json)'
+    $java = Get-LocalJava
+    & $java --enable-native-access=ALL-UNNAMED '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' -cp "$e2eClasspath" MyGame.e2e.Program --attach @RunnerArguments
+    exit $LASTEXITCODE
+}
 if ($Local) {
     if (-not $NoBuild) {
-        & ./gradlew.bat --no-daemon installDist :server:lobby:test :e2e:javaHome *> (Join-Path $root '.logs/build.log')
-        if ($LASTEXITCODE -ne 0) {
-            Get-Content (Join-Path $root '.logs/build.log') -Tail 35 | Write-Host
-            exit 1
-        }
+        Assert-NoRunningServer
+        Build-Local :server:lobby:test
     }
     if ($BuildOnly) { exit 0 }
-    $javaHomePath = (Get-Content (Join-Path $root '.logs/java-home.txt') -Raw).Trim()
-    & "$javaHomePath/bin/java.exe" --enable-native-access=ALL-UNNAMED '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.Program @RunnerArguments
+    $java = Get-LocalJava
+    if (-not $java) { throw 'Build with ./run-e2e.ps1 -Local -BuildOnly before using -NoBuild.' }
+    & $java --enable-native-access=ALL-UNNAMED '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' -cp "$e2eClasspath" MyGame.e2e.Program @RunnerArguments
     exit $LASTEXITCODE
 }
 if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer cache automatically.' }
-$project = 'my-game-e2e-' + [guid]::NewGuid().ToString('N')
+if (-not $IsWindows -and (Test-Path -LiteralPath '/var/run/docker.sock')) {
+        $env:MY_GAME_RUNNER_USER = "$(id -u):$(id -g)"
+        $dockerGid = & stat -c '%g' /var/run/docker.sock 2>$null
+        if ($LASTEXITCODE -ne 0) { $dockerGid = & stat -f '%g' /var/run/docker.sock }
+        if ($LASTEXITCODE -ne 0) { throw 'Could not read the Docker socket group.' }
+        $env:MY_GAME_DOCKER_GID = $dockerGid
+    }
+    $project = 'my-game-e2e-' + [guid]::NewGuid().ToString('N')
 $logs = Join-Path $root ".logs/docker-$project"
 New-Item -ItemType Directory $logs | Out-Null
 # BuildKit reuses the previous transfer of a build context with the same directory name and

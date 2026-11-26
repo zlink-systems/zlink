@@ -3,7 +3,8 @@ package MyGame;
 public enum Scenario {
     PARTY("party"),
     RECONNECT("reconnect"),
-    UPDATE("update");
+    UPDATE("update"),
+    DUNGEON_LEAVE("dungeon-leave");
     private final String id;
 
     Scenario(String id) {
