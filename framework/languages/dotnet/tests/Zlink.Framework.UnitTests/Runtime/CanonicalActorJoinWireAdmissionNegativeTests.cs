@@ -269,7 +269,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         NodeGeneration,
     }
 
-    private sealed class WireAdmissionFixture : IAsyncDisposable
+    internal sealed class WireAdmissionFixture : IAsyncDisposable
     {
         private const string MeshName = "wire-admission";
         internal const string ActorId = "actor-1";
@@ -315,7 +315,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
 
         internal static async Task<WireAdmissionFixture> CreateAsync(
             ActorFenceMismatch? mismatch = null,
-            Func<ZLinkSpotActorJoinResult>? onJoin = null
+            Func<ZLinkSpotActorJoinResult>? onJoin = null,
+            bool includeEntrySpot = false
         )
         {
             var provider = new ZLinkInMemoryProviderLocationStore();
@@ -351,6 +352,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             var node = new ZLinkSpotNodeRegistration
             {
                 SpotNodeName = MeshName,
+                EntrySpotType = includeEntrySpot ? typeof(AdmissionEntrySpot) : null,
                 ObjectRole = ZLinkMeshNodeObjectRole.Server,
                 ObjectRoleSelected = true,
                 Router = new ZLinkSpotRouterCapabilityRegistration
@@ -510,6 +512,21 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             );
         }
 
+        internal ActorJoinRequest CreateEntryRequest()
+        {
+            var entry = Runtime.GetSpotNodeRuntime(MeshName).EntrySpotActivation!;
+            return CreateRequest() with
+            {
+                Entry = true,
+                TargetSpotId = entry.SpotId,
+                TargetSpotGeneration = _targetNodeGeneration,
+                TargetAuthorityOwnerGeneration = _targetNodeGeneration,
+                TargetOwnerLeaseGeneration = checked(
+                    (ulong)Runtime.LocationLifecycle!.OwnerToken.LeaseGeneration
+                ),
+            };
+        }
+
         internal async Task<IReadOnlyList<Message>> SendAsync(
             ActorJoinRequest request,
             byte[]? head = null
@@ -639,6 +656,11 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                 await Task.Delay(10);
             }
         }
+    }
+
+    private sealed class AdmissionEntrySpot(IZLinkEntrySpotContext context) : IZLinkEntrySpot
+    {
+        public IZLinkEntrySpotContext Context { get; } = context;
     }
 
     private sealed class AdmissionSpot(

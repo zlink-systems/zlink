@@ -72,11 +72,10 @@ internal static class ZLinkActorRelocationRoot
                     !ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(job.Payload.Span, out _, out _)
                 )
                 .OrderBy(static job => job.AcceptedSequence)
-                .Select(
-                    (job, index) =>
-                        ZLinkCanonicalActorAcceptedJournal
-                            .Decode(job.Payload.Span, checked((long)index))
-                            .Frame
+                .Select(job =>
+                    ZLinkCanonicalActorAcceptedJournal
+                        .Decode(job.Payload.Span, checked((long)job.AcceptedSequence))
+                        .Frame
                 )
                 .ToArray();
         }

@@ -1,8 +1,11 @@
 using System.Buffers.Binary;
 using System.Text;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
+using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Streams;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -61,6 +64,7 @@ internal static class ZLinkCanonicalActorAcceptedJournal
                 "An accepted Actor frame requires exact operation, reply and authority fences."
             );
 
+        var multipart = CanWriteMultipart(frame, source, targetActor, request, replyRoute);
         using var stream = new MemoryStream();
         stream.WriteByte(
             request
@@ -74,7 +78,7 @@ internal static class ZLinkCanonicalActorAcceptedJournal
         );
         using (var identity = new MemoryStream())
         {
-            Text8(identity, source.NodeRid.ToHex());
+            WriteRid(identity, source.NodeRid, multipart);
             U64(identity, source.NodeGeneration);
             Text8(identity, source.OwnerId);
             U64(identity, source.LeaseGeneration);
@@ -94,7 +98,7 @@ internal static class ZLinkCanonicalActorAcceptedJournal
                     );
                 Text8(identity, bound.ActorId);
                 U64(identity, bound.ActorGeneration);
-                Text8(identity, bound.SessionRid.ToHex());
+                WriteRid(identity, bound.SessionRid, multipart);
                 U64(identity, bound.BindingGeneration);
                 U64(identity, bound.SessionSequence);
             }
@@ -117,23 +121,22 @@ internal static class ZLinkCanonicalActorAcceptedJournal
 
         Text8(stream, targetActor.ActorId);
         U64(stream, targetActor.Generation);
-        Text8(stream, targetActor.NodeRid.ToHex());
+        WriteRid(stream, targetActor.NodeRid, multipart);
         U64(stream, frame.RouteContext.TargetNodeGeneration);
         U64(stream, frame.RouteContext.AuthorityOwnerGeneration);
         U64(stream, frame.RouteContext.OwnerLeaseGeneration);
 
-        var payload = EncodeFramePayload(frame);
-        stream.WriteByte(1); // application-payload-envelope-v1
-        using (var body = new MemoryStream())
-        {
-            Text8(body, ZLinkStreamProtocolDefaults.DecodeHeader(frame.Header).Name);
-            Text8(body, FrameContentType);
-            U32(body, checked((uint)payload.Length));
-            body.Write(payload);
-            U32(stream, checked((uint)body.Length));
-            body.Position = 0;
-            body.CopyTo(stream);
-        }
+        stream.Write(
+            multipart
+                ? ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
+                    new ReadOnlyMemory<byte>[] { frame.Header, frame.Body }
+                )
+                : ZLinkApplicationPayloadEnvelopeCodec.Encode(
+                    ZLinkStreamProtocolDefaults.DecodeHeader(frame.Header).Name,
+                    FrameContentType,
+                    EncodeFramePayload(frame)
+                )
+        );
         var encoded = stream.ToArray();
         if (!ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(encoded))
             throw new InvalidOperationException(
@@ -149,106 +152,236 @@ internal static class ZLinkCanonicalActorAcceptedJournal
     {
         if (!ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(encoded))
             throw new InvalidDataException("The accepted Actor frozen record is malformed.");
-        var reader = new Reader(encoded);
-        var kind = reader.Byte();
-        if (
-            kind
-            is not (
-                (byte)ServiceWireCodec.MeshRecordKind.ActorSend
-                or (byte)ServiceWireCodec.MeshRecordKind.ActorRequest
-            )
-        )
-            throw new InvalidDataException("The accepted Actor record kind is invalid.");
-        var sourceKind = reader.Byte();
-        if (
-            sourceKind
-            is not (
-                (byte)ServiceWireCodec.FrozenSourceKind.Node
-                or (byte)ServiceWireCodec.FrozenSourceKind.BoundSession
-            )
-        )
-            throw new InvalidDataException("The accepted Actor source kind is invalid.");
-        var sourceReader = new Reader(reader.Bytes(reader.U16()));
-        var sourceNodeRid = TextRid(sourceReader.Text8());
-        var sourceNodeGeneration = sourceReader.U64();
-        var sourceOwnerId = sourceReader.Text8();
-        var sourceOwnerLease = sourceReader.U64();
-        var source = new ZLinkServiceWireCodec.RequestSourceFence(
-            sourceOwnerId,
-            sourceOwnerLease,
-            sourceNodeRid,
-            sourceNodeGeneration
+        var record = ServiceWireCodec.DecodeFrozenRecord(
+            encoded.ToArray(),
+            ServiceWireCodec.DecodeContext.Empty with
+            {
+                EffectiveCompleteMessageBytes = encoded.Length,
+                EffectiveCompleteMessageBytesMinusActualEnvelopeOverhead = encoded.Length,
+            }
         );
-        ZLinkActorBoundSessionHandoffFence? boundSession = null;
-        if (sourceKind == (byte)ServiceWireCodec.FrozenSourceKind.BoundSession)
+        var (request, fence, payload) = record.Body switch
         {
-            var sourceActorId = sourceReader.Text8();
-            var sourceActorGeneration = sourceReader.U64();
-            var sourceSessionRid = TextRid(sourceReader.Text8());
-            var bindingGeneration = sourceReader.U64();
-            var sessionSequence = sourceReader.U64();
-            boundSession = new ZLinkActorBoundSessionHandoffFence(
-                sourceActorId,
-                sourceActorGeneration,
-                sourceSessionRid,
-                string.Empty,
-                bindingGeneration,
-                sessionSequence
-            );
-        }
-        sourceReader.End();
-        ValidateDecodedSource(source);
-        if (reader.Byte() != 0)
-            throw new InvalidDataException(
-                "Actor frame metadata must be embedded in its exact header."
-            );
-        var operation = new MeshOperationId(reader.U64(), reader.U64());
-        var operationKind = reader.U32();
-        var replyReader = new Reader(reader.Bytes(reader.U16()));
-        var replyRoute =
-            kind == (byte)ServiceWireCodec.MeshRecordKind.ActorRequest ? replyReader.U64() : 0;
-        replyReader.End();
-        if (
-            operationKind
-            != (
-                kind == (byte)ServiceWireCodec.MeshRecordKind.ActorRequest
-                    ? (uint)ServiceWireCodec.MeshOperationKind.ActorRequest
-                    : (uint)ServiceWireCodec.MeshOperationKind.None
-            )
-        )
-            throw new InvalidDataException("The accepted Actor operation kind is invalid.");
-        var actor = new ZLinkBackendActorRef(default, reader.Text8(), reader.U64());
-        var targetNodeRid = TextRid(reader.Text8());
-        var targetNodeGeneration = reader.U64();
-        var authorityOwnerGeneration = reader.U64();
-        var ownerLeaseGeneration = reader.U64();
-        actor = actor with { NodeRid = targetNodeRid };
-        if (reader.Byte() != 1)
-            throw new InvalidDataException("The accepted Actor payload version is invalid.");
-        var application = new Reader(reader.Bytes(checked((int)reader.U32())));
-        _ = application.Text8();
-        if (!string.Equals(application.Text8(), FrameContentType, StringComparison.Ordinal))
-            throw new InvalidDataException("The accepted Actor payload type is invalid.");
-        var payload = application.Bytes(checked((int)application.U32()));
-        application.End();
-        reader.End();
-        var frame = DecodeFramePayload(
-            payload,
-            actor,
-            source,
-            boundSession,
-            operation,
-            replyRoute,
-            targetNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration,
-            arrivalIndex
+            ServiceWireCodec.FrozenRecordBodyCase8 send => (false, send.TargetActor, send.Payload),
+            ServiceWireCodec.FrozenRecordBodyCase9 call => (true, call.TargetActor, call.Payload),
+            _ => throw new InvalidDataException("The accepted Actor record kind is invalid."),
+        };
+        var legacy = IsLegacyContentType(payload.ContentType.Value);
+        var (source, boundSession) = DecodeSource(record.Source, legacy);
+        var replyRoute = record.ReplyRoute is ServiceWireCodec.FrozenReplyRouteCase3 reply
+            ? reply.ReplyRouteId.Value
+            : 0;
+        var operation = new MeshOperationId(
+            record.OperationId.High.Value,
+            record.OperationId.Low.Value
         );
+        var targetNodeRid = DecodeRid(fence.TargetNodeRid.RoutingId, legacy);
+        var actor = new ZLinkBackendActorRef(
+            targetNodeRid,
+            fence.Actor.ActorId.Value,
+            fence.Actor.ObjectGeneration.Value
+        );
+        var route = new ZLinkBackendActorRouteContext(
+            operation,
+            0,
+            fence.TargetNodeGeneration.Value,
+            fence.ExpectedAuthorityOwnerGeneration.Value,
+            fence.ExpectedOwnerLeaseGeneration.Value,
+            replyRoute,
+            request ? RequestFlag : 0,
+            IsBoundSessionRoute: boundSession is not null
+        );
+        var frame = legacy
+            ? DecodeFramePayload(
+                payload.Payload.Value,
+                source,
+                boundSession,
+                operation,
+                replyRoute,
+                route.TargetNodeGeneration,
+                route.AuthorityOwnerGeneration,
+                route.OwnerLeaseGeneration,
+                arrivalIndex
+            )
+            : DecodeMultipartFrame(
+                payload,
+                request,
+                actor,
+                source,
+                boundSession,
+                route,
+                arrivalIndex,
+                encoded.Length
+            );
         return new ZLinkCanonicalActorAcceptedFrame(
             new ZLinkActorAcceptedRecord(frame, source, actor),
             actor,
             targetNodeRid
         );
+    }
+
+    private static bool CanWriteMultipart(
+        ZLinkActorHandoffFrame frame,
+        ZLinkServiceWireCodec.RequestSourceFence source,
+        ZLinkBackendActorRef actor,
+        bool request,
+        ulong replyRoute
+    )
+    {
+        // A direct reply uses the frozen request source and reply route.
+        // The callback capability stays with the source Actor's in-memory handoff.
+        var flags = request ? RequestFlag : 0;
+        var replyActorIsDerived =
+            (frame.ReplyActorNodeRid.Length == 0 && frame.ReplyActorGeneration == 0)
+            || (
+                frame.ReplyActorNodeRid.AsSpan().SequenceEqual(actor.NodeRid.ToBytes())
+                && frame.ReplyActorGeneration == actor.Generation
+            );
+        return replyActorIsDerived
+            && frame.RequestId == replyRoute
+            && frame.Flags == flags
+            && frame.RouteContext.MessageFollowHopCount == 0
+            && (frame.RouteContext.ReplyFlags == 0 || frame.RouteContext.ReplyFlags == flags)
+            && (
+                frame.RouteContext.ReplyCapability is null
+                || (request && frame.RouteContext.IsDirectRoute)
+            )
+            && (
+                frame.BoundSessionSource is { } bound
+                    ? frame.SourceSessionRid.AsSpan().SequenceEqual(bound.SessionRid.ToBytes())
+                        && bound.BindingToken
+                            == BindingToken(source, bound.SessionRid, bound.BindingGeneration)
+                    : frame.SourceSessionRid.Length == 0
+            );
+    }
+
+    private static (
+        ZLinkServiceWireCodec.RequestSourceFence Source,
+        ZLinkActorBoundSessionHandoffFence? Bound
+    ) DecodeSource(ServiceWireCodec.FrozenSourceIdentity identity, bool legacy)
+    {
+        ZLinkServiceWireCodec.RequestSourceFence source;
+        ZLinkActorBoundSessionHandoffFence? bound = null;
+        switch (identity)
+        {
+            case ServiceWireCodec.FrozenSourceIdentityCase0 node:
+                source = new(
+                    node.SourceOwnerId.Value,
+                    node.SourceOwnerLeaseGeneration.Value,
+                    DecodeRid(node.SourceNodeRid.RoutingId, legacy),
+                    node.SourceNodeGeneration.Value
+                );
+                break;
+            case ServiceWireCodec.FrozenSourceIdentityCase2 actor when !legacy:
+                source = new(
+                    actor.SourceOwnerId.Value,
+                    actor.SourceOwnerLeaseGeneration.Value,
+                    actor.SourceNodeRid.RoutingId,
+                    actor.SourceNodeGeneration.Value
+                );
+                break;
+            case ServiceWireCodec.FrozenSourceIdentityCase3 session:
+                source = new(
+                    session.SourceOwnerId.Value,
+                    session.SourceOwnerLeaseGeneration.Value,
+                    DecodeRid(session.SourceNodeRid.RoutingId, legacy),
+                    session.SourceNodeGeneration.Value
+                );
+                var sessionRid = DecodeRid(session.SourceSessionRid.RoutingId, legacy);
+                var bindingGeneration = session.SourceBindingGeneration.Value;
+                bound = new(
+                    session.SourceActor.ActorId.Value,
+                    session.SourceActor.ObjectGeneration.Value,
+                    sessionRid,
+                    legacy ? string.Empty : BindingToken(source, sessionRid, bindingGeneration),
+                    bindingGeneration,
+                    session.SourceSessionSequence.Value
+                );
+                break;
+            default:
+                throw new InvalidDataException("The accepted Actor source kind is invalid.");
+        }
+        ValidateDecodedSource(source);
+        return (source, bound);
+    }
+
+    private static string BindingToken(
+        ZLinkServiceWireCodec.RequestSourceFence source,
+        RoutingId sessionRid,
+        ulong bindingGeneration
+    ) =>
+        ZLinkActorBoundSessionBindingToken.Canonical(
+            source.NodeRid,
+            source.NodeGeneration,
+            source.OwnerId,
+            source.LeaseGeneration,
+            sessionRid,
+            bindingGeneration
+        );
+
+    private static ZLinkActorHandoffFrame DecodeMultipartFrame(
+        ServiceWireCodec.ApplicationPayloadEnvelopeV1 payload,
+        bool request,
+        ZLinkBackendActorRef actor,
+        ZLinkServiceWireCodec.RequestSourceFence source,
+        ZLinkActorBoundSessionHandoffFence? boundSession,
+        ZLinkBackendActorRouteContext route,
+        long arrivalIndex,
+        int encodedLength
+    )
+    {
+        var envelope = new ZLinkApplicationPayloadEnvelope(
+            payload.PacketName.Value,
+            payload.ContentType.Value,
+            payload.Payload.Value
+        );
+        if (
+            !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                envelope,
+                out var parts
+            )
+        )
+            throw new InvalidDataException("The accepted Actor payload type is invalid.");
+        try
+        {
+            if (parts.Length != 2)
+                throw new InvalidDataException(
+                    "The accepted Actor multipart must contain two parts."
+                );
+            var header = parts[0].AsReadOnlySpan().ToArray();
+            if (
+                ZLinkStreamProtocolDefaults.DecodeHeader(header).Kind
+                != (request ? ZlinkStreamMessageKind.Request : ZlinkStreamMessageKind.Send)
+            )
+                throw new InvalidDataException("The accepted Actor STREAM kind is invalid.");
+            return new ZLinkActorHandoffFrame(
+                Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
+                actor.NodeRid.ToBytes().ToArray(),
+                actor.Generation,
+                source.NodeRid.ToBytes().ToArray(),
+                boundSession is { } bound ? bound.SessionRid.ToBytes().ToArray() : [],
+                route.ReplyRequestId,
+                request ? RequestFlag : 0,
+                header,
+                parts[1].AsReadOnlySpan().ToArray(),
+                arrivalIndex,
+                route,
+                source.NodeGeneration,
+                source,
+                route.ReplyRequestId,
+                encodedLength,
+                boundSession,
+                CanonicalAcceptedSequence: checked((ulong)arrivalIndex)
+            );
+        }
+        catch (ZlinkStreamException error)
+        {
+            throw new InvalidDataException("The accepted Actor STREAM header is invalid.", error);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
     }
 
     private static byte[] EncodeFramePayload(ZLinkActorHandoffFrame frame)
@@ -274,7 +407,6 @@ internal static class ZLinkCanonicalActorAcceptedJournal
 
     private static ZLinkActorHandoffFrame DecodeFramePayload(
         ReadOnlySpan<byte> encoded,
-        ZLinkBackendActorRef actor,
         ZLinkServiceWireCodec.RequestSourceFence requestSource,
         ZLinkActorBoundSessionHandoffFence? boundSession,
         MeshOperationId operation,
@@ -336,7 +468,8 @@ internal static class ZLinkCanonicalActorAcceptedJournal
             requestSource,
             replyRoute,
             encoded.Length,
-            boundSession
+            boundSession,
+            CanonicalAcceptedSequence: checked((ulong)arrivalIndex)
         );
     }
 
@@ -366,11 +499,23 @@ internal static class ZLinkCanonicalActorAcceptedJournal
         }
     }
 
-    private static RoutingId TextRid(string value)
+    private static void WriteRid(Stream stream, RoutingId rid, bool multipart)
     {
+        if (multipart)
+            Bytes8(stream, rid.ToBytes());
+        else
+            Text8(stream, rid.ToHex());
+    }
+
+    internal static bool IsLegacyContentType(string contentType) => contentType == FrameContentType;
+
+    internal static RoutingId DecodeRid(RoutingId rid, bool legacy)
+    {
+        if (!legacy)
+            return rid;
         try
         {
-            return RoutingId.FromHex(value);
+            return RoutingId.FromHex(StrictUtf8.GetString(rid.ToBytes()));
         }
         catch (Exception error) when (error is ArgumentException or FormatException)
         {

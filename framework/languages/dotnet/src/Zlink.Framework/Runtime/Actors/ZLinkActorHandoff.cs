@@ -47,7 +47,9 @@ internal sealed record ZLinkActorHandoffFrame(
     ZLinkServiceWireCodec.RequestSourceFence? RequestSource = null,
     ulong RelocationReplyRouteId = 0,
     long CanonicalEncodedLength = 0,
-    ZLinkActorBoundSessionHandoffFence? BoundSessionSource = null
+    ZLinkActorBoundSessionHandoffFence? BoundSessionSource = null,
+    // A target may assign its own FIFO index when it imports a frozen record.
+    ulong CanonicalAcceptedSequence = 0
 )
 {
     internal Func<ValueTask<bool>>? Withdraw { get; set; }

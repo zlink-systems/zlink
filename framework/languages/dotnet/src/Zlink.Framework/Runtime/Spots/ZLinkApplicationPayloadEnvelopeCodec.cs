@@ -188,14 +188,19 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
     )
     {
         parts = [];
-        if (
-            !TryDecode(frame, out var envelope)
-            || !string.Equals(envelope.PacketName, MultipartPacketName, StringComparison.Ordinal)
-            || !string.Equals(envelope.ContentType, MultipartContentType, StringComparison.Ordinal)
-        )
-            return false;
+        return TryDecode(frame, out var envelope)
+            && TryDecodeFrameworkMultipart(envelope, out parts);
+    }
 
-        return TryDecodeMultipart(envelope.Payload.Span, out parts);
+    internal static bool TryDecodeFrameworkMultipart(
+        ZLinkApplicationPayloadEnvelope envelope,
+        out Message[] parts
+    )
+    {
+        parts = [];
+        return string.Equals(envelope.PacketName, MultipartPacketName, StringComparison.Ordinal)
+            && string.Equals(envelope.ContentType, MultipartContentType, StringComparison.Ordinal)
+            && TryDecodeMultipart(envelope.Payload.Span, out parts);
     }
 
     internal static bool TryDecodeFrameworkMultipart(Message frame, out Message[] parts)
