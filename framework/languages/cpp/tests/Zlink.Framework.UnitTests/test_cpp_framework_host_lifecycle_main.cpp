@@ -32,6 +32,9 @@ int main (int argc, char **argv)
     if (argc == 2 && std::string_view (argv[1]) == "empty-host-relocation")
         return verify_host_relocation_needs_target_only_for_units () ? EXIT_SUCCESS : EXIT_FAILURE;
 
+    if (argc == 2 && std::string_view (argv[1]) == "relocation-topology")
+        return verify_relocation_topology ();
+
     if (const char *iterations = std::getenv ("ZLINK_CPP_FIRST_ACTOR_REQUEST_ITERATIONS")) {
         return verify_first_request_after_remote_actor_create (std::atoi (iterations))
                  ? EXIT_SUCCESS
@@ -87,7 +90,7 @@ int main (int argc, char **argv)
         && !verify_application_signaled_relocation ())
         return EXIT_FAILURE;
 
-    if (verify_manual_topology_relocation_blockers () != EXIT_SUCCESS)
+    if (verify_relocation_topology () != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     return verify_shutdown_termination ();

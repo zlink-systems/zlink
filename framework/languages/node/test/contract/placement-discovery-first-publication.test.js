@@ -10,8 +10,8 @@ const {
   ZLinkRequestSourceResolver
 } = require('../../packages/framework/dist/runtime/locations/request-source-resolver');
 const {
-  createObjectCreationDeadline
-} = require('../../packages/framework/dist/runtime/host/object-creation-deadline');
+  createObjectOperationDeadline
+} = require('../../packages/framework/dist/runtime/host/object-operation-deadline');
 const {
   ZLinkLocationStoreRepository
 } = require('../../packages/framework/dist/runtime/locations/location-store-repository');
@@ -89,9 +89,9 @@ for (const kind of ['actor', 'user_spot']) {
         await sources.observeLiveDescriptors('play', rows());
         t.mock.timers.enable({ apis: ['setTimeout'] });
         const timeoutMs = 1000;
-        const deadline = createObjectCreationDeadline(
+        const deadline = createObjectOperationDeadline(
           timeoutMs,
-          kind === 'actor' ? 'Actor' : 'User Spot'
+          kind === 'actor' ? 'Actor creation' : 'User Spot creation'
         );
         t.after(() => deadline.close());
         let pending = true;

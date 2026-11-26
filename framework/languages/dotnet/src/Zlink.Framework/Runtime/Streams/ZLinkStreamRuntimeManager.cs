@@ -71,6 +71,7 @@ internal sealed class ZLinkStreamRuntimeManager(
                     streamNodeRegistration.HeaderSessionType,
                     state.TaskRunner,
                     streamNodeRegistration.TlsServer is null ? "tcp" : "tls",
+                    timeProvider: registration.TimeProvider,
                     actorDispatchEnabled: streamNodeRegistration.ActorDispatchEnabled,
                     maxMessageSize: streamNodeRegistration.SocketConfig.MaxMessageSize,
                     applicationJobQueue: state.ApplicationJobQueue,
