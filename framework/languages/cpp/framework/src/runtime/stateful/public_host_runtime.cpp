@@ -1368,14 +1368,21 @@ public_host_runtime_t::accepted_record_authority (
         const auto &local = _options.mesh.descriptor;
         // The execution owner checks a Spot's current incarnation. Actor admission
         // validates the native object fence here, independently of sender availability.
-        if ((query.target.kind == stateful::object_kind_t::actor
-             && query.requested_object_generation == query.target.object_generation
-             && query.requested_authority_owner_generation
-                  != query.target.authority_owner_generation)
-            || query.target_node_routing_id != local.node_routing_id
+        if (query.target_node_routing_id != local.node_routing_id
             || query.target_node_generation != local.lifecycle_generation)
             throw detail_make_boundary_exception (detail::boundary_error_t::stale_generation,
                                                   "accepted target fence is stale");
+        if (query.target.kind == stateful::object_kind_t::actor
+            && query.requested_object_generation == query.target.object_generation
+            && query.requested_authority_owner_generation
+                 != query.target.authority_owner_generation) {
+            if (query.direct_request && owner && _local_lease_observation && sources
+                && query.requested_authority_owner_generation
+                     > query.target.authority_owner_generation)
+                return accept_committed_actor_request (std::move (query), *sources);
+            throw detail_make_boundary_exception (detail::boundary_error_t::stale_generation,
+                                                  "accepted target fence is stale");
+        }
         // Admission has ended: only the exact mailbox's retained execution owner may accept.
         // Healthy admission continues without this state-lane lookup.
         if (!owner && _bound_execution_owner) {
@@ -1450,6 +1457,75 @@ public_host_runtime_t::accepted_record_authority (
     catch (...) {
         return task_t<authority_t> (detail::current_exception_result<authority_t> ());
     }
+}
+
+task_t<std::optional<stateful::accepted_record_authority_t>>
+public_host_runtime_t::accept_committed_actor_request (
+  stateful::accepted_record_authority_query_t query, live_location_reader_t &sources) const
+{
+    auto expected = query.target;
+    expected.authority_owner_generation = query.requested_authority_owner_generation;
+    // The mailbox retains the original in order while the target confirms the Store.
+    // SpotWide commit publishes ordinary participant rows, and the registered
+    // relocation attempt owns their shared restore identity.
+    const auto staged_owner = _local_lease_observation ();
+    const auto restore = co_await _relocation_session_terminal_lane.run_task (
+      [&] () -> std::optional<stateful::relocation_restore_identity_t> {
+          for (const auto &[key, attempt] : _relocation_target_attempts) {
+              const auto &target = attempt.prepare.target;
+              if (!staged_owner || !attempt.cutover_received || relocation_target_terminal (attempt)
+                  || target.target_node_routing_id != query.target_node_routing_id
+                  || target.target_node_generation != query.target_node_generation
+                  || target.target_owner_id != staged_owner->owner_id
+                  || target.target_owner_lease_generation
+                       != static_cast<std::uint64_t> (staged_owner->lease_generation))
+                  continue;
+              const auto participant = std::find_if (
+                attempt.targets.begin (), attempt.targets.end (), [&] (const auto &candidate) {
+                    return candidate == query.target || candidate == expected;
+                });
+              const auto index = static_cast<std::size_t> (participant - attempt.targets.begin ());
+              if (index < attempt.sources.size ()
+                  && expected.authority_owner_generation
+                       > attempt.sources[index].authority_owner_generation)
+                  return attempt.restore_identity;
+          }
+          return std::nullopt;
+      });
+    auto owner = staged_owner;
+    const auto stale = [] {
+        return detail_make_boundary_exception (detail::boundary_error_t::stale_generation,
+                                               "accepted target fence is stale");
+    };
+    if (restore) {
+        const auto read = co_await sources.read_authority (actor_authority_key (expected.key));
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+        owner = _local_lease_observation ();
+        if (!snapshot || snapshot->object_generation != expected.object_generation
+            || snapshot->authority_owner_generation != expected.authority_owner_generation
+            || snapshot->allocation.object_kind != placement_object_kind_t::actor
+            || snapshot->allocation.state != placement_allocation_state_t::active
+            || snapshot->allocation.target.mesh_name != expected.mesh_name
+            || snapshot->allocation.target.node_rid.value () != expected.node_id
+            || snapshot->allocation.target.node_lifecycle_generation != query.target_node_generation
+            || !owner || owner->owner_id != staged_owner->owner_id
+            || owner->lease_generation != staged_owner->lease_generation
+            || owner->owner_id != snapshot->owner.owner_id
+            || owner->lease_generation != snapshot->owner.lease_generation)
+            throw stale ();
+    } else {
+        const auto current = co_await _objects.find_async (expected.kind, expected.key);
+        if (current != expected)
+            throw stale ();
+    }
+    query.target = expected;
+    auto authority =
+      co_await accepted_record_authority (std::move (query), std::move (owner), &sources);
+    if (authority)
+        authority->committed_target = std::make_shared<const stateful::committed_target_ingress_t> (
+          stateful::committed_target_ingress_t{
+            std::move (expected), restore.value_or (stateful::relocation_restore_identity_t{})});
+    co_return authority;
 }
 
 void public_host_runtime_t::forward_relocation_application (
@@ -8535,8 +8611,8 @@ public_host_runtime_t::dispatch_application_claim (
                             if (!native) {
                                 const auto accepted =
                                   co_await self->_stateful_dispatch->ingest_claimed (
-                                    *native_owner, slot, std::move (retained),
-                                    std::move (prepared));
+                                    *native_owner, slot, std::move (retained), std::move (prepared),
+                                    &*native_owner);
                                 if (accepted == stateful::stateful_error_t::none)
                                     (void) co_await self->dispatch_stateful_owner (*native_owner,
                                                                                    dispatch);
@@ -9720,12 +9796,14 @@ task_t<std::optional<stateful::object_ref_t>> public_host_runtime_t::accept_loca
         original.reset ();
     }
     const auto accepted = co_await _stateful_dispatch->accept_local (
-      *owner, std::move (accepted_record), std::move (ingress), original, std::move (terminal));
+      *owner, std::move (accepted_record), std::move (ingress), original, std::move (terminal),
+      authority->committed_target.get ());
     if (!original)
         co_return std::nullopt;
     if (accepted != stateful::stateful_error_t::none)
         throw protocol::service_wire_error_t ("local accepted Actor enqueue failed");
-    co_return *owner;
+    co_return authority->committed_target ? authority->committed_target->target
+                                          : std::move (*owner);
 }
 
 task_t<void> public_host_runtime_t::enqueue_local_multicast (

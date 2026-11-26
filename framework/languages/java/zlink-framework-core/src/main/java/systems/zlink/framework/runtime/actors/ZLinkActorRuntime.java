@@ -42,6 +42,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.execution.ZLinkConfirmedReplay;
 import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -4221,7 +4222,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                         records,
                                         (record, terminal) -> {
                                             var operation = replay.apply(record, terminal);
-                                            return () -> dispatches.runTurn(turn, operation);
+                                            return ZLinkConfirmedReplay.wrap(
+                                                    operation,
+                                                    next -> () -> dispatches.runTurn(turn, next));
                                         },
                                         jobs));
     }

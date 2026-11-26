@@ -1208,6 +1208,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       session_seal_local_completion_t local_completion,
       const std::function<void (const std::vector<std::uint8_t> &)> &reconcile);
     using relocation_attempt_key_t = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>;
+    task_t<std::optional<stateful::accepted_record_authority_t>>
+    accept_committed_actor_request (stateful::accepted_record_authority_query_t query,
+                                    live_location_reader_t &sources) const;
     struct relocation_target_attempt_t;
     task_t<bool> try_finalize_relocation_target (relocation_attempt_key_t key);
     task_t<void> complete_relocation_target_when_delivered (

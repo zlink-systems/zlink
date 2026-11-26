@@ -431,6 +431,8 @@ internal sealed class ZLinkSpotNodeCatalog(
             activation.CancelActiveOperations();
     }
 
+    internal Func<ZLinkSpotActivation, ValueTask>? BeforeShutdownCloseForTest { get; set; }
+
     internal async ValueTask CloseLifecycleAsync()
     {
         await StopIdleEvictionAsync().ConfigureAwait(false);
@@ -448,6 +450,9 @@ internal sealed class ZLinkSpotNodeCatalog(
             await CaptureAsync(async () =>
                 {
                     if (registration.Owner is { } owner)
+                    {
+                        if (BeforeShutdownCloseForTest is { } beforeClose)
+                            await beforeClose(owner.Activation).ConfigureAwait(false);
                         _ = await ExecuteCloseTransactionAsync(
                                 spotId,
                                 owner.Activation,
@@ -457,6 +462,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                                 requireNoActors: false
                             )
                             .ConfigureAwait(false);
+                    }
                     else
                         _ = await registration.Joined!.ConfigureAwait(false);
                 })
@@ -739,7 +745,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 })
                 .ConfigureAwait(false);
             ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
-            await activation._serial.FinishActivationPreparation().ConfigureAwait(false);
+            await activation._serial.FinishPublishedUserPreparationAsync().ConfigureAwait(false);
 
             return new ZLinkSpotCreateResult(
                 Reference(activation),
@@ -922,7 +928,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 })
                 .ConfigureAwait(false);
             ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
-            await activation._serial.FinishActivationPreparation().ConfigureAwait(false);
+            await activation._serial.FinishPublishedUserPreparationAsync().ConfigureAwait(false);
         }
         catch (Exception error)
         {
@@ -1230,7 +1236,9 @@ internal sealed class ZLinkSpotNodeCatalog(
             })
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
-        await prepared.Activation._serial.FinishActivationPreparation().ConfigureAwait(false);
+        await prepared
+            .Activation._serial.FinishPublishedUserPreparationAsync()
+            .ConfigureAwait(false);
     }
 
     internal ValueTask ValidateRelocatedReservedAsync(

@@ -8,7 +8,7 @@ int main (int argc, char **argv)
     std::filesystem::path bin = std::filesystem::absolute (argv[0]).parent_path ();
     std::string selection;
     bool check_only = false;
-    std::unique_ptr<MyGame::E2E::World> world;
+    std::unique_ptr<MyGame::E2E::World> world, fresh_world;
     int exit = 0, passed = 0;
     std::vector<MyGame::E2E::ScenarioDefinition> selected;
     std::string current;
@@ -65,7 +65,10 @@ int main (int argc, char **argv)
                     MyGame::E2E::table (endpoint);
                     break;
                 case MyGame::E2E::Scenario::reconnect:
-                    MyGame::E2E::reconnect (endpoint);
+                    fresh_world = std::make_unique<MyGame::E2E::World> (root, bin, 1);
+                    MyGame::E2E::reconnect (endpoint, *fresh_world);
+                    fresh_world->close ();
+                    fresh_world.reset ();
                     break;
                 case MyGame::E2E::Scenario::update:
                     MyGame::E2E::update (endpoint, *world);
@@ -81,9 +84,11 @@ int main (int argc, char **argv)
         std::cerr << error.what () << std::endl;
         exit = 1;
     }
-    if (world) {
+    for (auto *owned : {fresh_world.get (), world.get ()}) {
+        if (!owned)
+            continue;
         try {
-            world->close ();
+            owned->close ();
         }
         catch (const std::exception &error) {
             std::cerr << error.what () << std::endl;

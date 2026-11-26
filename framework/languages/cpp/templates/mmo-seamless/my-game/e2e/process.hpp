@@ -4,6 +4,8 @@
 #include <mutex>
 #include <thread>
 #include <sstream>
+#include <iostream>
+#include <syncstream>
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -55,7 +57,8 @@ class Process
   public:
     Process (const std::vector<std::string> &arguments,
              const std::filesystem::path &out_log,
-             const std::filesystem::path &err_log)
+             const std::filesystem::path &err_log,
+             const std::string &node = {})
     {
         require (!arguments.empty (), "Empty child command");
 #ifdef _WIN32
@@ -129,6 +132,7 @@ class Process
         argv.push_back (nullptr);
         pid_ = fork ();
         if (pid_ == 0) {
+            setpgid (0, 0);
             dup2 (in[0], STDIN_FILENO);
             dup2 (out[1], STDOUT_FILENO);
             dup2 (err, STDERR_FILENO);
@@ -151,8 +155,11 @@ class Process
         input_ = in[1];
         output_ = out[0];
 #endif
-        reader_ = std::thread ([this, out_log] {
+        reader_ = std::thread ([this, out_log, node] {
             std::ofstream log (out_log);
+            std::ofstream flow;
+            if (!node.empty ())
+                flow.open (out_log.parent_path () / (node + ".flow.log"));
             std::string pending;
             char buffer[4096];
             for (;;) {
@@ -167,8 +174,6 @@ class Process
                 if (count <= 0)
                     break;
 #endif
-                log.write (buffer, count);
-                log.flush ();
                 pending.append (buffer, count);
                 std::size_t end;
                 while ((end = pending.find ('\n')) != std::string::npos) {
@@ -176,6 +181,16 @@ class Process
                     pending.erase (0, end + 1);
                     if (!line.empty () && line.back () == '\r')
                         line.pop_back ();
+                    if (!node.empty () && line.starts_with ("FLOW ")) {
+                        flow << line.substr (5) << std::endl;
+                        continue;
+                    }
+                    log << line << std::endl;
+                    if (!node.empty () && line.starts_with ("GAME ")) {
+                        std::osyncstream (std::cout)
+                          << '[' << node << "] " << line.substr (5) << std::endl;
+                        continue;
+                    }
                     {
                         std::lock_guard lock (mutex_);
                         lines_.push_back (std::move (line));
@@ -206,9 +221,11 @@ class Process
                         break;
                 code = WIFEXITED (status) ? WEXITSTATUS (status) : 128 + WTERMSIG (status);
 #endif
-                if (!pending.empty ())
+                if (!pending.empty ()) {
+                    log << pending << std::flush;
                     lines_.push_back (pending);
-                if (!log)
+                }
+                if (!log || (!node.empty () && !flow))
                     read_error_ = "Process output log failed";
                 exit_code_ = code;
                 exited_ = true;

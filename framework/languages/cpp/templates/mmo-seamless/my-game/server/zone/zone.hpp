@@ -1,4 +1,6 @@
 #pragma once
+#include <iostream>
+#include <syncstream>
 #include "player.hpp"
 #include "server/shared/config.hpp"
 #include <cmath>
@@ -121,6 +123,7 @@ class Zone final : public fx::spot_t<Player>
         if (!positions_.take_arrival (id, arrival))
             throw std::runtime_error ("Zone admission has no movement intent");
         positions_.add_player (id, arrival);
+        std::osyncstream (std::cout) << "GAME Player entered Zone" << std::endl;
         co_await publish_local (id, PlayerAppeared{id, arrival.position, context_.spot_id ()});
         if (positions_.is_in_border (arrival.position))
             co_await publish_border (id, arrival.position, arrival.sequence,

@@ -149,7 +149,11 @@ import {
   ReceiveKind,
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
-import type { ServiceSpotMessageFollowSeal } from '../foundation/service-stateful-runtime';
+import type {
+  ServiceRelocationRequest,
+  ServiceRelocationRequestAdmission,
+  ServiceSpotMessageFollowSeal
+} from '../foundation/service-stateful-runtime';
 import {
   M6bServiceWireCommand,
   decodeMaintenanceReplyRelay,
@@ -4945,6 +4949,91 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       this.targetStages.delete(stagingId);
       this.targetAssemblies.delete(stagingId);
     }
+  }
+
+  resolveTargetRequestAdmission(
+    meshName: string,
+    request: ServiceRelocationRequest
+  ): ServiceRelocationRequestAdmission | undefined {
+    if (this.targetStages.size === 0) return undefined;
+    const fence = request.target;
+    const key =
+      request.kind === 'actor'
+        ? encodeAuthorityKey('actor', request.target.actor.actorId)
+        : encodeAuthorityKey('user_spot', request.target.spot.spotId);
+    const generation =
+      request.kind === 'actor' ? request.target.actor.generation : request.target.spot.generation;
+    const nodeRid =
+      request.kind === 'actor' ? request.target.actor.nodeRid : request.target.targetNodeRid;
+    for (const stage of this.targetStages.values()) {
+      if (stage.phase !== 'finalizing' && stage.phase !== 'committed') continue;
+      const { prepare, reservation } = stage.offer;
+      const target = prepare.target;
+      if (
+        reservation.prepared.plan.targetDescriptor.meshName !== meshName ||
+        !routingIdsEqual(target.nodeRid, nodeRid) ||
+        target.nodeGeneration !== fence.targetNodeGeneration
+      )
+        continue;
+      const hidden = stage.staging.hidden.get(key.value);
+      if (hidden === undefined) continue;
+      if (
+        request.kind === 'actor' &&
+        (hidden.cancelIngress === undefined ||
+          fence.authorityOwnerGeneration <= hidden.participant.authorityOwnerGeneration)
+      )
+        continue;
+      const participant = reservation.prepared.plan.participants.find(
+        (value) => value.key.value === key.value
+      )!;
+      const confirm = async (signal?: AbortSignal): Promise<boolean> => {
+        const current = await this.requireLocationStore().readAuthority(key, signal);
+        if (current.kind !== 'snapshot') return false;
+        const relocation = current.relocation;
+        const owner = this.options.currentOwner();
+        const sameStage =
+          relocation !== undefined &&
+          (relocation.phase === 'committed' ||
+            relocation.phase === 'activating' ||
+            isFinishingTargetRelocation(relocation)) &&
+          relocation.relocationId === stage.staging.envelope.aggregateId &&
+          relocation.target?.attemptGeneration === prepare.targetAttemptGeneration &&
+          relocation.sourceInventorySha256 === participant.relocation?.sourceInventorySha256;
+        // Authority publication can be cleared while the original Store read is pending.
+        // After opening, confirm the exact current target fence for the reserved request.
+        const publicationCleared = stage.phase === 'open' && relocation === undefined;
+        return (
+          (sameStage || publicationCleared) &&
+          current.allocation.state === 'active' &&
+          current.objectGeneration === generation &&
+          current.authorityOwnerGeneration === fence.authorityOwnerGeneration &&
+          current.ownerLeaseGeneration === fence.ownerLeaseGeneration &&
+          current.allocation.objectKind === hidden.participant.objectKind &&
+          current.allocation.descriptor.meshName === meshName &&
+          isExactCommittedTarget(
+            current,
+            participant.expected,
+            target,
+            participant.authorityPayload
+          ) &&
+          owner?.ownerId === target.ownerId &&
+          owner.leaseGeneration === target.ownerLeaseGeneration &&
+          !(await this.exactSourceLeaseExpired(owner, signal)) &&
+          stage.phase !== 'failed'
+        );
+      };
+      if (request.kind === 'actor') {
+        return {
+          kind: 'actor',
+          route: (...args) =>
+            this.options.actorTransfer.captureTargetRequest(meshName, confirm, ...args)
+        };
+      }
+      if (hidden.activation !== undefined) {
+        return { kind: 'spot', activation: hidden.activation, confirm };
+      }
+    }
+    return undefined;
   }
 
   async commitTargetReservation(

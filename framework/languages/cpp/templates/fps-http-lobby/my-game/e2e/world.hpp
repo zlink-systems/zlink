@@ -3,6 +3,8 @@
 #include <random>
 #include <iostream>
 #include <cstdlib>
+#include <optional>
+#include <syncstream>
 
 namespace MyGame::E2E
 {
@@ -15,11 +17,12 @@ inline std::string unique_id ()
 }
 class World
 {
-    int run_room_capacity_ = 1;
+    std::optional<int> test_room_capacity_;
     struct Node
     {
         std::unique_ptr<Process> process;
         bool stopped = false;
+        std::string name;
     };
     std::filesystem::path root_, bin_, logs_;
     std::string project_, redis_;
@@ -59,10 +62,8 @@ class World
         config["RedisEndpoint"] = redis_;
         config["KeyPrefix"] = project_ + ":";
         config["MeshEndpoint"] = "tcp://127.0.0.1:0";
-        if (role == "match")
-            config["RoomCapacity"] = run_room_capacity_;
-        if (role == "session")
-            config["StreamEndpoint"] = "tcp://127.0.0.1:0";
+        if (role == "match" && test_room_capacity_)
+            config["RoomCapacity"] = *test_room_capacity_;
         if (role == "lobby") {
             config["HttpEndpoint"] = "http://127.0.0.1:0";
             config["SessionEndpoint"] = session_endpoint_;
@@ -74,7 +75,9 @@ class World
             output << config.dump (2);
             require (static_cast<bool> (output), "Config write failed");
         }
+        std::osyncstream (std::cout) << "[" << suffix << "] Starting" << std::endl;
         auto node = std::make_unique<Node> ();
+        node->name = suffix;
         auto executable = bin_ / ("my-game-" + role);
 #ifdef _WIN32
         executable += ".exe";
@@ -93,8 +96,8 @@ class World
             run_command ({"docker", "cp", config_path.string (), container + ":" + container_config});
             arguments = {"docker", "start", "-a", "-i", container};
         }
-        node->process = std::make_unique<Process> (
-          arguments, logs_ / (suffix + ".out.log"), logs_ / (suffix + ".err.log"));
+        node->process = std::make_unique<Process> (arguments, logs_ / (suffix + ".out.log"),
+                                                   logs_ / (suffix + ".err.log"), suffix);
         auto *result = node.get ();
         nodes_.push_back (std::move (node));
         const auto line = result->process->wait_line (Control::ready);
@@ -104,21 +107,32 @@ class World
         const auto mesh = ready.at ("meshEndpoint").get<std::string> ();
         require (!mesh.empty () && !mesh.ends_with (":0"),
                  "Framework did not publish the bound mesh endpoint");
+        if (config.contains ("StreamEndpoint") && config.at ("StreamEndpoint").is_string ()) {
+            const auto stream = ready.at ("streamEndpoint").get<std::string> ();
+            require (stream.starts_with ("ws://") && !stream.ends_with (":0"),
+                     "Framework did not publish a bound WebSocket STREAM endpoint: " + stream);
+        }
+        std::osyncstream (std::cout) << "[" << result->name << "] Ready" << std::endl;
         return {result, ready};
     }
     static void stop_node (Node &node)
     {
         if (node.stopped)
             return;
+        std::osyncstream (std::cout) << "[" << node.name << "] Stopping" << std::endl;
         node.process->command (Control::shutdown);
         node.process->wait_line (Control::stopped, Limits::shutdown);
         require (node.process->wait_exit () == 0, "Node shutdown exit failed");
         node.stopped = true;
+        std::osyncstream (std::cout) << "[" << node.name << "] Stopped" << std::endl;
     }
 
   public:
-    World (std::filesystem::path root, std::filesystem::path bin, int roomCapacity = 1) :
-        run_room_capacity_ (roomCapacity), root_ (std::filesystem::canonical (root)),
+    World (std::filesystem::path root,
+           std::filesystem::path bin,
+           std::optional<int> test_capacity = std::nullopt) :
+        test_room_capacity_ (test_capacity),
+        root_ (std::filesystem::canonical (root)),
         bin_ (std::filesystem::canonical (bin)),
         project_ ("my-game-" + unique_id ()),
         docker_project_ (environment ("MY_GAME_DOCKER_PROJECT"))
@@ -127,8 +141,12 @@ class World
         std::filesystem::create_directories (logs_);
         std::cout << "Logs: " << logs_.string () << std::endl;
     }
-    std::string start ()
+    std::string start (const nlohmann::json *attached = nullptr)
     {
+        if (attached) {
+            lobby_endpoint_ = nonempty (*attached, "lobbyEndpoint");
+            return nonempty (*attached, "sessionEndpoint");
+        }
         if (docker_project_.empty ()) {
             compose_started_ = true;
             run_command (compose ({"up", "--detach", "--wait", "redis"}));
@@ -144,8 +162,6 @@ class World
         matches_["matchB"] = start_node ("match-b", "match").first;
         const auto ready = start_node ("session", "session").second;
         const auto stream = ready.at ("streamEndpoint").get<std::string> ();
-        require (!stream.empty () && !stream.ends_with (":0"),
-                 "Framework did not publish stream endpoint");
         session_endpoint_ = stream;
         const auto lobby = start_node ("lobby", "lobby");
         lobby_ = lobby.first;
@@ -172,6 +188,17 @@ class World
         stop_node (*node);
         node = start_node (id == "matchA" ? "match-a" : "match-b", "match", false).first;
     }
+    nlohmann::json start_server ()
+    {
+        nlohmann::json endpoints{{"sessionEndpoint", start ()}};
+        endpoints["lobbyEndpoint"] = lobby_endpoint ();
+        return endpoints;
+    }
+    std::string client_addresses (const nlohmann::json &state) const
+    {
+        return nonempty (state, "sessionEndpoint") + "; matchmaking " + lobby_endpoint ();
+    }
+    const std::filesystem::path &logs () const { return logs_; }
     void close ()
     {
         std::vector<std::string> failures;

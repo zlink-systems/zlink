@@ -575,26 +575,13 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     CompletionStage<Void> executeAcceptedSpotLazyRecord(
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
-            Function<Boolean, CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return executeAcceptedSpotLazyRecord(
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease,
-                null);
-    }
-
-    CompletionStage<Void> executeAcceptedSpotLazyRecord(
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Function<Boolean, CompletionStage<Void>> operation,
+            Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> admission) {
         return spotQueue.enqueueRelocatableLazyRecord(
                 acceptedJournalRecord,
                 acceptedJournalRecordSizeHint,
-                () -> operation.apply(sharedSpotGate),
+                operation,
                 relocationRelease,
                 admission);
     }
@@ -760,11 +747,15 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                 () -> {
                     LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes = new LinkedHashMap<>();
                     lanes.put("spot", spotQueue);
-                    timerQueues.entrySet().stream()
-                            .sorted(Map.Entry.comparingByKey())
-                            .forEach(
-                                    entry ->
-                                            lanes.put("timer:" + entry.getKey(), entry.getValue()));
+                    if (sharedSpotGate) {
+                        timerQueues.entrySet().stream()
+                                .sorted(Map.Entry.comparingByKey())
+                                .forEach(
+                                        entry ->
+                                                lanes.put(
+                                                        "timer:" + entry.getKey(),
+                                                        entry.getValue()));
+                    }
                     for (String actorId : participantActorIds) {
                         if (lanes.putIfAbsent(
                                         "actor:" + actorId,

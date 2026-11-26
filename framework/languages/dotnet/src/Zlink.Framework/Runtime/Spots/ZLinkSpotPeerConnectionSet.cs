@@ -33,21 +33,11 @@ internal sealed class ZLinkSpotPeerConnectionSet
                         return new(ZLinkSpotAutoPeerClaimKind.AlreadyOwned, null);
 
                     _routerAuto[endpoint] = peerRid;
-                    return new(
-                        _routerManual.Contains(endpoint)
-                            ? ZLinkSpotAutoPeerClaimKind.SuppressedByManual
-                            : ZLinkSpotAutoPeerClaimKind.Replaced,
-                        current
-                    );
+                    return new(ZLinkSpotAutoPeerClaimKind.Replaced, current);
                 }
 
                 _routerAuto[endpoint] = peerRid;
-                return new(
-                    _routerManual.Contains(endpoint)
-                        ? ZLinkSpotAutoPeerClaimKind.SuppressedByManual
-                        : ZLinkSpotAutoPeerClaimKind.Added,
-                    null
-                );
+                return new(ZLinkSpotAutoPeerClaimKind.Added, null);
             })
         );
     }
@@ -144,7 +134,6 @@ internal enum ZLinkSpotAutoPeerClaimKind
     Added,
     AlreadyOwned,
     Replaced,
-    SuppressedByManual,
 }
 
 internal readonly record struct ZLinkSpotAutoPeerClaim(

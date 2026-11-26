@@ -69,7 +69,9 @@ internal static class DomainChecks
             "current sequence is stale without state change"
         );
 
-        foreach (var value in new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+        foreach (
+            var value in new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity }
+        )
         {
             var nonFinite = positions.Move("p1", new(value, 2));
             Check(
@@ -80,7 +82,9 @@ internal static class DomainChecks
         }
 
         var edge = new Positions(clock);
-        edge.Restore(new PositionsSnapshot([new PositionSnapshot("edge", GameNames.RegionMaxX, 0, 0)]));
+        edge.Restore(
+            new PositionsSnapshot([new PositionSnapshot("edge", GameNames.RegionMaxX, 0, 0)])
+        );
         before = edge.Capture();
         var outsideMaximum = edge.Move("edge", new(1, 1));
         Check(
@@ -88,7 +92,9 @@ internal static class DomainChecks
                 && Equal(before, edge.Capture()),
             "region maximum plus one is rejected without state change"
         );
-        edge.Restore(new PositionsSnapshot([new PositionSnapshot("edge", GameNames.RegionMinX, 0, 0)]));
+        edge.Restore(
+            new PositionsSnapshot([new PositionSnapshot("edge", GameNames.RegionMinX, 0, 0)])
+        );
         before = edge.Capture();
         var outsideMinimum = edge.Move("edge", new(-1, 1));
         Check(
@@ -104,10 +110,7 @@ internal static class DomainChecks
             "maximum safe integer sequence is accepted"
         );
         before = safeSequence.Capture();
-        var unsafeSequence = safeSequence.Move(
-            "safe",
-            new(0, GameNames.MaxSafeInteger + 1)
-        );
+        var unsafeSequence = safeSequence.Move("safe", new(0, GameNames.MaxSafeInteger + 1));
         Check(
             unsafeSequence is { Reason: Rejection.IntegerOutOfRange, RetryAfterMs: 0 }
                 && Equal(before, safeSequence.Capture()),
@@ -128,7 +131,10 @@ internal static class DomainChecks
         source.Add("relocated");
         Check(source.Move("relocated", new(GameNames.MaxStep, 1)) is null, "snapshot source move");
         var snapshot = source.Capture();
-        Check(snapshot.Players.Single().RemainingMs == 200, "snapshot stores remaining milliseconds");
+        Check(
+            snapshot.Players.Single().RemainingMs == 200,
+            "snapshot stores remaining milliseconds"
+        );
         Check(Equal(snapshot, source.Capture()), "capture does not change the source domain");
 
         var destinationClock = new ManualClock(TimeSpan.FromHours(8).Ticks);

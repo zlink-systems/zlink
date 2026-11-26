@@ -1961,12 +1961,6 @@ class spot_node_runtime_t
         std::vector<spot_relocation_unit_t> spots;
         std::vector<actor_ref_t> standalone_actors;
     };
-    struct remote_actor_transfer_t
-    {
-        spot_id_t source_spot_id;
-        zlink::message_t state;
-        std::string relocation_content_type;
-    };
     explicit spot_node_runtime_t (std::shared_ptr<spot_node_builder_state_t> state);
 
     std::weak_ptr<spot_node_builder_state_t> weak_state () const noexcept { return _state; }
@@ -2417,9 +2411,8 @@ class spot_node_runtime_t
       const std::function<void ()> &before_actor_join_completion = {});
     task_t<void>
     retire_relocation_source (const std::vector<runtime::stateful::object_ref_t> &sources);
-    task_t<result_t<remote_actor_transfer_t>> transfer_actor_out (const actor_ref_t &actor_ref,
-                                                                  std::string transfer_id = {},
-                                                                  bool capture_state = true);
+    task_t<result_t<std::string>> transfer_actor_out (const actor_ref_t &actor_ref,
+                                                      std::string transfer_id);
     task_t<result_t<void>>
     submit_remote_actor_leave_async (std::string transfer_id,
                                      actor_ref_t source_actor,

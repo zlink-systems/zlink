@@ -132,4 +132,44 @@ internal static class ZLinkFrameworkJsonDocument
 
     private static bool PropertyMatches(ref Utf8JsonReader reader, byte[] name) =>
         reader.ValueIsEscaped ? reader.ValueTextEquals(name) : reader.ValueSpan.SequenceEqual(name);
+
+#if ZLINK_FRAMEWORK
+    internal static string? PropertyPathAt(ReadOnlySpan<byte> payload, long tokenOffset)
+    {
+        var containers = new List<(bool Array, int Index, string? Property)>();
+        var reader = new Utf8JsonReader(payload);
+        while (reader.Read() && reader.TokenStartIndex <= tokenOffset)
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.PropertyName:
+                    containers[^1] = (false, -1, reader.GetString());
+                    continue;
+                case JsonTokenType.EndArray:
+                case JsonTokenType.EndObject:
+                    containers.RemoveAt(containers.Count - 1);
+                    continue;
+            }
+
+            if (containers.Count != 0 && containers[^1] is (true, var index, _))
+                containers[^1] = (true, index + 1, null);
+            if (reader.TokenStartIndex == tokenOffset)
+            {
+                var path = new StringBuilder("$");
+                foreach (var container in containers)
+                {
+                    if (container.Array)
+                        path.Append('[').Append(container.Index).Append(']');
+                    else if (container.Property is { } name)
+                        path.Append('.').Append(name);
+                }
+                return path.ToString();
+            }
+
+            if (reader.TokenType is JsonTokenType.StartArray or JsonTokenType.StartObject)
+                containers.Add((reader.TokenType == JsonTokenType.StartArray, -1, null));
+        }
+        return null;
+    }
+#endif
 }

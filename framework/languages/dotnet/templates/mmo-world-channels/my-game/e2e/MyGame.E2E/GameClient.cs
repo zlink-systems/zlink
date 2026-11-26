@@ -91,13 +91,18 @@ internal sealed class GameClient(
     public Task<ActionRejected> EarnRejectedAsync(CancellationToken ct) =>
         SendAsync<ActionRejected, EarnRequest>(new(), _ => true, ct);
 
-    public Task<ActionRejected> SendRejectedAsync<TRequest>(TRequest request, CancellationToken ct) =>
-        SendAsync<ActionRejected, TRequest>(request, _ => true, ct);
+    public Task<ActionRejected> SendRejectedAsync<TRequest>(
+        TRequest request,
+        CancellationToken ct
+    ) => SendAsync<ActionRejected, TRequest>(request, _ => true, ct);
 
-    public Task<ChannelView> ChannelViewAsync(Func<ChannelView, bool> predicate, CancellationToken ct) =>
-        SendAsync<ChannelView, ChannelViewRequest>(new(), predicate, ct);
+    public Task<ChannelView> ChannelViewAsync(
+        Func<ChannelView, bool> predicate,
+        CancellationToken ct
+    ) => SendAsync<ChannelView, ChannelViewRequest>(new(), predicate, ct);
 
-    public Task<ChannelView> ChannelViewAsync(CancellationToken ct) => ChannelViewAsync(_ => true, ct);
+    public Task<ChannelView> ChannelViewAsync(CancellationToken ct) =>
+        ChannelViewAsync(_ => true, ct);
 
     public Task<PlayerView> ChangeAsync(long channel, CancellationToken ct) =>
         SendAsync<PlayerView, ChangeChannelRequest>(

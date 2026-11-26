@@ -1488,7 +1488,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             if (replaceRouteAt == 1)
             {
                 await prepareSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
-                await ReleaseAutomaticConnectionsAsync();
+                await ReplaceSelectedRouteAsync();
                 routeProxy!.Resume();
                 var failure = Assert.IsType<ZLinkFrameworkException>(
                     await cutover.PrepareFailure.Task.WaitAsync(TimeSpan.FromSeconds(3))
@@ -1544,7 +1544,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             if (replaceRouteAt == 2)
             {
                 await cutover.CutoverSendSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
-                await ReleaseAutomaticConnectionsAsync();
+                await ReplaceSelectedRouteAsync();
                 routeProxy!.Resume();
             }
             await cutover.CutoverSendSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -1640,7 +1640,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             }
         }
 
-        async Task ReleaseAutomaticConnectionsAsync()
+        async Task ReplaceSelectedRouteAsync()
         {
             var sourceNode = source
                 .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
@@ -1654,6 +1654,13 @@ public sealed partial class RelocationBehaviorConformanceTests
             targetRouteBefore = targetNode
                 .ObservePeerRoute(sourceNode.RoutingId)
                 .SelectedGeneration;
+            var targetEndpoint = target
+                .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+                .GetListenerStatus(ZLinkListenerKind.RouteMesh, RelocationBehaviorHost.MeshName)
+                .Endpoint;
+            // The test injects a reciprocal manual connection while the
+            // existing pipe holds a relocation record.
+            sourceNode.ConnectPeer(targetNode.RoutingId, targetEndpoint);
             automaticConnections.TrySetResult();
             while (true)
             {

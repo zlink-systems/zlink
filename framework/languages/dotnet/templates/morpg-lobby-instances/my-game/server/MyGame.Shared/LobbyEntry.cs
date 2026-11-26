@@ -10,9 +10,15 @@ public sealed class LobbyEntry(IZLinkEntrySpotContext context, IZLinkSpotManager
 
     public void Configure()
     {
-        Context.Handlers.AddActorPacket<LobbyEntryPartyViewNotification, PlayerActor>(nameof(PartyView));
-        Context.Handlers.AddActorPacket<LobbyEntryDungeonViewNotification, PlayerActor>(nameof(DungeonView));
-        Context.Handlers.AddActorPacket<LobbyEntryActionRejectedNotification, PlayerActor>(nameof(ActionRejected));
+        Context.Handlers.AddActorPacket<LobbyEntryPartyViewNotification, PlayerActor>(
+            nameof(PartyView)
+        );
+        Context.Handlers.AddActorPacket<LobbyEntryDungeonViewNotification, PlayerActor>(
+            nameof(DungeonView)
+        );
+        Context.Handlers.AddActorPacket<LobbyEntryActionRejectedNotification, PlayerActor>(
+            nameof(ActionRejected)
+        );
         Context.Handlers.AddActorPacket<LobbyLogin, PlayerActor>(nameof(JoinLobbyRequest));
         Context.Handlers.AddActorPacket<CreateParty, PlayerActor>(nameof(CreatePartyRequest));
         Context.Handlers.AddActorPacket<JoinParty, PlayerActor>(nameof(JoinPartyRequest));
@@ -31,7 +37,10 @@ public sealed class LobbyEntry(IZLinkEntrySpotContext context, IZLinkSpotManager
         CancellationToken ct
     )
     {
-        if (string.IsNullOrWhiteSpace(partyId) || (!create && await spots.FindAsync(partyId, ct) is null))
+        if (
+            string.IsNullOrWhiteSpace(partyId)
+            || (!create && await spots.FindAsync(partyId, ct) is null)
+        )
         {
             await actor
                 .Context.BoundSession.Send(new ActionRejected(Rejection.InvalidParty))
@@ -41,7 +50,10 @@ public sealed class LobbyEntry(IZLinkEntrySpotContext context, IZLinkSpotManager
         var id = partyId;
         if (create)
         {
-            var result = await spots.GetOrCreate(id, GameNames.PartyType).InMesh(GameNames.WorldMesh).Async(ct);
+            var result = await spots
+                .GetOrCreate(id, GameNames.PartyType)
+                .InMesh(GameNames.WorldMesh)
+                .Async(ct);
             if (result.State == ZLinkSpotCreateState.Rejected)
                 throw new InvalidOperationException("Party creation rejected.");
         }
@@ -91,22 +103,40 @@ public sealed class JoinParty
 }
 
 [ZLinkSpotActorSendHandler(nameof(PartyView))]
-public sealed class LobbyEntryPartyViewNotification : IZLinkEntrySpotActorSendHandler<LobbyEntry, PlayerActor, PartyView>
+public sealed class LobbyEntryPartyViewNotification
+    : IZLinkEntrySpotActorSendHandler<LobbyEntry, PlayerActor, PartyView>
 {
-    public ValueTask HandleAsync(LobbyEntry spot, PlayerActor actor, IZLinkMessageContext context,
-        PartyView message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        LobbyEntry spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        PartyView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }
 
 [ZLinkSpotActorSendHandler(nameof(DungeonView))]
-public sealed class LobbyEntryDungeonViewNotification : IZLinkEntrySpotActorSendHandler<LobbyEntry, PlayerActor, DungeonView>
+public sealed class LobbyEntryDungeonViewNotification
+    : IZLinkEntrySpotActorSendHandler<LobbyEntry, PlayerActor, DungeonView>
 {
-    public ValueTask HandleAsync(LobbyEntry spot, PlayerActor actor, IZLinkMessageContext context,
-        DungeonView message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        LobbyEntry spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        DungeonView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }
 
 [ZLinkSpotActorSendHandler(nameof(ActionRejected))]
-public sealed class LobbyEntryActionRejectedNotification : IZLinkEntrySpotActorSendHandler<LobbyEntry, PlayerActor, ActionRejected>
+public sealed class LobbyEntryActionRejectedNotification
+    : IZLinkEntrySpotActorSendHandler<LobbyEntry, PlayerActor, ActionRejected>
 {
-    public ValueTask HandleAsync(LobbyEntry spot, PlayerActor actor, IZLinkMessageContext context,
-        ActionRejected message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        LobbyEntry spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        ActionRejected message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }

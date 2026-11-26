@@ -199,6 +199,12 @@ struct relocation_restore_identity_t
                             const relocation_restore_identity_t &) = default;
 };
 
+struct committed_target_ingress_t
+{
+    object_ref_t target;
+    relocation_restore_identity_t restore;
+};
+
 struct relocation_seal_t
 {
     std::uint64_t token = 0;
@@ -461,11 +467,15 @@ class stateful_object_runtime_t
     // The caller keeps owner alive until it reads the outcome.
     template <class Admit>
     task_t<enqueue_outcome_t>
-    enqueue_admitted (const object_ref_t &owner, Admit admit, bool restored)
+    enqueue_admitted (const object_ref_t &owner,
+                      Admit admit,
+                      bool restored,
+                      const committed_target_ingress_t *committed = nullptr)
     {
-        return _lane.run_task ([this, &owner, admit = std::move (admit), restored] () mutable {
-            return admit_on_lane (owner, admit, restored);
-        });
+        return _lane.run_task (
+          [this, &owner, admit = std::move (admit), restored, committed] () mutable {
+              return admit_on_lane (owner, admit, restored, committed);
+          });
     }
     template <class Admit>
     posted_enqueue_t post_admitted (const object_ref_t &owner, Admit admit, bool restored)
@@ -631,11 +641,17 @@ class stateful_object_runtime_t
     object_state_t state_on_lane (const object_record_t &object) const;
     bool sealed_by_on_lane (const object_record_t &object, std::uint64_t token) const;
     const relocation_seal_binding_t *seal_binding_on_lane (const object_record_t &object) const;
+    object_record_t *find_application_owner_on_lane (const object_ref_t &owner,
+                                                     const committed_target_ingress_t *committed,
+                                                     stateful_error_t &error);
     template <class Admit>
-    enqueue_outcome_t admit_on_lane (const object_ref_t &owner, Admit &admit, bool restored)
+    enqueue_outcome_t admit_on_lane (const object_ref_t &owner,
+                                     Admit &admit,
+                                     bool restored,
+                                     const committed_target_ingress_t *committed = nullptr)
     {
         enqueue_outcome_t outcome;
-        auto *object = find_record_locked (owner, outcome.error);
+        auto *object = find_application_owner_on_lane (owner, committed, outcome.error);
         if (object == nullptr)
             return outcome;
         auto admitted = admit (seal_binding_on_lane (*object));
@@ -643,7 +659,7 @@ class stateful_object_runtime_t
             outcome.error = admitted.error;
             return outcome;
         }
-        return place_application_on_lane (*object, owner, std::move (admitted.turn),
+        return place_application_on_lane (*object, object->reference, std::move (admitted.turn),
                                           admitted.after_cut, restored);
     }
     enqueue_outcome_t place_application_on_lane (object_record_t &object,

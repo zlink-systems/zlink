@@ -30,7 +30,9 @@ function contractPayload(name: string, payload: unknown): unknown {
   if (!payload || typeof payload !== 'object') return payload;
   const value = payload as Record<string, unknown>;
   if (
-    (name === PacketNames.worldState || name === PacketNames.playerMoved || name === 'SessionInfo') &&
+    (name === PacketNames.worldState ||
+      name === PacketNames.playerMoved ||
+      name === 'SessionInfo') &&
     typeof value.sequence === 'string'
   )
     return { ...value, sequence: BigInt(value.sequence) };
@@ -75,9 +77,8 @@ class PlayerClient {
         this.messages.push({ name, payload });
         appendFileSync(
           log,
-          JSON.stringify({ name, payload }, (_, v) =>
-            typeof v === 'bigint' ? v.toString() : v
-          ) + '\n'
+          JSON.stringify({ name, payload }, (_, v) => (typeof v === 'bigint' ? v.toString() : v)) +
+            '\n'
         );
         this.changed.emit('change');
       });
@@ -217,7 +218,11 @@ class PlayerClient {
   async packetRejected(packet: EnterZone): Promise<ActionRejected> {
     const index = this.messages.length;
     await this.connector.send(packet).submit();
-    return this.wait<ActionRejected>(PacketNames.actionRejected, index, (value) => value.reason === 'packet-not-allowed');
+    return this.wait<ActionRejected>(
+      PacketNames.actionRejected,
+      index,
+      (value) => value.reason === 'packet-not-allowed'
+    );
   }
   async close(): Promise<void> {
     await this.connector.close();
@@ -232,7 +237,7 @@ export async function scenario(
   endpoint: string,
   runId: string,
   logDir: string,
-  control: NodeControl
+  control?: NodeControl
 ): Promise<void> {
   const clients: PlayerClient[] = [];
   const create = (suffix: string): PlayerClient => {
@@ -340,17 +345,21 @@ export async function scenario(
           const edgeBefore = await edge.join(`edge-${runId}`, Game.zoneWidth * Game.zoneCount - 1);
           const outside = await edge.moveRejected(1, 1n);
           assert.equal(outside.reason, 'outside-world');
-          assert.deepEqual(await edge.state(), edgeBefore, 'World-boundary rejection changed state');
+          assert.deepEqual(
+            await edge.state(),
+            edgeBefore,
+            'World-boundary rejection changed state'
+          );
           assert.deepEqual(await client.sessionInfo(), session);
           const continued = await client.move(1, 3n);
           assert.equal(continued.nodeId, 'zoneB');
           sameActor(session, await client.sessionInfo());
           assert.equal((await client.dungeon(`dungeon-${runId}`)).nodeId, 'instance');
         } else {
-        const after = await client.move(1, 1n);
-        sameActor(session, await client.sessionInfo());
-        assert.equal(after.zoneId, 'zone-4');
-        assert.equal(after.nodeId, 'zoneB');
+          const after = await client.move(1, 1n);
+          sameActor(session, await client.sessionInfo());
+          assert.equal(after.zoneId, 'zone-4');
+          assert.equal(after.nodeId, 'zoneB');
           await client.close();
           const reconnect = create('reconnected');
           assert.deepEqual(
@@ -366,6 +375,7 @@ export async function scenario(
           assert.equal(reconnect.disconnects, 0);
         }
       } else if (name === 'update') {
+        assert(control, 'update requires an isolated run');
         let state = await client.move(-1, 1n);
         let safe = false;
         let drainFailure: unknown;

@@ -1134,6 +1134,24 @@ stateful_object_runtime_t::place_application_on_lane (object_record_t &object,
     return outcome;
 }
 
+stateful_object_runtime_t::object_record_t *
+stateful_object_runtime_t::find_application_owner_on_lane (
+  const object_ref_t &owner, const committed_target_ingress_t *committed, stateful_error_t &error)
+{
+    if (!committed)
+        return find_record_locked (owner, error);
+    // Fence publication can occur while the original waits for Store confirmation.
+    // The current generation can accept immediately, or the same restore owns the hold.
+    if (auto *current = find_record_locked (committed->target, error))
+        return current;
+    auto *staged = find_record_locked (owner, error);
+    if (staged && staged->state == object_state_t::recovering
+        && staged->restore_identity == committed->restore)
+        return staged;
+    error = stateful_error_t::generation_stale;
+    return nullptr;
+}
+
 stateful_error_t stateful_object_runtime_t::enqueue (const object_ref_t &owner,
                                                      turn_domain_t domain,
                                                      turn_record_t record)

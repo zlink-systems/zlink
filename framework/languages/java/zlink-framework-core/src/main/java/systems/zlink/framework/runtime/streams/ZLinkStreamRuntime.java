@@ -30,6 +30,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownExecutor;
@@ -55,7 +56,6 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 import systems.zlink.framework.streams.ZLinkStreamSessionError;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -116,8 +116,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
     private final ZLinkFrameworkRegistration registration;
-    private final systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
-            applicationJobQueue;
+    private final ZLinkApplicationJobQueue applicationJobQueue;
     private final ZLinkMessageSerializer serializer;
     private final ZLinkActorRuntime actors;
     private final Map<String, ZLinkInternalMeshNode> meshNodes;
@@ -134,8 +133,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final ZLinkMetadataPolicyRegistration metadataPolicy;
     private final Duration sessionRelocationSealTimeout;
     private final Duration sessionReplacementCallbackTimeout;
-    private final List<ZLinkBackendStreamSocket> streams = new ArrayList<>();
-    private final Map<String, ZLinkBackendStreamSocket> streamsByName = new HashMap<>();
+    private final Map<String, StreamReceiveLoop> receiveLoops = new LinkedHashMap<>();
     private final Map<String, Boolean> streamSessionRelayAttached = new HashMap<>();
     // One binding generation counter for every Session this node owns when no
     // native Session relay allocates it (Session-Actor binding §4).
@@ -149,7 +147,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final LongSupplier nanoTime;
     private final ScheduledExecutorService replyRetryExecutor;
     private final ExecutorService receiveExecutor;
-    private final List<StreamReceiveLoop> receiveLoops = new ArrayList<>();
     private final ZLinkStreamAuthenticationAdmission authenticationAdmission;
     private ZLinkRuntimeMetrics.Registration authenticationAdmissionMetric;
     private volatile boolean draining;
@@ -549,8 +546,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
      * Opens each STREAM node and starts receiving.
      *
      * <p>The runtime is already recorded by its owner when this runs, and each socket is recorded
-     * in {@code streams} the moment it exists. A failure here leaves a partial set of sockets that
-     * the owner's close ({@link #closeAsync()}) releases like any other.
+     * in {@code receiveLoops} the moment it exists. A failure here leaves a partial set of sockets
+     * that the owner's close ({@link #closeAsync()}) releases like any other.
      */
     public ZLinkStreamRuntime start() {
         return start(new CompletableFuture<>());
@@ -566,7 +563,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkInternalMeshNode meshNode =
                     actorMeshName == null ? null : meshNodes.get(actorMeshName);
             ZLinkBackendStreamSocket stream = streamAdapter.createStreamSocket(context, meshNode);
-            streams.add(stream);
+            receiveLoops.put(streamNode.name(), new StreamReceiveLoop(streamNode, stream));
             if (streamNode.tlsServer() != null) {
                 stream.setTlsServer(
                         streamNode.tlsServer().certificatePath(),
@@ -577,7 +574,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             // Notification records must be enabled before bind. Framework
             // ingress below uses recv mode and never registers onPacket.
             ZLinkInternalSpotNode spotNode = resolveSessionRelayNode(spotNodes);
-            streamsByName.put(streamNode.name(), stream);
             streamSessionRelayAttached.put(streamNode.name(), spotNode != null);
             if (spotNode != null) {
                 streamSessionRelaySpotNodes.put(streamNode.name(), spotNode);
@@ -590,10 +586,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 stream.bind(bindEndpoint);
             }
             stream.startSessionService();
-            receiveLoops.add(new StreamReceiveLoop(streamNode, stream));
         }
         authenticationAdmissionMetric = authenticationAdmission.registerMetric();
-        receiveLoops.forEach(StreamReceiveLoop::start);
+        receiveLoops.values().forEach(StreamReceiveLoop::start);
         return this;
     }
 
@@ -615,20 +610,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     public ZLinkSessionActorsRuntime sessionActors(String streamNodeName, RoutingId sessionRid) {
-        ZLinkBackendStreamSocket stream = streamsByName.get(streamNodeName);
-        if (stream == null) {
+        StreamReceiveLoop reader = receiveLoops.get(streamNodeName);
+        if (reader == null) {
             throw new ZLinkConfigurationException("stream node is not running: " + streamNodeName);
         }
-        StreamNodeRegistration streamNode =
-                registration.streamNodes().stream()
-                        .filter(node -> node.name().equals(streamNodeName))
-                        .findFirst()
-                        .orElseThrow(
-                                () ->
-                                        new ZLinkConfigurationException(
-                                                "stream node is not configured: "
-                                                        + streamNodeName));
-        var state = getOrCreateSessionState(streamNode, stream, sessionRid, null);
+        var state = getOrCreateSessionState(reader.streamNode, reader.stream, sessionRid, null);
         if (state == null) {
             throw shutdownFailure();
         }
@@ -640,8 +626,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     /** Returns the advertised endpoint of a bound STREAM listener, or null when it has none. */
     public String boundListenerEndpoint(StreamNodeRegistration registration) {
-        ZLinkBackendStreamSocket stream = streamsByName.get(registration.name());
-        String actual = stream == null ? null : stream.lastEndpoint();
+        StreamReceiveLoop reader = receiveLoops.get(registration.name());
+        String actual = reader == null ? null : reader.stream.lastEndpoint();
         if (actual == null || actual.isBlank()) {
             actual = registration.bindEndpoint();
         }
@@ -1000,8 +986,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         return stateLane
                 .<CompletionStage<java.util.OptionalLong>>runNowOrQueue(
                         () -> {
-                            for (var entry : streamsByName.entrySet()) {
-                                if (entry.getValue() != stream) continue;
+                            for (var entry : receiveLoops.entrySet()) {
+                                if (entry.getValue().stream != stream) continue;
                                 var session = findSessionState(entry.getKey(), sessionRid);
                                 if (session != null
                                         && ownerNodeRid.equals(session.ownerNodeRid)
@@ -1242,14 +1228,21 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private final class StreamReceiveLoop implements AutoCloseable {
+        private static final long NO_PERMIT_WAIT = Long.MIN_VALUE;
+        private static final long WAITING_FOR_PERMIT = Long.MAX_VALUE;
+
         private final StreamNodeRegistration streamNode;
         private final ZLinkBackendStreamSocket stream;
         private volatile boolean closed;
         private final java.util.concurrent.atomic.AtomicReference<
-                        CompletableFuture<
-                                systems.zlink.framework.runtime.internal.dispatch
-                                        .ZLinkApplicationJobQueue.Permit>>
+                        CompletableFuture<ZLinkApplicationJobQueue.Permit>>
                 pendingAcquire = new java.util.concurrent.atomic.AtomicReference<>();
+        // PACKET readiness has no routing id. One reader clock applies to this socket's sessions.
+        // The receive turns update it on the same state lane that runs liveness checks.
+        private long permitResumedNanos = NO_PERMIT_WAIT;
+        // Counts queue grants so a wait recorded after its grant does not overwrite the resume.
+        private final java.util.concurrent.atomic.AtomicLong permitGrants =
+                new java.util.concurrent.atomic.AtomicLong();
 
         private StreamReceiveLoop(
                 StreamNodeRegistration streamNode, ZLinkBackendStreamSocket stream) {
@@ -1264,19 +1257,15 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         @Override
         public void close() {
             closed = true;
-            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
-                    .cancelPendingAcquire(pendingAcquire);
+            ZLinkApplicationJobQueue.cancelPendingAcquire(pendingAcquire);
         }
 
         /**
          * Runs one receive turn. A turn ends when no permit is free; the Application Job Queue
          * grant starts the next turn with that permit, so no receive thread waits for capacity.
          */
-        private void runTurn(
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
-                        granted) {
-            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
-                    first = granted;
+        private void runTurn(ZLinkApplicationJobQueue.Permit granted) {
+            ZLinkApplicationJobQueue.Permit first = granted;
             while (!isClosed()) {
                 try {
                     if (first == null && !stream.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
@@ -1287,22 +1276,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     }
                     ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
                     while (batch.canReceiveNext()) {
-                        systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
-                                        .Permit
-                                permit = first;
+                        boolean resumed = first != null;
+                        ZLinkApplicationJobQueue.Permit permit = first;
                         first = null;
                         if (permit == null) {
-                            permit =
-                                    applicationJobQueue.acquireOrResume(
-                                            receiveExecutor,
-                                            this::runTurn,
-                                            pendingAcquire,
-                                            systems.zlink.framework.runtime.internal.dispatch
-                                                    .ZLinkApplicationJobQueue.Origin.REMOTE);
+                            permit = acquirePermit();
                             if (isClosed()) {
-                                systems.zlink.framework.runtime.internal.dispatch
-                                        .ZLinkApplicationJobQueue.cancelPendingAcquire(
-                                        pendingAcquire);
+                                ZLinkApplicationJobQueue.cancelPendingAcquire(pendingAcquire);
                                 if (permit != null) {
                                     permit.abandonReservation();
                                 }
@@ -1315,6 +1295,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         ZLinkBackendStreamReceived received = null;
                         boolean transferred = false;
                         try {
+                            if (resumed) {
+                                inStateLane(
+                                        () -> {
+                                            permitResumedNanos = nanoTime.getAsLong();
+                                            return null;
+                                        });
+                            }
                             received = stream.recv();
                             if (received == null) {
                                 break;
@@ -1344,10 +1331,47 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             }
         }
 
+        private ZLinkApplicationJobQueue.Permit acquirePermit() {
+            // A free permit takes no state-lane turn. Only a wait is recorded, and a grant that
+            // already started the next turn keeps its later resume time.
+            long grantsBefore = permitGrants.get();
+            var permit =
+                    applicationJobQueue.acquireOrResume(
+                            receiveExecutor,
+                            this::resumeTurn,
+                            pendingAcquire,
+                            ZLinkApplicationJobQueue.Origin.REMOTE);
+            if (permit == null) {
+                inStateLane(
+                        () -> {
+                            if (permitGrants.get() == grantsBefore) {
+                                permitResumedNanos = WAITING_FOR_PERMIT;
+                            }
+                            return null;
+                        });
+            }
+            return permit;
+        }
+
+        private void resumeTurn(ZLinkApplicationJobQueue.Permit granted) {
+            permitGrants.incrementAndGet();
+            runTurn(granted);
+        }
+
+        private long inboundRemainingNanos(long now, long lastActivity, long timeout) {
+            if (timeout == 0 || permitResumedNanos == WAITING_FOR_PERMIT) {
+                return Long.MAX_VALUE;
+            }
+            long elapsed = now - lastActivity;
+            if (permitResumedNanos != NO_PERMIT_WAIT) {
+                elapsed = Math.min(elapsed, now - permitResumedNanos);
+            }
+            return timeout - elapsed;
+        }
+
         private boolean processReceived(
                 ZLinkBackendStreamReceived received,
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
-                        permit,
+                ZLinkApplicationJobQueue.Permit permit,
                 ZLinkReceiveBatchBudget batch) {
             RoutingId routingId = received.routingId().orElse(null);
             if (routingId == null) {
@@ -1453,7 +1477,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkStreamHeader streamHeader,
             Message payload) {
         if (forcedStop.isDone()) return forcedStop;
-        ZLinkBackendStreamSocket stream = streamsByName.get(streamNode.name());
+        ZLinkBackendStreamSocket stream = receiveLoops.get(streamNode.name()).stream;
         //  Spec 27 §4: at Off the inbound flow pair is neither read into a flow
         //  context nor copied forward; at every other level the ingress installs
         //  the inbound pair or starts a new flow.
@@ -1762,7 +1786,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         if (forcedStop.isDone()) return;
         if (event == MonitorEventType.CONNECTION_READY) {
             getOrCreateSessionState(
-                    streamNode, streamsByName.get(streamNode.name()), routingId, null);
+                    streamNode, receiveLoops.get(streamNode.name()).stream, routingId, null);
             return;
         }
         SessionState state =
@@ -2137,7 +2161,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     streamNode,
                     session,
                     context,
-                    stream,
+                    receiveLoops.get(streamNode.name()),
                     routingId,
                     ownerNodeRid,
                     ownerNode,
@@ -2286,7 +2310,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         livenessExecutor.shutdownNow();
         boolean livenessStopped =
                 awaitExecutorTermination(livenessExecutor, "STREAM liveness executor");
-        receiveLoops.forEach(StreamReceiveLoop::close);
+        receiveLoops.values().forEach(StreamReceiveLoop::close);
         receiveExecutor.shutdownNow();
         boolean receiveStopped =
                 awaitExecutorTermination(receiveExecutor, "STREAM receive executor");
@@ -2296,8 +2320,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             + " open");
             return;
         }
-        for (ZLinkBackendStreamSocket stream : streams) {
-            stream.close();
+        for (StreamReceiveLoop reader : receiveLoops.values()) {
+            reader.stream.close();
         }
         if (ownsContext) {
             context.close();
@@ -2564,7 +2588,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private ScheduledFuture<?> livenessTimer;
         private final ZLinkSession session;
         private final ZLinkStreamSessionContextState context;
-        private final ZLinkBackendStreamSocket stream;
+        private final StreamReceiveLoop reader;
         private final RoutingId routingId;
         private final RoutingId ownerNodeRid;
         private final ZLinkInternalMeshNode ownerNode;
@@ -2581,7 +2605,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 StreamNodeRegistration streamNode,
                 ZLinkSession session,
                 ZLinkStreamSessionContextState context,
-                ZLinkBackendStreamSocket stream,
+                StreamReceiveLoop reader,
                 RoutingId routingId,
                 RoutingId ownerNodeRid,
                 ZLinkInternalMeshNode ownerNode,
@@ -2596,7 +2620,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             lastHeartbeatPhaseNanos = connectedNanos;
             this.session = session;
             this.context = context;
-            this.stream = stream;
+            this.reader = reader;
             this.routingId = routingId;
             this.ownerNodeRid = ownerNodeRid;
             this.ownerNode = ownerNode;
@@ -2618,7 +2642,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         ZLinkBackendStreamSocket stream() {
-            return stream;
+            return reader.stream;
         }
 
         RoutingId routingId() {
@@ -2661,13 +2685,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         long inboundRemainingNanos(long now) {
-            return heartbeatTimeoutNanos - (now - lastInboundNanos);
+            return reader.inboundRemainingNanos(now, lastInboundNanos, heartbeatTimeoutNanos);
         }
 
         long idleRemainingNanos(long now) {
-            return idleTimeoutNanos == 0
-                    ? Long.MAX_VALUE
-                    : idleTimeoutNanos - (now - lastApplicationNanos);
+            return reader.inboundRemainingNanos(now, lastApplicationNanos, idleTimeoutNanos);
         }
 
         void cancelLivenessTimer() {

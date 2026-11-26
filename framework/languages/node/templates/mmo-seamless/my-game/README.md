@@ -35,10 +35,32 @@ Shell:
 PowerShell:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 Docker builds a shared role image and a runner image using the pinned `NODE_IMAGE` ARG (`node:22.20.0-trixie`, with a slim runtime stage). The runner image also includes Docker CLI 28.5.1. The build compiles TypeScript and generates packet schemas for the Framework's default typed JSON serializer. Relocation adapters serialize only application state.
+
+## Run the server and e2e
+
+Install Node.js 22 or later, npm and Docker Compose v2 for local hosting. From this directory, leave the first command running and execute the second in another terminal.
+
+```bash
+./run-server.sh
+./run-e2e.sh
+```
+
+```powershell
+.\run-server.cmd
+.\run-e2e.cmd
+```
+
+The Windows wrappers start PowerShell 7 with UTF-8 output and a process-scoped execution policy. The equivalent PowerShell scripts are `run-server.ps1` and `run-e2e.ps1`.
+
+`run-server` runs `npm ci`, builds the project, starts Redis and the local nodes, and prints the WebSocket address next to `Server ready`. When present, HTTP API addresses are printed separately. Use Ctrl+C to stop the nodes and Redis. A second server start is rejected while the first server is starting or running.
+
+`run-e2e` detects a ready server through `.logs/server.json` and runs the compatible scenarios against it. Node replacement requires isolation, so attached runs skip `update`. Stop the server before running the full Docker e2e. Use `--local` or `-Local` to request a separate local run with Redis in Docker.
+
+`.logs/run-<id>/` contains generated node settings, separate `*.out.log`, `*.err.log` and `*.flow.log` files, and failure details. Attached runs keep their client results in a new run directory and print the path. The running server continues writing node logs to its own run directory. Docker build and cleanup logs are in `.logs/docker-<project>/`.
 
 ## Client connection
 
@@ -106,6 +128,8 @@ try {
 
 ## Docker e2e
 
+These commands use Docker isolation when no local server is ready.
+
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario cross,border,reconnect
@@ -114,19 +138,19 @@ try {
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario cross,border,reconnect
+.\run-e2e.cmd -CheckDomain
+.\run-e2e.cmd -CheckStructure
 ```
 
 The default order is `cross`, `border`, `reconnect`, `update`. Cross verifies rejected movement leaves state unchanged, uses the server-provided retry delay, crosses Zones, preserves Actor identity and reaches Dungeon placement. Border verifies adjacent visibility, `out-of-range` when a player moves into the Zone interior beyond the border band, and the existing `left-zone` and `disconnected` events. Reconnect verifies preserved movement with a new physical Session. Update drains Zone A while movement continues, observes relocation and SafeToShutdown, stops the old process, starts its replacement and verifies continued game traffic. `--check-domain` verifies finite input, bounds, sequence, budget, and snapshot boundaries without sending non-finite JSON.
 
-Each run validates `zlink.structure.json`, creates a unique Redis Compose project and key prefix, binds listeners to OS-assigned ports, and saves node stdout, stderr message-flow records and client packets in `.logs/run-<id>/`. Cleanup failure causes exit code 1. The runner uses separate role entrypoints and starts Zone A before Zone B so fixed Zone placement follows the declared configuration.
+Each run validates `zlink.structure.json`, creates a unique Redis Compose project and key prefix, binds listeners to OS-assigned ports, and saves node stdout, stderr and message-flow records and client packets in `.logs/run-<id>/`. Cleanup failure causes exit code 1. The runner uses separate role entrypoints and starts Zone A before Zone B so fixed Zone placement follows the declared configuration.
 
 Docker runs the e2e runner and each node in containers. Nodes share the runner's network namespace, preserving loopback endpoints and OS-assigned ports. The runner controls stdin and captures stdout through `docker start -a -i`. Each run owns a unique Compose project, network and image tags. Shell logs are in `.logs/docker-<project>/`; node and message-flow logs remain in `.logs/run-<id>/`. Cleanup removes only that run's resources and returns exit code 1 on failure. Shared Docker build cache is retained.
 
-For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. These commands install packages, build and run the same scenarios with Redis in Docker. Add `--no-build` or `-NoBuild` to reuse an existing local build.
+For local process debugging, run `./run-e2e.sh --local` or `.\run-e2e.cmd -Local`. These commands install packages, build and run the same scenarios with Redis in Docker. Add `--no-build` or `-NoBuild` to reuse an existing local build.
 
 ## Framework behavior to know
 
@@ -140,9 +164,11 @@ For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -Fil
 
 ## Known issues
 
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
+
 Validated against the published Framework 0.34.0 packages.
 
-Node typed handlers receive fields without the declared DTO class (#1731, scheduled for 0.32.0); the template reconstructs declared packet classes before forwarding through typed APIs.
+Node typed handlers receive fields without the declared DTO class (#1731, scheduled for 0.34.0); the template reconstructs declared packet classes before forwarding through typed APIs.
 
 Message Follow is explicitly configured to 30 seconds in shared hosting. The wait for `SAFE_TO_SHUTDOWN` is derived from that period plus the existing host relocation budget. Packet deadlines and the relocation operation budget remain unchanged.
 
