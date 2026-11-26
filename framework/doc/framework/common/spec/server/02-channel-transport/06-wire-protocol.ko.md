@@ -648,6 +648,9 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   넣는다. Body에는 그 boundary가 마감하는 정확한 relay batch를 설명하는 `boundaryRecordCount`와
   `boundaryChecksumCrc32c`가 추가된다. Target은 response를 보내지 않는다. Reserved ID 32, 35와
   41은 보내거나 accept하지 않는다.
+  **`boundaryChecksumCrc32c`의 입력은 그 batch의 각 command 31 body에 든 frozen record bytes를 보낸 순서대로
+  이어 붙인 것이다.** Command header, 길이 prefix와 command 31 전체 encoding은 넣지 않는다. 제어 frame을 다시
+  encode하지 않고 record 내용만 비교하기 위해서다. Batch가 비면 입력은 빈 bytes이고 값은 `0`이다.
 - Same-endpoint transport 재연결은 [Transport liveness §6](05-transport-liveness.ko.md#6-connection-loss와-reconnect)에 따라 Core가 수행한다. Core가 선택한 route를 노출하면 Framework가 service handshake와 identity admission을 다시 수행한다. 그 뒤 source의 batch 재전송과 target의 부분 staging 교체는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다.
 - Source는 application state, relocation 시작 전에 실행하지 않은 queue와 timer 정보를 direct
   transfer용으로 저장한다. Native timer handle과 callback continuation은 encode하지 않는다.

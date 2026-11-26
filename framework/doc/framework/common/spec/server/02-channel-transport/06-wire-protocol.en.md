@@ -720,6 +720,10 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   `boundaryChecksumCrc32c`, describing the precise relayed-record batch the boundary closes
   over. Target sends no response. Reserved IDs 32, 35, and 41 are neither sent nor
   accepted.
+  **The input of `boundaryChecksumCrc32c` is the frozen record bytes carried in each command 31 body of
+  that batch, concatenated in send order.** The command header, length prefixes, and the full command 31
+  encoding are not included, so the comparison covers record content without re-encoding control frames.
+  An empty batch has an empty input and the value `0`.
 - Core reconnects same-endpoint transport under [Transport liveness §6](05-transport-liveness.en.md#6-connection-loss-and-reconnect). After Core exposes its selected route, Framework repeats service handshake and identity admission. Source batch retransmission and target partial-staging replacement then follow [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 - The source stores application state, queue work not yet executed before relocation,
   and timer information for direct transfer. Native timer handles and callback
