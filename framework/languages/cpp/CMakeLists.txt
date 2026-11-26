@@ -3483,6 +3483,26 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
         TIMEOUT 30)
     endforeach()
   endforeach()
+  if(ZLINK_FRAMEWORK_CPP_TEST_PROBES)
+    add_executable(test_cpp_framework_stream_liveness_reader_expiry
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_liveness_reader_expiry.cpp)
+    zlink_framework_cpp_add_boost_headers(test_cpp_framework_stream_liveness_reader_expiry)
+    target_include_directories(test_cpp_framework_stream_liveness_reader_expiry PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_link_libraries(test_cpp_framework_stream_liveness_reader_expiry PRIVATE
+      zlink::framework opentelemetry-cpp::metrics)
+    foreach(_reader_transport IN ITEMS tcp websocket core)
+      foreach(_reader_frame IN ITEMS complete partial)
+        zlink_framework_cpp_add_test(
+          NAME test_cpp_framework_stream_liveness_reader_expiry_${_reader_transport}_${_reader_frame}
+          COMMAND test_cpp_framework_stream_liveness_reader_expiry ${_reader_transport} ${_reader_frame}
+          LABELS "framework-unit;framework-regression;stream;liveness"
+          TIER contract
+          TIMEOUT 30)
+      endforeach()
+    endforeach()
+  endif()
   add_zlink_framework_test(
     test_cpp_framework_poll_interval_wait
     tests/Zlink.Framework.UnitTests/test_cpp_framework_poll_interval_wait.cpp
