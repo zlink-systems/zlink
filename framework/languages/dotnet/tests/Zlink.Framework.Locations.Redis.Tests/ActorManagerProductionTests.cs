@@ -398,14 +398,23 @@ public sealed partial class ActorManagerProductionTests
         return services.BuildServiceProvider();
     }
 
-    private static ServiceProvider BuildClient(IZLinkLocationStore store, string endpoint)
+    private static ServiceProvider BuildClient(
+        IZLinkLocationStore store,
+        string endpoint,
+        TimeSpan? requestTimeout = null,
+        string? routingIdPrefix = null
+    )
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(store);
+            if (requestTimeout is { } timeout)
+                options.DefaultRequestTimeout = timeout;
             options.ConfigureInboundDispatch().CoreHwmMemoryLimitBytes = 1UL * 1024 * 1024 * 1024;
             var node = options.AddRouteMesh("objects").Listen(endpoint);
+            if (routingIdPrefix is not null)
+                node.SetRoutingIdPrefix(routingIdPrefix);
             node.Channel("objects").Client();
             node.Objects().Client();
         });

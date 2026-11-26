@@ -216,7 +216,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         var source = runtime.ResolveActorCreationSource(authority.MeshName);
         if (authority.NodeRid == source.Node.RoutingId)
         {
-            var local = await source
+            return await source
                 .DestroyActorLocalAsync(
                     new ActorDestroyOperation(
                         1,
@@ -230,24 +230,48 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            return local.Completion?.Destroyed
-                ?? throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"Actor '{actor.ActorId}' local destroy did not produce a terminal result.",
-                    ZLinkRetryAdvice.RetryAfterBackoff
-                );
         }
 
-        return await source
-            .Node.DestroyActorRemoteAsync(
-                currentRef.ToBackend(),
-                authority.NodeGeneration,
-                snapshot.AuthorityOwnerGeneration,
-                checked((ulong)snapshot.OwnerLeaseGeneration),
-                runtime.Registration.DefaultRequestTimeout,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(runtime.Registration.DefaultRequestTimeout);
+        try
+        {
+            await source
+                .Node.SendActorDestroyAsync(
+                    currentRef.ToBackend(),
+                    authority.NodeGeneration,
+                    snapshot.AuthorityOwnerGeneration,
+                    checked((ulong)snapshot.OwnerLeaseGeneration),
+                    deadline.Token
+                )
+                .ConfigureAwait(false);
+
+            var waitAttempt = 0;
+            while (true)
+            {
+                var observed = await store
+                    .ReadAuthorityAsync(authorityKey, deadline.Token)
+                    .ConfigureAwait(false);
+                if (
+                    observed is not ZLinkAuthorityReadResult.Found current
+                    || current.Snapshot.ObjectGeneration > actor.ObjectGeneration
+                )
+                    return true;
+
+                await DelayAuthorityObservationAsync(waitAttempt++, deadline.Token)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException failure)
+            when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                $"Remote Actor destroy exceeded its deadline for '{actor.ActorId}'.",
+                ZLinkRetryAdvice.RetryAfterBackoff,
+                failure
+            );
+        }
     }
 
     private async ValueTask<ZLinkActorCreateResult> SubmitAsync(
@@ -826,17 +850,20 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
     //  owner) nor reclaim (recovery-required fence) previously spun through
     //  reserve->join->null with no log and no backoff until the caller's
     //  deadline. Trace and back off so the cycle is visible and cheap.
-    private static async ValueTask DelayJoinRetryAsync(
+    private static ValueTask DelayJoinRetryAsync(
         string actorId,
         int attempt,
         CancellationToken cancellationToken
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery($"actor_join_retry actor={actorId} attempt={attempt}");
-        var backoffMilliseconds = 1 << Math.Min(attempt, 8);
-        await Task.Delay(TimeSpan.FromMilliseconds(backoffMilliseconds), cancellationToken)
-            .ConfigureAwait(false);
+        return DelayAuthorityObservationAsync(attempt, cancellationToken);
     }
+
+    private static ValueTask DelayAuthorityObservationAsync(
+        int attempt,
+        CancellationToken cancellationToken
+    ) => new(Task.Delay(TimeSpan.FromMilliseconds(1 << Math.Min(attempt, 8)), cancellationToken));
 }
 
 internal abstract class ZLinkActorCreateCallBase
