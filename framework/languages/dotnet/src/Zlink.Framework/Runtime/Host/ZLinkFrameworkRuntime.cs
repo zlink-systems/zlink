@@ -157,7 +157,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         {
             _locationRuntime.CaptureExecutions = SnapshotLocationExecutions;
             _locationRuntime.ExecutionsDiscarded += DiscardLocationExecutions;
-            _locationRuntime.DiscardExecutionsAsync = DiscardTrackedLocationExecutionsAsync;
+            _locationRuntime.DiscardExecutionsAsync = DiscardLocationExecutionsAsync;
             _locationRuntime.DiscardExecutionFailed = error =>
                 ErrorSink.ReportRuntimeTaskException("location-discard", error);
             _locationRuntime.ExecutionResumed += ResumeLocationExecution;
@@ -807,39 +807,6 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         : execution is ZLinkActorRuntimeState actor
             ? _actorSessionManager.DiscardLocationExecutionAsync(actor)
         : DiscardLocationExecutionsAsync(new HashSet<object> { execution });
-
-    private async ValueTask DiscardTrackedLocationExecutionsAsync(IReadOnlySet<object> executions)
-    {
-        if (_locationLifecycle is not { } lifecycle)
-        {
-            await DiscardLocationExecutionsAsync(executions).ConfigureAwait(false);
-            return;
-        }
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        var started = await lifecycle
-            .TryRunBackgroundAsync(async _ =>
-            {
-                try
-                {
-                    await DiscardLocationExecutionsAsync(executions).ConfigureAwait(false);
-                    completion.TrySetResult();
-                }
-                catch (Exception error)
-                {
-                    completion.TrySetException(error);
-                    throw;
-                }
-            })
-            .ConfigureAwait(false);
-        if (!started)
-        {
-            await DiscardLocationExecutionsAsync(executions).ConfigureAwait(false);
-            return;
-        }
-        await completion.Task.ConfigureAwait(false);
-    }
 
     private async ValueTask DiscardLocationExecutionsAsync(IReadOnlySet<object> executions)
     {
@@ -1697,6 +1664,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             await CaptureAsync(_locationLifecycle.PauseBackgroundWorkAsync).ConfigureAwait(false);
         if (Services.GetService<ZLinkAutoConnectLifecycleCoordinator>() is { } autoConnectLifecycle)
             await CaptureAsync(() => autoConnectLifecycle.StopAsync(forceStopToken))
+                .ConfigureAwait(false);
+        if (_locationRuntime is { } locations)
+            await CaptureAsync(() => locations.DrainDiscardedLocalExecutionsAsync(forceStopToken))
                 .ConfigureAwait(false);
         var generationCleanupReporter = (
             state?.ErrorSink ?? Volatile.Read(ref _generationErrorSink)
