@@ -1416,8 +1416,7 @@ apply_bound_session_bind_async (
                             const auto &ref = actor_instance->context ().actor_ref ();
                             const auto key = std::string (actor_ref_access_t::actor_type (ref))
                                              + ":" + std::string (ref.actor_id ().value ());
-                            return owner->retiring_actor_keys.contains (key)
-                                   || owner->destroying_actors.contains (key)
+                            return owner->destroying_actors.contains (key)
                                    || !owner->actor_instances.contains (key);
                         });
                     if (!cancelled || (!shutdown.stop_requested () && !actor_ending))
