@@ -36,7 +36,10 @@ public final class TownState {
     }
 
     public PartyRun partyFor(String id) {
-        return parties.values().stream().filter(party -> party.members.contains(id)).findFirst().orElse(null);
+        return parties.values().stream()
+                .filter(party -> party.members.contains(id))
+                .findFirst()
+                .orElse(null);
     }
 
     public PartyRun partyForRun(String runId) {
@@ -51,9 +54,6 @@ public final class TownState {
                 townId,
                 nodeId,
                 players.stream().sorted().toList(),
-                new TreeMap<>(parties)
-                        .entrySet().stream()
-                                .map(e -> e.getValue().view())
-                                .toList());
+                new TreeMap<>(parties).entrySet().stream().map(e -> e.getValue().view()).toList());
     }
 }

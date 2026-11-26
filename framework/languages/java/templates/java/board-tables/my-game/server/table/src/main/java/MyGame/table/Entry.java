@@ -19,6 +19,10 @@ public final class Entry implements ZLinkEntrySpot<Player> {
         return CompletableFuture.completedFuture(null);
     }
 
+    public CompletionStage<Void> onDisconnectActor(Player actor) {
+        return actor.disconnected();
+    }
+
     public CompletionStage<Void> onLeaveActor(Player actor) {
         return CompletableFuture.completedFuture(null);
     }
