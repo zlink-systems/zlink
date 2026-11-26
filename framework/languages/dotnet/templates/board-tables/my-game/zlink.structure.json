@@ -73,19 +73,19 @@
   ],
   "channels": [
     {
-      "name": "player-api",
+      "name": "my-game-player-records",
       "owner": "tableA",
       "kind": "client-server",
       "role": "client"
     },
     {
-      "name": "player-api",
+      "name": "my-game-player-records",
       "owner": "tableB",
       "kind": "client-server",
       "role": "client"
     },
     {
-      "name": "player-api",
+      "name": "my-game-player-records",
       "owner": "api",
       "kind": "client-server",
       "role": "server"

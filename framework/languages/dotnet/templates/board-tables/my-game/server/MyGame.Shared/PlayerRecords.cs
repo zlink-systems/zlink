@@ -2,7 +2,7 @@ namespace MyGame.Shared;
 
 public static class PlayerRecords
 {
-    public const string Channel = "player-api";
+    public const string Channel = "my-game-player-records";
 }
 
 public sealed record LoadPlayer(string PlayerId);

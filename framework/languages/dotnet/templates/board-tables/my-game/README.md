@@ -180,13 +180,13 @@ After a local build, use the following command to check structure without starti
 dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
 ```
 
-The structure check validates the actual files' version, identifiers, configuration paths and IDs, Spot declarations, `player-api` channel roles, edges, and the scenario list.
+The structure check validates the actual files' version, identifiers, configuration paths and IDs, Spot declarations, `my-game-player-records` channel roles, edges, and the scenario list.
 
 ## Matchmaking and player records
 
 The Pool is an Instance Spot on the matchmaker node. It selects a pair and sends `PrepareRoom` to the `RoomProvisioner` Instance Spot on a play node. The provisioner creates a Table and sends `RoomPrepared` to the Pool. The Pool offers the assignment after successful preparation and sends `CommitRoom` after both join completions. The Table publishes the committed seats.
 
-The Actor loads its balance once through `LoadPlayer` on the `player-api` channel and carries it into Table admission. At settlement the Table sends one `CommitRound` containing all seat balances. The API node writes the round marker and balances in one Redis operation. After `RoundCommitted`, the Table applies the result and publishes `HandResult`. Each Actor records its own committed balance when it receives that result. Use unique table IDs for new games so that the pair of table ID and hand number identifies a single round.
+The Actor loads its balance once through `LoadPlayer` on the `my-game-player-records` channel and carries it into Table admission. At settlement the Table sends one `CommitRound` containing all seat balances. The API node writes the round marker and balances in one Redis operation. After `RoundCommitted`, the Table applies the result and publishes `HandResult`. Each Actor records its own committed balance when it receives that result. Use unique table IDs for new games so that the pair of table ID and hand number identifies a single round.
 
 ## Game rules and extension
 

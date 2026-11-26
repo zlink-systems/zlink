@@ -69,7 +69,7 @@ An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame
 
 `server/MyGame.Matchmaker/PoolSpot.cs` owns the matchmaking queue and offers an assignment after the `RoomProvisioner` answers `PrepareRoom` with `RoomPrepared`. Keep ticket decisions in the Pool and seat decisions in the Table.
 
-`server/MyGame.Api/RedisPlayerRecords.cs` loads player balances and atomically writes each round with its idempotency marker. Play nodes discover the API through the shared Location Store and call it over `player-api`. The capability port and channel adapter are in `server/MyGame.Table/PlayerRecords.cs`.
+`server/MyGame.Api/RedisPlayerRecords.cs` loads player balances and atomically writes each round with its idempotency marker. Play nodes discover the API through the shared Location Store and call it over `my-game-player-records`. The capability port and channel adapter are in `server/MyGame.Table/PlayerRecords.cs`.
 
 ### Shared contracts and hosting
 
@@ -83,7 +83,7 @@ An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame
 
 ### RouteMesh
 
-A RouteMesh connects nodes that exchange messages between processes; this project uses `GameNames.WorldMesh`. The API serves `player-api` as a client-server channel and play nodes connect as clients. [Channel messaging](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/) describes registration and calls.
+A RouteMesh connects nodes that exchange messages between processes; this project uses `GameNames.WorldMesh`. The API serves `my-game-player-records` as a client-server channel and play nodes connect as clients. [Channel messaging](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/) describes registration and calls.
 
 ### Spots and Actors
 
