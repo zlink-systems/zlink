@@ -42,17 +42,17 @@ public sealed partial class LocationRuntimeTests
                 item.ExecutionStatus != ZLinkObjectExecutionStatus.Paused,
             sharedGate: shared
         );
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var suspended = new TaskCompletionSource<Task>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var completeIo = new TaskCompletionSource();
         var resumed = false;
         queue.TryPostApplicationWithAdmission(
             async ct =>
             {
-                entered.TrySetResult();
-                await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
-                    _ => new ValueTask(completeIo.Task),
-                    ct
-                );
+                var turn = ZLinkSerialTurn.Current!;
+                suspended.TrySetResult(turn.Suspended);
+                await turn.YieldFrameworkCallAsync(_ => new ValueTask(completeIo.Task), ct);
                 resumed = true;
             },
             0,
@@ -63,7 +63,7 @@ public sealed partial class LocationRuntimeTests
         );
         try
         {
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await suspended.Task.Unwrap().WaitAsync(TimeSpan.FromSeconds(5));
             store.Stale = leaseLoss;
             store.Fail = !leaseLoss;
             Assert.False(await locations.RenewOwnerLeaseOnceAsync());
@@ -893,6 +893,7 @@ public sealed partial class LocationRuntimeTests
                 .Async();
             var activation = Assert.Single(runtime.GetSpotNodeRuntime("deadline-execution").Spots);
             var spot = Assert.IsType<OutageExecutionSpot>(activation.Spot);
+            await spot.Timer!.CancelAsync();
             await provider
                 .GetRequiredService<IZLinkActorManager>()
                 .Create("steady-actor", "deadline-actor")
@@ -3498,6 +3499,8 @@ public sealed partial class LocationRuntimeTests
         internal bool MissingRead;
         internal ZLinkOwnerLeaseReadResult? OwnerLeaseRead;
         internal int Claims;
+        private int _readCalls;
+        internal int ReadCalls => Volatile.Read(ref _readCalls);
         internal TaskCompletionSource ReadStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ReleaseRead { get; } =
@@ -3512,6 +3515,7 @@ public sealed partial class LocationRuntimeTests
             CancellationToken cancellationToken = default
         )
         {
+            Interlocked.Increment(ref _readCalls);
             if (HoldRead)
             {
                 ReadStarted.TrySetResult();
@@ -4007,19 +4011,33 @@ public sealed partial class LocationRuntimeTests
     [Fact]
     public async Task Startup_ClaimConflict_RemainsAnErrorWhenConfirmationReadTimesOut()
     {
-        var store = new ConflictWithNonCooperativeReadStore();
-        var runtime = new ZLinkLocationRuntime(
-            new ZLinkLocationOptions { OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(25) },
-            store
-        );
-
-        await Assert.ThrowsAsync<ZLinkOwnerLeaseClaimRejectedException>(() =>
-            runtime
-                .StartAsync(RoutingId.From("conflict-read-timeout-node"))
-                .AsTask()
-                .WaitAsync(TimeSpan.FromSeconds(1))
-        );
-        Assert.Equal(1, store.ReadCalls);
+        var time = new ControllableTimeProvider();
+        var options = new ZLinkLocationOptions
+        {
+            OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(25),
+        };
+        var store = new OutageLeaseStore(new ZLinkInMemoryLocationStore(time))
+        {
+            ConflictClaim = true,
+            HoldRead = true,
+        };
+        await using var runtime = new ZLinkLocationRuntime(options, store, time);
+        var budgetCreated = time.WaitForNextTimerAsync(options.OwnerLeaseRenewTimeout);
+        var startup = runtime.StartAsync(RoutingId.From("conflict-read-timeout-node")).AsTask();
+        try
+        {
+            await Task.WhenAll(budgetCreated, store.ReadStarted.Task)
+                .WaitAsync(TimeSpan.FromSeconds(1));
+            time.AdvanceMonotonic(options.OwnerLeaseRenewTimeout);
+            await Assert.ThrowsAsync<ZLinkOwnerLeaseClaimRejectedException>(() =>
+                startup.WaitAsync(TimeSpan.FromSeconds(1))
+            );
+            Assert.Equal(1, store.ReadCalls);
+        }
+        finally
+        {
+            store.ReleaseRead.TrySetResult();
+        }
     }
 
     [Fact]
@@ -4552,34 +4570,6 @@ public sealed partial class LocationRuntimeTests
             ValueTask.FromResult<ZLinkOwnerLeaseReadResult>(
                 new ZLinkOwnerLeaseReadResult.Missing()
             );
-    }
-
-    private sealed class ConflictWithNonCooperativeReadStore : ZLinkLocationStoreTestDouble
-    {
-        private readonly TaskCompletionSource<ZLinkOwnerLeaseReadResult> _read = new(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        private int _readCalls;
-
-        public int ReadCalls => Volatile.Read(ref _readCalls);
-
-        public override ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
-            string ownerId,
-            TimeSpan leaseTtl,
-            CancellationToken cancellationToken = default
-        ) =>
-            ValueTask.FromResult<ZLinkOwnerLeaseClaimResult>(
-                new ZLinkOwnerLeaseClaimResult.Conflict()
-            );
-
-        public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
-            string ownerId,
-            CancellationToken cancellationToken = default
-        )
-        {
-            Interlocked.Increment(ref _readCalls);
-            return new ValueTask<ZLinkOwnerLeaseReadResult>(_read.Task);
-        }
     }
 
     private sealed class CancelAfterCommittedClaimStore(IZLinkLocationRepository inner)
