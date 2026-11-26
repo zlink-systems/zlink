@@ -5,13 +5,20 @@ import MyGame.*;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
-import java.util.Arrays;
+import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.locations.redis.*;
 import systems.zlink.framework.spring.*;
+
+import java.util.Arrays;
 
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)
 public class Program {
+    @Bean
+    public PlayerApi playerApi(ZLinkRouteClient client) {
+        return new ChannelPlayerApi(client);
+    }
+
     @Bean
     public ZLinkFrameworkConfigurer framework(
             NodeConfig config,
@@ -20,6 +27,8 @@ public class Program {
         return options -> {
             Hosting.configure(options, locations, relocations);
             options.addHandlersFromPackageOf(Program.class);
+            var api = options.addClientServerChannel(Names.API).client();
+            if (config.apiEndpoint() != null) api.connect(config.apiEndpoint());
             options.addRouteMesh(Names.MESH)
                     .listen(config.meshEndpoint())
                     .setRoutingIdPrefix(config.id())
@@ -34,6 +43,10 @@ public class Program {
                                     b.stableTypeLimit(config.tableCapacity());
                                 b.preserveStateWith(TableTransfer.class);
                             })
+                    .addInstanceSpotFactory(
+                            Names.ROOM_PROVISIONER,
+                            RoomProvisioner.class,
+                            b -> b.recreateOnRelocation())
                     .addActorFactory(
                             Names.PLAYER,
                             Player.class,
@@ -45,6 +58,8 @@ public class Program {
     public static void main(String[] args) throws Exception {
         if (Arrays.equals(args, new String[] {"--check-domain"})) {
             int passed = DomainChecks.run();
+            RoomWithdrawalCheck.run();
+            System.out.println("Room withdrawal check: passed");
             System.out.println("Domain checks: " + passed + "/7 passed");
             if (passed != 7) System.exit(1);
             DomainChecks.verifyJsonContract();

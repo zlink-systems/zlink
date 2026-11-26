@@ -22,18 +22,26 @@ public final class Scenarios {
             var initial = pair(a, b);
             var sessionA = a.sessionInfo();
             var sessionB = b.sessionInfo();
-            check(sessionA.actorId().equals(a.playerId) && sessionB.actorId().equals(b.playerId), "Actor identity differs");
+            check(
+                    sessionA.actorId().equals(a.playerId) && sessionB.actorId().equals(b.playerId),
+                    "Actor identity differs");
             switch (scenario) {
                 case HIT -> hitScenario(a, b);
                 case WALL -> wallScenario(a, b);
                 case INPUT -> inputScenario(a, b);
                 case RECONNECT -> reconnectScenario(a, b, sessionA, sessionB);
                 case UPDATE -> updateScenario(a, b, nodes, initial, sessionA, sessionB);
-                case MATCHMAKING -> throw new IllegalStateException("Matchmaking scenario was handled separately");
+                case MATCHMAKING ->
+                        throw new IllegalStateException(
+                                "Matchmaking scenario was handled separately");
             }
-            check(a.disconnects.get() == 0 && a.connector.isConnected(), "First player disconnected");
+            check(
+                    a.disconnects.get() == 0 && a.connector.isConnected(),
+                    "First player disconnected");
             if (scenario != Scenario.RECONNECT)
-                check(b.disconnects.get() == 0 && b.connector.isConnected(), "Second player disconnected");
+                check(
+                        b.disconnects.get() == 0 && b.connector.isConnected(),
+                        "Second player disconnected");
         }
     }
 
@@ -50,30 +58,55 @@ public final class Scenarios {
             casualB.queue("casual");
             var rankedRoom = rankedA.next(MatchFound.class);
             var casualRoom = casualA.next(MatchFound.class);
-            check(rankedRoom.roomId().equals(rankedB.next(MatchFound.class).roomId())
-                    && casualRoom.roomId().equals(casualB.next(MatchFound.class).roomId())
-                    && !rankedRoom.roomId().equals(casualRoom.roomId()), "Different modes were not separated");
+            check(
+                    rankedRoom.roomId().equals(rankedB.next(MatchFound.class).roomId())
+                            && casualRoom.roomId().equals(casualB.next(MatchFound.class).roomId())
+                            && !rankedRoom.roomId().equals(casualRoom.roomId()),
+                    "Different modes were not separated");
             Predicate<RoomView> full = view -> view.players().size() == Rules.PLAYERS_PER_ROOM;
             var ranked = rankedA.next(RoomView.class, full);
             var casual = casualA.next(RoomView.class, full);
             var rankedOther = rankedB.next(RoomView.class, full);
             var casualOther = casualB.next(RoomView.class, full);
-            check(ranked.equals(rankedOther) && casual.equals(casualOther)
-                    && new HashSet<>(ranked.players().stream().map(PlayerView::playerId).toList())
-                            .equals(Set.of(rankedA.playerId, rankedB.playerId))
-                    && new HashSet<>(casual.players().stream().map(PlayerView::playerId).toList())
-                            .equals(Set.of(casualA.playerId, casualB.playerId))
-                    && ranked.phase() == MatchPhase.Playing && casual.phase() == MatchPhase.Playing
-                    && ranked.players().stream().allMatch(player -> player.hp() == Rules.INITIAL_HP && player.lastSequence() == 0)
-                    && casual.players().stream().allMatch(player -> player.hp() == Rules.INITIAL_HP && player.lastSequence() == 0),
+            check(
+                    ranked.equals(rankedOther)
+                            && casual.equals(casualOther)
+                            && new HashSet<>(
+                                            ranked.players().stream()
+                                                    .map(PlayerView::playerId)
+                                                    .toList())
+                                    .equals(Set.of(rankedA.playerId, rankedB.playerId))
+                            && new HashSet<>(
+                                            casual.players().stream()
+                                                    .map(PlayerView::playerId)
+                                                    .toList())
+                                    .equals(Set.of(casualA.playerId, casualB.playerId))
+                            && ranked.phase() == MatchPhase.Playing
+                            && casual.phase() == MatchPhase.Playing
+                            && ranked.players().stream()
+                                    .allMatch(
+                                            player ->
+                                                    player.hp() == Rules.INITIAL_HP
+                                                            && player.lastSequence() == 0)
+                            && casual.players().stream()
+                                    .allMatch(
+                                            player ->
+                                                    player.hp() == Rules.INITIAL_HP
+                                                            && player.lastSequence() == 0),
                     "Matched Room members or initial state differ");
             var rejected = rankedA;
             rejected.send(new RoomAssignment(casualRoom.roomId()));
             var packetResult = rejected.next(ActionRejected.class);
-            check(packetResult.reason().equals(Rejection.PACKET_NOT_ALLOWED), "Session accepted an internal RoomAssignment");
+            check(
+                    packetResult.reason().equals(Rejection.PACKET_NOT_ALLOWED),
+                    "Session accepted an internal RoomAssignment");
             same(ranked, view(rankedA));
-            check(List.of(rankedA, rankedB, casualA, casualB).stream()
-                    .allMatch(client -> client.disconnects.get() == 0 && client.connector.isConnected()),
+            check(
+                    List.of(rankedA, rankedB, casualA, casualB).stream()
+                            .allMatch(
+                                    client ->
+                                            client.disconnects.get() == 0
+                                                    && client.connector.isConnected()),
                     "Matchmaking disconnected a client");
         }
     }
@@ -87,9 +120,15 @@ public final class Scenarios {
         Predicate<RoomView> full = room -> room.players().size() == Rules.PLAYERS_PER_ROOM;
         var first = a.next(RoomView.class, full);
         var second = b.next(RoomView.class, full);
-        check(first.equals(second) && first.roomId().equals(foundA.roomId())
-                && first.phase() == MatchPhase.Playing
-                && first.players().stream().allMatch(player -> player.hp() == Rules.INITIAL_HP && player.lastSequence() == 0),
+        check(
+                first.equals(second)
+                        && first.roomId().equals(foundA.roomId())
+                        && first.phase() == MatchPhase.Playing
+                        && first.players().stream()
+                                .allMatch(
+                                        player ->
+                                                player.hp() == Rules.INITIAL_HP
+                                                        && player.lastSequence() == 0),
                 "Initial room state differs");
         return first;
     }
@@ -118,7 +157,9 @@ public final class Scenarios {
         walk(b, new Vec3(52, 0, 22));
         var before = view(b);
         shoot(a, aim(a, b), ShotOutcome.BLOCKED_BY_WALL);
-        check(player(view(b), b).hp() == player(before, b).hp(), "A wall-blocked ray caused damage");
+        check(
+                player(view(b), b).hp() == player(before, b).hp(),
+                "A wall-blocked ray caused damage");
         walk(a, Geometry.ArenaMap.SPAWNS.get(0));
         walk(b, Geometry.ArenaMap.SPAWNS.get(1));
         hit(a, b, 75);
@@ -130,7 +171,8 @@ public final class Scenarios {
         var moveSequence = next(beforeBudget, a);
         move(a, new Vec3(0, 0, -2));
         move(a, new Vec3(0, 0, -2));
-        check(player(view(a), a).lastSequence() == moveSequence + 1,
+        check(
+                player(view(a), a).lastSequence() == moveSequence + 1,
                 "Movement did not preserve sequence");
         reject(a, new MoveRequest(new Vec3(0, 0, -2), moveSequence + 1), Rejection.STALE_SEQUENCE);
 
@@ -138,7 +180,10 @@ public final class Scenarios {
         long sequence = player(current, a).lastSequence();
         reject(a, new MoveRequest(new Vec3(0, 0, 1), sequence), Rejection.STALE_SEQUENCE);
         reject(a, new ShootRequest(new Vec3(1, 0, 0), sequence - 1), Rejection.STALE_SEQUENCE);
-        reject(a, new MoveRequest(new Vec3(Rules.MAX_STEP + 1, 0, 0), sequence + 1), Rejection.STEP_TOO_LARGE);
+        reject(
+                a,
+                new MoveRequest(new Vec3(Rules.MAX_STEP + 1, 0, 0), sequence + 1),
+                Rejection.STEP_TOO_LARGE);
         reject(a, new MoveRequest(new Vec3(0, 1, 0), sequence + 1), Rejection.VERTICAL_MOVE);
         reject(a, new MoveRequest(new Vec3(0, -1, 0), sequence + 1), Rejection.VERTICAL_MOVE);
         walk(a, new Vec3(player(current, a).position().x(), 0, 0));
@@ -152,7 +197,8 @@ public final class Scenarios {
         var shotSequence = next(beforeFire, a);
         shoot(a, new Vec3(0, 1, 0), ShotOutcome.MISS);
         var afterFire = view(a);
-        check(player(afterFire, a).position().equals(player(beforeFire, a).position())
+        check(
+                player(afterFire, a).position().equals(player(beforeFire, a).position())
                         && player(afterFire, a).lastSequence() == shotSequence,
                 "Shots changed position or lost sequence");
         reject(a, new ShootRequest(new Vec3(0, 1, 0), shotSequence), Rejection.STALE_SEQUENCE);
@@ -160,7 +206,8 @@ public final class Scenarios {
         System.out.println("input: movement and shot sequences preserve requests");
     }
 
-    private static void reconnectScenario(Client a, Client b, SessionInfo sessionA, SessionInfo sessionB) throws Exception {
+    private static void reconnectScenario(
+            Client a, Client b, SessionInfo sessionA, SessionInfo sessionB) throws Exception {
         walk(b, new Vec3(54, 0, 18));
         hit(a, b, 75);
         var beforeReconnect = view(b);
@@ -170,37 +217,52 @@ public final class Scenarios {
             again.queue();
             same(beforeReconnect, again.next(RoomView.class));
             var identity = again.sessionInfo();
-            check(!identity.sessionId().equals(sessionB.sessionId())
-                    && identity.actorId().equals(sessionB.actorId())
-                    && identity.objectGeneration() == sessionB.objectGeneration(), "Reconnect changed Actor identity");
+            check(
+                    !identity.sessionId().equals(sessionB.sessionId())
+                            && identity.actorId().equals(sessionB.actorId())
+                            && identity.objectGeneration() == sessionB.objectGeneration(),
+                    "Reconnect changed Actor identity");
             move(again, new Vec3(0, 0, 1));
             hit(a, again, 50);
             hit(a, again, 25);
             hit(a, again, 0);
             ended(a, again);
-            check(again.disconnects.get() == 0 && again.connector.isConnected(), "Reconnected player disconnected");
+            check(
+                    again.disconnects.get() == 0 && again.connector.isConnected(),
+                    "Reconnected player disconnected");
         }
         try (var finished = new Client(a.endpoint, b.playerId)) {
             finished.connect();
             finished.queue();
             var restored = finished.next(RoomView.class);
-            check(restored.phase() == MatchPhase.Finished && restored.winner().equals(a.playerId)
-                    && player(restored, finished).hp() == 0, "Finished reconnect lost winner or HP");
+            check(
+                    restored.phase() == MatchPhase.Finished
+                            && restored.winner().equals(a.playerId)
+                            && player(restored, finished).hp() == 0,
+                    "Finished reconnect lost winner or HP");
         }
         check(a.sessionInfo().equals(sessionA), "Reconnect changed the first Session");
     }
 
     private static void updateScenario(
-            Client a, Client b, Nodes nodes, RoomView initial, SessionInfo sessionA, SessionInfo sessionB)
+            Client a,
+            Client b,
+            Nodes nodes,
+            RoomView initial,
+            SessionInfo sessionA,
+            SessionInfo sessionB)
             throws Exception {
         move(a, new Vec3(0, 0, -1));
         hit(a, b, 75);
         var before = view(a);
         nodes.drain(before.nodeId());
-        check(a.sessionInfo().equals(sessionA) && b.sessionInfo().equals(sessionB), "Update changed session binding");
+        check(
+                a.sessionInfo().equals(sessionA) && b.sessionInfo().equals(sessionB),
+                "Update changed session binding");
         var relocatedA = view(a);
         var relocatedB = view(b);
-        check(!relocatedA.nodeId().equals(before.nodeId())
+        check(
+                !relocatedA.nodeId().equals(before.nodeId())
                         && !relocatedB.nodeId().equals(before.nodeId()),
                 "Room did not relocate");
         same(before, relocatedA);
@@ -208,7 +270,9 @@ public final class Scenarios {
         nodes.replace(before.nodeId());
         newMatch(nodes, before.nodeId());
         hit(a, b, 50);
-        check(a.sessionInfo().equals(sessionA) && b.sessionInfo().equals(sessionB), "Replacement changed session binding");
+        check(
+                a.sessionInfo().equals(sessionA) && b.sessionInfo().equals(sessionB),
+                "Replacement changed session binding");
     }
 
     private static void newMatch(Nodes nodes, String replacement) throws Exception {
@@ -217,7 +281,9 @@ public final class Scenarios {
                 var b = new Client(nodes.endpoint, "new-b-" + suffix)) {
             a.connect();
             b.connect();
-            check(pair(a, b).nodeId().equals(replacement), "Replacement did not accept the new Room");
+            check(
+                    pair(a, b).nodeId().equals(replacement),
+                    "Replacement did not accept the new Room");
         }
     }
 
@@ -225,8 +291,13 @@ public final class Scenarios {
         var before = view(client);
         var request = new MoveRequest(delta, next(before, client));
         while (true) {
-            Object result = client.sendAndAwait(request, value -> value instanceof MoveResult || value instanceof ActionRejected);
-            if (result instanceof ActionRejected rejected && rejected.reason().equals(Rejection.MOVE_BUDGET)
+            Object result =
+                    client.sendAndAwait(
+                            request,
+                            value ->
+                                    value instanceof MoveResult || value instanceof ActionRejected);
+            if (result instanceof ActionRejected rejected
+                    && rejected.reason().equals(Rejection.MOVE_BUDGET)
                     && rejected.retryAfterMs() > 0) {
                 same(before, view(client));
                 Thread.sleep(rejected.retryAfterMs());
@@ -234,11 +305,18 @@ public final class Scenarios {
             }
             check(result instanceof MoveResult, "Movement was rejected: " + result);
             var moved = (MoveResult) result;
-            check(moved.sequence() == request.sequence()
-                    && moved.position().equals(player(before, client).position().plus(delta)), "Movement result differs");
+            check(
+                    moved.sequence() == request.sequence()
+                            && moved.position()
+                                    .equals(player(before, client).position().plus(delta)),
+                    "Movement result differs");
             var after = view(client);
-            check(player(after, client).lastSequence() == request.sequence(), "Movement lost sequence");
-            check(after.players().stream().allMatch(player -> player.position().y() == 0), "Movement changed feet height");
+            check(
+                    player(after, client).lastSequence() == request.sequence(),
+                    "Movement lost sequence");
+            check(
+                    after.players().stream().allMatch(player -> player.position().y() == 0),
+                    "Movement changed feet height");
             return;
         }
     }
@@ -267,48 +345,66 @@ public final class Scenarios {
         return player(room, target).position().minus(player(room, shooter).position());
     }
 
-    private static void shoot(Client shooter, Vec3 direction, String outcome) throws Exception {
+    private static long shoot(Client shooter, Vec3 direction, String outcome) throws Exception {
         var before = view(shooter);
         var request = new ShootRequest(direction, next(before, shooter));
         while (true) {
-            Object response = shooter.sendAndAwait(request, value -> value instanceof ShotResult || value instanceof ShotRejected);
-            if (response instanceof ShotRejected rejected && rejected.reason().equals(Rejection.FIRE_TOO_SOON)
+            Object response =
+                    shooter.sendAndAwait(
+                            request,
+                            value -> value instanceof ShotResult || value instanceof ShotRejected);
+            if (response instanceof ShotRejected rejected
+                    && rejected.reason().equals(Rejection.FIRE_TOO_SOON)
                     && rejected.retryAfterMs() > 0) {
                 same(before, view(shooter));
                 Thread.sleep(rejected.retryAfterMs());
                 continue;
             }
-            check(response instanceof ShotResult result && result.outcome().equals(outcome)
-                    && result.sequence() == request.sequence(), "Expected " + outcome + ", received " + response);
-            return;
+            if (!(response instanceof ShotResult result)
+                    || !result.outcome().equals(outcome)
+                    || result.sequence() != request.sequence()) {
+                throw new IllegalStateException("Expected " + outcome + ", received " + response);
+            }
+            return result.sequence();
         }
     }
 
     private static void hit(Client shooter, Client target, int hp) throws Exception {
-        shoot(shooter, aim(shooter, target), ShotOutcome.HIT);
-        var first = view(shooter);
-        var second = view(target);
-        check(first.equals(second) && player(first, target).hp() == hp, "Hit views or damage differ");
+        long sequence = shoot(shooter, aim(shooter, target), ShotOutcome.HIT);
+        Predicate<RoomView> afterShot = room -> room.players().stream()
+                .anyMatch(p -> p.playerId().equals(shooter.playerId) && p.lastSequence() == sequence);
+        var first = shooter.view(afterShot);
+        var second = target.view(afterShot);
+        check(
+                first.equals(second) && player(first, target).hp() == hp,
+                "Hit views or damage differ");
     }
 
     private static void ended(Client a, Client b) throws Exception {
-        check(a.next(MatchEnded.class).winner().equals(a.playerId)
-                && b.next(MatchEnded.class).winner().equals(a.playerId), "Wrong match winner");
+        check(
+                a.next(MatchEnded.class).winner().equals(a.playerId)
+                        && b.next(MatchEnded.class).winner().equals(a.playerId),
+                "Wrong match winner");
         var room = view(a);
-        check(room.phase() == MatchPhase.Finished && room.winner().equals(a.playerId), "Finished state differs");
+        check(
+                room.phase() == MatchPhase.Finished && room.winner().equals(a.playerId),
+                "Finished state differs");
     }
 
     private static void reject(Client client, Object request, String reason) throws Exception {
         var before = view(client);
         client.send(request);
-        Object result = client.sendAndAwait(null, value -> value instanceof ActionRejected || value instanceof ShotRejected);
+        Object result =
+                client.sendAndAwait(
+                        null,
+                        value -> value instanceof ActionRejected || value instanceof ShotRejected);
         boolean expected =
                 result instanceof ActionRejected action
-                        && action.retryAfterMs() == 0
-                        && action.reason().equals(reason)
-                || result instanceof ShotRejected shot
-                        && shot.retryAfterMs() == 0
-                        && shot.reason().equals(reason);
+                                && action.retryAfterMs() == 0
+                                && action.reason().equals(reason)
+                        || result instanceof ShotRejected shot
+                                && shot.retryAfterMs() == 0
+                                && shot.reason().equals(reason);
         check(expected, "Expected rejection " + reason + ", received " + result);
         same(before, view(client));
         System.out.println("input rejected: " + reason + "; state unchanged");
@@ -330,7 +426,14 @@ public final class Scenarios {
     }
 
     private static void same(RoomView before, RoomView after) {
-        check(new RoomView(after.roomId(), before.nodeId(), after.players(), after.phase(), after.winner()).equals(before),
+        check(
+                new RoomView(
+                                after.roomId(),
+                                before.nodeId(),
+                                after.players(),
+                                after.phase(),
+                                after.winner())
+                        .equals(before),
                 "Room state changed: " + before + " -> " + after);
     }
 

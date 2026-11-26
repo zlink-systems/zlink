@@ -8,6 +8,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.*;
+import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -55,6 +56,9 @@ final class ZLinkActorSpotJoinRelocationPolicyTest {
             assertEquals(1, admissions.get());
             assertEquals(0, wireRequests.get());
 
+            ((ZLinkRouteMeshRuntimeOptions) target.routeMeshRuntime())
+                    .mesh("game")
+                    .setPlacementWeight(0);
             try (var source =
                     ZLinkFrameworkRuntimeTestAccess.start(
                             options("source", locations, relocations, mixedFactories))) {
