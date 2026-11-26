@@ -1,0 +1,7 @@
+user-spot-created|spot=cross-lang-entry-join-spot|nodeRid=cpp-entry-join-source|state=created
+user-spot-source-peer-ready|ready=true|peers=1
+user-spot-joined|actor=cross-lang-entry-join-actor|spot=cross-lang-entry-join-spot|nodeRid=cpp-entry-join-source
+user-spot-probe|nodeRid=cpp-entry-join-source|targetRid=cpp-entry-join-source|actor=cross-lang-entry-join-actor|stateVersion=7
+entry-join-request-reply|phase=join|accepted=true|actor=cross-lang-entry-join-actor
+user-spot-joined|actor=cross-lang-entry-join-actor-restart|spot=cross-lang-entry-join-spot|nodeRid=cpp-entry-join-source
+entry-join-probe|actor=cross-lang-entry-join-actor|nodeRid=node-entry-join-target|originRid=cpp-entry-join-source

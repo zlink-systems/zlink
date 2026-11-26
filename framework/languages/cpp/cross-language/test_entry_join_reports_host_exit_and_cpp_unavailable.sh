@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SMOKE="${1:-${SCRIPT_DIR}/run_cross_language_smoke.sh}"
+SMOKE="${1:-${SMOKE:-${SCRIPT_DIR}/run_cross_language_smoke.sh}}"
+FIXTURES="${SCRIPT_DIR}/fixtures/entry-join"
 RUN_DIR="$(mktemp -d "${TMPDIR:-${PWD}}/entry-join-report.XXXXXX")"
 trap 'rm -rf "${RUN_DIR}"' EXIT
 
@@ -36,20 +37,6 @@ entry_join_reports_host_exit() {
 
 ready_status=0
 entry_join_reports_host_exit || ready_status=$?
-if (($# <= 1)); then
-  if ((ready_status == 0)); then
-    echo 'entry_join_reports_host_exit: passed'
-  fi
-  exit "${ready_status}"
-fi
-
-# Arguments after SMOKE are the archived cpp->cpp, cpp->node, and node->node
-# run directories and the node->node smoke stage log.
-if (($# != 5)); then
-  echo "usage: $0 SMOKE CPP_CPP_RUN CPP_NODE_RUN NODE_NODE_RUN NODE_NODE_LOG" >&2
-  exit 2
-fi
-
 # shellcheck disable=SC1090
 source <(sed -n '/^PIDS=()$/,/^cleanup() {$/p' "${SMOKE}" | sed '$d')
 # shellcheck disable=SC1090
@@ -86,7 +73,7 @@ start_outage_host() {
   if [[ "${case_name}" == exit && "${suffix}" == target-restarted.events ]]; then
     (exit 1) >"${RUN_DIR}/${name}.log" 2>&1 &
     PIDS+=("$!")
-    cp "${fixture_dir}/${fixture_id}-target-restarted.log" "${RUN_DIR}/${name}.log"
+    cp "${fixture_dir}/${fixture_id}-target-restarted.txt" "${RUN_DIR}/${name}.log"
     while kill -0 "${PIDS[-1]}" 2>/dev/null; do command sleep 0.01; done
   else
     command sleep 30 &
@@ -121,27 +108,27 @@ expect_failure() {
   fi
 }
 
-expected_success="$(sed -n '/^ok - remote Entry Spot join: node source -> node target /p' "$5")"
+expected_success="$(sed -n '/^ok - remote Entry Spot join: node source -> node target /p' "${FIXTURES}/success.txt")"
 generations='joined at generation ([0-9]+) \(was ([0-9]+)\)'
 [[ "${expected_success}" =~ ${generations} ]]
 new_generation_fixture="${BASH_REMATCH[1]}"
 old_generation_fixture="${BASH_REMATCH[2]}"
 
 failures="${ready_status}"
-expect_failure "${RUN_DIR}/initial" 'first join: Unavailable' initial "$2" cpp cpp
-expect_failure "${RUN_DIR}/restart" 'entry-join-cpp-node-target-restarted exited before ready (status 1)' exit "$3" cpp node
+expect_failure "${RUN_DIR}/initial" 'first join: Unavailable' initial "${FIXTURES}" cpp cpp
+expect_failure "${RUN_DIR}/restart" 'entry-join-cpp-node-target-restarted exited before ready (status 1)' exit "${FIXTURES}" cpp node
 grep -qF rejectedConflict "${RUN_DIR}/restart" || failures=1
-actual_success="$(replay success "$4" node node)"
+actual_success="$(replay success "${FIXTURES}" node node)"
 printf '%s\n' "${actual_success}"
 [[ "${actual_success##*$'\n'}" == "${expected_success}" ]] || failures=1
-expect_failure "${RUN_DIR}/stale-fence" 'expected restarted fence' stale-fence "$4" node node "6e6f6465 ${old_generation_fixture}"
+expect_failure "${RUN_DIR}/stale-fence" 'expected restarted fence' stale-fence "${FIXTURES}" node node "6e6f6465 ${old_generation_fixture}"
 # Reuse the recorded terminal for the second Actor and omit its success event.
 restart_unavailable_fixture="${RUN_DIR}/restart-unavailable-fixture"
 mkdir "${restart_unavailable_fixture}"
-cp "$4"/entry-join-node-node.{source,target,target-restarted}.events "${restart_unavailable_fixture}"
+cp "${FIXTURES}"/entry-join-node-node.{source,target,target-restarted}.events "${restart_unavailable_fixture}"
 restart_terminal="$(sed -n 's/^user-spot-join-failed|kind=unavailable|actor=cross-lang-entry-join-actor$/&-restart/p' \
-  "$2/entry-join-cpp-cpp.source.events")"
-sed '/^entry-spot-joined|/d' "$4/entry-join-node-node.target-restarted.events" \
+  "${FIXTURES}/entry-join-cpp-cpp.source.events")"
+sed '/^entry-spot-joined|/d' "${FIXTURES}/entry-join-node-node.target-restarted.events" \
   >"${restart_unavailable_fixture}/entry-join-node-node.target-restarted.events"
 for terminal in "${restart_terminal}" "${restart_terminal/|kind=unavailable|/|kind=Unavailable|}"; do
   expect_failure "${RUN_DIR}/restart-unavailable" 'restart join: Unavailable without evidence of zero binding submissions' \
