@@ -333,6 +333,13 @@ target_link_libraries(zlink_framework_m6c_runtime PUBLIC
   zlink_framework_m6b_runtime
   Threads::Threads)
 
+set(ZLINK_FRAMEWORK_CPP_SPOT_RUNTIME_SOURCES
+  framework/src/runtime/spots/spot_runtime.cpp
+  framework/src/runtime/spots/spot_runtime_activation.cpp
+  framework/src/runtime/spots/spot_runtime_actor_join.cpp
+  framework/src/runtime/spots/spot_runtime_ingress.cpp
+  framework/src/runtime/spots/spot_runtime_relocation.cpp)
+
 add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/codecs/json_profile_engine.cpp
   $<TARGET_OBJECTS:zlink_framework_m6a_objects>
@@ -373,7 +380,7 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/mesh/mesh_node_runtime.cpp
   framework/src/runtime/mesh/route_mesh_runtime_service.cpp
   framework/src/runtime/mesh/route_mesh_runtime_options_service.cpp
-  framework/src/runtime/spots/spot_runtime.cpp
+  ${ZLINK_FRAMEWORK_CPP_SPOT_RUNTIME_SOURCES}
   framework/src/runtime/mesh/mesh_record_dispatcher.cpp
   framework/src/runtime/spots/actor_transfer_coordinator.cpp
   framework/src/runtime/spots/spot_ids.cpp
@@ -410,7 +417,7 @@ if(ZLINK_FRAMEWORK_CPP_SHARED AND APPLE)
 endif()
 zlink_framework_cpp_configure_msvc_target(zlink_framework)
 if(MSVC)
-  set_property(SOURCE framework/src/runtime/spots/spot_runtime.cpp APPEND PROPERTY
+  set_property(SOURCE ${ZLINK_FRAMEWORK_CPP_SPOT_RUNTIME_SOURCES} APPEND PROPERTY
     COMPILE_OPTIONS
       "$<$<CONFIG:Release>:/O1>"
       "$<$<CONFIG:Release>:/Oi->")
