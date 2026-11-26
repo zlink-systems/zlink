@@ -6156,7 +6156,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             if (header != null) {
                 int command = header.command();
                 if (isApplicationWireCommand(command)) {
-                    if (currentSource != null && topology.isReady(sourceRid)) {
+                    if (currentSource != null) {
                         applicationSourceLifecycle =
                                 currentSource.descriptor().lifecycleGeneration();
                     } else {
