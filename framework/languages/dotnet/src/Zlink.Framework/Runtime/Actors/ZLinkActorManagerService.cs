@@ -258,6 +258,19 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 )
                     return true;
 
+                if (
+                    current.Snapshot.ObjectGeneration == actor.ObjectGeneration
+                    && ZLinkActorAuthorityPayloadCodec.IsClosing(current.Snapshot)
+                    && await TryReleaseObservedClosingAsync(
+                            store,
+                            authorityKey,
+                            current.Snapshot,
+                            deadline.Token
+                        )
+                        .ConfigureAwait(false)
+                )
+                    return true;
+
                 await DelayAuthorityObservationAsync(waitAttempt++, deadline.Token)
                     .ConfigureAwait(false);
             }
@@ -271,6 +284,33 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 ZLinkRetryAdvice.RetryAfterBackoff,
                 failure
             );
+        }
+    }
+
+    private static async ValueTask<bool> TryReleaseObservedClosingAsync(
+        IZLinkLocationRepository store,
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot snapshot,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            return await store
+                .ReleaseEndedReservationAsync(
+                    key,
+                    snapshot.StoreVersion,
+                    cancellationToken: cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        catch (ZLinkFrameworkException failure)
+            when (failure.Kind == ZLinkFrameworkErrorKind.Unavailable
+                && failure.RetryAdvice == ZLinkRetryAdvice.RetryAfterStateChange
+            )
+        {
+            // The repository observed the ended lease and owns the release wait.
+            return false;
         }
     }
 

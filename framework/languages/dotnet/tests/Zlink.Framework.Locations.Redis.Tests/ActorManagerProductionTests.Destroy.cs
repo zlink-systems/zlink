@@ -210,10 +210,14 @@ public sealed partial class ActorManagerProductionTests
         }
     }
 
-    private sealed class DestroyLocationStore(ZLinkAuthorityKey key, bool holdAuthorityRead)
-        : IZLinkLocationStore
+    private sealed class DestroyLocationStore(
+        ZLinkAuthorityKey key,
+        bool holdAuthorityRead,
+        IZLinkLocationStore? store = null
+    ) : IZLinkLocationStore
     {
-        private readonly ZLinkInMemoryProviderLocationStore _inner = new();
+        private readonly IZLinkLocationStore _inner =
+            store ?? new ZLinkInMemoryProviderLocationStore();
         private readonly ZLinkStoreKey _authorityKey =
             ZLinkProviderLocationRepository.AuthorityMetaKey(key);
         private int _deleteCalls;

@@ -402,7 +402,8 @@ public sealed partial class ActorManagerProductionTests
         IZLinkLocationStore store,
         string endpoint,
         TimeSpan? requestTimeout = null,
-        string? routingIdPrefix = null
+        string? routingIdPrefix = null,
+        TimeSpan? ownerLeaseFencingMargin = null
     )
     {
         var services = new ServiceCollection();
@@ -411,6 +412,8 @@ public sealed partial class ActorManagerProductionTests
             options.AddLocationStore(store);
             if (requestTimeout is { } timeout)
                 options.DefaultRequestTimeout = timeout;
+            if (ownerLeaseFencingMargin is { } margin)
+                options.ConfigureLocations().OwnerLeaseFencingMargin = margin;
             options.ConfigureInboundDispatch().CoreHwmMemoryLimitBytes = 1UL * 1024 * 1024 * 1024;
             var node = options.AddRouteMesh("objects").Listen(endpoint);
             if (routingIdPrefix is not null)

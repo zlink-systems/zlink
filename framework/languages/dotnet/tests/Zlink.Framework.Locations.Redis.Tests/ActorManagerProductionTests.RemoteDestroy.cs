@@ -152,6 +152,80 @@ public sealed partial class ActorManagerProductionTests
         }
     }
 
+    [Fact]
+    public async Task RemoteDestroyReleasesClosingAfterOwnerLeaseEnds()
+    {
+        const string actorId = "destroy-ended-owner";
+        const string endpoint = "tcp://127.0.0.1:0";
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var ownerStore = new DestroyLocationStore(key, holdAuthorityRead: false, store);
+        var repository = new ZLinkProviderLocationRepository(store);
+        await using var owner = BuildServer(ownerStore, endpoint);
+        await using var caller = BuildClient(
+            store,
+            endpoint,
+            TimeSpan.FromSeconds(2),
+            ownerLeaseFencingMargin: TimeSpan.FromMilliseconds(100)
+        );
+        var ownerRuntime = owner.GetRequiredService<ZLinkFrameworkRuntime>();
+        var callerRuntime = caller.GetRequiredService<ZLinkFrameworkRuntime>();
+        await FrameworkHost(owner).StartAsync(CancellationToken.None);
+        await FrameworkHost(caller).StartAsync(CancellationToken.None);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var ct = timeout.Token;
+
+        try
+        {
+            var actor = Assert
+                .IsType<ZLinkActorCreateResult.Created>(
+                    await owner
+                        .GetRequiredService<IZLinkActorManager>()
+                        .GetOrCreate(actorId, "player")
+                        .Async(ct)
+                )
+                .Actor;
+            var callerNode = callerRuntime.GetSpotNodeRuntime("objects").Node;
+            await WaitUntilAsync(() => callerNode.MeshStatus().AdmittedPeerCount == 1);
+            var destroy = caller
+                .GetRequiredService<IZLinkActorManager>()
+                .DestroyAsync(actor, ct)
+                .AsTask();
+            await ownerStore.DeleteStarted.Task.WaitAsync(ct);
+
+            var closing = Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(key, ct)
+                )
+                .Snapshot;
+            Assert.Equal(actor.ObjectGeneration, closing.ObjectGeneration);
+            Assert.True(ZLinkActorAuthorityPayloadCodec.IsClosing(closing));
+            Assert.False(destroy.IsCompleted);
+            var ownerToken = new ZLinkLocationOwnerToken(
+                closing.OwnerId,
+                closing.OwnerLeaseGeneration
+            );
+            Assert.Equal(
+                ZLinkOwnerLeaseReleaseResult.Released,
+                await repository.ReleaseOwnerLeaseAsync(ownerToken, ct)
+            );
+            Assert.IsType<ZLinkStoreReadResult.Missing>(
+                await store.ReadAsync(ZLinkProviderLocationRepository.OwnerKey(closing.OwnerId), ct)
+            );
+
+            Assert.True(await destroy);
+            Assert.IsType<ZLinkAuthorityReadResult.Missing>(
+                await repository.ReadAuthorityAsync(key, ct)
+            );
+        }
+        finally
+        {
+            ownerStore.ReleaseDelete.TrySetResult();
+            await callerRuntime.StopAsync(CancellationToken.None);
+            await ownerRuntime.StopAsync(CancellationToken.None);
+        }
+    }
+
     private sealed class AuthorityOnlyStore(IZLinkLocationStore store) : IZLinkLocationStore
     {
         public ValueTask<ZLinkStoreReadResult> ReadAsync(
