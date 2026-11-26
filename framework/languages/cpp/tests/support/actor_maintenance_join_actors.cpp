@@ -35,8 +35,10 @@ const fw::actor_context_t &actor_t::context () const noexcept
     return _context;
 }
 
-fw::task_t<void> actor_t::on_join_completed (const fw::actor_join_completion_t &completion)
+fw::task_t<void> actor_t::on_join_completed (const fw::actor_join_completion_t &delivered)
 {
+    // The caller owns `delivered` only until this coroutine first suspends.
+    const fw::actor_join_completion_t completion = delivered;
     if (observations->join_completion_view)
         co_await observations->join_completion_view ();
     bool hold = false;
