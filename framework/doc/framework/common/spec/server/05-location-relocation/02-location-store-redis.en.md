@@ -399,8 +399,11 @@ nodes at once, or rerunning it after an interruption, gives the same result.
 2. For each remaining v11 MeshNode capacity record, one batch Puts its active and pending values into
    the §4.1 counter keys and Deletes the old record. Its conditions are `Value` on the old record (the
    bytes read) and `Missing` on every target counter key. On `Conflict` or a lost response, read that
-   record and its counter keys again: if the old record is gone and the counter keys exist, it is done;
-   otherwise retry. A counter whose value is `0` isn't Put (an absent key is `0`). The RID part of the old
+   record and its counter keys again and decide as follows. If the old record is gone, this batch or another
+   node's batch moved it, so the record is done. If the old record's bytes changed, retry with the new bytes.
+   If the old record's bytes are unchanged and any target counter key exists, no writer can repair the state,
+   because a normal batch changes both together. The node doesn't retry and stops with a startup
+   configuration error. A counter whose value is `0` isn't Put (an absent key is `0`). The RID part of the old
    record's key is decoded to bytes and compared with both the raw RID bytes and the rendered string of each
    current descriptor: when exactly one descriptor matches, it maps to that RID's `routingIdHex`; when none
    does, to the `routingIdHex` of those bytes parsed literally as a RoutingId. The old record value is read in
@@ -542,6 +545,9 @@ record golden fixture. Each item maps to one test.
 - An unrecognized format tag or `recordVersion` fails explicitly, and
   there's no backward-compatible path that reads the old key/value format
   and converts it to the new opaque record.
+- Starting a v12 node against a Store that still holds a v11 MeshNode capacity record and already holds one
+  of that record's target counter keys ends startup with a configuration error, and leaves the old record
+  and the counter key unchanged.
 
 ---
 
