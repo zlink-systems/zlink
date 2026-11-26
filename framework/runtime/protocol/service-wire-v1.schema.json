@@ -8272,6 +8272,55 @@
         }
       ],
       "payload": "forbidden"
+    },
+    {
+      "id": 55,
+      "name": "instanceSpotFollow",
+      "domain": "application",
+      "allowedFlags": [
+        "metadata"
+      ],
+      "requiredFlags": [],
+      "body": [
+        {
+          "name": "operationHigh",
+          "$ref": "u64",
+          "maximum": 0
+        },
+        {
+          "name": "operationLow",
+          "$ref": "u64",
+          "maximum": 0
+        },
+        {
+          "name": "sourceNodeGeneration",
+          "$ref": "nonzero-u64"
+        },
+        {
+          "name": "sourceNodeRid",
+          "$ref": "rid"
+        },
+        {
+          "name": "sourceSpotId",
+          "$ref": "optional-text8"
+        },
+        {
+          "name": "messageFollowHopCount",
+          "$ref": "u8",
+          "minimum": 0,
+          "maximum": {
+            "$bound": "messageFollowHopCount"
+          }
+        },
+        {
+          "name": "targetSpot",
+          "$ref": "spot-route-fence"
+        }
+      ],
+      "payload": "required",
+      "payloadType": {
+        "$ref": "application-payload-envelope-v1"
+      }
     }
   ],
   "relocationStateMachine": {
@@ -8561,7 +8610,7 @@
       "last": 45
     },
     {
-      "first": 55,
+      "first": 56,
       "last": 255
     }
   ],

@@ -771,6 +771,8 @@ internal static class ServiceWireCodec
 
     internal readonly record struct BoundSessionClose54(byte Flags,NonzeroU64 Correlation,ActorRef Actor,RetiredBoundSessionRouteFence Session);
 
+    internal readonly record struct InstanceSpotFollow55(byte Flags,U64 OperationHigh,U64 OperationLow,NonzeroU64 SourceNodeGeneration,Rid SourceNodeRid,OptionalText8 SourceSpotId,U8 MessageFollowHopCount,SpotRouteFence TargetSpot,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+
     private ref struct Reader
     {
         private readonly ReadOnlySpan<byte> bytes;
@@ -7965,6 +7967,69 @@ internal static class ServiceWireCodec
     {
         var frames=new byte[1][];
         frames[0]=EncodeBoundSessionClose54Header(value,context);
+        return frames;
+    }
+    internal static InstanceSpotFollow55 DecodeInstanceSpotFollow55Header(ReadOnlySpan<byte> frame,DecodeContext context)
+    {
+        var body = new Reader(frame);
+        if(body.U8()!=90)throw Error("magic");
+        if(body.U8()!=77)throw Error("magic");
+        if(body.U8()!=1||body.U8()!=55)throw Error("header");
+        var flags=body.U8();
+        if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
+        var OperationHigh = ReadU64(ref body, context);
+        if (OperationHigh.Value > 0UL) throw Error("operationHigh: maximum");
+        var OperationLow = ReadU64(ref body, context);
+        if (OperationLow.Value > 0UL) throw Error("operationLow: maximum");
+        var SourceNodeGeneration = ReadNonzeroU64(ref body, context);
+        var SourceNodeRid = ReadRid(ref body, context);
+        var SourceSpotId = ReadOptionalText8(ref body, context);
+        var MessageFollowHopCount = ReadU8(ref body, context);
+        if (MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
+        if (MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
+        var TargetSpot = ReadSpotRouteFence(ref body, context);
+        body.End("body");
+        var value=new InstanceSpotFollow55(flags,OperationHigh,OperationLow,SourceNodeGeneration,SourceNodeRid,SourceSpotId,MessageFollowHopCount,TargetSpot,default,default);
+        return value;
+    }
+    internal static byte[] EncodeInstanceSpotFollow55Header(InstanceSpotFollow55 value,DecodeContext context) { var writer = new Writer(); WriteInstanceSpotFollow55Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteInstanceSpotFollow55Header(ref writer, value, context); return bytes; }
+    private static void WriteInstanceSpotFollow55Header(ref Writer body, InstanceSpotFollow55 value, DecodeContext context)
+    {
+        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(55);body.U8(value.Flags);
+        if (value.OperationHigh.Value > 0UL) throw Error("operationHigh: maximum");
+        WriteU64(ref body, value.OperationHigh, context);
+        if (value.OperationLow.Value > 0UL) throw Error("operationLow: maximum");
+        WriteU64(ref body, value.OperationLow, context);
+        WriteNonzeroU64(ref body, value.SourceNodeGeneration, context);
+        WriteRid(ref body, value.SourceNodeRid, context);
+        WriteOptionalText8(ref body, value.SourceSpotId, context);
+        if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
+        if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
+        WriteU8(ref body, value.MessageFollowHopCount, context);
+        WriteSpotRouteFence(ref body, value.TargetSpot, context);
+    }
+    internal static InstanceSpotFollow55 DecodeInstanceSpotFollow55(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeInstanceSpotFollow55Header(frames[0],context);
+        var index=1;
+        if((value.Flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=DecodeMetadataFrame(frames[index++],context) };}
+        if(index>=frames.Count)throw Error("payload required");
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
+        if(index!=frames.Count)throw Error("extra frame");
+        return value;
+    }
+    internal static InstanceSpotFollow55 DecodeInstanceSpotFollow55(byte[] frame,DecodeContext context)=>DecodeInstanceSpotFollow55(new[]{frame},context);
+    internal static byte[][] EncodeInstanceSpotFollow55(InstanceSpotFollow55 value,DecodeContext context)
+    {
+        var frames=new byte[1+((value.Flags&1)!=0?1:0)+1][];
+        frames[0]=EncodeInstanceSpotFollow55Header(value,context);
+        var index=1;
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=EncodeMetadataFrame(value.Metadata.Value,context);}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
         return frames;
     }    internal static AuthorityPayloadV1 DecodeDurableAuthorityPayloadV1(byte[] bytes,DecodeContext context){if(bytes.LongLength>1048576L)throw Error("limit");var r=new Reader(bytes);if(r.U8()!=90)throw Error("magic");if(r.U8()!=76)throw Error("magic");if(r.U8()!=65)throw Error("magic");if(r.U8()!=85)throw Error("magic");if(r.U8()!=1)throw Error("version");if(ReadU16(ref r,context).Value!=0)throw Error("flags");var x=r.Slice(checked((int)ReadU32(ref r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=ReadAuthorityPayloadV1(ref x,context);x.End("body");return v;}
     internal static byte[] EncodeDurableAuthorityPayloadV1(AuthorityPayloadV1 value,DecodeContext context){var writer = new Writer(); WriteDurableAuthorityPayloadV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteDurableAuthorityPayloadV1(ref writer, value, context); return bytes;}

@@ -47,6 +47,7 @@ export const ServiceWireCommand = {
   relocationState: 52,
   relocationFailed: 53,
   boundSessionClose: 54,
+  instanceSpotFollow: 55,
 } as const;
 export const ServiceWireFlag = {
   metadata: 1,

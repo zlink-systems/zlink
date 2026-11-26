@@ -9695,7 +9695,71 @@ const frames: Uint8Array[] = [writer.result()];
 return frames; }
 export function validateBoundSessionCloseCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
-export type ServiceWireCommand = HelloCommand | AdmitCommand | RejectCommand | UpdateCommand | LivenessProbeCommand | LivenessAckCommand | NodeSendCommand | NodeRequestCommand | ChannelSendCommand | ChannelRequestCommand | ReplyCommand | SpotSendCommand | SpotRequestCommand | LogicalMulticastCommand | ActorSendCommand | ActorRequestCommand | ActorLookupCommand | ActorDestroyCommand | ActorJoinCommand | ActorLeftCommand | RelocationReadyCommand | RelocationDataCommand | ReplyRelayCommand | RelocationCutoverCommand | BoundSessionSendCommand | ActorJoinedCommand | BoundSessionBindCommand | InstanceSpotCommand | RelocationPrepareCommand | SessionRelocationSealCommand | SessionRelocationSealedCommand | SessionRelocationRouteCommand | ReplyRelayAckCommand | UserSpotCreateCommand | UserSpotCloseCommand | ActorCreateCommand | MessageFollowCommand | BoundSessionReplacedCommand | RelocationStateCommand | RelocationFailedCommand | BoundSessionCloseCommand;
+export type InstanceSpotFollowCommand = { readonly command: "instanceSpotFollow"; readonly flags: number; readonly operationHigh: U64; readonly operationLow: U64; readonly sourceNodeGeneration: NonzeroU64; readonly sourceNodeRid: Rid; readonly sourceSpotId: OptionalText8; readonly messageFollowHopCount: U8; readonly targetSpot: SpotRouteFence; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
+export function decodeInstanceSpotFollowCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): InstanceSpotFollowCommand { if (!frames.length) fail("instanceSpotFollow frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 55) fail("instanceSpotFollow header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("instanceSpotFollow flags"); const value: any = { command: "instanceSpotFollow", flags };
+  value["operationHigh"] = readU64(reader, context, value, flags);
+  if (numeric(value["operationHigh"]) > 0n) fail("operationHigh constraint");
+
+  value["operationLow"] = readU64(reader, context, value, flags);
+  if (numeric(value["operationLow"]) > 0n) fail("operationLow constraint");
+
+  value["sourceNodeGeneration"] = readNonzeroU64(reader, context, value, flags);
+
+
+  value["sourceNodeRid"] = readRid(reader, context, value, flags);
+
+
+  value["sourceSpotId"] = readOptionalText8(reader, context, value, flags);
+
+
+  value["messageFollowHopCount"] = readU8(reader, context, value, flags);
+  if (numeric(value["messageFollowHopCount"]) < 0n || numeric(value["messageFollowHopCount"]) > 8n) fail("messageFollowHopCount constraint");
+
+  value["targetSpot"] = readSpotRouteFence(reader, context, value, flags);
+
+
+reader.done("instanceSpotFollow"); let frameIndex = 1;
+  if ((flags & 1) !== 0) { if (frameIndex >= frames.length) fail("instanceSpotFollow metadata"); value.metadata = decodeMetadataFrame(frames[frameIndex++], context); }
+  if (frameIndex >= frames.length) fail("instanceSpotFollow payload"); value.payload = decodeApplicationPayloadEnvelopeV1(frames[frameIndex++], context);
+if (frameIndex !== frames.length) fail("instanceSpotFollow frames");
+
+return value; }
+export function encodeInstanceSpotFollowCommand(value: InstanceSpotFollowCommand, context: ServiceWireDecoderContext): readonly Uint8Array[] { if ((value.flags & ~1) !== 0 || (value.flags & 0) !== 0) fail("instanceSpotFollow flags");  const writer = new Writer(); writer.put([90,77, 1, 55, value.flags]);
+  if (value["operationHigh"] === undefined) fail("operationHigh required");
+  if (numeric(value["operationHigh"]) > 0n) fail("operationHigh constraint");
+
+  writeU64(numeric(value["operationHigh"]), writer, context, value, value.flags);
+  if (value["operationLow"] === undefined) fail("operationLow required");
+  if (numeric(value["operationLow"]) > 0n) fail("operationLow constraint");
+
+  writeU64(numeric(value["operationLow"]), writer, context, value, value.flags);
+  if (value["sourceNodeGeneration"] === undefined) fail("sourceNodeGeneration required");
+
+
+  writeNonzeroU64(numeric(value["sourceNodeGeneration"]), writer, context, value, value.flags);
+  if (value["sourceNodeRid"] === undefined) fail("sourceNodeRid required");
+
+
+  writeRid(value["sourceNodeRid"], writer, context, value, value.flags);
+  if (value["sourceSpotId"] === undefined) fail("sourceSpotId required");
+
+
+  writeOptionalText8(value["sourceSpotId"], writer, context, value, value.flags);
+  if (value["messageFollowHopCount"] === undefined) fail("messageFollowHopCount required");
+  if (numeric(value["messageFollowHopCount"]) < 0n || numeric(value["messageFollowHopCount"]) > 8n) fail("messageFollowHopCount constraint");
+
+  writeU8(value["messageFollowHopCount"], writer, context, value, value.flags);
+  if (value["targetSpot"] === undefined) fail("targetSpot required");
+
+
+  writeSpotRouteFence(value["targetSpot"], writer, context, value, value.flags);
+const frames: Uint8Array[] = [writer.result()];
+  if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("instanceSpotFollow metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("instanceSpotFollow metadata forbidden");
+  if (value.payload === undefined) fail("instanceSpotFollow payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
+return frames; }
+export function validateInstanceSpotFollowCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
+
+export type ServiceWireCommand = HelloCommand | AdmitCommand | RejectCommand | UpdateCommand | LivenessProbeCommand | LivenessAckCommand | NodeSendCommand | NodeRequestCommand | ChannelSendCommand | ChannelRequestCommand | ReplyCommand | SpotSendCommand | SpotRequestCommand | LogicalMulticastCommand | ActorSendCommand | ActorRequestCommand | ActorLookupCommand | ActorDestroyCommand | ActorJoinCommand | ActorLeftCommand | RelocationReadyCommand | RelocationDataCommand | ReplyRelayCommand | RelocationCutoverCommand | BoundSessionSendCommand | ActorJoinedCommand | BoundSessionBindCommand | InstanceSpotCommand | RelocationPrepareCommand | SessionRelocationSealCommand | SessionRelocationSealedCommand | SessionRelocationRouteCommand | ReplyRelayAckCommand | UserSpotCreateCommand | UserSpotCloseCommand | ActorCreateCommand | MessageFollowCommand | BoundSessionReplacedCommand | RelocationStateCommand | RelocationFailedCommand | BoundSessionCloseCommand | InstanceSpotFollowCommand;
 
 export function decodeAuthorityPayloadV1DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityPayloadV1 { if (bytes.length > 1048576) fail("authority-payload-v1 maximum"); const reader = new Reader(bytes); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 76 || Number(reader.u(1)) !== 65 || Number(reader.u(1)) !== 85 || Number(reader.u(1)) !== 1) fail("authority-payload-v1 header"); const flags = readU16(reader, context, {}, 0); if (!same(flags, 0)) fail("authority-payload-v1 flags"); const length = Number(readU32(reader, context, {}, 0)); const body = reader.take(length); const checksumOffset = reader.offset; const declared = Number(reader.u(4)); reader.done("authority-payload-v1"); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail("authority-payload-v1 checksum"); return decodeAuthorityPayloadV1(body, context); }
 export function encodeAuthorityPayloadV1DurableFormat(value: AuthorityPayloadV1, context: ServiceWireDecoderContext): Uint8Array { const body = encodeAuthorityPayloadV1(value, context); const writer = new Writer(); writer.put([90,76,65,85, 1]); writeU16(0, writer, context, {}, 0); writeU32(body.length, writer, context, {}, 0); writer.put(body); writer.u(BigInt(crc32c(writer.result())), 4); const bytes = writer.result(); if (bytes.length > 1048576) fail("authority-payload-v1 maximum"); return bytes; }
