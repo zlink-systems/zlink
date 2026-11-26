@@ -208,10 +208,23 @@ class spot_node_builder_state_t
         explicit actor_destroy_t (std::uint64_t generation) : generation (generation) {}
 
         const std::uint64_t generation;
+        // Lane-owned. Set once the Closing CAS succeeded.
+        bool closing_accepted = false;
         task_completion_source_t<bool> accepted;
         task_completion_source_t<bool> terminal;
     };
     std::map<std::string, std::shared_ptr<actor_destroy_t>> destroying_actors;
+    /* Spec 04-actor-model 6.8: until the Closing CAS succeeds, a failed CAS
+     * leaves the Actor Ready, so a request in that window is retryable. After
+     * it succeeds the incarnation is gone. Lane only. */
+    std::optional<framework_error_kind_t> actor_destroy_rejection (const std::string &key) const
+    {
+        const auto found = destroying_actors.find (key);
+        if (found == destroying_actors.end ())
+            return std::nullopt;
+        return found->second->closing_accepted ? framework_error_kind_t::not_found
+                                               : framework_error_kind_t::unavailable;
+    }
     std::set<std::string> destroyed_actor_keys;
     // A request id is reserved before dispatch and receives one terminal
     // reply. The table owns both states so replay and retry use the same

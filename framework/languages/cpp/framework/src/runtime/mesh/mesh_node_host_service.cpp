@@ -1668,6 +1668,19 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (actor_ref_t actor)
             const auto *current = std::get_if<authority_snapshot_t> (&observed);
             if (!current || current->object_generation > actor.object_generation ())
                 co_return true;
+            // Location runtime 6.1: an observer reclaims a Closing record whose
+            // owner lease ended, with the same CAS the owner-side reclaim uses.
+            if (current->object_generation == actor.object_generation ()) {
+                const auto observed_payload =
+                  decode_direct_actor_authority_payload (current->payload);
+                if (observed_payload
+                    && observed_payload->state == actor_authority_state_t::closing) {
+                    const auto released = co_await _location_store->release_ended_reservation (
+                      key, current->store_version, cancellation);
+                    if (released)
+                        co_return true;
+                }
+            }
             co_await detail::delay (_services->get_required<detail::delay_owner_t> (),
                                     std::chrono::milliseconds (1));
         }

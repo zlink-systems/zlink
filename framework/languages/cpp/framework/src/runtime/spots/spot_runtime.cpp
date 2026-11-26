@@ -5736,12 +5736,12 @@ class actor_dispatch_admission_token_t final
     actor_dispatch_admission_token_t (
       std::shared_ptr<spot_node_builder_state_t> state,
       std::string actor_key,
-      bool retiring,
+      std::optional<framework_error_kind_t> destroy_rejection,
       std::optional<runtime::protocol::actor_route_fence_t> authority_fence,
       actor_message_follow_relay_t actor_message_follow_relay) :
         _state (std::move (state)),
         _actor_key (std::move (actor_key)),
-        _initial_retiring (retiring),
+        _initial_destroy_rejection (destroy_rejection),
         _initial_authority_fence (std::move (authority_fence)),
         _actor_message_follow_relay (std::move (actor_message_follow_relay))
     {
@@ -5749,7 +5749,10 @@ class actor_dispatch_admission_token_t final
 
     ~actor_dispatch_admission_token_t () noexcept { settle (); }
 
-    bool initial_retiring () const noexcept { return _initial_retiring; }
+    std::optional<framework_error_kind_t> initial_destroy_rejection () const noexcept
+    {
+        return _initial_destroy_rejection;
+    }
 
     const std::optional<runtime::protocol::actor_route_fence_t> &
     initial_authority_fence () const noexcept
@@ -5774,8 +5777,8 @@ class actor_dispatch_admission_token_t final
         try {
             return _state->lane
               .run ([this, &actor_ref] {
-                  if (_state->destroying_actors.contains (_actor_key)) {
-                      return result_t<phase_snapshot_t>::failure (framework_error_kind_t::not_found,
+                  if (const auto rejected = _state->actor_destroy_rejection (_actor_key)) {
+                      return result_t<phase_snapshot_t>::failure (*rejected,
                                                                   "actor destruction is pending");
                   }
 
@@ -5925,7 +5928,7 @@ class actor_dispatch_admission_token_t final
   private:
     std::shared_ptr<spot_node_builder_state_t> _state;
     std::string _actor_key;
-    bool _initial_retiring = false;
+    std::optional<framework_error_kind_t> _initial_destroy_rejection;
     std::optional<runtime::protocol::actor_route_fence_t> _initial_authority_fence;
     actor_message_follow_relay_t _actor_message_follow_relay;
     std::optional<spot_node_builder_state_t::pending_handoff_request_key_t> _pending_handoff_key;
@@ -12408,21 +12411,21 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
       admitted_message_follow_target == nullptr ? "follow_fence=none" : "follow_fence=present");
     struct actor_relay_prefence_state_snapshot_t
     {
-        bool retiring = false;
+        std::optional<framework_error_kind_t> destroy_rejection;
         bool authority_projected = false;
         bool has_current_authority = false;
         std::optional<runtime::protocol::actor_route_fence_t> authority_fence;
     };
     const auto prefence_snapshot =
       admission_token
-        ? actor_relay_prefence_state_snapshot_t{admission_token->initial_retiring (), true,
+        ? actor_relay_prefence_state_snapshot_t{admission_token->initial_destroy_rejection (), true,
                                                 admission_token->initial_authority_fence ()
                                                   .has_value (),
                                                 admission_token->initial_authority_fence ()}
         : _state->lane.run_sync ([&] {
               actor_relay_prefence_state_snapshot_t snapshot;
-              snapshot.retiring = _state->destroying_actors.contains (key);
-              if (snapshot.retiring)
+              snapshot.destroy_rejection = _state->actor_destroy_rejection (key);
+              if (snapshot.destroy_rejection)
                   return snapshot;
               snapshot.authority_projected = admitted_message_follow_target != nullptr;
               const auto current = _state->actor_authority_fences.find (key);
@@ -12431,9 +12434,9 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                   snapshot.authority_fence = current->second;
               return snapshot;
           });
-    if (prefence_snapshot.retiring) {
+    if (prefence_snapshot.destroy_rejection) {
         co_return result_t<std::optional<zlink::message_t>>::failure (
-          framework_error_kind_t::not_found, "actor destruction is pending");
+          *prefence_snapshot.destroy_rejection, "actor destruction is pending");
     }
     // A cold hit carries no follow fence (e.g. a client probing the actor's
     // former owner directly, unaware it already relocated). Relocation
@@ -14515,6 +14518,7 @@ task_t<result_t<bool>> spot_node_runtime_t::destroy_actor (actor_ref_t actor,
             operation->terminal.complete (failure);
             co_return failure;
         }
+        co_await state->lane.run_task ([&] { operation->closing_accepted = true; });
         const auto rejected = [operation] {
             operation->terminal.complete (result_t<bool>::failure (
               framework_error_kind_t::shutting_down, "Actor destroy queue is closed"));
@@ -16284,7 +16288,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                       detail::effective_spot_node_rid (_state->snapshot);
                     snapshot.admission_token = std::make_shared<actor_dispatch_admission_token_t> (
                       _state, snapshot.actor_key,
-                      _state->destroying_actors.contains (snapshot.actor_key),
+                      _state->actor_destroy_rejection (snapshot.actor_key),
                       std::move (token_authority_fence), snapshot.actor_message_follow_relay);
                     return snapshot;
                 })

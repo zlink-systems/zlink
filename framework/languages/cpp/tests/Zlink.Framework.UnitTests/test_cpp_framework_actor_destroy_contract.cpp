@@ -25,18 +25,22 @@ class actor_destroy_store_t final : public fw::location_store_t
     fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
     {
         const auto authority = authority_key.load ();
-        if (reject_next_authority_put && authority
-            && std::ranges::any_of (request.mutations,
-                                    [&] (const auto &mutation) {
-                                        const auto *put = std::get_if<fw::store_put_t> (&mutation);
-                                        return put && put->key.value == authority->value;
-                                    })
-            && reject_next_authority_put.exchange (false))
+        const bool authority_put =
+          authority && std::ranges::any_of (request.mutations, [&] (const auto &mutation) {
+              const auto *put = std::get_if<fw::store_put_t> (&mutation);
+              return put && put->key.value == authority->value;
+          });
+        if (authority_put && hold_next_authority_put.exchange (false)) {
+            put_held.complete (fw::result_t<void>::success ());
+            co_await put_proceed.task ();
+        }
+        if (authority_put && reject_next_authority_put.exchange (false))
             co_return fw::store_write_corrupt_t{};
-        if (authority && std::ranges::any_of (request.mutations, [&] (const auto &mutation) {
-                const auto *remove = std::get_if<fw::store_delete_t> (&mutation);
-                return remove && remove->key.value == authority->value;
-            })) {
+        if (authority && !pass_authority_deletes
+            && std::ranges::any_of (request.mutations, [&] (const auto &mutation) {
+                   const auto *remove = std::get_if<fw::store_delete_t> (&mutation);
+                   return remove && remove->key.value == authority->value;
+               })) {
             deleting.complete (fw::result_t<void>::success ());
             co_await proceed.task ();
             if (reject_delete)
@@ -57,8 +61,12 @@ class actor_destroy_store_t final : public fw::location_store_t
       std::make_shared<fw::runtime::in_memory_location_store_t> ();
     std::atomic<std::shared_ptr<const fw::store_key_t>> authority_key;
     std::atomic<bool> hide_mesh_descriptors{false};
+    std::atomic<bool> hold_next_authority_put{false};
     std::atomic<bool> reject_next_authority_put{false};
+    std::atomic<bool> pass_authority_deletes{false};
     std::atomic<bool> reject_delete{false};
+    fw::task_completion_source_t<void> put_held;
+    fw::task_completion_source_t<void> put_proceed;
     fw::task_completion_source_t<void> deleting;
     fw::task_completion_source_t<void> proceed;
 };
@@ -194,6 +202,32 @@ TEST_F (ActorDestroyContract, ClosingCasFailureRestoresActorAndAllowsDestroy)
     ASSERT_TRUE (destroyed && *destroyed && destroyed->value ());
 }
 
+TEST_F (ActorDestroyContract, RequestDuringClosingCasIsUnavailableAndServedAfterCasFailure)
+{
+    release_destroy_t release{store->proceed};
+    release_destroy_t release_put{store->put_proceed};
+    // After Entry handoff, the first Put on this authority is the Closing CAS.
+    store->hold_next_authority_put = true;
+    store->reject_next_authority_put = true;
+    const auto destroying = manager.destroy (actor ());
+    ASSERT_TRUE (store->put_held.task ().result_for (wait_budget));
+
+    auto &client = services->get_required<fw::actor_client_t> ();
+    const auto during =
+      client.request (actor ().actor_id (), probe_t{29}).async<probe_t> ().result_for (wait_budget);
+    ASSERT_TRUE (during);
+    ASSERT_FALSE (*during);
+    EXPECT_EQ (during->error_kind (), fw::framework_error_kind_t::unavailable);
+
+    store->put_proceed.complete (fw::result_t<void>::success ());
+    const auto failed = destroying.result_for (wait_budget);
+    ASSERT_TRUE (failed && !*failed);
+    const auto after =
+      client.request (actor ().actor_id (), probe_t{31}).async<probe_t> ().result_for (wait_budget);
+    ASSERT_TRUE (after && *after);
+    EXPECT_EQ (after->value ().value, 31);
+}
+
 TEST_F (ActorDestroyContract, OwnerDestroyJoinsTerminal)
 {
     release_destroy_t release{store->proceed};
@@ -289,6 +323,39 @@ TEST_F (ActorDestroyContract, RemoteDestroyWaitsForOwnerAuthorityRemoval)
     const auto owner_result = owner_destroy.result_for (wait_budget);
     ASSERT_TRUE (removed && *removed && removed->value ());
     ASSERT_TRUE (owner_result && *owner_result && owner_result->value ());
+}
+
+TEST_F (ActorDestroyContract, RemoteDestroyReleasesClosingAfterOwnerLeaseEnds)
+{
+    host_t caller;
+    configure (caller, std::make_shared<observations_t> (), second_rid, store,
+               std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    caller.start ();
+    ASSERT_TRUE (ready (caller));
+    auto caller_services = caller.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (peer_ready (caller_services.get_required<fw::route_mesh_runtime_t> (), first_rid));
+    auto &remote = caller_services.get_required<fw::actor_manager_t> ();
+    release_destroy_t release{store->proceed};
+    const auto pending = remote.destroy (actor ());
+    // The owner published Closing and stops before removing the authority.
+    ASSERT_TRUE (store->deleting.task ().result_for (wait_budget));
+    store->pass_authority_deletes = true;
+    // End the owner lease as if the owner process stopped.
+    const auto ended =
+      store->inner
+        ->write ({{},
+                  {fw::store_delete_t{fw::store_key_t{std::string ("owner-lease") + '\0'
+                                                      + before_destroy.owner.owner_id}}}})
+        .result_for (wait_budget);
+    ASSERT_TRUE (ended && *ended);
+
+    const auto removed = pending.result_for (wait_budget);
+    ASSERT_TRUE (removed && *removed && removed->value ());
+    const auto authority = services->get_required<fw::location_repository_t> ()
+                             .read_authority (fw::runtime::actor_authority_key (actor_id))
+                             .result_for (wait_budget);
+    ASSERT_TRUE (authority && *authority);
+    EXPECT_EQ (std::get_if<fw::authority_snapshot_t> (&authority->value ()), nullptr);
 }
 
 TEST_F (ActorDestroyContract, RemoteDestroyWithoutAdmittedOwnerIsUnavailable)
