@@ -208,6 +208,7 @@
         <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
         <Compile Include="Runtime/FanoutSubscriptionTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
+        <Compile Include="Runtime/ApplicationMetadataSizeTests.cs"/>
         <Compile Include="Runtime/ChannelHeaderGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecAllocationRegressionTests.cs"/>
         <Compile Include="Runtime/MessagingHotPathWireTests.cs"/>

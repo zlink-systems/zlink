@@ -1,6 +1,9 @@
 using System.Buffers;
 using System.Text;
+using Google.Protobuf;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Streams;
+using Zlink.Framework.Runtime.Protocol.ChannelHeaderV1;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
@@ -20,14 +23,11 @@ namespace Zlink.Framework.Runtime.Messaging;
 //                   value_len (uint16, big-endian, 0..65535)
 //                   value bytes (UTF-8, no NUL)
 //
-// Total encoded size (version + count + all entries) MUST be <= 1024 bytes
-// (ZLINK_MESH_APPLICATION_METADATA_MAX). Keys are unique (last-write-wins is a
-// caller/builder concern; the immutable dictionary guarantees uniqueness here).
+// The receive-side frame bound limits allocation. The application metadata
+// limit is measured using the ChannelHeader field 13 encoding in both directions.
+// The immutable dictionary guarantees unique keys on encode.
 internal static class ZLinkMeshMetadataCodec
 {
-    // ZLINK_MESH_APPLICATION_METADATA_MAX (core/include/zlink/service/mesh_node.h).
-    internal const int MaxEncodedSize = 1024;
-
     internal static readonly UTF8Encoding StrictUtf8 = new(false, true);
     internal static readonly IComparer<string> Utf8ByteComparer = Comparer<string>.Create(
         CompareUtf8CodePoints
@@ -60,6 +60,28 @@ internal static class ZLinkMeshMetadataCodec
     private const int MaxEntries = 255;
     private const int MaxKeyLength = 255;
     private const int MaxValueLength = ushort.MaxValue;
+
+    internal static bool TryAddChannelHeaderEntry(ref int remaining, int keyBytes, int valueBytes)
+    {
+        var entryBodySize =
+            (long)CodedOutputStream.ComputeTagSize(MetadataEntry.KeyFieldNumber)
+            + CodedOutputStream.ComputeLengthSize(keyBytes)
+            + keyBytes;
+        // MetadataEntry.value is a proto3 string with implicit presence.
+        if (valueBytes != 0)
+            entryBodySize +=
+                (long)CodedOutputStream.ComputeTagSize(MetadataEntry.ValueFieldNumber)
+                + CodedOutputStream.ComputeLengthSize(valueBytes)
+                + valueBytes;
+        var fieldSize =
+            CodedOutputStream.ComputeTagSize(ChannelHeader.MetadataFieldNumber)
+            + CodedOutputStream.ComputeUInt64Size((ulong)entryBodySize)
+            + entryBodySize;
+        if (fieldSize > remaining)
+            return false;
+        remaining -= (int)fieldSize;
+        return true;
+    }
 
     // Snapshots the metadata into the canonical wire frame. Returns an empty
     // buffer when there is nothing to send (no metadata frame is attached), so
@@ -105,16 +127,17 @@ internal static class ZLinkMeshMetadataCodec
             );
 
         var totalSize = 2;
+        var remaining = ServiceWireConstants.MetadataBytes;
         foreach (var (key, value) in values)
         {
             var keyLength = ValidateKey(key);
             var valueLength = ValidateValue(key, value);
-            totalSize = checked(totalSize + 1 + keyLength + 2 + valueLength);
-            if (totalSize > MaxEncodedSize)
+            if (!TryAddChannelHeaderEntry(ref remaining, keyLength, valueLength))
                 throw new ArgumentException(
-                    $"Encoded application metadata exceeds the {MaxEncodedSize}-byte limit.",
+                    $"Encoded application metadata exceeds the {ServiceWireConstants.MetadataBytes}-byte limit.",
                     nameof(metadata)
                 );
+            totalSize += 1 + keyLength + 2 + valueLength;
         }
         return totalSize;
     }
@@ -130,13 +153,14 @@ internal static class ZLinkMeshMetadataCodec
         if (frame.Length == 0)
             return true;
 
-        if (frame.Length > MaxEncodedSize || frame.Length < 2)
+        if (frame.Length > ServiceWireConstants.MetadataBytes || frame.Length < 2)
             return false;
         if (frame[0] != Version)
             return false;
 
         int count = frame[1];
         var offset = 2;
+        var remaining = ServiceWireConstants.MetadataBytes;
         Dictionary<string, string>? values = null;
         for (var entry = 0; entry < count; entry++)
         {
@@ -156,6 +180,8 @@ internal static class ZLinkMeshMetadataCodec
             int valueLength = (frame[offset] << 8) | frame[offset + 1];
             offset += 2;
             if (offset + valueLength > frame.Length)
+                return false;
+            if (!TryAddChannelHeaderEntry(ref remaining, keyLength, valueLength))
                 return false;
             var valueSpan = frame.Slice(offset, valueLength);
             if (!TryDecodeUtf8(valueSpan, out var value))
@@ -178,7 +204,7 @@ internal static class ZLinkMeshMetadataCodec
     {
         if (string.IsNullOrEmpty(key))
             throw new ArgumentException("Application metadata keys must not be empty.");
-        var length = Encoding.UTF8.GetByteCount(key);
+        var length = StrictUtf8.GetByteCount(key);
         if (length is 0 or > MaxKeyLength)
             throw new ArgumentException(
                 $"Application metadata key '{key}' must encode to 1..{MaxKeyLength} UTF-8 bytes."
@@ -193,7 +219,7 @@ internal static class ZLinkMeshMetadataCodec
     private static int ValidateValue(string key, string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        var length = Encoding.UTF8.GetByteCount(value);
+        var length = StrictUtf8.GetByteCount(value);
         if (length > MaxValueLength)
             throw new ArgumentException(
                 $"Application metadata value for key '{key}' exceeds {MaxValueLength} UTF-8 bytes."
