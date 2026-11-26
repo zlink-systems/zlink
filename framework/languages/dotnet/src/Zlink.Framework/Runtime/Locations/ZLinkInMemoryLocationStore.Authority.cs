@@ -1276,15 +1276,6 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 )
                     return ZLinkAggregateCommitResult.Stale;
                 var now = _time.GetUtcNow();
-                if (
-                    !MatchesLiveTarget(
-                        aggregate.Request.TargetDescriptor,
-                        aggregate.Request.TargetDescriptorLifecycleGeneration,
-                        aggregate.Request.TargetOwner,
-                        now
-                    )
-                )
-                    return ZLinkAggregateCommitResult.Stale;
 
                 ReadOnlyMemory<byte> Payload(ZLinkAggregateParticipant participant) =>
                     committedRelocation is null

@@ -1755,34 +1755,25 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
     }
 
-    public async ValueTask<ZLinkAggregateCommitResult> CommitAggregateAsync(
+    public ValueTask<ZLinkAggregateCommitResult> CommitAggregateAsync(
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken = default
-    )
-    {
-        return await CommitAggregateCoreAsync(fence, cancellationToken, allowPreparingTarget: false)
-            .ConfigureAwait(false);
-    }
+    ) => CommitAggregateCoreAsync(fence, cancellationToken);
 
-    public async ValueTask<ZLinkAggregateCommitResult> CommitAggregateForRecoveryAsync(
+    public ValueTask<ZLinkAggregateCommitResult> CommitAggregateForRecoveryAsync(
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken = default
-    )
-    {
-        return await CommitAggregateCoreAsync(fence, cancellationToken, allowPreparingTarget: true)
-            .ConfigureAwait(false);
-    }
+    ) => CommitAggregateAsync(fence, cancellationToken);
 
     public ValueTask<ZLinkAggregateCommitResult> CommitAggregateAttemptAsync(
         ZLinkAggregateFence fence,
         ulong attempt,
         CancellationToken cancellationToken
-    ) => CommitAggregateCoreAsync(fence, cancellationToken, allowPreparingTarget: false, attempt);
+    ) => CommitAggregateCoreAsync(fence, cancellationToken, attempt);
 
     private async ValueTask<ZLinkAggregateCommitResult> CommitAggregateCoreAsync(
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken,
-        bool allowPreparingTarget,
         ulong? attempt = null
     )
     {
@@ -1811,21 +1802,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                 )
                 .ConfigureAwait(false);
             var request = RehydrateAggregateRequest(aggregate.Record, participants);
-            var target = await ReadEligibleTargetAsync(
-                    request.TargetDescriptor,
-                    request.TargetDescriptorLifecycleGeneration,
-                    request.TargetOwner,
-                    null,
-                    null,
-                    cancellationToken,
-                    requireNewPlacementEligibility: request.Participants.Any(static participant =>
-                        participant.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
-                    ),
-                    allowPreparingTarget: allowPreparingTarget
-                )
-                .ConfigureAwait(false);
-            if (target is null)
-                return ZLinkAggregateCommitResult.Stale;
             var authorities = new StoredAuthority?[request.Participants.Count];
             await Parallel
                 .ForEachAsync(
@@ -1860,8 +1836,6 @@ internal sealed partial class ZLinkProviderLocationRepository
             var conditions = new List<ZLinkStoreCondition>
             {
                 new ZLinkStoreCondition.Version(key, aggregate.Version),
-                target.DescriptorCondition,
-                target.OwnerCondition,
             };
             var committed = aggregate.Record with { Status = AggregateStatus.Committed };
             if (request.RepresentativeKey is { } representative)
