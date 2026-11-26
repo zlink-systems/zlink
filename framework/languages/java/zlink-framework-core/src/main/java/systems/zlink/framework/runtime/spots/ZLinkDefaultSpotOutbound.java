@@ -10,6 +10,7 @@ import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
@@ -635,33 +636,27 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                             : ZLinkRequestMetrics.spot(meshName);
             ZLinkRequestMetrics.start(metric);
             SpotTransportAddressResolver resolver = resolver();
-            CompletionStage<TReply> stage;
+            CompletableFuture<TReply> stage = ZLinkCompletionBridge.newCancellationFuture();
             try {
-                stage =
-                        SpotTransportAddressResolver.resolveForCall(
-                                        resolver, target, instanceIntent)
-                                .handle(
-                                        (address, failure) -> {
-                                            if (failure != null) {
-                                                return CompletableFuture.<TReply>failedFuture(
-                                                        unwrap(failure));
-                                            }
-                                            CompletionStage<TReply> submitted =
-                                                    instanceIntent
-                                                            ? instanceSpots == null
-                                                                    ? CompletableFuture
-                                                                            .failedFuture(
-                                                                                    new ZLinkConfigurationException(
-                                                                                            "Instance Spot runtime is not configured"))
-                                                                    : activateRequest(
-                                                                            replyType, resolver,
-                                                                            address)
-                                                            : requestExisting(address, replyType);
-                                            return !instanceIntent && address != null
-                                                    ? resolver.observeTerminal(target, submitted)
-                                                    : submitted;
-                                        })
-                                .thenCompose(Function.identity());
+                SpotTransportAddressResolver.request(
+                        resolver,
+                        target,
+                        instanceIntent,
+                        timeout == null ? defaultRequestTimeout : timeout,
+                        System::nanoTime,
+                        channels == null ? null : channels.spotRequestOperations(),
+                        stage,
+                        (address, remaining) -> {
+                            if (instanceIntent) {
+                                return instanceSpots == null
+                                        ? CompletableFuture.failedFuture(
+                                                new ZLinkConfigurationException(
+                                                        "Instance Spot runtime is not configured"))
+                                        : activateRequest(replyType, resolver, address, remaining);
+                            }
+                            return resolver.observeTerminal(
+                                    target, requestExisting(address, replyType, remaining));
+                        });
             } catch (RuntimeException | Error failure) {
                 payload.close();
                 ZLinkRequestMetrics.complete(
@@ -689,7 +684,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         private <TReply> CompletionStage<TReply> activateRequest(
                 Class<TReply> replyType,
                 SpotTransportAddressResolver resolver,
-                SpotTransportAddress readyRoute) {
+                SpotTransportAddress readyRoute,
+                Duration remaining) {
             return instanceSpots
                     .request(
                             target,
@@ -699,7 +695,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                             packetName,
                             contentType,
                             metadata.values(),
-                            timeout,
+                            remaining,
                             readyRoute,
                             resolver,
                             requestAdmission)
@@ -714,7 +710,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         }
 
         private <TReply> CompletionStage<TReply> requestExisting(
-                SpotTransportAddress address, Class<TReply> replyType) {
+                SpotTransportAddress address, Class<TReply> replyType, Duration remaining) {
             backendSpot.rememberSpotAuthority(
                     address.targetNodeRid(),
                     address.spotId(),
@@ -734,7 +730,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                 packetName,
                                 contentType,
                                 metadata,
-                                timeout,
+                                remaining,
                                 replyType,
                                 requestAdmission)
                         : direct.submitRequest(
@@ -747,7 +743,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                 packetName,
                                 contentType,
                                 metadata,
-                                timeout,
+                                remaining,
                                 replyType,
                                 requestAdmission);
             } catch (RuntimeException failure) {

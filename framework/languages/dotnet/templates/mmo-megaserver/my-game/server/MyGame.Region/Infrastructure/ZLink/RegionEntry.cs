@@ -70,9 +70,10 @@ public sealed class RegionEntry(IZLinkEntrySpotContext context, IZLinkSpotManage
         CancellationToken ct
     )
     {
-        var nextIndex = index >= GameNames.MaxReplicasPerRegion
-            ? GameNames.MaxReplicasPerRegion + 1
-            : index + 1;
+        var nextIndex =
+            index >= GameNames.MaxReplicasPerRegion
+                ? GameNames.MaxReplicasPerRegion + 1
+                : index + 1;
         return SelectAsync(actor, region, nextIndex, ct);
     }
 }

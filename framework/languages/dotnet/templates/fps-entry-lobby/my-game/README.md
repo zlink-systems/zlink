@@ -1,6 +1,6 @@
 # MyGame FPS entry lobby
 
-This .NET FPS template pairs players by mode through Entry Spots, a fixed Matchmaking User Spot, and dynamic Room User Spots. Extend this template's domain to build your FPS server. The RouteMesh name is `my-game-arena` (`GameNames.WorldMesh`). RoomState owns movement budgets, ray hit decisions, health, shared input sequences, and match completion. Disconnected players resume the same Actor and Room; draining a play node (match) relocates ongoing matches without reconnecting clients.
+This .NET FPS template pairs players by mode through Entry Spots, a fixed Matchmaking User Spot, and dynamic Room User Spots. Use the room domain in this reference project to design your FPS server. The RouteMesh name is `my-game-arena` (`GameNames.WorldMesh`). RoomState owns movement budgets, ray hit decisions, health, shared input sequences, and match completion. Disconnected players resume the same Actor and Room; draining a play node (match) relocates ongoing matches without reconnecting clients.
 
 ```mermaid
 flowchart LR
@@ -14,6 +14,8 @@ flowchart LR
     matchB --> location
     matchA <-->|host relocation| matchB
 ```
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
 
 ## Prerequisites
 
@@ -32,12 +34,26 @@ Run commands from this project root:
 PowerShell builds the same Dockerfile targets:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 `Dockerfile` owns fixed `SDK_IMAGE`, `RUNTIME_IMAGE`, and `DOCKER_CLI_IMAGE` defaults. Replace the appropriate base ARG when adopting a ZLink base image. All node roles share the node image because their runtime dependencies match; each retains its own executable entry point. The ASP.NET Core runtime supplies shared hosting dependencies. The runner target adds Docker CLI and structure inputs without including the SDK.
 
 Scripts remove unique image tags after each invocation. Docker retains build layers for subsequent runs.
+
+## Local server
+
+Run from the template directory with the .NET 8 SDK and Docker Compose v2 available. The command builds the server and starts Redis in Docker and the game nodes as local processes.
+
+```bash
+./run-server.sh
+```
+
+```powershell
+.\run-server.cmd
+```
+
+Connect clients to the WebSocket address in the `Server ready` line. When the topology has an HTTP API, the runner also prints its address. Ctrl+C stops the nodes and Redis. A second start is rejected while the server is running.
 
 ## Client connection
 
@@ -116,13 +132,17 @@ await Task.WhenAll(QueueAsync("guide-player-a"), QueueAsync("guide-player-b"));
 
 ## Local e2e
 
-Both scripts build images and call the same C# orchestrator inside a runner container. A unique Compose project/network contains Redis and the runner. The runner checks structure before starting nodes. Nodes share its network namespace, preserving loopback listeners and OS-assigned ports without host port mappings. Redis publishes an ephemeral loopback port for local debugging.
+Run `run-e2e` from another terminal to detect the running server through `.logs/server.json`, or run it with the server stopped to use an isolated Docker deployment. The attached run skips `update` because node replacement needs isolated processes.
+
+The runner prints each scenario result and the pass total. Find per-node stdout, stderr, and Framework message flow in `.logs/run-<id>/` as `<node>.out.log`, `<node>.err.log`, and `<node>.flow.log`. An isolated scenario with its own deployment keeps these files in a scenario subdirectory. Failures reference a `*-failure.log` file. Docker build and cleanup logs remain in `.logs/docker-<project>/`.
+
+In isolated Docker mode, both scripts build images and call the same C# runner inside a container. A unique Compose project/network contains Redis and the runner. The runner checks structure before starting nodes. Nodes share its network namespace, preserving loopback listeners and OS-assigned ports without host port mappings. Redis publishes an ephemeral loopback port for local debugging.
 
 The runner creates each node with interactive stdin, copies its configuration with `docker cp`, and attaches through `docker start -a -i`. `ManagedProcess` retains readiness, drain, shutdown, and replacement controls. Only the runner mounts the Docker socket; use a trusted local daemon. Scripts remove their labeled containers, Compose project, and image tags. Cleanup failure returns exit code 1.
 
 Node stderr logs (`<node>.err.log`) include Framework message flow records because dispatch diagnostics use `Normal`. Inspect these logs from the first failing run.
 
-On Unix sockets, Bash runs the runner with the caller's UID/GID and the socket's group so retained logs remain writable by the caller. Windows uses Docker Desktop's filesystem mapping. Build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`; node settings and control logs are in `.logs/run-<id>/`.
+On Unix sockets, the script runs the runner with the caller's UID/GID and the socket's group so retained logs remain writable by the caller. Windows uses Docker Desktop's filesystem mapping. Build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`; node settings and control logs are in `.logs/run-<id>/`.
 
 For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`. Redis remains in Docker. After a local build, `--no-build` or `-NoBuild` skips compilation:
 
@@ -132,8 +152,8 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -Local
-pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
+.\run-e2e.cmd -Local
+.\run-e2e.cmd -Local -NoBuild
 ```
 
 ```sh
@@ -143,9 +163,9 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario matchmaking,hit,wall,input,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario matchmaking,hit,wall,input,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 The runner checks the structure, starts its own Redis Compose project and node processes, and records stdout, stderr and message-flow diagnostics in `.logs/run-<id>/`. Redis and node listeners use OS-assigned ports; Redis keys use a unique run prefix. Cleanup failures return exit code 1. Each scenario uses fresh node containers and an independent Redis key prefix; the invocation shares one Redis service. The fixture sets RoomCapacity to one, so after migration fills the surviving process, the replacement is the eligible provider for a new Room. Production defaults to unrestricted Room capacity.
@@ -159,7 +179,7 @@ The runner checks the structure, starts its own Redis Compose project and node p
 | reconnect | A new client retains Actor, Room, position, HP and last sequence; finished reconnect retains winner |
 | update | Relocation completion, safe shutdown, unchanged connection and Room state, replacement and new Room admission |
 
-`DomainChecks.cs` runs boundary checks in the existing e2e executable before scenario nodes start. It covers closed ray/AABB faces, tangents, exact range, wall/player distance ties, movement budget and cooldown boundaries, rejected state, and snapshots restored against a different monotonic clock origin. `./run-e2e.sh --check-domain` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain` runs these checks together with a separate local typed Session wire golden check; Redis and game scenario nodes are not started.
+`DomainChecks.cs` runs boundary checks in the existing e2e executable before scenario nodes start. It covers closed ray/AABB faces, tangents, exact range, wall/player distance ties, movement budget and cooldown boundaries, rejected state, and snapshots restored against a different monotonic clock origin. `./run-e2e.sh --check-domain` or `.\run-e2e.cmd -CheckDomain` runs these checks together with a separate local typed Session wire golden check; Redis and game scenario nodes are not started.
 
 ## FPS rules and extension points
 
@@ -189,6 +209,8 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 ## Known issues
 
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
+
 Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
@@ -197,4 +219,4 @@ Wait for the bootstrap owner to report `READY` before starting another play node
 
 Start Redis, then match A (which bootstraps `matchmaking`), match B, and Session, using each project's `--config server/config/<node>.json` argument. Configure production Redis endpoints, unique key prefixes and listener addresses. Both play nodes register relocation adapters and the same stable types.
 
-Send `drain` on the selected play node (match)'s standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, then `SAFE_TO_SHUTDOWN`. Send `shutdown`, require successful process termination, and start the same role with the same configuration. Read actual bound endpoints from `READY` JSON. The runner performs this sequence without client reconnection.
+Send `drain` on the selected play node (match)'s standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, then `SAFE_TO_SHUTDOWN`. Send `shutdown`, require successful process termination, and start the same role with the same configuration. Read actual bound endpoints from `READY` JSON. The isolated runner performs this sequence without client reconnection.

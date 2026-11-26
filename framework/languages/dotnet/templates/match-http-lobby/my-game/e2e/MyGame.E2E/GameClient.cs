@@ -107,10 +107,7 @@ internal sealed class GameClient(
         while (actionResults.Reader.TryRead(out _)) { }
     }
 
-    public async Task<object> WaitActionAsync(
-        Func<RoomView, bool> updated,
-        CancellationToken ct
-    )
+    public async Task<object> WaitActionAsync(Func<RoomView, bool> updated, CancellationToken ct)
     {
         ClearActionResults();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -141,7 +138,8 @@ internal sealed class GameClient(
     public Task SendAsync<T>(T message, CancellationToken ct) =>
         Connector.Send(message).Async(ct).AsTask();
 
-    public Task JoinAsync(string roomId, CancellationToken ct) => SendAsync(new JoinRoomRequest(PlayerId, roomId), ct);
+    public Task JoinAsync(string roomId, CancellationToken ct) =>
+        SendAsync(new JoinRoomRequest(PlayerId, roomId), ct);
 
     public async Task<RoomView> ViewAsync(Func<RoomView, bool> predicate, CancellationToken ct)
     {
@@ -155,7 +153,7 @@ internal sealed class GameClient(
         await Connector.Request(new SessionInfoRequest()).Async<SessionInfo>(ct);
 
     public ValueTask DisposeAsync() => outcome.CleanupAsync(Connector.DisposeAsync);
+
     public Task<RoomView> WaitViewAsync(Func<RoomView, bool> predicate, CancellationToken ct) =>
         WaitAsync(predicate, ct);
-
 }
