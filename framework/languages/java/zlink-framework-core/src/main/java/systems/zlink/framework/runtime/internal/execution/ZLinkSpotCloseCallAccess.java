@@ -33,6 +33,8 @@ public final class ZLinkSpotCloseCallAccess {
 
         void reopenActorDestroyAdmission(ZLinkSerialExecutionQueue queue, Object attempt);
 
+        void acceptActorDestroyAdmission(ZLinkSerialExecutionQueue queue, Object attempt);
+
         CompletionStage<Void> enqueueActorWithPayloadBytes(
                 ZLinkSerialExecutionQueue queue,
                 long payloadBytes,
@@ -84,6 +86,15 @@ public final class ZLinkSpotCloseCallAccess {
             ZLinkSerialExecutionQueue queue, Object attempt) {
         selectedAccess()
                 .reopenActorDestroyAdmission(
+                        Objects.requireNonNull(queue, "queue"),
+                        Objects.requireNonNull(attempt, "attempt"));
+    }
+
+    /** Marks that the destroy attempt holding the queue's seal published Closing. */
+    public static void acceptActorDestroyAdmission(
+            ZLinkSerialExecutionQueue queue, Object attempt) {
+        selectedAccess()
+                .acceptActorDestroyAdmission(
                         Objects.requireNonNull(queue, "queue"),
                         Objects.requireNonNull(attempt, "attempt"));
     }

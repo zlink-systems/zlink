@@ -309,20 +309,10 @@ final class ZLinkActorDestroyContractTest {
         String key = ZLinkAuthorityKeyCodec.actor(ACTOR_ID);
         var rejectClosing = new AtomicBoolean(true);
         var closingFailure = new IllegalStateException("injected Actor Closing CAS failure");
-        var codec = new ZLinkActorAuthorityPayloadCodec();
         var repository =
                 rejectActorMutation(
                         delegate,
-                        mutation ->
-                                rejectClosing.get()
-                                        && mutation instanceof ZLinkAuthorityPut put
-                                        && codec.decode(put.payload())
-                                                .filter(
-                                                        payload ->
-                                                                payload.state()
-                                                                        == ZLinkActorAuthorityPayloadCodec
-                                                                                .State.CLOSING)
-                                                .isPresent(),
+                        mutation -> rejectClosing.get() && isClosingPut(mutation),
                         closingFailure);
         var construction =
                 new ZLinkFrameworkRuntimeTestAccess.Construction()
@@ -349,6 +339,56 @@ final class ZLinkActorDestroyContractTest {
             var following = manager.destroy(actor).toCompletableFuture();
             assertNotSame(first, following);
             assertTrue(await(following));
+        }
+    }
+
+    @Test
+    void requestDuringClosingCasIsUnavailableAndServedAfterCasFailure() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var delegate = new ZLinkProviderLocationRepository(locations);
+        var closingFailure = new IllegalStateException("injected Actor Closing CAS failure");
+        var closingReached = new CompletableFuture<Void>();
+        var closingProceed = new CompletableFuture<Void>();
+        var repository =
+                rejectActorMutation(
+                        delegate,
+                        ZLinkActorDestroyContractTest::isClosingPut,
+                        closingFailure,
+                        closingReached,
+                        closingProceed);
+        var construction =
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .locationStores(ZLinkRegisteredLocationStores.fromUnified(repository));
+        try (var runtime = start(locations, "destroy-owner", null, construction)) {
+            var actor = create(runtime);
+            var destroying = runtime.actorManager().destroy(actor).toCompletableFuture();
+            await(closingReached);
+
+            var during =
+                    runtime.actorClient()
+                            .requestToActor(ACTOR_ID, new ReadGeneration())
+                            .submit(Long.class)
+                            .toCompletableFuture();
+            Throwable rejected = null;
+            try {
+                during.get(10, TimeUnit.SECONDS);
+            } catch (ExecutionException | TimeoutException failure) {
+                rejected = failure;
+            } finally {
+                // Release the Closing CAS before any assertion so runtime close cannot wait on it.
+                closingProceed.complete(null);
+            }
+            assertInstanceOf(ExecutionException.class, rejected);
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, frameworkFailure(rejected).kind());
+
+            var failure = assertThrows(CompletionException.class, destroying::join);
+            assertSame(closingFailure, failure.getCause());
+            assertEquals(
+                    actor.objectGeneration(),
+                    await(
+                            runtime.actorClient()
+                                    .requestToActor(ACTOR_ID, new ReadGeneration())
+                                    .submit(Long.class)));
         }
     }
 
@@ -421,10 +461,45 @@ final class ZLinkActorDestroyContractTest {
         }
     }
 
+    private static boolean isClosingPut(ZLinkAuthorityMutation mutation) {
+        return mutation instanceof ZLinkAuthorityPut put
+                && new ZLinkActorAuthorityPayloadCodec()
+                        .decode(put.payload())
+                        .filter(
+                                payload ->
+                                        payload.state()
+                                                == ZLinkActorAuthorityPayloadCodec.State.CLOSING)
+                        .isPresent();
+    }
+
+    private static ZLinkFrameworkException frameworkFailure(Throwable failure) {
+        for (var cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ZLinkFrameworkException framework) return framework;
+        }
+        return fail("no ZLinkFrameworkException in " + failure);
+    }
+
     private static ZLinkLocationRepository rejectActorMutation(
             ZLinkLocationRepository delegate,
             Predicate<ZLinkAuthorityMutation> reject,
             RuntimeException failure) {
+        return rejectActorMutation(
+                delegate,
+                reject,
+                failure,
+                new CompletableFuture<>(),
+                CompletableFuture.completedFuture(null));
+    }
+
+    /**
+     * Fails a matching mutation after {@code proceed}; {@code reached} completes when it arrives.
+     */
+    private static ZLinkLocationRepository rejectActorMutation(
+            ZLinkLocationRepository delegate,
+            Predicate<ZLinkAuthorityMutation> reject,
+            RuntimeException failure,
+            CompletableFuture<Void> reached,
+            CompletionStage<Void> proceed) {
         String key = ZLinkAuthorityKeyCodec.actor(ACTOR_ID);
         return (ZLinkLocationRepository)
                 Proxy.newProxyInstance(
@@ -434,7 +509,9 @@ final class ZLinkActorDestroyContractTest {
                             if (method.getName().equals("compareExchange")
                                     && key.equals(arguments[0])
                                     && reject.test((ZLinkAuthorityMutation) arguments[2])) {
-                                return CompletableFuture.failedFuture(failure);
+                                reached.complete(null);
+                                return proceed.thenCompose(
+                                        ignored -> CompletableFuture.failedFuture(failure));
                             }
                             try {
                                 return method.invoke(delegate, arguments);

@@ -804,6 +804,10 @@ final class ZLinkActorDispatchSerials {
                                             }
                                         });
                             } else {
+                                for (var closingLane : closingLanes(claimed, registered)) {
+                                    ZLinkSpotCloseCallAccess.acceptActorDestroyAdmission(
+                                            closingLane, attempt);
+                                }
                                 if (registered.barrier() != null) {
                                     registered.barrier().complete(null);
                                 }

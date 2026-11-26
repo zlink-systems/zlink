@@ -70,6 +70,11 @@ public final class ZLinkSerialExecutionQueue {
                         queue.reopenActorDestroyAdmission(attempt);
                     }
 
+                    public void acceptActorDestroyAdmission(
+                            ZLinkSerialExecutionQueue queue, Object attempt) {
+                        queue.acceptActorDestroyAdmission(attempt);
+                    }
+
                     public CompletionStage<Void> enqueueActorWithPayloadBytes(
                             ZLinkSerialExecutionQueue queue,
                             long payloadBytes,
@@ -163,6 +168,8 @@ public final class ZLinkSerialExecutionQueue {
     volatile RelocationState relocation;
     // Null admits work. A destroy attempt may undo its seal until Closing is published.
     private volatile Object closingAdmissionSeal;
+    // Whether the destroy attempt holding the seal published Closing.
+    private volatile boolean closingAdmissionAccepted;
     private boolean relocated;
     private final List<QuiescenceWaiter> quiescenceWaiters = new ArrayList<>();
 
@@ -547,6 +554,7 @@ public final class ZLinkSerialExecutionQueue {
         }
         if (closingAdmissionSeal == null || seal == CLOSING_SEAL) {
             closingAdmissionSeal = seal;
+            closingAdmissionAccepted = false;
         }
         return true;
     }
@@ -554,7 +562,25 @@ public final class ZLinkSerialExecutionQueue {
     private synchronized void reopenActorDestroyAdmission(Object attempt) {
         if (closingAdmissionSeal == attempt) {
             closingAdmissionSeal = null;
+            closingAdmissionAccepted = false;
         }
+    }
+
+    private synchronized void acceptActorDestroyAdmission(Object attempt) {
+        if (closingAdmissionSeal == attempt) {
+            closingAdmissionAccepted = true;
+        }
+    }
+
+    /**
+     * Spec 03-spot-actor/04-actor-model §6.8: until the destroy attempt holding the seal publishes
+     * Closing, a failed CAS reopens admission and the Actor stays Ready, so a request in that
+     * window is retryable.
+     */
+    private boolean actorDestroyClosingPendingLocked() {
+        return closingAdmissionSeal != null
+                && closingAdmissionSeal != CLOSING_SEAL
+                && !closingAdmissionAccepted;
     }
 
     /**
@@ -626,7 +652,11 @@ public final class ZLinkSerialExecutionQueue {
             }
             return CompletableFuture.failedFuture(
                     ZLinkFrameworkErrorOrigin.closingSpot(
-                            closing ? ZLinkFrameworkErrorKind.NOT_FOUND : sealedKind));
+                            closing
+                                    ? ZLinkFrameworkErrorKind.NOT_FOUND
+                                    : actorDestroyClosingPendingLocked()
+                                            ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                                            : sealedKind));
         }
         return relocated ? CompletableFuture.failedFuture(new RelocatedOwnerException()) : null;
     }
