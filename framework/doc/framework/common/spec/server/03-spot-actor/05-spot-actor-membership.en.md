@@ -63,6 +63,10 @@ For both same-node and cross-node joins, a transaction adding membership to a Us
 target Spot authority's SpotId, `ObjectGeneration`, and `StoreVersion`, and the validity of the
 owner lease recorded in that authority, as commit conditions. Application join approval or a
 locally active Spot doesn't replace those conditions.
+When a relocation aggregate commit moves that Spot authority in the same commit, "the owner lease
+recorded in that authority" is the target owner lease this commit records. For a Spot that isn't moved
+with it, it's the lease recorded now. This lease condition belongs to adding membership; it isn't a
+target liveness check on the commit itself ([Location runtime §9.1](../05-location-relocation/01-location-runtime.en.md#91-when-restore-data-becomes-the-official-data)).
 
 The Object Client or Server role requires a Location Store. Without a Store,
 it's rejected at startup, and a hidden local Store or a runtime-local object
