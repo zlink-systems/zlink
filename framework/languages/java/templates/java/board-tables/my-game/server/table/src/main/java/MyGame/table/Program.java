@@ -58,6 +58,8 @@ public class Program {
     public static void main(String[] args) throws Exception {
         if (Arrays.equals(args, new String[] {"--check-domain"})) {
             int passed = DomainChecks.run();
+            RoomWithdrawalCheck.run();
+            System.out.println("Room withdrawal check: passed");
             System.out.println("Domain checks: " + passed + "/7 passed");
             if (passed != 7) System.exit(1);
             DomainChecks.verifyJsonContract();

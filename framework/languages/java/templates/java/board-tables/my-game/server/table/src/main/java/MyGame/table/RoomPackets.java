@@ -4,7 +4,6 @@ import MyGame.*;
 
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public final class RoomPackets {
@@ -29,8 +28,7 @@ public final class RoomPackets {
 
     public static final class Withdraw implements ZLinkSpotPacketHandler<Table, WithdrawRoom> {
         public CompletionStage<Void> handle(Table table, WithdrawRoom message) {
-            table.withdraw(message);
-            return CompletableFuture.completedFuture(null);
+            return table.withdraw(message);
         }
     }
 }

@@ -102,7 +102,8 @@ public final class Table implements ZLinkSpot<Player> {
     }
 
     CompletionStage<Void> commit(CommitRoom message) {
-        if (!reserved(message.assignmentId())) return CompletableFuture.completedFuture(null);
+        if (!uncommitted(message.assignmentId()) || state.matchMembers.isEmpty())
+            return CompletableFuture.completedFuture(null);
         var seats = new ArrayList<TableState.Seat>();
         state.matchMembers.forEach(
                 (member, chips) ->
@@ -113,19 +114,25 @@ public final class Table implements ZLinkSpot<Player> {
         return broadcastViews();
     }
 
-    void withdraw(WithdrawRoom message) {
-        if (reserved(message.assignmentId())) state.matchMembers = Map.of();
+    CompletionStage<Void> withdraw(WithdrawRoom message) {
+        if (!uncommitted(message.assignmentId())) return CompletableFuture.completedFuture(null);
+        state.matchMembers = Map.of();
+        return context.close().thenAccept(closed -> {});
     }
 
-    private boolean reserved(String assignmentId) {
+    private boolean uncommitted(String assignmentId) {
         return context.spotId().equals(assignmentId)
                 && state.matchMembers != null
-                && !state.matchMembers.isEmpty()
                 && state.seats.isEmpty();
     }
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
-        return CompletableFuture.completedFuture(null);
+        if (state.matchMembers == null || !state.matchMembers.isEmpty())
+            return CompletableFuture.completedFuture(null);
+        // A Spot can close itself from a packet handler, after the leave callback completes.
+        return context.outbound()
+                .sendToSpot(context.spotId(), new WithdrawRoom(context.spotId()))
+                .submit();
     }
 
     // Seats the player at admission; a seated player is admitted again without a new seat.

@@ -336,9 +336,10 @@ public final class ServerHost implements ServerControl, AutoCloseable {
                                                 + "/*",
                                         "MyGame." + module + ".Program",
                                         config.toString()));
-                if (console && !windows()) {
-                    // The host handles terminal interrupts and sends shutdown over stdin.
-                    command.addAll(0, List.of("sh", "-c", "trap '' INT; exec \"$@\"", "node"));
+                if (console) {
+                    // The host handles Ctrl+C and shuts down nodes through their stdin.
+                    if (windows()) command.add(1, "-Xrs");
+                    else command.addAll(0, List.of("sh", "-c", "trap '' INT; exec \"$@\"", "node"));
                 }
             }
             var builder =

@@ -124,7 +124,9 @@ public final class Scenarios {
         var suffix = UUID.randomUUID().toString();
         try (var client = new Client(endpoint, "p0-" + suffix, "table-" + suffix)) {
             client.sendJoin(true);
-            check(client.next(ActionRejected.class).equals(new ActionRejected(Rules.NOT_SEATED, 0)),
+            check(
+                    client.next(ActionRejected.class)
+                            .equals(new ActionRejected(Rules.NOT_SEATED, 0)),
                     "An unseated player was allowed to reconnect");
             client.send(new FindMatch());
             var queued = client.next(MatchQueued.class);
@@ -352,20 +354,19 @@ public final class Scenarios {
         if (id == Scenario.PERSIST) verifyReload(server, tableId, persisted);
     }
 
-    private static void verifyReload(ServerControl.Connection server, String tableId, SeatView balance)
-            throws Exception {
+    private static void verifyReload(
+            ServerControl.Connection server, String tableId, SeatView balance) throws Exception {
         check(balance.chips() != Rules.INITIAL_CHIPS, "Test round did not change the balance");
         try (var host = new ServerHost(server.root(), 0, false)) {
             var fresh = host.startPersistenceProbe(server.endpoints());
             try (var stale = new Client(fresh.endpoint(), balance.playerId(), tableId)) {
                 stale.sendJoin(true);
                 check(
-                        stale.next(ActionRejected.class).equals(new ActionRejected(Rules.NOT_SEATED, 0)),
+                        stale.next(ActionRejected.class)
+                                .equals(new ActionRejected(Rules.NOT_SEATED, 0)),
                         "Reconnect accepted a seat lost on restart");
             }
-            try (var reconnected =
-                    new Client(
-                            fresh.endpoint(), balance.playerId(), tableId)) {
+            try (var reconnected = new Client(fresh.endpoint(), balance.playerId(), tableId)) {
                 var view = reconnected.connect();
                 check(
                         reconnected.sessionInfo().actorId().equals(balance.playerId()),
