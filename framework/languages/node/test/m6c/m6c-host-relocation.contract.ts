@@ -1525,13 +1525,17 @@ test('PerActor Spot shell excludes Spot timers from relocation payload', async (
     serial,
     fixture.spot as never
   );
-  let captured: Awaited<ReturnType<ServiceRelocationObjectCaptureOwner['captureUserSpotAggregate']>> | undefined;
+  let captured:
+    | Awaited<ReturnType<ServiceRelocationObjectCaptureOwner['captureUserSpotAggregate']>>
+    | undefined;
   const originalCapture = ServiceRelocationObjectCaptureOwner.prototype.captureUserSpotAggregate;
   const stopped = new Error('Capture observed.');
   t.mock.method(
     ServiceRelocationObjectCaptureOwner.prototype,
     'captureUserSpotAggregate',
-    async (...args: Parameters<ServiceRelocationObjectCaptureOwner['captureUserSpotAggregate']>) => {
+    async (
+      ...args: Parameters<ServiceRelocationObjectCaptureOwner['captureUserSpotAggregate']>
+    ) => {
       captured = await originalCapture.call(new ServiceRelocationObjectCaptureOwner(), ...args);
       await captured.abortSource();
       throw stopped;
