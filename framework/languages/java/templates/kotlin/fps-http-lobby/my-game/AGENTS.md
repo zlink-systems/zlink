@@ -1,5 +1,15 @@
 # MyGame FPS development guide
 
+## Template reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+## Local execution
+
+Start the local deployment with `./run-server.sh` or `.\run-server.cmd`. From another terminal run `./run-e2e.sh` or `.\run-e2e.cmd`. The e2e runner attaches when the server is ready and otherwise starts an isolated Docker deployment. The `lobby` and `update` scenarios start or replace nodes and require an isolated run. Use `--isolated` or `-Isolated` to force isolation. Stop the local server with Ctrl+C.
+
+Node stdout, stderr, message flow and scenario failure details are under `.logs/run-<id>/`. Follow the paths printed by both commands when diagnosing an attached run.
+
 ## Rules for AI
 
 `server/lobby` is an API node that holds no game state; the session node manages client connections, and the play nodes host the game Spots. Before writing code, decide which kind you are editing.
@@ -25,6 +35,8 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/kot
 
 ## Project and development
 
+Run one scenario with `./run-e2e.sh --scenario lobby`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 This Kotlin project runs an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, assigns a UUID Room ID, and prepares the member list of a dynamic Room User Spot before returning the assignment. Players connect to Session over STREAM and join the assigned Room. `build.gradle.kts` pins the public Framework and connector packages. The [README](README.md) owns execution, deployment, FPS rules, and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
 
 Run from this project root with Docker Compose v2 and Linux containers:
@@ -39,15 +51,19 @@ Run from this project root with Docker Compose v2 and Linux containers:
 PowerShell 7 provides the same commands:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario lobby,hit,wall,input,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 For host-process debugging, install JDK 25 and add `--local` or `-Local`. After a local build, `--no-build` or `-NoBuild` skips compilation. Keep scenario assertions and inspect the first failure before rerunning.
 
 ## Modules and extension points
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use a nullable Kotlin type such as `String?` in a DTO. A Java record used from Kotlin declares nullability with `@Nullable`. To allow omission in a Kotlin DTO, declare a primary-constructor default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
 
 - `server/shared/src/main/kotlin/MyGame/Contracts.kt`: typed game contracts, action limits, and protocol names. `HttpLobbyContracts.kt`: API node and server-only preparation contracts. `Geometry.kt`: `Vec3`, closed slab ray/AABB intersection, static map, spawn points, and player boxes.
 - `server/match/src/main/kotlin/MyGame/match/domain/RoomState.kt`: authoritative positions, HP, phase, winner, shared sequences, movement budgets, cooldowns, and hit selection. Production time is monotonic; only the domain constructor accepts a test clock. Snapshot DTOs store remaining milliseconds rather than process clock readings.
@@ -70,7 +86,7 @@ Use the [ZLink documentation](https://docs.zlink.systems/), [Kotlin server guide
 
 ## Diagnostics and defects
 
-Dispatch diagnostics are Normal in `Hosting.kt`; node stderr contains message-flow records. Preserve the first `.logs/run-<id>/` settings, stdout, and stderr before modifying or rerunning a failing case. Compare operation, Actor, flow/corr, and transition order between passing and failing traces. A single isolated failure remains a defect even if a later run passes. Preserve startup exceptions when no flow record exists yet.
+Dispatch diagnostics are Normal in `Hosting.kt`; the runner saves message-flow records in each node’s `*-message-flow.log`. Preserve the first `.logs/run-<id>/` settings, stdout, and stderr before modifying or rerunning a failing case. Compare operation, Actor, flow/corr, and transition order between passing and failing traces. A single isolated failure remains a defect even if a later run passes. Preserve startup exceptions when no flow record exists yet.
 
 For local process discovery diagnostics, set `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1` before launching nodes. Docker nodes do not inherit arbitrary host environment variables. Do not change timeout, fixed waits, or assertions to hide failures. The runner cleans up its own processes and Compose project; retain cleanup errors and do not stop other workloads.
 

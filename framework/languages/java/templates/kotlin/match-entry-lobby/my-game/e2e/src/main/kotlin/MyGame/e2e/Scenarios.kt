@@ -114,9 +114,7 @@ private suspend fun moveBy(
             is ActionRejected -> {
                 check(!moveBudgetRejected) { "Move was rejected again after RetryAfterMs." }
                 moveBudgetRejected = true
-                check(
-                    result.reason == Rejection.MOVE_BUDGET && result.retryAfterMs > 0
-                ) {
+                check(result.reason == Rejection.MOVE_BUDGET && result.retryAfterMs > 0) {
                     "Unexpected movement rejection: ${result.reason}."
                 }
                 sameState(before, mover.view())
@@ -154,9 +152,7 @@ private suspend fun hit(
             is ActionRejected -> {
                 check(!fireTooSoonRejected) { "Shot was rejected again after RetryAfterMs." }
                 fireTooSoonRejected = true
-                check(
-                    result.reason == Rejection.FIRE_TOO_SOON && result.retryAfterMs > 0
-                ) {
+                check(result.reason == Rejection.FIRE_TOO_SOON && result.retryAfterMs > 0) {
                     "Unexpected shot rejection: ${result.reason}."
                 }
                 sameState(before, a.view())
@@ -187,9 +183,8 @@ private suspend fun newMatch(endpoint: String, replacement: String) {
 
 private suspend fun input(a: Client, b: Client) {
     val beforeMove = a.view()
-    val firstSpawn = beforeMove.players.single {
-        it.x == Game.FIRST_SPAWN_X && it.y == Game.FIRST_SPAWN_Y
-    }
+    val firstSpawn =
+        beforeMove.players.single { it.x == Game.FIRST_SPAWN_X && it.y == Game.FIRST_SPAWN_Y }
     val mover = if (firstSpawn.playerId == a.playerId) a else b
     val other = if (mover === a) b else a
     val source = player(beforeMove, mover)
@@ -198,8 +193,12 @@ private suspend fun input(a: Client, b: Client) {
     val moveSequence = source.lastSequence + 1
     moveBy(a, b, mover, moveDelta, 0.0, moveSequence)
     val afterMove = moveBy(a, b, mover, moveDelta, 0.0, moveSequence + 1)
-    check(player(afterMove, mover).lastSequence == moveSequence + 1 &&
-        player(afterMove, other).hp == target.hp) { "Movement changed sequence or player HP." }
+    check(
+        player(afterMove, mover).lastSequence == moveSequence + 1 &&
+            player(afterMove, other).hp == target.hp
+    ) {
+        "Movement changed sequence or player HP."
+    }
     rejectAction(mover, MoveRequest(moveDelta, 0.0, moveSequence + 1), Rejection.STALE_SEQUENCE)
 
     val beforeShot = a.view()
@@ -226,14 +225,14 @@ private suspend fun input(a: Client, b: Client) {
 
     val outsideStart = walk(a, b, mover, 1.0, Game.FIRST_SPAWN_Y)
     val outsideSequence = player(outsideStart, mover).lastSequence + 1
-    rejectAction(
-        mover,
-        MoveRequest(-Game.MAX_STEP, 0.0, outsideSequence),
-        Rejection.OUTSIDE_MAP,
-    )
+    rejectAction(mover, MoveRequest(-Game.MAX_STEP, 0.0, outsideSequence), Rejection.OUTSIDE_MAP)
     val beforeWall = walk(a, b, mover, Game.WALL_X - Game.MAX_STEP, WALL_CENTER_Y)
     val wallSequence = player(beforeWall, mover).lastSequence + 1
-    rejectAction(mover, MoveRequest(Game.MAX_STEP, 0.0, wallSequence), Rejection.MOVE_BLOCKED_BY_WALL)
+    rejectAction(
+        mover,
+        MoveRequest(Game.MAX_STEP, 0.0, wallSequence),
+        Rejection.MOVE_BLOCKED_BY_WALL,
+    )
     moveBy(a, b, mover, -0.1, 0.0, Game.MAX_SAFE_INTEGER)
     check(player(mover.view(), mover).lastSequence == Game.MAX_SAFE_INTEGER) {
         "Maximum safe sequence was not accepted."
@@ -245,10 +244,10 @@ private suspend fun input(a: Client, b: Client) {
     )
 }
 
-suspend fun scenario(id: String, nodes: Nodes) {
+suspend fun scenario(id: String, target: ScenarioTarget) {
     val suffix = UUID.randomUUID().toString()
-    val a = Client(nodes.endpoint, "p1-$suffix")
-    val b = Client(nodes.endpoint, "p2-$suffix")
+    val a = Client(target.endpoint, "p1-$suffix")
+    val b = Client(target.endpoint, "p2-$suffix")
     var bClosed = false
     withCleanup(cleanup = { withCleanup(cleanup = { a.close() }) { if (!bClosed) b.close() } }) {
         a.connect()
@@ -276,8 +275,13 @@ suspend fun scenario(id: String, nodes: Nodes) {
                 rejectShot(a, b, nextSequence(a), Rejection.OUT_OF_RANGE)
                 rejectShot(a, b, nextSequence(a), Rejection.NO_TARGET, "missing-player")
                 walk(a, b, b, Game.SECOND_SPAWN_X, LANE_Y)
-                for (hp in Game.INITIAL_HP - 2 * Game.SHOT_DAMAGE downTo 0 step Game.SHOT_DAMAGE)
-                    hit(a, b, nextSequence(a), hp)
+                for (hp in
+                    Game.INITIAL_HP - 2 * Game.SHOT_DAMAGE downTo 0 step Game.SHOT_DAMAGE) hit(
+                    a,
+                    b,
+                    nextSequence(a),
+                    hp,
+                )
                 check(
                     a.next<MatchEnded>().winner == a.playerId &&
                         b.next<MatchEnded>().winner == a.playerId
@@ -310,7 +314,8 @@ suspend fun scenario(id: String, nodes: Nodes) {
                 walk(a, b, b, Game.SECOND_SPAWN_X, Game.SECOND_SPAWN_Y)
                 val beforeClearShot = a.view()
                 val expectedHp =
-                    beforeClearShot.players.single { it.playerId == b.playerId }.hp - Game.SHOT_DAMAGE
+                    beforeClearShot.players.single { it.playerId == b.playerId }.hp -
+                        Game.SHOT_DAMAGE
                 val clearShot = hit(a, b, nextSequence(a), expectedHp)
                 check(clearShot.players.single { it.playerId == b.playerId }.hp == expectedHp) {
                     "Wall behind target blocked a clear shot."
@@ -319,7 +324,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
             "reconnect" -> {
                 bClosed = true
                 b.close()
-                val again = Client(nodes.endpoint, b.playerId)
+                val again = Client(target.endpoint, b.playerId)
                 withCleanup(cleanup = { again.close() }) {
                     again.connect()
                     again.queue()
@@ -336,7 +341,9 @@ suspend fun scenario(id: String, nodes: Nodes) {
                     check(
                         restored.phase == Game.PLAYING_PHASE &&
                             restored.winner == null &&
-                            restored.players.single { it.playerId == again.playerId }.lastSequence == 1L
+                            restored.players
+                                .single { it.playerId == again.playerId }
+                                .lastSequence == 1L
                     ) {
                         "Reconnect did not restore the active phase and last sequence."
                     }
@@ -348,7 +355,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
                         "Room view did not restore the finished phase and winner."
                     }
 
-                    val finishedReconnect = Client(nodes.endpoint, again.playerId)
+                    val finishedReconnect = Client(target.endpoint, again.playerId)
                     withCleanup(cleanup = { finishedReconnect.close() }) {
                         finishedReconnect.connect()
                         finishedReconnect.queue()
@@ -365,9 +372,9 @@ suspend fun scenario(id: String, nodes: Nodes) {
                         sameState(finished, restoredFinished)
                         check(
                             restoredFinished.winner == a.playerId &&
-                                restoredFinished.players.single {
-                                    it.playerId == again.playerId
-                                }.lastSequence == 2L
+                                restoredFinished.players
+                                    .single { it.playerId == again.playerId }
+                                    .lastSequence == 2L
                         ) {
                             "Finished reconnect did not restore the winner and last sequence."
                         }
@@ -375,14 +382,14 @@ suspend fun scenario(id: String, nodes: Nodes) {
                 }
             }
             "update" -> {
-                nodes.drain(before.nodeId)
+                requireNotNull(target.deployment).drain(before.nodeId)
                 check(a.sessionInfo() == session1 && b.sessionInfo() == session2) {
                     "Update changed Session binding."
                 }
                 sameState(before, a.view { it.nodeId != before.nodeId })
                 sameState(before, b.view { it.nodeId != before.nodeId })
-                nodes.replace(before.nodeId)
-                newMatch(nodes.endpoint, before.nodeId)
+                requireNotNull(target.deployment).replace(before.nodeId)
+                newMatch(target.endpoint, before.nodeId)
                 hit(a, b, 3, Game.INITIAL_HP - Game.SHOT_DAMAGE * 2)
                 check(a.sessionInfo() == session1 && b.sessionInfo() == session2) {
                     "Replacement changed Session binding."

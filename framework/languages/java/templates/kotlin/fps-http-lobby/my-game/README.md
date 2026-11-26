@@ -17,6 +17,10 @@ flowchart LR
   players -->|HTTP| lobby["API node (matchmaking)"]
 ```
 
+[한국어](README.ko.md)
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
 ## Prerequisites
 
 Docker with Compose v2 and Linux containers, network access to Maven Central and the Gradle Plugin Portal, and PowerShell 7 on Windows. JDK 25 is required only for local process debugging. The included Gradle wrapper builds the project. Public Framework and connector versions are pinned in `build.gradle.kts`.
@@ -32,14 +36,34 @@ Run from this project root.
 PowerShell:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
+
+## Local server and e2e
+
+Run the first command from this directory to build and start Redis and the application nodes. Run the second command from a separate terminal to connect the scenarios to that deployment. When the server is ready, `Server ready` shows the WebSocket address for game clients. Press Ctrl+C in the server terminal to stop its processes and Redis. On Windows the `.cmd` files use PowerShell 7 (`pwsh`).
+
+```bash
+./run-server.sh
+./run-e2e.sh
+```
+
+```powershell
+.\run-server.cmd
+.\run-e2e.cmd
+```
+
+With no running server, `run-e2e` creates and removes an isolated Docker deployment. The `lobby` and `update` scenarios start or replace nodes and require an isolated run. Use `--isolated` (`-Isolated` on Windows) to force isolation while a server is running.
+
+The local server uses the configured Room capacity. Isolated scenarios can set a smaller capacity to verify placement and node replacement.
+
+The server publishes its endpoints in `.logs/server.json`. Each run keeps node stdout, stderr, Framework message-flow records and failure details under `.logs/run-<id>/`. For an attached run, find the node logs under the directory printed by `run-server` and the scenario details under the directory printed by `run-e2e`. Docker build and cleanup logs are under `.logs/docker-<project>/`.
 
 ## Client connection
 
 ### Endpoint and first packet
 
-The Session client STREAM listener defaults to `tcp://127.0.0.1:0` in `server/config/session.json`. Port `0` asks the OS for a free port; use the actual `streamEndpoint` in the process line `READY <json>`, which also contains `id` and `meshEndpoint`. TCP has no URL path. Web browsers, Unity WebGL, and Cocos Creator web cannot connect to this default TCP listener; they require a separately configured WebSocket deployment. The API node defaults to `http://127.0.0.1:0` in `server/config/lobby.json`; its READY JSON provides `httpEndpoint`. Replace `sessionEndpoint` ending in `CHANGE_ME` with the actual Session endpoint before starting Lobby; `e2e/src/main/kotlin/MyGame/e2e/Nodes.kt` performs that wiring for its temporary deployment.
+The Session client STREAM listener defaults to `ws://127.0.0.1:0` in `server/config/session.json`. Port `0` asks the OS for a free port; use the actual `streamEndpoint` in the process line `READY <json>`, which also contains `id` and `meshEndpoint`. Use the WebSocket address printed by `run-server` for browser clients. The API node defaults to `http://127.0.0.1:0` in `server/config/lobby.json`; its READY JSON provides `httpEndpoint`. Replace `sessionEndpoint` ending in `CHANGE_ME` with the actual Session endpoint before starting Lobby; `e2e/src/main/kotlin/MyGame/e2e/Nodes.kt` performs that wiring for its temporary deployment.
 
 Loopback is reachable only inside the same host/network namespace. Keep a deployment running for external clients, bind to a reachable interface and port, and expose that port from containers. The Docker e2e deployment is temporary and is removed after the run. Mesh listeners and Redis are not game-client endpoints.
 
@@ -121,7 +145,7 @@ suspend fun connectOnce(endpoint: String, playerId: String, roomId: String) {
 }
 ```
 
-## Local e2e
+## Scenario selection and validation
 
 The runner checks the structure, starts its own Redis Compose project and node processes, and records stdout, stderr, and message-flow diagnostics in `.logs/run-<id>/`. Redis and node listeners use OS-assigned ports; Redis keys use a unique run prefix. Each scenario uses fresh node containers and an independent Redis key prefix. Cleanup failures return exit code 1.
 
@@ -132,9 +156,9 @@ The runner checks the structure, starts its own Redis Compose project and node p
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario lobby,hit,wall,input,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 For host-process debugging, install JDK 25 and add `--local` or `-Local`. After a local build, add `--no-build` or `-NoBuild` to skip compilation.
@@ -183,3 +207,7 @@ Start Redis, then both play nodes (match) using `server/config/match-a.json` and
 The Match configuration `roomCapacity` sets the positive per-node Room stable-type limit. Deployment configurations allow multiple Rooms. The e2e runner uses a capacity of two for `lobby`, which keeps the duel and ranked Rooms in place while the restarted Lobby provisions a new Room. Other scenarios use a capacity of one so the surviving host is full after relocation and the replacement must handle the next Room.
 
 For a play node (match) update, send `drain` to stdin and require `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, require `STOPPED` and exit zero, then start the replacement with the same configuration. The API node remains outside host relocation. HTTP matchmaking holds the first POST response until another player requests the same mode; shutdown fails pending requests. The HTTP adapter removes an unpaired request when its client disconnects, allowing the same player ID to request again. Cancellation does not change paired requests.
+
+## Known issues
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.

@@ -10,15 +10,16 @@ import java.util.Set;
 import java.util.concurrent.*;
 
 public final class GameSession implements ZLinkSession {
-    private static final Set<String> ALLOWED_CLIENT_PACKETS = Set.of(
-            JoinTownRequest.class.getSimpleName(),
-            ChangeChannelRequest.class.getSimpleName(),
-            CreatePartyRequest.class.getSimpleName(),
-            JoinPartyRequest.class.getSimpleName(),
-            EnterDungeonRequest.class.getSimpleName(),
-            AdvanceRequest.class.getSimpleName(),
-            ViewRequest.class.getSimpleName(),
-            SessionInfoRequest.class.getSimpleName());
+    private static final Set<String> ALLOWED_CLIENT_PACKETS =
+            Set.of(
+                    JoinTownRequest.class.getSimpleName(),
+                    ChangeChannelRequest.class.getSimpleName(),
+                    CreatePartyRequest.class.getSimpleName(),
+                    JoinPartyRequest.class.getSimpleName(),
+                    EnterDungeonRequest.class.getSimpleName(),
+                    AdvanceRequest.class.getSimpleName(),
+                    ViewRequest.class.getSimpleName(),
+                    SessionInfoRequest.class.getSimpleName());
 
     private final ZLinkSessionContext context;
     private final ZLinkActorManager actors;

@@ -8,7 +8,14 @@ object Names {
     const val STREAM = "players"
     const val PLAYER = "Player"
     const val TABLE = "Table"
-    val SCENARIOS = listOf("table", "reconnect", "update")
+    const val ROOM_PROVISIONER = "RoomProvisioner"
+    const val ROOM_PROVISIONER_KEY = "room-provisioner-board"
+    const val POOL = "Pool"
+    const val POOL_KEY = "pool-board"
+    const val MATCHMAKER = "matchmaker"
+    const val API = "api"
+    const val PLAYER_DATA = "player-data"
+    val SCENARIOS = listOf("table", "reconnect", "match", "match-cancel", "update", "persist")
 }
 
 object Rules {
@@ -39,14 +46,19 @@ object Rules {
             !isContractInteger(left) ||
                 !isContractInteger(right) ||
                 right > MAX_CONTRACT_INTEGER - left
-        ) return null
+        )
+            return null
         return left + right
     }
 }
 
 @JsonSerialize class SessionInfoRequest
 
-data class JoinTableRequest(val playerId: String = "", val tableId: String = "")
+data class JoinTableRequest(
+    val playerId: String = "",
+    val tableId: String = "",
+    val reconnect: Boolean = false,
+)
 
 @JsonSerialize class TableViewRequest
 

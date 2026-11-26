@@ -42,6 +42,7 @@ public final class Zone implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
+        System.out.println("Player entered Zone " + context.spotId());
         playerIds.add(actor.context().actorId());
         return actors.sendToActor(actor.context().actorId(), view(actor))
                 .submit()
@@ -49,6 +50,7 @@ public final class Zone implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
+        System.out.println("Player left " + context.spotId());
         return playerIds.remove(actor.context().actorId())
                 ? publishPlayers()
                 : CompletableFuture.completedFuture(null);
