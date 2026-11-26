@@ -127,7 +127,7 @@ inline void movement (const std::string &endpoint)
 
 inline void dungeon (const std::string &endpoint)
 {
-    Client client (endpoint, "p1");
+    Client client (endpoint, "dungeon-player-" + unique_id ());
     client.join ("forest");
     const auto id = "dungeon-" + unique_id ();
     const auto opened = client.dungeon (id);
@@ -138,19 +138,19 @@ inline void dungeon (const std::string &endpoint)
 
 inline void reconnect (const std::string &endpoint)
 {
+    const auto player_id = "reconnect-player-" + unique_id ();
     RegionView before;
     SessionInfo identity;
     {
-        Client client (endpoint, "p1");
+        Client client (endpoint, player_id);
         client.join ("forest");
         client.move (Names::max_step, 1);
-        before = client.wait_view ([&] (const auto &view) {
-            return at (view, "p1", Names::max_step, 1);
-        });
+        before = client.wait_view (
+          [&] (const auto &view) { return at (view, player_id, Names::max_step, 1); });
         identity = client.info ();
         client.close ();
     }
-    Client client (endpoint, "p1");
+    Client client (endpoint, player_id);
     const auto after = client.join ("forest");
     const auto rebound = client.info ();
     same_actor (identity, rebound);

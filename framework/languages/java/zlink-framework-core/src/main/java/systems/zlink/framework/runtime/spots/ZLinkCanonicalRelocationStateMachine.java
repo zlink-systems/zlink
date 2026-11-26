@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator.TargetIngressAuthority;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityConflict;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityEntry;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
@@ -962,7 +963,12 @@ final class ZLinkCanonicalRelocationStateMachine
                 .thenCompose(
                         restore -> {
                             return withTargetPreparationStage(
-                                            target.stage(restore.request()), "restore")
+                                            target.stage(
+                                                    restore.request(),
+                                                    new TargetIngressAuthority(
+                                                            () -> attempt.prepared().getNow(null),
+                                                            attempt::committed)),
+                                            "restore")
                                     .thenRun(() -> attempt.request().complete(restore.request()))
                                     .thenCompose(
                                             ignored ->
@@ -1497,7 +1503,7 @@ final class ZLinkCanonicalRelocationStateMachine
             Fence fence, TargetAttempt attempt, CompletableFuture<Void> publication) {
         publication.whenComplete(
                 (ignored, failure) -> {
-                    if (failure != null && !attempt.committed()) {
+                    if (failure != null && attempt.committed() == null) {
                         attempt.prepared()
                                 .handle((prepared, prepareFailure) -> null)
                                 .thenCompose(
@@ -1549,7 +1555,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 .thenApply(
                         published -> {
                             //  S2 — target owner CAS confirmed.
-                            attempt.committed(true);
+                            attempt.committed(published);
                             attempt.committedNanos(System.nanoTime());
                             return published;
                         })
@@ -2737,7 +2743,7 @@ final class ZLinkCanonicalRelocationStateMachine
         private CompletionStage<Void> publication;
         CompletionStage<Void> readyPublication;
         private boolean relayReadyAccepted;
-        private boolean committed;
+        private ZLinkAggregateRelocationCoordinator.Published committed;
         private volatile long committedNanos;
         byte[] receivedCutover;
 
@@ -2866,11 +2872,11 @@ final class ZLinkCanonicalRelocationStateMachine
                     });
         }
 
-        boolean committed() {
+        ZLinkAggregateRelocationCoordinator.Published committed() {
             return inStateLane(() -> committed);
         }
 
-        void committed(boolean value) {
+        void committed(ZLinkAggregateRelocationCoordinator.Published value) {
             inStateLane(
                     () -> {
                         committed = value;

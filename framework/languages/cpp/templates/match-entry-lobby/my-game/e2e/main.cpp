@@ -1,13 +1,17 @@
 #include "scenarios.hpp"
+#include "server_host.hpp"
 int main (int argc, char **argv)
 {
 #ifndef _WIN32
     signal (SIGPIPE, SIG_IGN);
+#else
+    SetConsoleOutputCP (CP_UTF8);
 #endif
     std::filesystem::path root = std::filesystem::current_path ();
     std::filesystem::path bin = std::filesystem::absolute (argv[0]).parent_path ();
     std::string selection;
     bool check_only = false;
+    bool serve = false, probe = false, attach = false;
     std::unique_ptr<MyGame::E2E::World> world;
     int exit = 0, passed = 0;
     std::vector<MyGame::E2E::ScenarioDefinition> selected;
@@ -15,7 +19,13 @@ int main (int argc, char **argv)
     try {
         for (int i = 1; i < argc; ++i) {
             const std::string option (argv[i]);
-            if (option == "--check-structure")
+            if (option == "--serve")
+                serve = true;
+            else if (option == "--server-running")
+                probe = true;
+            else if (option == "--attach")
+                attach = true;
+            else if (option == "--check-structure")
                 check_only = true;
             else if (i + 1 < argc && option == "--root")
                 root = argv[++i];
@@ -25,7 +35,13 @@ int main (int argc, char **argv)
                 throw std::invalid_argument ("Usage: my-game-e2e [--root path] [--scenario "
                                              "hit,wall,input,reconnect,update] [--check-structure]");
         }
+        if (probe)
+            return MyGame::E2E::server_running (root) ? 0 : 1;
         MyGame::E2E::check_structure (root);
+        if (serve) {
+            MyGame::E2E::run_server (root, bin);
+            return 0;
+        }
         if (check_only) {
             std::cout << "Structure: passed" << std::endl;
             return 0;
@@ -52,10 +68,27 @@ int main (int argc, char **argv)
                 if (requested.contains (scenario.name))
                     selected.push_back (scenario);
         }
+        const auto server = attach ? MyGame::E2E::running_server (root) : nlohmann::json{};
+        if (attach)
+            std::erase_if (selected, [] (const auto &scenario) {
+                const std::string_view name = scenario.name;
+                if (name == "update") {
+                    std::cout << "Skipping update: requires isolated node replacement."
+                              << std::endl;
+                    return true;
+                }
+                return false;
+            });
+        if (selected.empty ()) {
+            std::cout << "Scenarios: 0/0 passed" << std::endl;
+            return 0;
+        }
         for (const auto &scenario : selected) {
             current = scenario.name;
-            world = std::make_unique<MyGame::E2E::World> (root, bin);
-            const auto endpoint = world->start ();
+            std::cout << "━━ " << current << " (" << passed + 1 << '/' << selected.size () << ") ━━"
+                      << std::endl;
+            world = std::make_unique<MyGame::E2E::World> (root, bin, 1);
+            const auto endpoint = world->start (attach ? &server : nullptr);
             MyGame::E2E::scenario (scenario.id, endpoint, *world);
             world->close ();
             world.reset ();
@@ -64,9 +97,10 @@ int main (int argc, char **argv)
         }
     }
     catch (const std::exception &error) {
-        if (!current.empty ())
-            std::cout << "✗ " << current << std::endl;
-        std::cerr << error.what () << std::endl;
+        if (world)
+            MyGame::E2E::log_failure (world->logs (), current, error);
+        else
+            std::cerr << error.what () << std::endl;
         exit = 1;
     }
     if (world) {
@@ -74,11 +108,11 @@ int main (int argc, char **argv)
             world->close ();
         }
         catch (const std::exception &error) {
-            std::cerr << error.what () << std::endl;
+            MyGame::E2E::log_failure (world->logs (), "Cleanup", error);
             exit = 1;
         }
     }
-    if (!check_only)
+    if (!check_only && !serve && !probe)
         std::cout << "Scenarios: " << passed << "/" << selected.size () << " passed" << std::endl;
     return exit;
 }

@@ -49,11 +49,7 @@ public static class NodeControl
         await host.StartAsync();
         var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
         await WaitForServingAsync(runtime, CancellationToken.None);
-        await CommandsAsync(
-            host,
-            readiness(),
-            runtime
-        );
+        await CommandsAsync(host, readiness(), runtime);
     }
 
     private static async Task CommandsAsync(

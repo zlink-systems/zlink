@@ -48,24 +48,49 @@ public static class ShotOutcome
     public const string BlockedByWall = Rejection.BlockedByWall;
 }
 
-public enum MatchPhase { Waiting, Playing, Finished }
+public enum MatchPhase
+{
+    Waiting,
+    Playing,
+    Finished,
+}
 
 public sealed record SessionInfoRequest;
+
 public sealed record SessionInfo(string SessionId, string ActorId, ulong ObjectGeneration);
+
 public sealed record QueueRequest(string PlayerId, string Mode = GameNames.DefaultMode);
+
 public sealed record RoomAdmission(string PlayerId, string RoomId);
+
 public sealed record RoomAssignment(string RoomId);
+
 public sealed record MatchFound(string RoomId);
+
 public sealed record MoveRequest(Vec3 Delta, long Sequence);
+
 public sealed record MoveResult(Vec3 Position, long Sequence);
+
 public sealed record ShootRequest(Vec3 AimDirection, long Sequence);
+
 public sealed record RoomViewRequest;
+
 public sealed record PlayerView(string PlayerId, Vec3 Position, int Hp, long LastSequence);
-public sealed record RoomView(string RoomId, string NodeId, PlayerView[] Players,
-    MatchPhase Phase, string? Winner);
+
+public sealed record RoomView(
+    string RoomId,
+    string NodeId,
+    PlayerView[] Players,
+    MatchPhase Phase,
+    string? Winner
+);
+
 public sealed record ShotResult(string Outcome, string? TargetId, long Sequence);
+
 public sealed record ShotRejected(string Reason, int RetryAfterMs = 0);
+
 public sealed record ActionRejected(string Reason, int RetryAfterMs = 0);
+
 public sealed record MatchEnded(string Winner);
 
 public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEndpoint);

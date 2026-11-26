@@ -15,7 +15,8 @@ import {
   PartyJoin,
   PrepareDungeon,
   DungeonPrepared,
-  JoinDungeon, RunPhase
+  JoinDungeon,
+  RunPhase
 } from '../shared/messages';
 import { Player } from '../shared/player';
 import { PartyState } from './domain';
@@ -30,9 +31,7 @@ export class Party implements ZLinkSpot<Player> {
   async onActorJoin(id: string, payload: ZLinkMessage) {
     const request = payload.decode(PartyJoin);
     return {
-      accepted:
-        request.partyId === String(this.context.spotId) &&
-        this.state.join(id, request)
+      accepted: request.partyId === String(this.context.spotId) && this.state.join(id, request)
     };
   }
   async onJoinedActor(_actor: Player): Promise<void> {
@@ -52,14 +51,19 @@ export class Party implements ZLinkSpot<Player> {
     this.state.markReady(actor.context.actorId);
     await this.broadcast();
   }
-  async enter(actor: Player): Promise<void> { await this.enterPlayer(actor.context.actorId); }
+  async enter(actor: Player): Promise<void> {
+    await this.enterPlayer(actor.context.actorId);
+  }
   async enterPlayer(playerId: string): Promise<void> {
     const reason = this.state.enter(playerId);
     if (reason) {
       await this.actors.sendToActor(playerId, new ActionRejected(reason)).submit();
       return;
     }
-    if (this.state.phase === RunPhase.Active) { await this.actors.sendToActor(playerId, this.state.view()).submit(); return; }
+    if (this.state.phase === RunPhase.Active) {
+      await this.actors.sendToActor(playerId, this.state.view()).submit();
+      return;
+    }
     const runId = this.state.runId!;
     const dungeonId = Names.dungeonPrefix + runId;
     const result = await this.spots
@@ -72,13 +76,23 @@ export class Party implements ZLinkSpot<Player> {
     const prepared = await this.context.outbound
       .requestToSpot(dungeonId, new PrepareDungeon(runId, this.state.partyId, members))
       .submit<DungeonPrepared>();
-    if (prepared.dungeonId !== dungeonId || this.state.prepared(prepared.runId)) throw new Error('Dungeon preparation identity mismatch');
-    for (const id of members.filter(id => !this.state.entered.includes(id)))
+    if (prepared.dungeonId !== dungeonId || this.state.prepared(prepared.runId))
+      throw new Error('Dungeon preparation identity mismatch');
+    for (const id of members.filter((id) => !this.state.entered.includes(id)))
       await this.actors.sendToActor(id, new JoinDungeon(dungeonId, runId)).submit();
   }
-  arrived(runId: string, playerId: string): void { const reason = this.state.arrived(runId, playerId); if (reason) throw new Error(reason); }
-  started(runId: string): void { const reason = this.state.started(runId); if (reason) throw new Error(reason); }
-  completed(runId: string): void { const reason = this.state.completed(runId); if (reason) throw new Error(reason); }
+  arrived(runId: string, playerId: string): void {
+    const reason = this.state.arrived(runId, playerId);
+    if (reason) throw new Error(reason);
+  }
+  started(runId: string): void {
+    const reason = this.state.started(runId);
+    if (reason) throw new Error(reason);
+  }
+  completed(runId: string): void {
+    const reason = this.state.completed(runId);
+    if (reason) throw new Error(reason);
+  }
   capture(): Uint8Array {
     return Buffer.from(JSON.stringify(this.state));
   }

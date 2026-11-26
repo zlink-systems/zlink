@@ -12,7 +12,9 @@ public sealed class ZoneSpot(
     NodeSettings settings
 ) : IZLinkSpot<PlayerActor>
 {
-    public bool IsVisible(PlayerActor actor) => positions.TryState(actor.Context.ActorId, out var observer) && observer.Connected;
+    public bool IsVisible(PlayerActor actor) =>
+        positions.TryState(actor.Context.ActorId, out var observer) && observer.Connected;
+
     public IZLinkSpotContext Context { get; } = context;
 
     private readonly ZonePositionDomain positions = new(context.SpotId);
@@ -55,7 +57,10 @@ public sealed class ZoneSpot(
         );
     }
 
-    public async ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken)
+    public async ValueTask OnJoinedActorAsync(
+        PlayerActor actor,
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!positions.TryTakeArrival(actor.Context.ActorId, out var arrival))
@@ -179,34 +184,47 @@ public sealed class ZoneSpot(
         {
             if (
                 observerId == presence.PlayerId
-                || (presence.Kind != BorderPresenceKind.Left
-                    && Math.Abs(observer.Position.X - presence.Position.X) > GameNames.BorderRadius)
+                || (
+                    presence.Kind != BorderPresenceKind.Left
+                    && Math.Abs(observer.Position.X - presence.Position.X) > GameNames.BorderRadius
+                )
             )
                 continue;
             if (presence.Kind == BorderPresenceKind.Appeared)
             {
-                await actors.SendToActor(
-                    observerId,
-                    new PlayerAppeared(presence.PlayerId, presence.Position, Context.SpotId)
-                ).Async();
+                await actors
+                    .SendToActor(
+                        observerId,
+                        new PlayerAppeared(presence.PlayerId, presence.Position, Context.SpotId)
+                    )
+                    .Async();
             }
             else if (presence.Kind == BorderPresenceKind.Moved)
             {
-                await actors.SendToActor(
-                    observerId,
-                    new PlayerMoved(presence.PlayerId, presence.Position, presence.Sequence, Context.SpotId)
-                ).Async();
+                await actors
+                    .SendToActor(
+                        observerId,
+                        new PlayerMoved(
+                            presence.PlayerId,
+                            presence.Position,
+                            presence.Sequence,
+                            Context.SpotId
+                        )
+                    )
+                    .Async();
             }
             else if (presence.Kind == BorderPresenceKind.Left)
             {
-                await actors.SendToActor(
-                    observerId,
-                    new PlayerLeft(
-                        presence.PlayerId,
-                        presence.Reason ?? PlayerLeftReason.LeftZone
-                    , Context.SpotId
+                await actors
+                    .SendToActor(
+                        observerId,
+                        new PlayerLeft(
+                            presence.PlayerId,
+                            presence.Reason ?? PlayerLeftReason.LeftZone,
+                            Context.SpotId
+                        )
                     )
-                ).Async();
+                    .Async();
             }
             else
                 throw new InvalidDataException("Unknown border update.");
@@ -270,8 +288,10 @@ public sealed class ZoneSpot(
     private ValueTask SendWorldStateAsync(PlayerActor actor)
     {
         var state = positions.State(actor.Context.ActorId);
-        return actor.Context.BoundSession
-            .Send(new WorldState(Context.SpotId, settings.Id, state.Position.X, state.Sequence))
+        return actor
+            .Context.BoundSession.Send(
+                new WorldState(Context.SpotId, settings.Id, state.Position.X, state.Sequence)
+            )
             .Async();
     }
 }

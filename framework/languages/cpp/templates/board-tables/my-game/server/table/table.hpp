@@ -61,6 +61,13 @@ class Entry final : public fx::entry_spot_t<Player>
     {
         if (request.playerId != actor.context ().actor_id ().value ())
             throw std::invalid_argument ("Player identity differs from Actor");
+        if (request.reconnect) {
+            co_await actor.context ()
+              .bound_session ()
+              .send (ActionRejected{Rules::not_seated, 0})
+              .async ();
+            co_return;
+        }
         const auto created = co_await spots_.get_or_create (request.tableId, Names::table)
                                .in_mesh (Names::mesh)
                                .async ();
