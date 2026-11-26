@@ -34,6 +34,7 @@ export type ZLinkObjectCreationStore = Pick<
   | 'completeCreation'
   | 'abort'
   | 'releaseEndedReservation'
+  | 'cleanupAggregateInventory'
   | 'prepareAggregate'
   | 'commitAggregate'
   | 'abortAggregate'

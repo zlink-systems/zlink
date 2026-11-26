@@ -157,6 +157,7 @@ test('target commit fixes capture plus pre-boundary request counts, excluding Se
   const key = encodeAuthorityKey('actor', 'actor');
   const stage = {
     phase: 'ready',
+    lane: Promise.resolve(),
     cutoverReceived: true,
     offer: { prepare: { target: {} } },
     boundaryRelay: [1, 0].map((kind) => ({

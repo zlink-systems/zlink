@@ -152,6 +152,7 @@ function targetAtCutover(f, entries) {
   let authority = source;
   const stage = {
     phase: 'ready',
+    lane: Promise.resolve(),
     cutoverReceived: true,
     boundaryRelay: [],
     offer: { prepare: { target: {} }, reservation: { prepared: { fence: {}, plan: {} } } },

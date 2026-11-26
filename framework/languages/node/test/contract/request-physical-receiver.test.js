@@ -1,3 +1,4 @@
+const { relocationInventoryStore } = require('./fixtures/relocation-authority-store');
 const { sessionBindingControlPorts } = require('./fixtures/session-binding-control');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -3342,6 +3343,7 @@ for (const terminal of ['normal', 'hook-failure', 'cancel', 'deadline', 'shutdow
         },
         liveDescriptors: async () => [target],
         locationStore: () => ({
+          ...relocationInventoryStore(),
           readAuthority: async () => (targetCommitted ? targetAuthority : sourceAuthority),
           readOwnerLease: async () => ({
             kind: 'found',

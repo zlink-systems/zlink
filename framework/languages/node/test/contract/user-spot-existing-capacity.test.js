@@ -469,10 +469,9 @@ test('expired Ready authority protected by an aggregate never bypasses lease val
         expectedStoreVersion: snapshot.storeVersion,
         ownerTransition: 'preserve',
         authorityPayload: snapshot.payload,
-        membershipMutation: Buffer.alloc(0)
+        membershipMutation: Buffer.from('[]')
       }
     ],
-    inventoryDigest: Buffer.alloc(32, 9),
     targetDescriptor: snapshot.allocation.descriptor,
     targetDescriptorLifecycleGeneration: snapshot.allocation.descriptorLifecycleGeneration,
     targetOwner: { ownerId: snapshot.ownerId, leaseGeneration: snapshot.ownerLeaseGeneration },

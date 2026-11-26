@@ -1,5 +1,10 @@
-import { isDeepStrictEqual } from 'node:util';
-import { commitAuthorityRelocation, encodeAuthorityAggregate } from './authority-relocation-record';
+import { relocationAuthorityPayloadForTarget } from './relocation-authority-payload';
+import {
+  commitAuthorityRelocation,
+  isPreparedAuthorityRelocation,
+  sameAuthorityRelocationTarget,
+  encodeAuthorityAggregate
+} from './authority-relocation-record';
 import { sameAuthorityIncarnation, type ZLinkDiscardedAuthorityFence } from './lifecycle-runtime';
 import { routingIdsEqual } from '../routing-id';
 import {
@@ -878,11 +883,50 @@ export class ZLinkInMemoryAuthorityStore {
     validateAggregateRequest(request);
     const aggregateKey = aggregateRecordKey(request.aggregateId.value, request.aggregateGeneration);
     const existing = this.aggregates.get(aggregateKey);
+    const representative = request.participants.find(
+      ({ relocation }) => relocation?.target != null
+    );
+    const attempt = representative?.relocation?.target;
+    const fence: ZLinkAggregateFence = {
+      aggregateId: request.aggregateId,
+      aggregateGeneration: request.aggregateGeneration,
+      relocationAttempt:
+        attempt == null
+          ? undefined
+          : {
+              representative: representative!.authorityKey,
+              generation: attempt.attemptGeneration
+            }
+    };
     if (existing !== undefined) {
-      if (existing.state === 'prepared' && sameAggregateRequest(existing.request, request)) {
-        return { kind: 'alreadyPrepared', fence: existing.fence };
+      if (existing.state !== 'prepared' || !sameAggregateRequest(existing.request, request)) {
+        return existing.state === 'committed' ? { kind: 'stale' } : { kind: 'conflict' };
       }
-      return existing.state === 'committed' ? { kind: 'stale' } : { kind: 'conflict' };
+      if (attempt != null) {
+        const row = this.rows.get(representative!.authorityKey.value);
+        const actual = row?.snapshot.relocation;
+        if (
+          row === undefined ||
+          !isPreparedAuthorityRelocation(actual, request.aggregateId.value) ||
+          actual.target === null ||
+          !sameAuthorityRelocationTarget(actual.target, attempt)
+        )
+          return { kind: 'conflict' };
+        if (actual.target.attemptGeneration !== attempt.attemptGeneration) {
+          if (row.snapshot.storeVersion.value !== representative!.expectedStoreVersion.value)
+            return { kind: 'conflict' };
+          row.snapshot = {
+            ...row.snapshot,
+            storeVersion: version(++this.storeVersion),
+            relocation: {
+              ...actual,
+              target: { ...actual.target, attemptGeneration: attempt.attemptGeneration }
+            }
+          };
+          this.scanRevision++;
+        }
+      }
+      return { kind: 'alreadyPrepared', fence };
     }
     if (
       !this.validation.isTargetLive(
@@ -914,15 +958,16 @@ export class ZLinkInMemoryAuthorityStore {
       sourceCapacity = addCapacity(sourceCapacity, row.snapshot.allocation.capacity);
     }
     if (!sameCapacity(sourceCapacity, request.capacity)) return { kind: 'conflict' };
-    const fence: ZLinkAggregateFence = {
-      aggregateId: request.aggregateId,
-      aggregateGeneration: request.aggregateGeneration
-    };
     this.adjustCapacity(this.pendingCapacity, target, 1);
     for (const participant of request.participants) {
       if (participant.relocation !== undefined) {
         const row = this.rows.get(participant.authorityKey.value)!;
-        row.snapshot = { ...row.snapshot, relocation: structuredClone(participant.relocation) };
+        row.snapshot = {
+          ...row.snapshot,
+          storeVersion: version(++this.storeVersion),
+          relocation: structuredClone(participant.relocation)
+        };
+        this.scanRevision++;
       }
     }
     this.aggregates.set(aggregateKey, {
@@ -941,6 +986,19 @@ export class ZLinkInMemoryAuthorityStore {
     const key = aggregateRecordKey(fence.aggregateId.value, fence.aggregateGeneration);
     const aggregate = this.aggregates.get(key);
     if (aggregate === undefined) return { kind: 'stale' };
+    const representative = aggregate.fence.relocationAttempt?.representative;
+    const relocation =
+      representative === undefined
+        ? undefined
+        : this.rows.get(representative.value)?.snapshot.relocation;
+    if (
+      representative !== undefined &&
+      (fence.relocationAttempt?.representative.value !== representative.value ||
+        relocation?.relocationId !== fence.aggregateId.value ||
+        relocation.target?.attemptGeneration !== fence.relocationAttempt.generation)
+    ) {
+      return { kind: 'stale' };
+    }
     if (aggregate.state === 'committed') return { kind: 'alreadyCommitted' };
     if (aggregate.state !== 'prepared') return { kind: 'stale' };
     let versionsNeeded = 0n;
@@ -950,21 +1008,32 @@ export class ZLinkInMemoryAuthorityStore {
       readonly row: AuthorityRow;
       readonly changesOwner: boolean;
       readonly relocation: StoredSnapshot['relocation'];
+      readonly payload: Uint8Array;
     }> = [];
     for (const participant of aggregate.request.participants) {
       const row = this.rows.get(participant.authorityKey.value);
       if (
         row === undefined ||
         row.snapshot.allocation.state !== 'active' ||
-        row.snapshot.storeVersion.value !== participant.expectedStoreVersion.value
+        (participant.authorityKey.value !== representative?.value &&
+          row.snapshot.storeVersion.value !== participant.expectedStoreVersion.value)
       ) {
         return { kind: 'stale' };
       }
+      const membership = fence.actorMemberships?.get(participant.authorityKey.value);
+      const payload =
+        relocation === undefined && membership === undefined
+          ? participant.authorityPayload
+          : relocationAuthorityPayloadForTarget(participant.authorityPayload, membership, {
+              owner: aggregate.request.targetOwner,
+              meshName: aggregate.request.targetDescriptor.meshName,
+              nodeRid: aggregate.request.targetDescriptor.rid,
+              nodeGeneration: aggregate.request.targetDescriptorLifecycleGeneration,
+              objectGeneration: row.snapshot.objectGeneration
+            });
       const actor =
         row.snapshot.allocation.objectKind === 'actor'
-          ? decodeActorAuthorityPayload(
-              serviceRelocationAuthorityApplicationPayload(participant.authorityPayload)
-            )
+          ? decodeActorAuthorityPayload(serviceRelocationAuthorityApplicationPayload(payload))
           : undefined;
       if (actor?.currentSpotKind === ZLinkSpotKind.User) {
         const participantSpot = aggregate.request.participants.find(
@@ -1003,9 +1072,10 @@ export class ZLinkInMemoryAuthorityStore {
         participant,
         row,
         changesOwner: participant.ownerTransition === 'newOwner',
+        payload,
         relocation:
           commitAuthorityRelocation(
-            row.snapshot.relocation,
+            relocation,
             fence.aggregateId.value,
             fence.acceptedRequests?.get(participant.authorityKey.value)
           ) ?? row.snapshot.relocation
@@ -1017,12 +1087,12 @@ export class ZLinkInMemoryAuthorityStore {
     ) {
       return { kind: 'generationExhausted' };
     }
-    for (const { participant, row, changesOwner, relocation } of rows) {
+    for (const { row, changesOwner, relocation, payload } of rows) {
       const snapshot = {
         ...row.snapshot,
         storeVersion: version(++this.storeVersion),
         relocation,
-        payload: Buffer.from(participant.authorityPayload)
+        payload: Buffer.from(payload)
       };
       if (!changesOwner) {
         row.snapshot = snapshot;
@@ -1059,6 +1129,14 @@ export class ZLinkInMemoryAuthorityStore {
     const key = aggregateRecordKey(fence.aggregateId.value, fence.aggregateGeneration);
     const aggregate = this.aggregates.get(key);
     if (aggregate === undefined) return { kind: 'stale' };
+    const representative = aggregate.fence.relocationAttempt?.representative;
+    if (
+      representative !== undefined &&
+      (fence.relocationAttempt?.representative.value !== representative.value ||
+        this.rows.get(representative.value)?.snapshot.relocation?.target?.attemptGeneration !==
+          fence.relocationAttempt.generation)
+    )
+      return { kind: 'stale' };
     if (aggregate.state === 'aborted') return { kind: 'alreadyAborted' };
     if (aggregate.state !== 'prepared') return { kind: 'stale' };
     this.adjustCapacity(this.pendingCapacity, aggregateTargetAllocation(aggregate.request), -1);
@@ -1312,9 +1390,6 @@ function validateAggregateRequest(request: ZLinkAggregatePrepareRequest): void {
   if (request.aggregateGeneration < 1n || request.participants.length < 1) {
     throw new RangeError('Aggregate generation and participant count are invalid.');
   }
-  if (request.inventoryDigest.byteLength !== SHA256_DIGEST_BYTES) {
-    throw new TypeError(`Aggregate inventory digest must contain ${SHA256_DIGEST_BYTES} bytes.`);
-  }
   validateCapacityVector(request.capacity);
   for (const participant of request.participants) {
     if (participant.relocation !== undefined)
@@ -1542,7 +1617,7 @@ function sameAggregateRequest(
     left.aggregateId.value !== right.aggregateId.value ||
     left.aggregateGeneration !== right.aggregateGeneration ||
     !sameOwner(left.targetOwner, right.targetOwner) ||
-    !Buffer.from(left.inventoryDigest).equals(Buffer.from(right.inventoryDigest)) ||
+    left.sealedInventoryDigest !== right.sealedInventoryDigest ||
     left.participants.length !== right.participants.length ||
     !sameDescriptor(left.targetDescriptor, right.targetDescriptor) ||
     left.targetDescriptorLifecycleGeneration !== right.targetDescriptorLifecycleGeneration ||
@@ -1554,9 +1629,10 @@ function sameAggregateRequest(
     const other = right.participants[index]!;
     return (
       participant.authorityKey.value === other.authorityKey.value &&
-      participant.expectedStoreVersion.value === other.expectedStoreVersion.value &&
+      (participant.relocation !== undefined ||
+        participant.expectedStoreVersion.value === other.expectedStoreVersion.value) &&
       participant.ownerTransition === other.ownerTransition &&
-      isDeepStrictEqual(participant.relocation, other.relocation) &&
+      (participant.relocation === undefined) === (other.relocation === undefined) &&
       Buffer.from(participant.authorityPayload).equals(Buffer.from(other.authorityPayload)) &&
       Buffer.from(participant.membershipMutation).equals(Buffer.from(other.membershipMutation))
     );
@@ -1572,7 +1648,6 @@ function cloneAggregateRequest(
     targetOwner: { ...request.targetOwner },
     targetDescriptor: { ...request.targetDescriptor },
     capacity: cloneCapacity(request.capacity),
-    inventoryDigest: Buffer.from(request.inventoryDigest),
     participants: request.participants.map((participant) => ({
       ...participant,
       authorityKey: { ...participant.authorityKey },

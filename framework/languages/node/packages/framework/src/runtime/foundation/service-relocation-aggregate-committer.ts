@@ -7,10 +7,12 @@ import type {
   ZLinkAuthoritySnapshot,
   ZLinkCapacityVector,
   ZLinkLocationOwnerToken,
-  ZLinkMeshNodeDescriptorKey
+  ZLinkMeshNodeDescriptorKey,
+  ZLinkRelocationActorMembership
 } from '../locations/internal-location-contracts';
 import type { ZLinkObjectCreationStore } from '../locations/internal-store-contracts';
-import { inventoryDigest, type ServiceRelocationEnvelope } from './service-relocation-runtime';
+import { compareInventoryAuthorityKeys } from '../locations/aggregate-inventory-store';
+import type { ServiceRelocationEnvelope } from './service-relocation-runtime';
 
 export interface ServiceRelocationAggregateParticipantPlan {
   readonly key: ZLinkAuthorityKey;
@@ -23,6 +25,8 @@ export interface ServiceRelocationAggregateParticipantPlan {
 
 export interface ServiceRelocationAggregatePlan {
   readonly envelope: ServiceRelocationEnvelope;
+  readonly sealedInventoryDigest?: string;
+  readonly actorMemberships?: ReadonlyMap<string, ZLinkRelocationActorMembership>;
   readonly participants: readonly ServiceRelocationAggregateParticipantPlan[];
   readonly targetDescriptor: ZLinkMeshNodeDescriptorKey;
   readonly targetDescriptorLifecycleGeneration: bigint;
@@ -53,10 +57,7 @@ export class ServiceRelocationAggregateCommitter {
       aggregateId,
       aggregateGeneration: plan.envelope.aggregateGeneration,
       participants,
-      inventoryDigest: Buffer.from(
-        inventoryDigest(plan.envelope.participants, plan.envelope.memberships),
-        'hex'
-      ),
+      sealedInventoryDigest: plan.sealedInventoryDigest,
       targetDescriptor: plan.targetDescriptor,
       targetDescriptorLifecycleGeneration: plan.targetDescriptorLifecycleGeneration,
       capacity: plan.capacity,
@@ -72,12 +73,16 @@ export class ServiceRelocationAggregateCommitter {
     ) {
       throw new Error('Location Store returned a different relocation aggregate fence.');
     }
-    return { fence: result.fence, plan };
+    return { fence: { ...result.fence, actorMemberships: plan.actorMemberships }, plan };
   }
 
   async abort(prepared: ServicePreparedRelocationAggregate, signal?: AbortSignal): Promise<void> {
     const result = await this.store.abortAggregate(prepared.fence, signal);
-    if (result.kind !== 'aborted' && result.kind !== 'alreadyAborted') {
+    if (
+      result.kind !== 'aborted' &&
+      result.kind !== 'alreadyAborted' &&
+      prepared.fence.relocationAttempt === undefined
+    ) {
       throw new Error(`Location Store rejected relocation aggregate abort: ${result.kind}.`);
     }
   }
@@ -88,7 +93,7 @@ function validateAndEncodeParticipants(
 ): readonly ZLinkAggregateParticipant[] {
   const envelopeByKey = new Map(plan.envelope.participants.map((value) => [value.key, value]));
   const ordered = [...plan.participants].sort((left, right) =>
-    left.key.value.localeCompare(right.key.value)
+    compareInventoryAuthorityKeys(left.key.value, right.key.value)
   );
   if (
     ordered.length !== plan.envelope.participants.length ||

@@ -57,7 +57,20 @@ function fixture() {
     requestPeerReconcile: async (mesh, peer) => { events.push('reconcile'); requested.resolve(); }
   });
   runtime.targetAssemblies.set('attempt', { assembly: { fail() {}, payload: async () => encodeServiceRelocationEnvelope(envelope, 1n) } });
-  runtime.resolveTargetParticipantInventory = async (_mesh, _request, decoded) => ({ ...decoded, participants: decoded.participants.map(p => ({ ...p, key: 'zla1:a:1:a', objectKind: 'actor', objectGeneration: 5n, authorityOwnerGeneration: 11n })) });
+  runtime.resolveTargetParticipantInventory = async (_mesh, _request, decoded) => ({
+    envelope: {
+      ...decoded,
+      participants: decoded.participants.map((p) => ({
+        ...p,
+        key: 'zla1:a:1:a',
+        objectKind: 'actor',
+        objectGeneration: 5n,
+        authorityOwnerGeneration: 11n
+      }))
+    },
+    entries: [],
+    digest: '0'.repeat(64)
+  });
   runtime.materializeTargetEnvelope = async () => ({ owner: {
     async restoreSavedWork() { restored.resolve(); },
     async abort() { events.push('abort'); }

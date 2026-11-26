@@ -4,7 +4,6 @@ import {
 } from '../framework-errors-internal';
 import { encodeActorReply } from '../actors/actor-reply';
 import { ZLinkStreamMessageKind } from '../streams/protocol';
-import { createHash } from 'node:crypto';
 import {
   type ActorRef,
   type RoutingId,
@@ -21,7 +20,6 @@ import {
 import type { Message } from '../../contracts/Common/Message';
 import {
   createDeferredJoinCompletion,
-  rewriteActorAuthorityRoute,
   toFrameworkActorRef,
   type ZLinkActorHandoffCoordinator,
   type ZLinkActorHandoffPrefixAdmission,
@@ -1116,37 +1114,18 @@ export class ZLinkActorTransferRuntime {
         `Actor '${actor.context.actorId}' relocation source authority is stale at the target.`
       );
     }
-    const membershipMutation = Buffer.from(
-      JSON.stringify({
-        actorId: actor.context.actorId,
-        actorGeneration: targetActorRef.objectGeneration.toString(),
-        spotId: String(spotId),
-        spotGeneration: spotGeneration.toString(),
-        membershipEpoch: membershipEpoch.toString()
-      }),
-      'utf8'
-    );
     const request = {
       aggregateId: { value: transferId } as ZLinkAggregateId,
-      aggregateGeneration: local.lifecycleGeneration,
+      aggregateGeneration: 1n,
       participants: [
         {
           authorityKey: key,
           expectedStoreVersion: expected.storeVersion,
           ownerTransition: 'newOwner' as const,
-          authorityPayload: rewriteActorAuthorityRoute(
-            expected.payload,
-            targetActorRef,
-            String(spotId),
-            spotGeneration,
-            ZLinkSpotKind.User,
-            local.lifecycleGeneration,
-            owner
-          ),
-          membershipMutation
+          authorityPayload: expected.payload,
+          membershipMutation: Buffer.from('[]')
         }
       ],
-      inventoryDigest: createHash('sha256').update(membershipMutation).digest(),
       targetDescriptor: {
         meshName: actor.context.meshName,
         rid: local.routingId
@@ -1181,12 +1160,30 @@ export class ZLinkActorTransferRuntime {
       signal?.throwIfAborted();
       let committed: Awaited<ReturnType<typeof store.commitAggregate>> | undefined;
       try {
-        committed = await store.commitAggregate(prepared.fence, signal);
+        committed = await store.commitAggregate(
+          {
+            ...prepared.fence,
+            actorMemberships: new Map([
+              [
+                key.value,
+                {
+                  actorSpotId: String(spotId),
+                  actorSpotGeneration: spotGeneration,
+                  actorSpotKind: ZLinkSpotKind.User
+                }
+              ]
+            ])
+          },
+          signal
+        );
       } catch (error) {
         firstError ??= error;
       }
       const observed = await this.readActorAuthorityForRelocation(store, key, signal);
-      if (observed !== undefined && exactTarget(observed)) return adopt(observed);
+      if (observed !== undefined && exactTarget(observed)) {
+        await store.cleanupAggregateInventory?.(prepared.fence, signal);
+        return adopt(observed);
+      }
       if (
         committed?.kind === 'stale' ||
         committed?.kind === 'generationExhausted' ||

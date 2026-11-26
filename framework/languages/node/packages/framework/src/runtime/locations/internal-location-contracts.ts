@@ -60,13 +60,28 @@ export type ZLinkAggregateParticipant = AuthorityContract.ZLinkAggregateParticip
 };
 export type ZLinkAggregatePrepareRequest = Omit<
   AuthorityContract.ZLinkAggregatePrepareRequest,
-  'participants'
-> & { readonly participants: readonly ZLinkAggregateParticipant[] };
+  'participants' | 'inventoryDigest'
+> & {
+  readonly participants: readonly ZLinkAggregateParticipant[];
+  readonly sealedInventoryDigest?: string;
+};
 
 /** Target boundary counts are installed in the owner commit, never a later phase write. */
 export type ZLinkAggregateFence = AuthorityContract.ZLinkAggregateFence & {
+  readonly relocationAttempt?: {
+    readonly representative: AuthorityContract.ZLinkAuthorityKey;
+    readonly generation: bigint;
+  };
+  readonly actorMemberships?: ReadonlyMap<string, ZLinkRelocationActorMembership>;
   readonly acceptedRequests?: ReadonlyMap<string, bigint>;
 };
+
+export interface ZLinkRelocationActorMembership {
+  readonly actorSpotId: string;
+  readonly actorSpotGeneration: bigint;
+  readonly actorSpotKind:
+    import('../../contracts').ZLinkSpotKind.Entry | import('../../contracts').ZLinkSpotKind.User;
+}
 
 export type ZLinkAuthorityScanResult =
   | { readonly kind: 'scanExpired' }

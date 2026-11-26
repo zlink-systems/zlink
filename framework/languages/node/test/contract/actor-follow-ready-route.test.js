@@ -1,3 +1,4 @@
+const { relocationInventoryStore } = require('./fixtures/relocation-authority-store');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
@@ -118,6 +119,7 @@ for (const operation of ['join', 'user_spot']) {
         { rid: 'target', lifecycleGeneration: 11n, applicationVersion: 1n }
       ],
       locationStore: () => ({
+        ...relocationInventoryStore(),
         async readAuthority(key) {
           if (authorityRows.has(key.value)) return authorityRows.get(key.value);
           const row =

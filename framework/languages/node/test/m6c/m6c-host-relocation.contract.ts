@@ -1,3 +1,4 @@
+import { relocationAuthorityPayloadForTarget } from '../../packages/framework/src/runtime/locations/relocation-authority-payload';
 import {
   commitAuthorityRelocation,
   encodeAuthorityAggregate
@@ -36,6 +37,8 @@ import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
 import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import { ZLinkInMemoryLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-location-store';
+import { ZLinkAggregateInventoryStore } from '../../packages/framework/src/runtime/locations/aggregate-inventory-store';
+import { ZLinkInMemoryProviderLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
 import {
   createServiceRelocationId,
   decodeQueuedHandoffPacket,
@@ -1053,6 +1056,8 @@ function targetCasFixture() {
           envelope
         },
         // Only a verified cutover lets the target submit its CAS (spec 28 §4.4).
+        phase: 'finalizing',
+        lane: Promise.resolve(),
         cutoverReceived: true,
         boundaryRelay: [],
         staging: { primaryAuthorityKey: actorKey, envelope, hidden: new Map() }
@@ -1551,9 +1556,6 @@ for (const scenario of ['held', 'rejected', 'successful'] as const) {
 }
 
 test('target-ready application authority contains no relocation publication', () => {
-  const runtime = new ZLinkHostServiceRelocationRuntime({
-    requests: fixtureRequestRuntime()
-  } as never);
   const sourceAuthority = encodeActorAuthorityIdentity({
     actorType: 'Player',
     actor: {
@@ -1572,13 +1574,13 @@ test('target-ready application authority contains no relocation publication', ()
     spotGeneration: coordinator.nodeGeneration,
     spotKind: ZLinkSpotKind.Entry
   });
-  const projected = (
-    runtime as unknown as {
-      authorityPayloadForTarget(payload: Uint8Array, target: unknown): Uint8Array;
-    }
-  ).authorityPayloadForTarget(
+  const projected = relocationAuthorityPayloadForTarget(
     sourceAuthority,
-
+    {
+      actorSpotId: 'target-entry',
+      actorSpotGeneration: target.nodeGeneration,
+      actorSpotKind: ZLinkSpotKind.Entry
+    },
     {
       owner: {
         ownerId: target.ownerId,
@@ -1587,10 +1589,7 @@ test('target-ready application authority contains no relocation publication', ()
       meshName: 'mesh-a',
       nodeRid: target.nodeRid,
       nodeGeneration: target.nodeGeneration,
-      objectGeneration: object.objectGeneration,
-      actorSpotId: 'target-entry',
-      actorSpotGeneration: target.nodeGeneration,
-      actorSpotKind: ZLinkSpotKind.Entry
+      objectGeneration: object.objectGeneration
     }
   );
   assert.equal(new LegacyRelocationAuthorityFixture().read(projected), undefined);
@@ -4197,7 +4196,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       const wire = {
         kind: 'cutover',
         relocation: { high: 0n, low: 145n },
-        targetAttemptGeneration: 6n,
+        targetAttemptGeneration: 1n,
         coordinator,
         senderRole: 'source',
         object: {
@@ -4271,6 +4270,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
 }
 
 function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[]) {
+  const inventory = new ZLinkAggregateInventoryStore(new ZLinkInMemoryProviderLocationStore());
   let current = initial;
   let removed = false;
   let prepared: any;
@@ -4291,6 +4291,14 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
     },
     get preserves() {
       return preserves;
+    },
+    storeAggregateInventory: inventory.store.bind(inventory),
+    readAggregateInventory(
+      fence: Parameters<typeof inventory.read>[0],
+      digest: string,
+      signal?: AbortSignal
+    ) {
+      return inventory.read(fence, Buffer.from(digest, 'hex'), signal);
     },
     async readAuthority() {
       return removed ? { kind: 'missing' as const, storeNow: new Date() } : current;

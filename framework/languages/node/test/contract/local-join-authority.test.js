@@ -835,17 +835,43 @@ for (const membership of [
             : primary.objectGeneration
       });
     }
+    const primaryKey = encodeAuthorityKey('user_spot', 'table').value;
+    const actorKey = encodeAuthorityKey('actor', 'player').value;
+    const aggregateId = '12345678-1234-4123-8123-123456789abc';
+    const aggregateHex = aggregateId.replaceAll('-', '');
+    const wireRelocation = {
+      high: BigInt(`0x${aggregateHex.slice(0, 16)}`),
+      low: BigInt(`0x${aggregateHex.slice(16)}`)
+    };
+    const relocation = {
+      relocationId: aggregateId,
+      phase: 'captured',
+      sourceInventorySha256: '1'.repeat(64),
+      coordinator: { expectedStoreVersion: primary.storeVersion.value }
+    };
     const runtime = new ZLinkHostServiceRelocationRuntime({
       spotManager: () => ({}),
       locationStore: () => ({
-        async readAuthority() {
-          return primary;
+        async readAuthority(key) {
+          return key.value === primaryKey ? { ...primary, relocation } : f.snapshot;
         },
-        async listAuthorities() {
-          return {
-            kind: 'page',
-            items: [{ key: encodeAuthorityKey('actor', 'player'), snapshot: f.snapshot }]
-          };
+        async readAggregateInventory() {
+          return [
+            ...(membership === 'current' || membership === 'stale root incarnation'
+              ? [
+                  {
+                    authorityKey: actorKey,
+                    ownerTransition: 'newOwner',
+                    expectedStoreVersion: f.snapshot.storeVersion.value
+                  }
+                ]
+              : []),
+            {
+              authorityKey: primaryKey,
+              ownerTransition: 'newOwner',
+              expectedStoreVersion: primary.storeVersion.value
+            }
+          ];
         }
       })
     });
@@ -863,12 +889,13 @@ for (const membership of [
       runtime.resolveTargetParticipantInventory(
         'play',
         {
+          relocation: wireRelocation,
           object: { kind: 'userSpot', spotId: 'table', objectGeneration: primary.objectGeneration }
         },
-        { participants: [{ participantId: 1n }, root] }
+        { aggregateId, aggregateGeneration: 1n, participants: [{ participantId: 1n }, root] }
       );
     if (membership === 'current') {
-      const result = await resolve();
+      const { envelope: result } = await resolve();
       assert.equal(result.participants.length, 2);
       assert.equal(result.memberships.length, 1);
       assert.equal(result.memberships[0].spotObjectGeneration, primary.objectGeneration);
@@ -1218,10 +1245,9 @@ async function membershipFailureFixture(backend) {
             expectedStoreVersion: spot.storeVersion,
             ownerTransition: 'newOwner',
             authorityPayload: spot.payload,
-            membershipMutation: Buffer.alloc(0)
+            membershipMutation: Buffer.from('[]')
           }
         ],
-        inventoryDigest: Buffer.alloc(32, 7),
         targetDescriptor: { meshName: 'play', rid: targets.actor.nodeRid },
         targetDescriptorLifecycleGeneration: 7n,
         targetOwner: targets.actor.owner,

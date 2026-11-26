@@ -47,26 +47,27 @@ async function prepareRelocation(store, sourceOwner, targetOwner, acceptedReques
     ownerId: node.owner.ownerId,
     ownerLeaseGeneration: node.owner.leaseGeneration
   });
-  for (const participant of request.participants) {
-    participant.relocation = {
-      relocationId: id.value,
-      phase: 'prepared',
-      source: nodeFence(source),
-      target: { ...nodeFence(target), attemptGeneration: 3n },
-      coordinator: { ...nodeFence(source), expectedStoreVersion: snapshots[0].storeVersion.value },
-      sourceInventorySha256: 'ab'.repeat(32),
-      applicationVersion: 1n
-    };
-  }
+  const relocation = {
+    relocationId: id.value,
+    phase: 'prepared',
+    source: nodeFence(source),
+    target: { ...nodeFence(target), attemptGeneration: 3n },
+    coordinator: { ...nodeFence(source), expectedStoreVersion: snapshots[0].storeVersion.value },
+    sourceInventorySha256: 'ab'.repeat(32),
+    applicationVersion: 1n
+  };
+  const [first, member] = request.participants;
+  first.relocation = relocation;
   const prepared = await store.prepareAggregate(request);
   assert.equal(prepared.kind, 'prepared');
-  const [first] = request.participants;
+  assert.equal((await store.readAuthority(member.authorityKey)).relocation, undefined);
   const before = await store.readAuthority(first.authorityKey);
   assert.equal(before.ownerId, sourceOwner.ownerId);
   assert.equal(before.relocation.phase, 'prepared');
   assert.equal(before.relocation.completion, undefined);
   return {
     participants: request.participants,
+    relocation,
     targetOwner,
     fence: {
       ...prepared.fence,
@@ -75,12 +76,12 @@ async function prepareRelocation(store, sourceOwner, targetOwner, acceptedReques
   };
 }
 
-function assertCommitted(authority, participant, acceptedRequests, targetOwner) {
+function assertCommitted(authority, participant, relocation, acceptedRequests, targetOwner) {
   assert.equal(authority.ownerId, targetOwner.ownerId);
   assert.equal(authority.ownerLeaseGeneration, targetOwner.leaseGeneration);
   assert.equal(authority.relocation.phase, 'committed');
   assert.deepEqual(authority.relocation, {
-    ...participant.relocation,
+    ...relocation,
     phase: 'committed',
     completion: {
       acceptedRequests,
@@ -98,6 +99,7 @@ async function assertCommittedParticipants(store, prepared) {
     assertCommitted(
       await store.readAuthority(participant.authorityKey),
       participant,
+      prepared.relocation,
       prepared.fence.acceptedRequests.get(participant.authorityKey.value) ?? 0n,
       prepared.targetOwner
     );
@@ -169,6 +171,7 @@ test('provider relocation publishes the committed record before materialization'
     assertCommitted(
       atPublish[index],
       participant,
+      prepared.relocation,
       prepared.fence.acceptedRequests.get(participant.authorityKey.value) ?? 0n,
       prepared.targetOwner
     );
@@ -198,7 +201,13 @@ for (const backing of ['repository', 'in-memory']) {
     const [participant] = prepared.participants;
     const key = participant.authorityKey;
     assert.equal((await store.commitAggregate(prepared.fence)).kind, 'committed');
-    assertCommitted(await store.readAuthority(key), participant, 9n, targetOwner.token);
+    assertCommitted(
+      await store.readAuthority(key),
+      participant,
+      prepared.relocation,
+      9n,
+      targetOwner.token
+    );
     assert.equal(
       (
         await store.commitAggregate({

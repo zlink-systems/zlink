@@ -100,7 +100,6 @@ function aggregateRequest(
     aggregateId,
     aggregateGeneration: generation,
     participants,
-    inventoryDigest: Buffer.alloc(32, 9),
     targetDescriptor: {
       meshName: target.meshName,
       rid: target.nodeRid

@@ -415,7 +415,7 @@ test('redis Location Store persists and validates a 10,100-participant inventory
   const inventory = new frameworkInternal.ZLinkAggregateInventoryStore(store);
   const aggregateId = '33333333-3333-4333-8333-333333333333';
   const participants = Array.from({ length: 10_100 }, (_, index) => ({
-    authorityKey: key(`actor:${index.toString().padStart(5, '0')}`),
+    authorityKey: encodeAuthorityKey('actor', index.toString().padStart(5, '0')),
     expectedStoreVersion: version(`version-${index}`),
     ownerTransition: 'newOwner',
     authorityPayload: Buffer.from(`authority-${index}`),
@@ -425,7 +425,6 @@ test('redis Location Store persists and validates a 10,100-participant inventory
     aggregateId: { value: aggregateId },
     aggregateGeneration: 1n,
     participants,
-    inventoryDigest: Buffer.alloc(32, 7),
     targetDescriptor: { meshName: 'play', rid: 'node-b' },
     targetDescriptorLifecycleGeneration: 2n,
     capacity: {
@@ -437,17 +436,17 @@ test('redis Location Store persists and validates a 10,100-participant inventory
   };
 
   try {
-    await inventory.store(request);
+    const digest = Buffer.from(await inventory.store(request), 'hex');
     const restored = await inventory.read(
       {
         aggregateId: request.aggregateId,
         aggregateGeneration: request.aggregateGeneration
       },
-      request.inventoryDigest
+      digest
     );
     assert.equal(restored.length, 10_100);
-    assert.equal(restored[0].authorityKey, 'actor:00000');
-    assert.equal(restored[10_099].authorityKey, 'actor:10099');
+    assert.equal(restored[0].authorityKey, 'zla1:a:5:00000');
+    assert.equal(restored[10_099].authorityKey, 'zla1:a:5:10099');
 
     const logicalPrefix =
       `zlink:v11:aggregate-inventory:${aggregateId}:1:`;
@@ -493,7 +492,7 @@ test('redis Location Store persists and validates a 10,100-participant inventory
           aggregateId: request.aggregateId,
           aggregateGeneration: request.aggregateGeneration
         },
-        request.inventoryDigest
+        digest
       ),
       /checksum|Invalid inventory page/
     );
@@ -1736,13 +1735,15 @@ function aggregateCommitterPlan(aggregateId, snapshot, spotId, target) {
       }],
       memberships: []
     },
-    participants: [{
-      key,
-      expected: snapshot,
-      ownerTransition: 'newOwner',
-      authorityPayload: Buffer.from(`relocated-${spotId}`),
-      membershipMutation: Buffer.alloc(0)
-    }],
+    participants: [
+      {
+        key,
+        expected: snapshot,
+        ownerTransition: 'newOwner',
+        authorityPayload: Buffer.from(`relocated-${spotId}`),
+        membershipMutation: Buffer.from('[]')
+      }
+    ],
     targetDescriptor: { meshName: target.meshName, rid: target.nodeRid },
     targetDescriptorLifecycleGeneration: target.nodeLifecycleGeneration,
     capacity: userSpotCapacity(1),

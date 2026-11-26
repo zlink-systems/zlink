@@ -56,6 +56,18 @@ export function isPreparedAuthorityRelocation(
   return relocation?.relocationId === aggregateId && relocation.phase === 'prepared';
 }
 
+export function sameAuthorityRelocationTarget(
+  left: NonNullable<AuthorityRelocation['target']>,
+  right: NonNullable<AuthorityRelocation['target']>
+): boolean {
+  return (
+    left.nodeRid === right.nodeRid &&
+    left.nodeGeneration === right.nodeGeneration &&
+    left.ownerId === right.ownerId &&
+    left.ownerLeaseGeneration === right.ownerLeaseGeneration
+  );
+}
+
 export function commitAuthorityRelocation(
   relocation: AuthorityRelocation | undefined,
   aggregateId: string,
