@@ -3,14 +3,22 @@ package systems.zlink.framework.runtime.internal.spots;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+import systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.spots.SpotHandle;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
+import java.util.function.BiFunction;
+import java.util.function.LongSupplier;
 
 public interface SpotTransportAddressResolver {
     default CompletionStage<Optional<SpotTransportAddress>> resolve(SpotHandle handle) {
@@ -50,6 +58,52 @@ public interface SpotTransportAddressResolver {
                     throw ZLinkFrameworkErrorOrigin.framework(
                             ZLinkFrameworkErrorKind.NOT_FOUND,
                             "SpotHandle route is stale or unavailable");
+                });
+    }
+
+    static <T> void request(
+            SpotTransportAddressResolver resolver,
+            String spotId,
+            boolean instanceIntent,
+            Duration timeout,
+            LongSupplier nanoTime,
+            ZLinkServiceOperationRegistry operations,
+            CompletableFuture<T> result,
+            BiFunction<SpotTransportAddress, Duration, CompletionStage<T>> submit) {
+        long deadline = nanoTime.getAsLong() + timeout.toNanos();
+        var flow = ZLinkFlowContext.current();
+        var resolution = resolveForCall(resolver, spotId, instanceIntent).toCompletableFuture();
+        // An asynchronous lookup uses the existing deadline index until transport takes ownership.
+        var lookup =
+                resolution.isDone() || operations == null
+                        ? resolution
+                        : operations.submitUntil(
+                                ZLinkServiceOperationIds.next(),
+                                deadline,
+                                () -> resolution,
+                                ignored -> {});
+        if (lookup != resolution) ZLinkCompletionBridge.forwardCancellation(result, lookup);
+        lookup.whenComplete(
+                (address, failure) -> {
+                    if (result.isDone()) return;
+                    if (failure != null) {
+                        result.completeExceptionally(failure);
+                        return;
+                    }
+                    try {
+                        Duration remaining =
+                                ZLinkRequestCalls.remainingUntil(deadline, nanoTime.getAsLong());
+                        var submitted =
+                                ZLinkFlowContext.call(flow, () -> submit.apply(address, remaining));
+                        ZLinkCompletionBridge.forwardCancellation(result, submitted);
+                        submitted.whenComplete(
+                                (value, error) -> {
+                                    if (error == null) result.complete(value);
+                                    else result.completeExceptionally(error);
+                                });
+                    } catch (RuntimeException | Error error) {
+                        result.completeExceptionally(error);
+                    }
                 });
     }
 
