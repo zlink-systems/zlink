@@ -3,5 +3,19 @@
     <target>System.err</target>
     <encoder><pattern>%date %-5level %logger - %msg%n</pattern></encoder>
   </appender>
+  <condition class="ch.qos.logback.core.boolex.IsPropertyDefinedCondition">
+    <key>MyGame.flowFile</key>
+  </condition>
+  <if>
+    <then>
+      <appender name="FLOW" class="ch.qos.logback.core.FileAppender">
+        <file>${MyGame.flowFile}</file>
+        <encoder><pattern>%date %msg%n</pattern></encoder>
+      </appender>
+      <logger name="systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer" additivity="false" level="INFO">
+        <appender-ref ref="FLOW"/>
+      </logger>
+    </then>
+  </if>
   <root level="INFO"><appender-ref ref="STDERR"/></root>
 </configuration>

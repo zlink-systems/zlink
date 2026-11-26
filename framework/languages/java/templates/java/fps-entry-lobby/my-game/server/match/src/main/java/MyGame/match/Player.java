@@ -19,9 +19,12 @@ public final class Player implements ZLinkActor {
 
     public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
         return switch (completion) {
-            case ZLinkActorJoinCompletion.Accepted accepted -> CompletableFuture.completedFuture(null);
+            case ZLinkActorJoinCompletion.Accepted accepted ->
+                    CompletableFuture.completedFuture(null);
             case ZLinkActorJoinCompletion.Rejected rejected ->
-                    context.boundSession().send(new MyGame.ActionRejected(Rejection.ADMISSION_REJECTED)).submit();
+                    context.boundSession()
+                            .send(new MyGame.ActionRejected(Rejection.ADMISSION_REJECTED))
+                            .submit();
             case ZLinkActorJoinCompletion.Failed failed ->
                     CompletableFuture.failedFuture(
                             new IllegalStateException("Join failed: " + failed.kind()));

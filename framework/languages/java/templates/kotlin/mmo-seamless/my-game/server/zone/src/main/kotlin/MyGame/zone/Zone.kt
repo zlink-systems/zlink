@@ -14,7 +14,8 @@ class Zone(
     private val config: NodeConfig,
     private val actors: ZLinkActorClient,
 ) : ZLinkSuspendingSpot<Player>() {
-    fun isVisible(actor: Player): Boolean = positions.tryState(actor.context.actorId())?.connected == true
+    fun isVisible(actor: Player): Boolean =
+        positions.tryState(actor.context.actorId())?.connected == true
 
     val positions = ZonePositionDomain(context.spotId())
     private val adjacent by lazy { Rules.adjacentZones(context.spotId()) }
@@ -32,21 +33,18 @@ class Zone(
         if (rejection != null) return ZLinkSpotActorJoinResult.reject(ZLinkMessage.of(rejection))
         return ZLinkSpotActorJoinResult.accept(
             ZLinkMessage.of(
-                WorldState(
-                    context.spotId(),
-                    config.id,
-                    arrival.position.x,
-                    arrival.sequence,
-                )
+                WorldState(context.spotId(), config.id, arrival.position.x, arrival.sequence)
             )
         )
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {
+        println("EVENT Zone joined: ${context.spotId()}")
         val actorId = actor.context.actorId()
-        val arrival = requireNotNull(positions.takeArrival(actorId)) {
-            "Zone admission has no movement intent"
-        }
+        val arrival =
+            requireNotNull(positions.takeArrival(actorId)) {
+                "Zone admission has no movement intent"
+            }
         positions.addPlayer(actorId, arrival)
         publishLocal(actorId, PlayerAppeared(actorId, arrival.position, context.spotId()))
         if (positions.isInBorder(arrival.position))
@@ -76,7 +74,12 @@ class Zone(
         if (!previous.connected) {
             publishLocal(actorId, PlayerAppeared(actorId, current.position, context.spotId()))
             if (positions.isInBorder(current.position))
-                publishBorder(actorId, current.position, current.sequence, BorderPresenceKind.APPEARED)
+                publishBorder(
+                    actorId,
+                    current.position,
+                    current.sequence,
+                    BorderPresenceKind.APPEARED,
+                )
         }
         sendWorldState(actor)
     }
@@ -95,7 +98,10 @@ class Zone(
             )
             return
         }
-        publishLocal(actorId, PlayerMoved(actorId, movement.position, movement.sequence, context.spotId()))
+        publishLocal(
+            actorId,
+            PlayerMoved(actorId, movement.position, movement.sequence, context.spotId()),
+        )
         movement.borderKind?.let { kind ->
             publishBorder(
                 actorId,
@@ -113,21 +119,30 @@ class Zone(
             if (
                 observerId == presence.playerId ||
                     (presence.kind != BorderPresenceKind.LEFT &&
-                        kotlin.math.abs(observer.position.x - presence.position.x) > Rules.BORDER_RADIUS)
+                        kotlin.math.abs(observer.position.x - presence.position.x) >
+                            Rules.BORDER_RADIUS)
             )
                 continue
             when (presence.kind) {
                 BorderPresenceKind.APPEARED ->
                     actors
                         .kotlin()
-                        .sendToActor(observerId, PlayerAppeared(presence.playerId, presence.position, context.spotId()))
+                        .sendToActor(
+                            observerId,
+                            PlayerAppeared(presence.playerId, presence.position, context.spotId()),
+                        )
                         .await()
                 BorderPresenceKind.MOVED ->
                     actors
                         .kotlin()
                         .sendToActor(
                             observerId,
-                            PlayerMoved(presence.playerId, presence.position, presence.sequence, context.spotId()),
+                            PlayerMoved(
+                                presence.playerId,
+                                presence.position,
+                                presence.sequence,
+                                context.spotId(),
+                            ),
                         )
                         .await()
                 BorderPresenceKind.LEFT ->
@@ -135,7 +150,11 @@ class Zone(
                         .kotlin()
                         .sendToActor(
                             observerId,
-                            PlayerLeft(presence.playerId, presence.reason ?: PlayerLeftReason.LEFT_ZONE, context.spotId()),
+                            PlayerLeft(
+                                presence.playerId,
+                                presence.reason ?: PlayerLeftReason.LEFT_ZONE,
+                                context.spotId(),
+                            ),
                         )
                         .await()
                 else -> error("Unknown border event: ${presence.kind}")
@@ -156,13 +175,7 @@ class Zone(
     private suspend fun publishLeft(playerId: String, state: PlayerStateView, reason: String) {
         publishLocal(playerId, PlayerLeft(playerId, reason, context.spotId()))
         if (positions.isInBorder(state.position))
-            publishBorder(
-                playerId,
-                state.position,
-                state.sequence,
-                BorderPresenceKind.LEFT,
-                reason,
-            )
+            publishBorder(playerId, state.position, state.sequence, BorderPresenceKind.LEFT, reason)
     }
 
     private suspend fun publishBorder(
