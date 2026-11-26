@@ -182,6 +182,7 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-java" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-dotnet-java" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-java-node" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "login-admission" ]] \
   && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
   echo "build it with: cmake --build ${BUILD_DIR} --target zlink_cpp_cross_language_host" >&2
@@ -2183,6 +2184,11 @@ run_java_cross_stages() {
 }
 
 case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
+  login-admission)
+    source "${SCRIPT_DIR}/login_admission.sh"
+    stage_login_admission
+    exit 0
+    ;;
   outage-relocation-node-dotnet-descriptor-first|outage-relocation-node-dotnet-cas-first|\
   outage-relocation-dotnet-java-descriptor-first|outage-relocation-dotnet-java-cas-first|\
   outage-relocation-java-cpp-descriptor-first|outage-relocation-java-cpp-cas-first|\
@@ -2464,6 +2470,11 @@ stage_cpp_source_dotnet_target_remote_actor_create
 stage_cpp_source_node_target_remote_actor_create
 stage_cpp_source_java_target_remote_actor_create
 stage_dotnet_source_java_target_remote_actor_create
+# Login admission (#4546): every server language against the raw wire probe and
+# every connector language. The stage fails the run when any cell fails.
+source "${SCRIPT_DIR}/login_admission.sh"
+stage_login_admission
+RESULTS+=("login admission: C++/.NET/Java/Node servers x (wire probe + four connectors)")
 
 for result in "${RESULTS[@]}"; do
   echo "ok - ${result}"

@@ -137,7 +137,8 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         if (store is null)
         {
             if (
-                !runtime.TryGetCreatedActorState(actor.ActorId, out var state)
+                !runtime.TryGetActorState(actor.ActorId, out var state)
+                || state.IsDispatchBlocked && !state.IsTeardownPending
                 || state.NativeActorRef is not { } current
                 || state.Actor is not { } instance
             )
@@ -173,13 +174,35 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
             || snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
             || !ZLinkActorAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var authority)
-            || authority.State != ZLinkActorAuthorityState.Ready
+            || authority.State
+                is not (ZLinkActorAuthorityState.Ready or ZLinkActorAuthorityState.Closing)
         )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"Actor '{actor.ActorId}' is moving.",
                 ZLinkRetryAdvice.RetryAfterBackoff
             );
+
+        if (
+            authority.State == ZLinkActorAuthorityState.Closing
+            && !await HasLiveOwnerAsync(snapshot, cancellationToken).ConfigureAwait(false)
+        )
+        {
+            if (
+                await store
+                    .ReleaseEndedReservationAsync(
+                        authorityKey,
+                        snapshot.StoreVersion,
+                        cancellationToken: cancellationToken
+                    )
+                    .ConfigureAwait(false)
+            )
+                return true;
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{actor.ActorId}' Closing authority could not be released."
+            );
+        }
 
         // MeshName and NodeRid in ActorRef are route snapshots. Exact destroy
         // fences the logical incarnation by ActorId + ObjectGeneration and
@@ -203,6 +226,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         snapshot.AuthorityOwnerGeneration,
                         checked((ulong)snapshot.OwnerLeaseGeneration)
                     ),
+                    snapshot,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -327,17 +351,14 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     .ConfigureAwait(false);
 
             if (
-                !createOnly
-                && await store.ReadAuthorityAsync(key, deadlineToken).ConfigureAwait(false)
-                    is ZLinkAuthorityReadResult.Found
-                    {
-                        Snapshot.Allocation.State: ZLinkPlacementAllocationState.Active
-                    } current
+                await store.ReadAuthorityAsync(key, deadlineToken).ConfigureAwait(false)
+                    is ZLinkAuthorityReadResult.Found current
                 && await JoinExistingAsync(
                         store,
                         key,
                         actorId,
                         actorType,
+                        createOnly,
                         current.Snapshot,
                         SelectTargetAsync,
                         deadlineToken
@@ -403,41 +424,22 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     ZLinkFrameworkErrorKind.TypeMismatch,
                     $"Actor '{actorId}' is not registered as '{actorType}'."
                 );
-            if (reserve is ZLinkObjectReserveResult.AlreadyExists existing)
+            var competing = reserve switch
             {
-                if (createOnly)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.AlreadyExists,
-                        $"Actor '{actorId}' already exists."
-                    );
-                var joined = await JoinExistingAsync(
-                        store,
-                        key,
-                        actorId,
-                        actorType,
-                        existing.Current,
-                        SelectTargetAsync,
-                        deadlineToken
-                    )
-                    .ConfigureAwait(false);
-                if (joined is not null)
-                    return joined;
-                await DelayJoinRetryAsync(actorId, joinRetryAttempt++, deadlineToken)
-                    .ConfigureAwait(false);
-                continue;
-            }
-            if (
-                !createOnly
-                && reserve
-                    is ZLinkObjectReserveResult.Conflict(ZLinkAuthorityReadResult.Found found)
-            )
+                ZLinkObjectReserveResult.AlreadyExists existing => existing.Current,
+                ZLinkObjectReserveResult.Conflict(ZLinkAuthorityReadResult.Found found) =>
+                    found.Snapshot,
+                _ => null,
+            };
+            if (competing is not null)
             {
                 var joined = await JoinExistingAsync(
                         store,
                         key,
                         actorId,
                         actorType,
-                        found.Snapshot,
+                        createOnly,
+                        competing,
                         SelectTargetAsync,
                         deadlineToken
                     )
@@ -615,11 +617,13 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         ZLinkAuthorityKey key,
         string actorId,
         string actorType,
+        bool createOnly,
         ZLinkAuthoritySnapshot current,
         Func<ValueTask<ZLinkMeshNodeDescriptor?>> selectTarget,
         CancellationToken cancellationToken
     )
     {
+        var waitAttempt = 0;
         while (true)
         {
             var matchesType =
@@ -670,6 +674,11 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     ZLinkFrameworkErrorKind.TypeMismatch,
                     $"Actor '{actorId}' does not use type '{actorType}'."
                 );
+            if (createOnly)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.AlreadyExists,
+                    $"Actor '{actorId}' already exists."
+                );
             if (
                 current.Allocation.State == ZLinkPlacementAllocationState.Active
                 && authority.State == ZLinkActorAuthorityState.Ready
@@ -682,14 +691,17 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         authority.NodeRid
                     )
                 );
-            if (authority.State != ZLinkActorAuthorityState.Creating)
+            if (
+                authority.State
+                is not (ZLinkActorAuthorityState.Creating or ZLinkActorAuthorityState.Closing)
+            )
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     $"Actor '{actorId}' creation state is invalid.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
 
-            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken)
+            await DelayJoinRetryAsync(actorId, waitAttempt++, cancellationToken)
                 .ConfigureAwait(false);
             var read = await store.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
             if (read is ZLinkAuthorityReadResult.Found next)

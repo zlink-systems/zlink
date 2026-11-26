@@ -584,8 +584,8 @@ public interface IZLinkMetadataCall<TSelf>
 }
 ```
 
-같은 key를 여러 번 설정하면 마지막 값이 전송된다. metadata 전체의 UTF-8 encoded 크기는 1024 bytes를
-넘을 수 없다. reply는 request metadata를 자동 복사하지 않으며 일반 reply에는 metadata setter를 두지
+같은 key를 여러 번 설정하면 마지막 값이 전송된다. metadata 전체 크기는 1024 bytes를
+넘을 수 없다. 크기는 [Wire protocol §4](../../../02-channel-transport/06-wire-protocol.ko.md#decode-검증과-크기-상한)의 한 가지 계산(entry마다 `ChannelHeader` field 13 encoding 길이의 합)으로 잰다. reply는 request metadata를 자동 복사하지 않으며 일반 reply에는 metadata setter를 두지
 않는다. STREAM session과 Actor relay에 적용할 allowlist는 root `ConfigureMetadata()`가 소유한다.
 
 ## 7. Location store와 startup
