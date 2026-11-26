@@ -6916,7 +6916,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         node._peersByRid.TryGetValue(rid, out var peer)
                         && peer is { Admission: not null, State: not MeshPeerState.NotRequired }
                         && peer.RouteGeneration == generation
-                        && (!application || peer.Admitted)
                     )
                     {
                         if (peer.Admitted)
@@ -10604,7 +10603,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 peer.LastChangedMs = checked((ulong)Environment.TickCount64);
                 _peersByRid[sourceRid] = peer;
             }
-            // Remote ADMIT completes admission for application ingress and route selection.
+            // Local admission permits ingress (Mesh Node §7). Remote ADMIT
+            // makes this selected route ready for senders (Transport Liveness §5).
             if (
                 command == ServiceWireConstants.Command.Admit
                 || peer.Admitted

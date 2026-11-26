@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Xunit.Abstractions;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -17,14 +18,39 @@ public sealed class RouteMeshEndedRouteClaimTests(ITestOutputHelper output)
     [Fact]
     public async Task CoreBufferedChannelSendReachesHandlerOnceAfterSnapshotEndsAdmission()
     {
-        await using var fixture = new Fixture();
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(RouteMeshEndedRouteClaimTests),
+                nameof(CoreBufferedChannelSendReachesHandlerOnceAfterSnapshotEndsAdmission)
+            )
+        )
+            return;
+
+        ObservedRouter? router = null;
+        await using var fixture = new Fixture(
+            (owner, native) =>
+                router = new ObservedRouter(
+                    native,
+                    owner.PeerRid,
+                    () => owner.Route.SelectedGeneration
+                ),
+            () =>
+                new MeshReceiveWakeTests.ControlledReceivePoller(socket =>
+                    socket is ObservedRouter decorated ? decorated.Native : socket
+                )
+                {
+                    CaptureIdleWait = true,
+                    BeforeWait = () => router?.ObserveReceiveTurnEnd(),
+                }
+        );
+        var observedRouter = Assert.IsType<ObservedRouter>(router);
         await using var first = fixture.Connect();
         var generation = await fixture.AdmitAsync(first);
         SendChannel(first, "current");
         Assert.Equal("current", await fixture.NextDeliveryAsync());
-        await fixture.Router.CurrentDataDrained.WaitAsync(ObservationTimeout);
+        await observedRouter.CurrentDataDrained.WaitAsync(ObservationTimeout);
 
-        var (blocked, receipt) = fixture.Router.HoldUntilRouteEnds();
+        var (blocked, receipt) = observedRouter.HoldUntilRouteEnds();
         SendChannel(first, "ended");
         await blocked.WaitAsync(ObservationTimeout);
         first.Close();
@@ -45,12 +71,14 @@ public sealed class RouteMeshEndedRouteClaimTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task ReplacementChannelSendRequiresRemoteAdmit()
+    public async Task ReplacementChannelSendRequiresLocalAdmission()
     {
         await using var fixture = new Fixture();
         var generation = await fixture.AdmitAndCloseAsync();
 
         await using var replacement = fixture.Connect();
+        await WaitUntilAsync(() => fixture.Route.SelectedGeneration != 0);
+        SendChannel(replacement, "before-hello");
         fixture.SendAdmission(replacement, ServiceWireConstants.Command.Hello);
         await WaitUntilAsync(() =>
             fixture.Node.PeerChannels(fixture.PeerRid, Lifecycle).Length != 0
@@ -59,7 +87,8 @@ public sealed class RouteMeshEndedRouteClaimTests(ITestOutputHelper output)
         Assert.Equal(0UL, fixture.Route.ReadyGeneration);
         Assert.True(fixture.Claims(generation, ServiceWireConstants.Command.ChannelSend));
         Assert.False(fixture.Claims(generation, ServiceWireConstants.Command.ReplyRelay));
-        SendChannel(replacement, "pending");
+        SendChannel(replacement, "locally-admitted");
+        Assert.Equal("locally-admitted", await fixture.NextDeliveryAsync());
 
         fixture.SendAdmission(replacement, ServiceWireConstants.Command.Admit);
         await WaitUntilAsync(() => fixture.Route.ReadyGeneration != 0);
@@ -105,6 +134,7 @@ public sealed class RouteMeshEndedRouteClaimTests(ITestOutputHelper output)
     [Fact]
     public async Task ChangedExpectedLifecycleRetiresTheEndedAdmission()
     {
+        await using var existingProcessSource = ZLinkProcessExecutionPool.CreateReceiveSource();
         await using var fixture = new Fixture();
         var generation = await fixture.AdmitAndCloseAsync();
         fixture.Node.SetPeerExpectation(
@@ -205,35 +235,26 @@ public sealed class RouteMeshEndedRouteClaimTests(ITestOutputHelper output)
         private readonly Channel<string> _deliveries = Channel.CreateUnbounded<string>();
         internal readonly RoutingId PeerRid = RoutingId.From($"peer-{Guid.NewGuid():N}");
         internal readonly ZLinkManagedMeshNode Node;
-        internal readonly ObservedRouter Router;
         internal ZLinkPeerRouteObservation Route => Node.ObservePeerRoute(PeerRid);
         internal string PeerEndpoint => _endpoint + "-peer";
 
-        internal Fixture()
+        internal Fixture(
+            Func<Fixture, IRouterSocket, IRouterSocket>? decorate = null,
+            Func<IPoller>? receivePollerFactory = null
+        )
         {
-            ObservedRouter? router = null;
-            var context = new CapturingRouterContext(
-                _context,
-                native =>
-                    router = new ObservedRouter(native, PeerRid, () => Route.SelectedGeneration)
-            );
+            IContext context = decorate is null
+                ? _context
+                : new CapturingRouterContext(_context, router => decorate(this, router));
             Node = new ZLinkManagedMeshNode(
                 context,
                 MeshName,
-                receivePollerFactory: () =>
-                    new MeshReceiveWakeTests.ControlledReceivePoller(socket =>
-                        socket is ObservedRouter decorated ? decorated.Native : socket
-                    )
-                    {
-                        CaptureIdleWait = true,
-                        BeforeWait = () => router?.ObserveReceiveTurnEnd(),
-                    }
+                receivePollerFactory: receivePollerFactory
             );
             Node.SetRoutingId(RoutingId.From($"node-{Guid.NewGuid():N}"));
             Node.SetBind(_endpoint);
             Node.AddChannel(ChannelName);
             Node.Start();
-            Router = router!;
             _pump = new ZLinkMeshDispatchPump(Node, new ZLinkMeshCompletionTable());
             _services = new ServiceCollection()
                 .AddSingleton(_deliveries)
