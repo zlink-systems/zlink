@@ -9,13 +9,11 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.testing.ZLinkLocationStoreTestAdapter;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -44,8 +42,8 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                 new ZLinkServiceAuthorityPayloadCodec()
                         .decode(participant.authorityPayload())
                         .orElseThrow();
-        assertEquals("owner-b", stagedOwner.ownerId());
-        assertEquals(12, stagedOwner.ownerLeaseGeneration());
+        assertEquals("owner-a", stagedOwner.ownerId());
+        assertEquals(6, stagedOwner.ownerLeaseGeneration());
 
         var published = coordinator.commit(prepared, NEVER).toCompletableFuture().join();
         assertEquals(prepared.fence(), published.fence());
@@ -68,7 +66,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                 .toCompletableFuture()
                 .join();
 
-        var normalized = authority.rows.get("spot:room-a");
+        var normalized = authority.rows.get("zla1:s:6:room-a");
         assertEquals(
                 null, ZLinkCanonicalRelocationAuthorityStateCodec.decode(normalized.payload()));
         var payload =
@@ -108,14 +106,14 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                 11,
                 java.util.List.of(
                         new ZLinkAggregateRelocationCoordinator.Participant(
-                                "spot:room-a",
+                                "zla1:s:6:room-a",
                                 ZLinkPlacementObjectKind.USER_SPOT,
                                 3,
                                 5,
                                 "version-1",
                                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                 payload,
-                                new byte[0])),
+                                new byte[] {'[', ']'})),
                 goldenRoot(),
                 new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-b")),
                 4,
@@ -126,25 +124,23 @@ final class ZLinkAggregateRelocationCoordinatorTest {
     }
 
     private static byte[] goldenRoot() {
-        Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
-        while (current != null) {
-            Path fixture = current.resolve("runtime/protocol/golden/relocation-envelope-v1.json");
-            if (Files.isRegularFile(fixture)) {
-                try {
-                    String json = Files.readString(fixture);
-                    int start = json.indexOf("\"logicalHex\": \"");
-                    if (start >= 0) {
-                        start += "\"logicalHex\": \"".length();
-                        return HexFormat.of()
-                                .parseHex(json.substring(start, json.indexOf('"', start)));
-                    }
-                } catch (IOException failure) {
-                    throw new IllegalStateException(failure);
-                }
-            }
-            current = current.getParent();
+        try {
+            return ServiceWirePilotCodec.encodeRelocationEnvelopeV1(
+                    new ServiceWirePilotCodec.RelocationEnvelopeV1(
+                            0,
+                            9,
+                            new ServiceWirePilotCodec.RelocationUserSpotIdentity("room-a", 3, 5),
+                            1,
+                            java.util.List.of(
+                                    new ServiceWirePilotCodec.RelocationApplicationState(
+                                            1, false, new byte[0])),
+                            java.util.List.of(),
+                            java.util.List.of(),
+                            java.util.List.of(),
+                            java.util.List.of()));
+        } catch (IOException failure) {
+            throw new IllegalStateException(failure);
         }
-        throw new IllegalStateException("shared relocation fixture was not found");
     }
 
     private static final class FakeAuthorityStore extends ZLinkLocationStoreTestAdapter {
@@ -199,7 +195,12 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                         participant.authorityKey(),
                         new ZLinkAuthoritySnapshot(
                                 "committed-" + participant.authorityKey(),
-                                participant.authorityPayload(),
+                                ZLinkAggregateRelocationCoordinator.projectAuthorityPayload(
+                                        participant.authorityPayload(),
+                                        prepared.targetDescriptor(),
+                                        prepared.targetDescriptorLifecycleGeneration(),
+                                        prepared.targetOwner(),
+                                        participant.ownerTransition()),
                                 participant.objectGeneration(),
                                 participant.sourceAuthorityOwnerGeneration() + 1,
                                 prepared.targetOwner().ownerId(),

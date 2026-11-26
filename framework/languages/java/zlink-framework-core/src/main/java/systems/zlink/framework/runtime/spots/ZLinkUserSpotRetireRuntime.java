@@ -212,9 +212,7 @@ public final class ZLinkUserSpotRetireRuntime {
                                                                 participant
                                                                         .sourceAuthorityOwnerGeneration()))
                                         .toList(),
-                                new ZLinkAggregateFence(
-                                        request.fence().aggregateId(),
-                                        request.fence().aggregateGeneration()),
+                                ZLinkAggregateFence.forRelocation(request.fence().aggregateId()),
                                 new ZLinkLocationOwnerToken(
                                         request.targetOwnerId(),
                                         request.targetOwnerLeaseGeneration()),

@@ -23,9 +23,11 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
@@ -416,7 +418,7 @@ final class ZLinkCommittedActorLocalIngressTest {
                                             (ZLinkAggregateFence) arguments[0],
                                             (systems.zlink.framework.runtime.internal.locations
                                                             .ZLinkStoreCancellation)
-                                                    arguments[1])
+                                                    arguments[arguments.length - 1])
                                     .thenApply(
                                             ignored ->
                                                     systems.zlink.framework.runtime.internal
@@ -551,12 +553,11 @@ final class ZLinkCommittedActorLocalIngressTest {
                 (repository, arguments) ->
                         repository
                                 .commitAggregate(
-                                        (systems.zlink.framework.runtime.internal.locations
-                                                        .ZLinkAggregateFence)
-                                                arguments[0],
-                                        (systems.zlink.framework.runtime.internal.locations
-                                                        .ZLinkStoreCancellation)
-                                                arguments[1])
+                                        (ZLinkAggregateFence) arguments[0],
+                                        arguments.length == 3
+                                                ? (ZLinkAggregateCommitIntent) arguments[1]
+                                                : null,
+                                        (ZLinkStoreCancellation) arguments[arguments.length - 1])
                                 .thenCompose(
                                         value ->
                                                 continuation

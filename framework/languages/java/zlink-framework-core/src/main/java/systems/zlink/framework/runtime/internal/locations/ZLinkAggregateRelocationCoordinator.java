@@ -4,17 +4,15 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.*;
+import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -56,7 +55,7 @@ public final class ZLinkAggregateRelocationCoordinator {
     public CompletionStage<Prepared> prepare(Request request, ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(cancellation, "cancellation");
-        return prepareAuthority(request, inventoryDigest(request.participants()), cancellation);
+        return prepareAuthority(request, cancellation);
     }
 
     public CompletionStage<Published> commit(
@@ -138,8 +137,13 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                                     != expected.size()) {
                                                                 return failed(
                                                                         new RelocationDataLostException(
-                                                                                "published relocation normalization has"
-                                                                                        + " an unknown participant state"));
+                                                                                "published"
+                                                                                        + " relocation"
+                                                                                        + " normalization"
+                                                                                        + " has an"
+                                                                                        + " unknown"
+                                                                                        + " participant"
+                                                                                        + " state"));
                                                             }
                                                             CompletionStage<Void> writes =
                                                                     CompletableFuture
@@ -350,10 +354,7 @@ public final class ZLinkAggregateRelocationCoordinator {
                         });
     }
 
-    /**
-     * Aborts a target-prepared aggregate before cutover without deleting the independently owned
-     * immutable source root.
-     */
+    /** Releases target preparation and its inventory before cutover. */
     public CompletionStage<Void> abortPreparedFence(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(fence, "fence");
@@ -369,260 +370,401 @@ public final class ZLinkAggregateRelocationCoordinator {
                                         : failed(new AuthorityConflictException(result)));
     }
 
-    /** Publishes source capture phases with the authority's current StoreVersion CAS. */
+    /** Seals inventory before publishing the source preparing phase. */
     public CompletionStage<ZLinkAuthoritySnapshot> prepareSource(
             List<ExpectedParticipant> participants,
             String primaryKey,
-            java.util.UUID relocationId,
+            ZLinkAggregateFence fence,
             long applicationVersion,
+            Function<ZLinkAuthoritySnapshot, byte[]> authorityPayload,
             ZLinkStoreCancellation cancellation) {
-        return sourcePhase(
-                participants,
-                primaryKey,
-                relocationId,
-                applicationVersion,
-                "preparing",
-                cancellation);
+        return sealSource(participants, primaryKey, fence, authorityPayload, cancellation)
+                .thenCompose(inventory -> inventory.beginCapture(applicationVersion, cancellation));
+    }
+
+    public CompletionStage<SealedSource> sealSource(
+            List<ExpectedParticipant> participants,
+            String primaryKey,
+            ZLinkAggregateFence fence,
+            Function<ZLinkAuthoritySnapshot, byte[]> authorityPayload,
+            ZLinkStoreCancellation cancellation) {
+        var primary = primaryParticipant(participants, primaryKey);
+        return readSourceParticipant(primary, cancellation)
+                .thenCompose(
+                        snapshot -> {
+                            var previous = snapshot.relocation();
+                            if (previous != null) {
+                                return CompletableFuture.completedFuture(
+                                        new SealedSource(primaryKey, snapshot, fence, null));
+                            }
+                            var entries =
+                                    new ArrayList<ZLinkAggregateParticipant>(participants.size());
+                            CompletionStage<Void> reads = CompletableFuture.completedFuture(null);
+                            for (var participant :
+                                    participants.stream()
+                                            .sorted(
+                                                    Comparator.comparing(
+                                                            ExpectedParticipant::authorityKey,
+                                                            ZLinkAggregateInventoryStore
+                                                                    ::compareKeys))
+                                            .toList()) {
+                                reads =
+                                        reads.thenCompose(
+                                                ignored -> {
+                                                    var read =
+                                                            participant.equals(primary)
+                                                                    ? CompletableFuture
+                                                                            .completedFuture(
+                                                                                    snapshot)
+                                                                    : readSourceParticipant(
+                                                                            participant,
+                                                                            cancellation);
+                                                    return read.thenAccept(
+                                                            member -> {
+                                                                if (!member.ownerId()
+                                                                                .equals(
+                                                                                        snapshot
+                                                                                                .ownerId())
+                                                                        || member
+                                                                                        .ownerLeaseGeneration()
+                                                                                != snapshot
+                                                                                        .ownerLeaseGeneration()) {
+                                                                    throw new IllegalStateException(
+                                                                            "Source capture owner"
+                                                                                    + " differs");
+                                                                }
+                                                                entries.add(
+                                                                        new ZLinkAggregateParticipant(
+                                                                                participant
+                                                                                        .authorityKey(),
+                                                                                member
+                                                                                        .objectGeneration(),
+                                                                                member
+                                                                                        .authorityOwnerGeneration(),
+                                                                                member
+                                                                                        .storeVersion(),
+                                                                                ZLinkAuthorityGenerationTransition
+                                                                                        .NEW_OWNER,
+                                                                                authorityPayload
+                                                                                        .apply(
+                                                                                                member),
+                                                                                new byte[] {
+                                                                                    '[', ']'
+                                                                                }));
+                                                            });
+                                                });
+                            }
+                            return reads.thenCompose(
+                                            ignored ->
+                                                    authorityStore.sealAggregateInventory(
+                                                            fence, entries, cancellation))
+                                    .thenApply(
+                                            digest ->
+                                                    new SealedSource(
+                                                            primaryKey, snapshot, fence, digest));
+                        });
+    }
+
+    public final class SealedSource {
+        private final String primaryKey;
+        private final ZLinkAuthoritySnapshot snapshot;
+        private final ZLinkAggregateFence fence;
+        private final byte[] digest;
+
+        private SealedSource(
+                String primaryKey,
+                ZLinkAuthoritySnapshot snapshot,
+                ZLinkAggregateFence fence,
+                byte[] digest) {
+            this.primaryKey = primaryKey;
+            this.snapshot = snapshot;
+            this.fence = fence;
+            this.digest = digest;
+        }
+
+        public CompletionStage<ZLinkAuthoritySnapshot> beginCapture(
+                long applicationVersion, ZLinkStoreCancellation cancellation) {
+            if (digest == null) return verifySourcePhase(snapshot, fence, applicationVersion);
+            return writePhase(
+                    primaryKey,
+                    snapshot,
+                    ZLinkAuthorityRelocation.preparing(
+                            snapshot,
+                            snapshot,
+                            fence.aggregateId(),
+                            HexFormat.of().formatHex(digest),
+                            applicationVersion),
+                    cancellation);
+        }
     }
 
     public CompletionStage<ZLinkAuthoritySnapshot> captureSource(
             List<ExpectedParticipant> participants,
             String primaryKey,
-            java.util.UUID relocationId,
+            ZLinkAggregateFence fence,
             long applicationVersion,
             ZLinkStoreCancellation cancellation) {
-        return sourcePhase(
-                participants,
-                primaryKey,
-                relocationId,
-                applicationVersion,
-                "captured",
-                cancellation);
+        return readSourceParticipant(primaryParticipant(participants, primaryKey), cancellation)
+                .thenCompose(snapshot -> verifySourcePhase(snapshot, fence, applicationVersion))
+                .thenCompose(
+                        snapshot -> {
+                            var relocation = snapshot.relocation();
+                            return relocation.hasReached("captured")
+                                    ? CompletableFuture.completedFuture(snapshot)
+                                    : writePhase(
+                                            primaryKey,
+                                            snapshot,
+                                            relocation.phase("captured"),
+                                            cancellation);
+                        });
     }
 
-    private CompletionStage<ZLinkAuthoritySnapshot> sourcePhase(
-            List<ExpectedParticipant> participants,
+    private static ExpectedParticipant primaryParticipant(
+            List<ExpectedParticipant> participants, String primaryKey) {
+        return participants.stream()
+                .filter(participant -> participant.authorityKey().equals(primaryKey))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private CompletionStage<ZLinkAuthoritySnapshot> readSourceParticipant(
+            ExpectedParticipant participant, ZLinkStoreCancellation cancellation) {
+        return authorityStore
+                .read(participant.authorityKey(), cancellation)
+                .thenApply(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
+                                    || snapshot.objectGeneration() != participant.objectGeneration()
+                                    || snapshot.authorityOwnerGeneration()
+                                            != participant.sourceAuthorityOwnerGeneration()) {
+                                throw new IllegalStateException(
+                                        "Source capture authority fence differs");
+                            }
+                            return snapshot;
+                        });
+    }
+
+    private static CompletionStage<ZLinkAuthoritySnapshot> verifySourcePhase(
+            ZLinkAuthoritySnapshot snapshot, ZLinkAggregateFence fence, long applicationVersion) {
+        var relocation = snapshot.relocation();
+        if (relocation == null
+                || relocation.aborted()
+                || !relocation.relocationId().equals(fence.aggregateId())
+                || relocation.applicationVersion() != applicationVersion) {
+            return failed(
+                    new RelocationDataLostException("source inventory has no matching phase"));
+        }
+        return CompletableFuture.completedFuture(snapshot);
+    }
+
+    public record SealedParticipant(
+            ZLinkAuthorityEntry authority,
+            String expectedStoreVersion,
+            ZLinkAuthorityGenerationTransition ownerTransition,
+            byte[] authorityPayload,
+            byte[] membershipMutation) {}
+
+    public CompletionStage<List<SealedParticipant>> readSealedInventory(
+            ZLinkAggregateFence fence, String primaryKey, ZLinkStoreCancellation cancellation) {
+        return readSealedInventory(fence, primaryKey, null, 0, null, 0, cancellation);
+    }
+
+    public CompletionStage<List<SealedParticipant>> readSealedInventory(
+            ZLinkAggregateFence fence,
             String primaryKey,
-            java.util.UUID relocationId,
-            long applicationVersion,
-            String phase,
+            RoutingId targetRid,
+            long targetNodeGeneration,
+            ZLinkLocationOwnerToken targetOwner,
+            long attempt,
             ZLinkStoreCancellation cancellation) {
-        List<ZLinkAuthorityEntry> entries = new ArrayList<>();
+        return authorityStore
+                .read(primaryKey, cancellation)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot primary)
+                                    || primary.relocation() == null
+                                    || !primary.relocation()
+                                            .relocationId()
+                                            .equals(fence.aggregateId())) {
+                                return failed(
+                                        new RelocationDataLostException(
+                                                "source inventory is not captured"));
+                            }
+                            var relocation = primary.relocation();
+                            if (targetOwner == null) {
+                                if (!relocation.phase().equals("captured")) {
+                                    return failed(
+                                            new RelocationDataLostException(
+                                                    "source inventory is not captured"));
+                                }
+                            } else {
+                                long current =
+                                        relocation.restoreAttempt(
+                                                targetRid, targetNodeGeneration, targetOwner);
+                                if (current == 0
+                                        || (attempt != current
+                                                && !(relocation.phase().equals("prepared")
+                                                        && current < Long.MAX_VALUE
+                                                        && attempt == current + 1))) {
+                                    return failed(
+                                            ZLinkRequestFailureMapping.receivedFailure(
+                                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                    "Restore conflicts with representative"
+                                                            + " authority",
+                                                    (int)
+                                                            ServiceWireConstants
+                                                                    .FRAMEWORK_ERROR_ACTOR_LOCATION_STALE,
+                                                    Map.of()));
+                                }
+                            }
+                            String digest = primary.relocation().sourceInventorySha256();
+                            return authorityStore
+                                    .readAggregateInventory(
+                                            fence, HexFormat.of().parseHex(digest), cancellation)
+                                    .thenCompose(
+                                            entries ->
+                                                    bindSealedInventory(
+                                                            entries,
+                                                            primaryKey,
+                                                            primary,
+                                                            cancellation));
+                        });
+    }
+
+    private CompletionStage<List<SealedParticipant>> bindSealedInventory(
+            List<ZLinkAggregateInventoryStore.StoredParticipant> entries,
+            String primaryKey,
+            ZLinkAuthoritySnapshot primary,
+            ZLinkStoreCancellation cancellation) {
+        List<SealedParticipant> result = new ArrayList<>(entries.size());
         CompletionStage<Void> reads = CompletableFuture.completedFuture(null);
-        for (var participant : participants) {
+        for (var entry : entries) {
+            boolean root = entry.authorityKey().equals(primaryKey);
             reads =
                     reads.thenCompose(
-                            ignored ->
-                                    authorityStore
-                                            .read(participant.authorityKey(), cancellation)
-                                            .thenAccept(
-                                                    read -> {
-                                                        if (!(read
-                                                                        instanceof
-                                                                        ZLinkAuthoritySnapshot
-                                                                                snapshot)
-                                                                || snapshot.objectGeneration()
-                                                                        != participant
-                                                                                .objectGeneration()
-                                                                || snapshot
-                                                                                .authorityOwnerGeneration()
-                                                                        != participant
-                                                                                .sourceAuthorityOwnerGeneration())
-                                                            throw new IllegalStateException(
-                                                                    "Source capture authority fence differs");
-                                                        entries.add(
-                                                                new ZLinkAuthorityEntry(
-                                                                        participant.authorityKey(),
-                                                                        snapshot));
-                                                    }));
-        }
-        return reads.thenCompose(
-                ignored -> {
-                    var primary =
-                            entries.stream()
-                                    .filter(entry -> entry.key().equals(primaryKey))
-                                    .findFirst()
-                                    .orElseThrow()
-                                    .snapshot();
-                    List<Participant> inventory =
-                            entries.stream()
-                                    .map(
-                                            entry ->
-                                                    new Participant(
-                                                            entry.key(),
-                                                            entry.snapshot()
-                                                                    .allocation()
-                                                                    .objectKind(),
-                                                            entry.snapshot().objectGeneration(),
-                                                            entry.snapshot()
-                                                                    .authorityOwnerGeneration(),
-                                                            entry.snapshot().storeVersion(),
-                                                            ZLinkAuthorityGenerationTransition
-                                                                    .PRESERVE,
-                                                            entry.snapshot().payload(),
-                                                            new byte[0]))
-                                    .toList();
-                    String digest = java.util.HexFormat.of().formatHex(inventoryDigest(inventory));
-                    CompletionStage<Void> writes = CompletableFuture.completedFuture(null);
-                    for (var entry : entries) {
-                        writes =
-                                writes.thenCompose(
-                                        unused -> {
-                                            var snapshot = entry.snapshot();
-                                            if (!snapshot.ownerId().equals(primary.ownerId())
+                            ignored -> {
+                                CompletionStage<ZLinkAuthorityReadResult> authority =
+                                        root
+                                                ? CompletableFuture.completedFuture(primary)
+                                                : authorityStore.read(
+                                                        entry.authorityKey(), cancellation);
+                                return authority.thenAccept(
+                                        read -> {
+                                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
+                                                    || !(root
+                                                                    ? primary.relocation()
+                                                                            .coordinatorExpectedStoreVersion()
+                                                                    : snapshot.storeVersion())
+                                                            .equals(entry.expectedStoreVersion())
+                                                    || !snapshot.ownerId().equals(primary.ownerId())
                                                     || snapshot.ownerLeaseGeneration()
-                                                            != primary.ownerLeaseGeneration())
-                                                return failed(
-                                                        new IllegalStateException(
-                                                                "Source capture owner differs"));
-                                            var previous = snapshot.relocation();
-                                            if (previous != null) {
-                                                if (!previous.relocationId().equals(relocationId))
-                                                    return failed(
-                                                            new IllegalStateException(
-                                                                    "Another relocation owns the authority"));
-                                                if (previous.hasReached(phase)
-                                                        && !previous.phase().equals("aborted"))
-                                                    return CompletableFuture.completedFuture(null);
-                                                if (!previous.phase().equals("preparing"))
-                                                    return failed(
-                                                            new IllegalStateException(
-                                                                    "Source capture phase differs"));
-                                                return writePhase(
-                                                                entry.key(),
-                                                                snapshot,
-                                                                previous.phase("captured"),
-                                                                cancellation)
-                                                        .thenApply(done -> null);
+                                                            != primary.ownerLeaseGeneration()) {
+                                                throw new RelocationDataLostException(
+                                                        "participant authority differs from sealed"
+                                                                + " inventory: "
+                                                                + entry.authorityKey());
                                             }
-                                            var preparing =
-                                                    ZLinkAuthorityRelocation.preparing(
-                                                            snapshot,
-                                                            primary,
-                                                            relocationId,
-                                                            digest,
-                                                            applicationVersion);
-                                            return writePhase(
-                                                            entry.key(),
-                                                            snapshot,
-                                                            preparing,
-                                                            cancellation)
-                                                    .thenCompose(
-                                                            current ->
-                                                                    phase.equals("preparing")
-                                                                            ? CompletableFuture
-                                                                                    .completedFuture(
-                                                                                            current)
-                                                                            : writePhase(
-                                                                                    entry.key(),
-                                                                                    current,
-                                                                                    preparing.phase(
-                                                                                            "captured"),
-                                                                                    cancellation))
-                                                    .thenApply(done -> null);
+                                            result.add(
+                                                    new SealedParticipant(
+                                                            new ZLinkAuthorityEntry(
+                                                                    entry.authorityKey(), snapshot),
+                                                            entry.expectedStoreVersion(),
+                                                            entry.ownerTransition(),
+                                                            entry.authorityPayload(),
+                                                            entry.membershipMutation()));
                                         });
+                            });
+        }
+        return reads.thenApply(
+                ignored -> {
+                    if (result.stream()
+                            .noneMatch(entry -> entry.authority().key().equals(primaryKey))) {
+                        throw new RelocationDataLostException(
+                                "sealed inventory omits the primary authority");
                     }
-                    return writes.thenCompose(
-                                    unused -> authorityStore.read(primaryKey, cancellation))
-                            .thenApply(read -> (ZLinkAuthoritySnapshot) read);
+                    return List.copyOf(result);
                 });
     }
 
     public CompletionStage<Void> abortSource(
-            List<ExpectedParticipant> participants,
+            ExpectedParticipant primary,
             ZLinkAggregateFence fence,
             String ownerId,
             long ownerLeaseGeneration,
             ZLinkStoreCancellation cancellation) {
         return abortPreparedFence(fence, cancellation)
                 .thenCompose(
-                        ignored -> {
-                            return abortSourceProgress(
-                                    participants,
-                                    fence.aggregateId(),
-                                    ownerId,
-                                    ownerLeaseGeneration,
-                                    cancellation);
-                        });
+                        ignored ->
+                                abortSourceProgress(
+                                        primary,
+                                        fence.aggregateId(),
+                                        ownerId,
+                                        ownerLeaseGeneration,
+                                        cancellation));
     }
 
     public CompletionStage<Void> abortSourceProgress(
-            List<ExpectedParticipant> participants,
+            ExpectedParticipant primary,
             UUID relocationId,
             String ownerId,
             long ownerLeaseGeneration,
             ZLinkStoreCancellation cancellation) {
         return sourceTerminal(
-                participants, relocationId, ownerId, ownerLeaseGeneration, "aborted", cancellation);
+                primary, relocationId, ownerId, ownerLeaseGeneration, "aborted", cancellation);
     }
 
     public CompletionStage<Void> clearSourceProgress(
-            List<ExpectedParticipant> participants,
-            UUID relocationId,
+            ExpectedParticipant primary,
+            ZLinkAggregateFence fence,
             String ownerId,
             long ownerLeaseGeneration,
             ZLinkStoreCancellation cancellation) {
         return sourceTerminal(
-                participants, relocationId, ownerId, ownerLeaseGeneration, null, cancellation);
+                        primary,
+                        fence.aggregateId(),
+                        ownerId,
+                        ownerLeaseGeneration,
+                        null,
+                        cancellation)
+                .thenCompose(
+                        ignored -> authorityStore.deleteAggregateInventory(fence, cancellation));
     }
 
     private CompletionStage<Void> sourceTerminal(
-            List<ExpectedParticipant> participants,
+            ExpectedParticipant primary,
             UUID relocationId,
             String ownerId,
             long ownerLeaseGeneration,
             String phase,
             ZLinkStoreCancellation cancellation) {
-        CompletionStage<Void> writes = CompletableFuture.completedFuture(null);
-        for (var participant : participants) {
-            writes =
-                    writes.thenCompose(
-                            unused ->
-                                    authorityStore
-                                            .read(participant.authorityKey(), cancellation)
-                                            .thenCompose(
-                                                    read -> {
-                                                        if (!(read
-                                                                        instanceof
-                                                                        ZLinkAuthoritySnapshot
-                                                                                snapshot)
-                                                                || snapshot.relocation() == null
-                                                                || !snapshot.relocation()
-                                                                        .relocationId()
-                                                                        .equals(relocationId)
-                                                                || snapshot.objectGeneration()
-                                                                        != participant
-                                                                                .objectGeneration()
-                                                                || snapshot
-                                                                                .authorityOwnerGeneration()
-                                                                        != participant
-                                                                                .sourceAuthorityOwnerGeneration()
-                                                                || !snapshot.ownerId()
-                                                                        .equals(ownerId)
-                                                                || snapshot.ownerLeaseGeneration()
-                                                                        != ownerLeaseGeneration)
-                                                            return CompletableFuture
-                                                                    .completedFuture(null);
-                                                        if (phase == null
-                                                                && !snapshot.relocation()
-                                                                        .phase()
-                                                                        .equals("aborted"))
-                                                            return failed(
-                                                                    new IllegalStateException(
-                                                                            "Source relocation cleanup requires Aborted"));
-                                                        return writePhase(
-                                                                        participant.authorityKey(),
-                                                                        snapshot,
-                                                                        phase == null
-                                                                                ? null
-                                                                                : snapshot.relocation()
-                                                                                        .phase(
-                                                                                                phase),
-                                                                        cancellation)
-                                                                .thenApply(done -> null);
-                                                    }));
-        }
-        return writes;
+        return authorityStore
+                .read(primary.authorityKey(), cancellation)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
+                                    || snapshot.relocation() == null
+                                    || !snapshot.relocation().relocationId().equals(relocationId)
+                                    || snapshot.objectGeneration() != primary.objectGeneration()
+                                    || snapshot.authorityOwnerGeneration()
+                                            != primary.sourceAuthorityOwnerGeneration()
+                                    || !snapshot.ownerId().equals(ownerId)
+                                    || snapshot.ownerLeaseGeneration() != ownerLeaseGeneration) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            if (phase == null && !snapshot.relocation().phase().equals("aborted")) {
+                                return failed(
+                                        new IllegalStateException(
+                                                "Source relocation cleanup requires Aborted"));
+                            }
+                            return writePhase(
+                                            primary.authorityKey(),
+                                            snapshot,
+                                            phase == null
+                                                    ? null
+                                                    : snapshot.relocation().phase(phase),
+                                            cancellation)
+                                    .thenApply(done -> null);
+                        });
     }
 
     private CompletionStage<ZLinkAuthoritySnapshot> writePhase(
@@ -693,13 +835,16 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                                                                 .aggregateId())))
                                                             return failed(
                                                                     new IllegalStateException(
-                                                                            "Relocation phase authority differs"));
+                                                                            "Relocation phase"
+                                                                                    + " authority"
+                                                                                    + " differs"));
                                                         if (snapshot.relocation() != null
                                                                 && snapshot.relocation().aborted()
                                                                 && !phase.equals("aborted"))
                                                             return failed(
                                                                     new IllegalStateException(
-                                                                            "Relocation was aborted"));
+                                                                            "Relocation was"
+                                                                                    + " aborted"));
                                                         if (snapshot.relocation() == null
                                                                 || snapshot.relocation()
                                                                         .hasReached(phase))
@@ -718,17 +863,34 @@ public final class ZLinkAggregateRelocationCoordinator {
     }
 
     static byte[] projectAuthorityPayload(
-            byte[] payload, Request request, ZLinkAuthorityGenerationTransition transition) {
-        byte[] application =
-                ZLinkCanonicalRelocationAuthorityStateCodec.applicationPayloadOrOriginal(payload);
+            byte[] payload,
+            ZLinkMeshNodeDescriptorKey targetDescriptor,
+            long targetGeneration,
+            ZLinkLocationOwnerToken targetOwner,
+            ZLinkAuthorityGenerationTransition transition) {
+        return projectAuthorityPayload(
+                payload, targetDescriptor, targetGeneration, targetOwner, transition, null);
+    }
+
+    public static byte[] projectAuthorityPayload(
+            byte[] application,
+            ZLinkMeshNodeDescriptorKey targetDescriptor,
+            long targetGeneration,
+            ZLinkLocationOwnerToken targetOwner,
+            ZLinkAuthorityGenerationTransition transition,
+            ZLinkAggregateCommitIntent.ActorMembership actorMembership) {
         var actorCodec =
                 new systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec();
         var actor = actorCodec.decode(application);
         var spotCodec =
                 new systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec();
         var spot = spotCodec.decode(application);
-        if (actor.isEmpty() && spot.isEmpty())
-            throw new IllegalArgumentException("Relocation authority payload is invalid");
+        if (actor.isEmpty() && spot.isEmpty()) {
+            if (actorMembership != null) {
+                throw new IllegalArgumentException("Relocation Actor authority payload is invalid");
+            }
+            return application;
+        }
         if (transition == ZLinkAuthorityGenerationTransition.PRESERVE) {
             String ownerId =
                     actor.isPresent() ? actor.get().ownerId() : spot.orElseThrow().ownerId();
@@ -743,11 +905,11 @@ public final class ZLinkAggregateRelocationCoordinator {
                     actor.isPresent()
                             ? actor.get().nodeGeneration()
                             : spot.orElseThrow().nodeGeneration();
-            if (!ownerId.equals(request.targetOwner().ownerId())
-                    || lease != request.targetOwner().leaseGeneration()
-                    || !mesh.equals(request.targetDescriptor().meshName())
-                    || !rid.equals(request.targetDescriptor().rid())
-                    || generation != request.targetDescriptorLifecycleGeneration())
+            if (!ownerId.equals(targetOwner.ownerId())
+                    || lease != targetOwner.leaseGeneration()
+                    || !mesh.equals(targetDescriptor.meshName())
+                    || !rid.equals(targetDescriptor.rid())
+                    || generation != targetGeneration)
                 throw new IllegalArgumentException(
                         "Preserved authority owner differs from target fence");
             return application;
@@ -758,14 +920,16 @@ public final class ZLinkAggregateRelocationCoordinator {
                     value.state(),
                     value.stableType(),
                     value.actorId(),
-                    value.currentSpotId(),
-                    value.currentSpotGeneration(),
-                    value.currentSpotKind(),
-                    request.targetOwner().ownerId(),
-                    request.targetOwner().leaseGeneration(),
-                    request.targetDescriptor().meshName(),
-                    request.targetDescriptor().rid(),
-                    request.targetDescriptorLifecycleGeneration());
+                    actorMembership == null ? value.currentSpotId() : actorMembership.spotId(),
+                    actorMembership == null
+                            ? value.currentSpotGeneration()
+                            : actorMembership.spotGeneration(),
+                    actorMembership == null ? value.currentSpotKind() : actorMembership.spotKind(),
+                    targetOwner.ownerId(),
+                    targetOwner.leaseGeneration(),
+                    targetDescriptor.meshName(),
+                    targetDescriptor.rid(),
+                    targetGeneration);
         }
         var value = spot.orElseThrow();
         return value.user().isPresent()
@@ -773,26 +937,27 @@ public final class ZLinkAggregateRelocationCoordinator {
                         value.state(),
                         value.stableType(),
                         value.spotId(),
-                        request.targetOwner().ownerId(),
-                        request.targetOwner().leaseGeneration(),
-                        request.targetDescriptor().meshName(),
-                        request.targetDescriptor().rid(),
-                        request.targetDescriptorLifecycleGeneration())
+                        targetOwner.ownerId(),
+                        targetOwner.leaseGeneration(),
+                        targetDescriptor.meshName(),
+                        targetDescriptor.rid(),
+                        targetGeneration)
                 : spotCodec.encodeInstance(
                         value.state(),
                         value.stableType(),
                         value.spotId(),
-                        request.targetOwner().ownerId(),
-                        request.targetOwner().leaseGeneration(),
-                        request.targetDescriptor().meshName(),
-                        request.targetDescriptor().rid(),
-                        request.targetDescriptorLifecycleGeneration(),
+                        targetOwner.ownerId(),
+                        targetOwner.leaseGeneration(),
+                        targetDescriptor.meshName(),
+                        targetDescriptor.rid(),
+                        targetGeneration,
                         value.activationRecoveryState());
     }
 
     private CompletionStage<Prepared> prepareAuthority(
-            Request request, byte[] digest, ZLinkStoreCancellation cancellation) {
+            Request request, ZLinkStoreCancellation cancellation) {
         List<ZLinkAggregateParticipant> mutations = new ArrayList<>();
+        List<ZLinkAuthoritySnapshot> snapshots = new ArrayList<>();
         CompletionStage<Void> reads = CompletableFuture.completedFuture(null);
         for (Participant participant : canonical(request.participants())) {
             reads =
@@ -805,15 +970,10 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                         if (!(read
                                                                 instanceof
                                                                 ZLinkAuthoritySnapshot snapshot))
-                                                            throw new IllegalStateException(
-                                                                    "Relocation source authority is missing");
-                                                        byte[] payload =
-                                                                projectAuthorityPayload(
-                                                                        participant
-                                                                                .applicationAuthorityPayload(),
-                                                                        request,
-                                                                        participant
-                                                                                .ownerTransition());
+                                                            throw new RelocationDataLostException(
+                                                                    "Relocation source authority is"
+                                                                            + " missing");
+                                                        snapshots.add(snapshot);
                                                         mutations.add(
                                                                 new ZLinkAggregateParticipant(
                                                                         participant.authorityKey(),
@@ -825,18 +985,65 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                                                 .expectedStoreVersion(),
                                                                         participant
                                                                                 .ownerTransition(),
-                                                                        payload,
+                                                                        participant
+                                                                                .applicationAuthorityPayload(),
                                                                         participant
                                                                                 .membershipMutation(),
-                                                                        ZLinkAuthorityRelocation
-                                                                                .prepared(
-                                                                                        snapshot,
-                                                                                        request,
-                                                                                        digest)));
+                                                                        null,
+                                                                        participant
+                                                                                .casStoreVersion()));
                                                     }));
         }
         return reads.thenCompose(
                 ignored -> {
+                    String representativeKey = request.representativeKey();
+                    int representative =
+                            java.util.stream.IntStream.range(0, mutations.size())
+                                    .filter(
+                                            index ->
+                                                    mutations
+                                                            .get(index)
+                                                            .authorityKey()
+                                                            .equals(representativeKey))
+                                    .findFirst()
+                                    .orElseThrow();
+                    var captured =
+                            Optional.ofNullable(snapshots.get(representative).relocation())
+                                    .filter(
+                                            relocation ->
+                                                    relocation
+                                                            .relocationId()
+                                                            .equals(request.aggregateId()));
+                    boolean alreadyPrepared =
+                            captured.filter(record -> record.phase().equals("prepared"))
+                                    .isPresent();
+                    byte[] digest =
+                            captured.map(
+                                            value ->
+                                                    HexFormat.of()
+                                                            .parseHex(
+                                                                    value.sourceInventorySha256()))
+                                    .orElseGet(
+                                            () -> ZLinkAggregateInventoryStore.digest(mutations));
+                    for (int index = 0; index < mutations.size(); index++) {
+                        var participant = mutations.get(index);
+                        var snapshot = snapshots.get(index);
+                        mutations.set(
+                                index,
+                                new ZLinkAggregateParticipant(
+                                        participant.authorityKey(),
+                                        participant.objectGeneration(),
+                                        participant.sourceAuthorityOwnerGeneration(),
+                                        participant.expectedStoreVersion(),
+                                        participant.ownerTransition(),
+                                        participant.authorityPayload(),
+                                        participant.membershipMutation(),
+                                        participant.authorityKey().equals(representativeKey)
+                                                ? ZLinkAuthorityRelocation.prepared(
+                                                        snapshot, request, digest)
+                                                : null,
+                                        participant.casStoreVersion()));
+                    }
                     ZLinkAggregatePrepareRequest storeRequest =
                             new ZLinkAggregatePrepareRequest(
                                     request.aggregateId(),
@@ -846,7 +1053,8 @@ public final class ZLinkAggregateRelocationCoordinator {
                                     request.targetDescriptor(),
                                     request.targetDescriptorLifecycleGeneration(),
                                     request.capacityBundle(),
-                                    request.targetOwner());
+                                    request.targetOwner(),
+                                    representativeKey);
                     ZLinkAggregateFence expectedFence =
                             new ZLinkAggregateFence(
                                     request.aggregateId(), request.aggregateGeneration());
@@ -878,6 +1086,16 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                     new Prepared(fence, request, digest));
                                         }
                                         Throwable original = unwrap(attempt.failure());
+                                        if (original instanceof ZLinkFrameworkException framework
+                                                && framework.kind()
+                                                        == ZLinkFrameworkErrorKind.DATA_LOST) {
+                                            return failed(original);
+                                        }
+                                        if (alreadyPrepared) {
+                                            return reconcilePreparedReplacement(
+                                                    new Prepared(expectedFence, request, digest),
+                                                    original);
+                                        }
                                         return abortAfterAmbiguousPrepare(expectedFence)
                                                 .thenCompose(
                                                         safeToResume ->
@@ -885,8 +1103,10 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                                         ? failed(original)
                                                                         : failed(
                                                                                 new PreparationOutcomeUnknownException(
-                                                                                        "aggregate prepare"
-                                                                                                + " outcome could"
+                                                                                        "aggregate"
+                                                                                                + " prepare"
+                                                                                                + " outcome"
+                                                                                                + " could"
                                                                                                 + " not be"
                                                                                                 + " reconciled",
                                                                                         original,
@@ -898,11 +1118,51 @@ public final class ZLinkAggregateRelocationCoordinator {
                 });
     }
 
+    private CompletionStage<Prepared> reconcilePreparedReplacement(
+            Prepared prepared, Throwable original) {
+        var request = prepared.request();
+        return authorityStore
+                .read(request.representativeKey(), NEVER_CANCELLED)
+                .handle(
+                        (read, failure) -> {
+                            if (failure != null) {
+                                var readFailure = unwrap(failure);
+                                if (readFailure != original) original.addSuppressed(readFailure);
+                                throw new PreparationOutcomeUnknownException(
+                                        "Prepared relocation replacement could not be reconciled",
+                                        original,
+                                        prepared);
+                            }
+                            if (read instanceof ZLinkAuthoritySnapshot snapshot) {
+                                var relocation = snapshot.relocation();
+                                if (relocation != null
+                                        && relocation.relocationId().equals(request.aggregateId())
+                                        && relocation.phase().equals("prepared")
+                                        && relocation.targetAttemptGeneration()
+                                                == request.targetAttemptGeneration()
+                                        && relocation.hasTarget(
+                                                request.targetDescriptor().rid(),
+                                                request.targetDescriptorLifecycleGeneration(),
+                                                request.targetOwner())) {
+                                    return prepared;
+                                }
+                            }
+                            throw new CompletionException(original);
+                        });
+    }
+
     private CompletionStage<Published> commitAuthority(
             Prepared prepared, ZLinkStoreCancellation cancellation) {
         CompletionStage<ZLinkAggregateCommitResult> operation;
         try {
-            operation = authorityStore.commitAggregate(prepared.fence(), cancellation);
+            operation =
+                    authorityStore.commitAggregate(
+                            prepared.fence(),
+                            new ZLinkAggregateCommitIntent(
+                                    prepared.request().representativeKey(),
+                                    prepared.request().targetAttemptGeneration(),
+                                    prepared.request().actorMembership()),
+                            cancellation);
         } catch (RuntimeException failure) {
             operation = failed(failure);
         }
@@ -951,21 +1211,34 @@ public final class ZLinkAggregateRelocationCoordinator {
     }
 
     private CompletionStage<Boolean> isPublished(Prepared prepared) {
+        var request = prepared.request();
         return authorityStore
-                .readAggregateProgress(prepared.fence(), NEVER_CANCELLED)
-                .handle(
-                        (read, failure) ->
-                                failure == null
-                                        && read.isPresent()
-                                        && read.get()
-                                                .request()
-                                                .aggregateId()
-                                                .equals(prepared.fence().aggregateId())
-                                        && read.get().request().aggregateGeneration()
-                                                == prepared.fence().aggregateGeneration()
-                                        && Arrays.equals(
-                                                read.get().request().inventoryDigest(),
-                                                prepared.inventoryDigest()));
+                .read(request.representativeKey(), NEVER_CANCELLED)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
+                                return CompletableFuture.completedFuture(false);
+                            }
+                            var relocation = snapshot.relocation();
+                            if (relocation == null
+                                    || !relocation.hasReached("committed")
+                                    || !relocation.relocationId().equals(request.aggregateId())
+                                    || relocation.targetAttemptGeneration()
+                                            != request.targetAttemptGeneration()) {
+                                return CompletableFuture.completedFuture(false);
+                            }
+                            return authorityStore
+                                    .readAggregateProgress(prepared.fence(), NEVER_CANCELLED)
+                                    .thenApply(
+                                            progress ->
+                                                    progress.isPresent()
+                                                            && Arrays.equals(
+                                                                    progress.orElseThrow()
+                                                                            .request()
+                                                                            .inventoryDigest(),
+                                                                    prepared.inventoryDigest()));
+                        })
+                .exceptionally(ignored -> false);
     }
 
     private CompletionStage<Boolean> abortAfterAmbiguousPrepare(ZLinkAggregateFence fence) {
@@ -985,33 +1258,8 @@ public final class ZLinkAggregateRelocationCoordinator {
                 .sorted(
                         Comparator.comparing(
                                 Participant::authorityKey,
-                                ZLinkAggregateRelocationCoordinator::compareUtf8))
+                                ZLinkAggregateInventoryStore::compareKeys))
                 .toList();
-    }
-
-    private static byte[] inventoryDigest(List<Participant> participants) {
-        Writer writer = new Writer();
-        for (Participant participant : canonical(participants)) {
-            writer.text32(participant.authorityKey());
-            writer.u8(participant.objectKind().value());
-            writer.i64(participant.objectGeneration());
-            writer.i64(participant.authorityOwnerGeneration());
-            writer.text32(participant.expectedStoreVersion());
-            // Cross-language enum values are Preserve=1 and NewOwner=2.
-            writer.u8(participant.ownerTransition().ordinal() + 1);
-            writer.bytes32(participant.applicationAuthorityPayload());
-            writer.bytes32(participant.membershipMutation());
-        }
-        try {
-            return MessageDigest.getInstance("SHA-256").digest(writer.toByteArray());
-        } catch (NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException(impossible);
-        }
-    }
-
-    private static int compareUtf8(String left, String right) {
-        return Arrays.compareUnsigned(
-                left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
     }
 
     private static Throwable unwrap(Throwable failure) {
@@ -1034,7 +1282,29 @@ public final class ZLinkAggregateRelocationCoordinator {
             String expectedStoreVersion,
             ZLinkAuthorityGenerationTransition ownerTransition,
             byte[] applicationAuthorityPayload,
-            byte[] membershipMutation) {
+            byte[] membershipMutation,
+            String casStoreVersion) {
+        public Participant(
+                String authorityKey,
+                ZLinkPlacementObjectKind objectKind,
+                long objectGeneration,
+                long authorityOwnerGeneration,
+                String expectedStoreVersion,
+                ZLinkAuthorityGenerationTransition ownerTransition,
+                byte[] applicationAuthorityPayload,
+                byte[] membershipMutation) {
+            this(
+                    authorityKey,
+                    objectKind,
+                    objectGeneration,
+                    authorityOwnerGeneration,
+                    expectedStoreVersion,
+                    ownerTransition,
+                    applicationAuthorityPayload,
+                    membershipMutation,
+                    expectedStoreVersion);
+        }
+
         public Participant {
             if (authorityKey == null
                     || authorityKey.isBlank()
@@ -1076,7 +1346,33 @@ public final class ZLinkAggregateRelocationCoordinator {
             long targetDescriptorLifecycleGeneration,
             ZLinkPlacementCapacityBundle capacityBundle,
             ZLinkLocationOwnerToken targetOwner,
-            String coordinatorExpectedStoreVersion) {
+            String coordinatorExpectedStoreVersion,
+            ZLinkAggregateCommitIntent.ActorMembership actorMembership) {
+        public Request(
+                UUID aggregateId,
+                long aggregateGeneration,
+                long targetAttemptGeneration,
+                List<Participant> participants,
+                byte[] root,
+                ZLinkMeshNodeDescriptorKey targetDescriptor,
+                long targetDescriptorLifecycleGeneration,
+                ZLinkPlacementCapacityBundle capacityBundle,
+                ZLinkLocationOwnerToken targetOwner,
+                String coordinatorExpectedStoreVersion) {
+            this(
+                    aggregateId,
+                    aggregateGeneration,
+                    targetAttemptGeneration,
+                    participants,
+                    root,
+                    targetDescriptor,
+                    targetDescriptorLifecycleGeneration,
+                    capacityBundle,
+                    targetOwner,
+                    coordinatorExpectedStoreVersion,
+                    null);
+        }
+
         public Request {
             Objects.requireNonNull(aggregateId, "aggregateId");
             if (aggregateId.equals(new UUID(0, 0))
@@ -1116,6 +1412,13 @@ public final class ZLinkAggregateRelocationCoordinator {
         @Override
         public byte[] root() {
             return root.clone();
+        }
+
+        String representativeKey() {
+            var object = ZLinkServiceRelocationEnvelopeCodec.decode(root).object();
+            return object.kind() == ZLinkPlacementObjectKind.ACTOR.value()
+                    ? ZLinkAuthorityKeyCodec.actor(object.objectId())
+                    : ZLinkAuthorityKeyCodec.spot(object.objectId());
         }
 
         /** Framework-issued identity for the immutable canonical root. */
@@ -1243,7 +1546,8 @@ public final class ZLinkAggregateRelocationCoordinator {
                 && prepared.fence().equals(fence)
                 && relocation.hasReached("committed")
                 && publication != null
-                && publication.targetAttemptGeneration() == fence.aggregateGeneration()
+                && publication.targetAttemptGeneration()
+                        == prepared.request().targetAttemptGeneration()
                 && publication.sourceOwnerId().equals(sourceOwner.ownerId())
                 && publication.sourceOwnerLeaseGeneration() == sourceOwner.leaseGeneration()
                 && publication.sourceNodeRid().equals(sourceNode)
@@ -1314,7 +1618,11 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                                                                             .targetDescriptor()
                                                                                                             .rid())) {
                                                                                 throw new RelocationDataLostException(
-                                                                                        "target owner generation differs: "
+                                                                                        "target"
+                                                                                                + " owner"
+                                                                                                + " generation"
+                                                                                                + " differs:"
+                                                                                                + " "
                                                                                                 + participant
                                                                                                         .authorityKey());
                                                                             }
@@ -1424,6 +1732,9 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                                 || payload.aggregateGeneration()
                                                                         != prepared.fence()
                                                                                 .aggregateGeneration()
+                                                                || payload.targetAttemptGeneration()
+                                                                        != prepared.request()
+                                                                                .targetAttemptGeneration()
                                                                 || !payload.targetOwnerId()
                                                                         .equals(
                                                                                 prepared.request()
@@ -1554,35 +1865,4 @@ public final class ZLinkAggregateRelocationCoordinator {
     }
 
     private record Attempt<T>(T result, Throwable failure) {}
-
-    private static final class Writer {
-        private final ByteArrayOutputStream output = new ByteArrayOutputStream();
-
-        void u8(int value) {
-            output.write(value);
-        }
-
-        void i32(int value) {
-            output.writeBytes(
-                    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array());
-        }
-
-        void i64(long value) {
-            output.writeBytes(
-                    ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array());
-        }
-
-        void text32(String value) {
-            bytes32(value.getBytes(StandardCharsets.UTF_8));
-        }
-
-        void bytes32(byte[] value) {
-            i32(value.length);
-            output.writeBytes(value);
-        }
-
-        byte[] toByteArray() {
-            return output.toByteArray();
-        }
-    }
 }

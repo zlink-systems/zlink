@@ -240,7 +240,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             new IllegalStateException(
                                     "User Spot is not active locally: " + spotId));
         }
-        return admit(spotId, spot, targetPolicy, cancellation).thenApply(ignored -> null);
+        return admit(spotId, spot, targetPolicy, cancellation)
+                .thenCompose(admission -> admission.selectTarget().get())
+                .thenApply(ignored -> null);
     }
 
     private ZLinkSpot<?> activeSpot(String spotId, ZLinkStoreCancellation cancellation) {
@@ -261,19 +263,20 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         ? List.of()
                         : actors.actorIdsInSpot(spotId).stream().map(actors::actorType).toList();
         return readInventory(spotId, barrier.participantActorIds(), cancellation)
-                .thenCompose(
+                .thenApply(
                         inventory -> {
                             validateLiveInventory(spot, inventory);
-                            return listDescriptors(cancellation)
-                                    .thenApply(
-                                            descriptors ->
-                                                    new Admission(
-                                                            inventory,
-                                                            selectTarget(
-                                                                    inventory,
-                                                                    descriptors,
-                                                                    targetPolicy,
-                                                                    shellActorTypes)));
+                            return new Admission(
+                                    inventory,
+                                    () ->
+                                            listDescriptors(cancellation)
+                                                    .thenApply(
+                                                            descriptors ->
+                                                                    selectTarget(
+                                                                            inventory,
+                                                                            descriptors,
+                                                                            targetPolicy,
+                                                                            shellActorTypes)));
                         });
     }
 
@@ -392,6 +395,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             ZLinkUserSpotRelocationBarrier.Seal seal,
             ZLinkRelocationMetricOperation metrics) {
         UUID aggregateId = UUID.randomUUID();
+        var fence = ZLinkAggregateFence.forRelocation(aggregateId);
         var phaseParticipants =
                 Stream.concat(
                                 Stream.of(admission.inventory().spot()),
@@ -415,23 +419,36 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                 "User Spot authority changed before Capture"));
                             }
                             return coordinator
-                                    .prepareSource(
+                                    .sealSource(
                                             phaseParticipants,
                                             current.spot().key(),
-                                            aggregateId,
-                                            admission.target().applicationVersion(),
+                                            fence,
+                                            ZLinkAuthoritySnapshot::payload,
                                             cancellation)
                                     .thenCompose(
-                                            ignored ->
-                                                    barrier.runCapture(
-                                                            seal,
-                                                            () ->
-                                                                    capture(
-                                                                            spot,
-                                                                            current,
-                                                                            seal,
-                                                                            admission.target(),
-                                                                            cancellation)));
+                                            inventory ->
+                                                    admission
+                                                            .selectTarget()
+                                                            .get()
+                                                            .thenCompose(
+                                                                    target ->
+                                                                            inventory
+                                                                                    .beginCapture(
+                                                                                            ZLinkCanonicalUserSpotRelocationEnvelope
+                                                                                                    .APPLICATION_VERSION,
+                                                                                            cancellation)
+                                                                                    .thenCompose(
+                                                                                            ignored ->
+                                                                                                    barrier
+                                                                                                            .runCapture(
+                                                                                                                    seal,
+                                                                                                                    () ->
+                                                                                                                            capture(
+                                                                                                                                    spot,
+                                                                                                                                    current,
+                                                                                                                                    seal,
+                                                                                                                                    target,
+                                                                                                                                    cancellation)))));
                         })
                 .thenCompose(
                         captured -> {
@@ -439,7 +456,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             captured,
                                             aggregateId,
                                             sealedSessions,
-                                            admission.target())
+                                            captured.target())
                                     .thenCompose(
                                             sealedResult -> {
                                                 Captured exact =
@@ -504,9 +521,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                                 unresolved,
                                                                 stageRequest(
                                                                         exact,
-                                                                        aggregateId,
+                                                                        fence,
                                                                         root,
-                                                                        admission.target())));
+                                                                        captured.target())));
                                             });
                         })
                 .exceptionallyCompose(
@@ -528,9 +545,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             //  §8.1: restore the source before command 44 abort.
                             CompletionStage<Void> release =
                                     coordinator
-                                            .abortSourceProgress(
-                                                    phaseParticipants,
-                                                    aggregateId,
+                                            .abortSource(
+                                                    phaseParticipants.getFirst(),
+                                                    fence,
                                                     admission
                                                             .inventory()
                                                             .spot()
@@ -554,8 +571,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             .thenCompose(
                                                     ignored ->
                                                             coordinator.clearSourceProgress(
-                                                                    phaseParticipants,
-                                                                    aggregateId,
+                                                                    phaseParticipants.getFirst(),
+                                                                    fence,
                                                                     admission
                                                                             .inventory()
                                                                             .spot()
@@ -691,7 +708,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                     seal.timerEnvelope(),
                                                     participants,
                                                     seal.capturedRecords()),
-                                            sessionRoutes(inventory, seal.capturedRecords())));
+                                            sessionRoutes(inventory, seal.capturedRecords()),
+                                            target));
                 });
     }
 
@@ -1246,13 +1264,13 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
     private ZLinkSpotRetireControl.StageRequest stageRequest(
             Captured captured,
-            UUID aggregateId,
+            ZLinkAggregateFence fence,
             byte[] relocationPayload,
             ZLinkMeshNodeDescriptor target) {
         ZLinkAuthoritySnapshot source = captured.inventory().spot().snapshot();
         var inventory = participantFences(captured);
         return new ZLinkSpotRetireControl.StageRequest(
-                new ZLinkSpotRetireControl.Fence(aggregateId, 1),
+                new ZLinkSpotRetireControl.Fence(fence.aggregateId(), fence.aggregateGeneration()),
                 localNodeRid,
                 localNodeGeneration,
                 source.ownerId(),
@@ -1591,25 +1609,17 @@ final class ZLinkUserSpotRetireSourceBuilder {
             //  restore, then terminal progress removal while the lanes are
             //  still paused. Lane resume is the last observable step. Command 44
             //  abort follows the source restore (Session-Actor binding §8.1).
-            var participants =
-                    Stream.concat(
-                                    Stream.of(captured.inventory().spot()),
-                                    captured.inventory().actors().stream())
-                            .map(
-                                    owned ->
-                                            new ZLinkAggregateRelocationCoordinator
-                                                    .ExpectedParticipant(
-                                                    owned.key(),
-                                                    owned.snapshot().objectGeneration(),
-                                                    owned.snapshot().authorityOwnerGeneration()))
-                            .toList();
-            var source = captured.inventory().spot().snapshot();
+            var spot = captured.inventory().spot();
+            var source = spot.snapshot();
+            var primary =
+                    new ZLinkAggregateRelocationCoordinator.ExpectedParticipant(
+                            spot.key(),
+                            source.objectGeneration(),
+                            source.authorityOwnerGeneration());
             return coordinator
                     .abortSource(
-                            participants,
-                            new ZLinkAggregateFence(
-                                    stageRequest.fence().aggregateId(),
-                                    stageRequest.fence().aggregateGeneration()),
+                            primary,
+                            ZLinkAggregateFence.forRelocation(stageRequest.fence().aggregateId()),
                             source.ownerId(),
                             source.ownerLeaseGeneration(),
                             () -> false)
@@ -1680,8 +1690,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     .thenCompose(
                             ignored ->
                                     coordinator.clearSourceProgress(
-                                            participants,
-                                            stageRequest.fence().aggregateId(),
+                                            primary,
+                                            ZLinkAggregateFence.forRelocation(
+                                                    stageRequest.fence().aggregateId()),
                                             source.ownerId(),
                                             source.ownerLeaseGeneration(),
                                             () -> false))
@@ -1787,7 +1798,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
         }
     }
 
-    private record Admission(Inventory inventory, ZLinkMeshNodeDescriptor target) {}
+    private record Admission(
+            Inventory inventory, Supplier<CompletionStage<ZLinkMeshNodeDescriptor>> selectTarget) {}
 
     private record Inventory(Owned spot, List<Owned> actors) {
         private Inventory {
@@ -1809,13 +1821,14 @@ final class ZLinkUserSpotRetireSourceBuilder {
     private record Captured(
             Inventory inventory,
             ZLinkUserSpotAggregateStagingOwner.Request staging,
-            List<ZLinkSpotRetireControl.SessionRouteFence> sessionRoutes) {
+            List<ZLinkSpotRetireControl.SessionRouteFence> sessionRoutes,
+            ZLinkMeshNodeDescriptor target) {
         private Captured {
             sessionRoutes = List.copyOf(sessionRoutes);
         }
 
         private Captured withSessionRoutes(List<ZLinkSpotRetireControl.SessionRouteFence> exact) {
-            return new Captured(inventory, staging, exact);
+            return new Captured(inventory, staging, exact, target);
         }
     }
 

@@ -13,6 +13,7 @@ import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateAbortResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest;
@@ -245,9 +246,26 @@ public final class ZLinkInMemoryLocationStore
     }
 
     @Override
+    public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
+            ZLinkAggregateFence fence,
+            ZLinkAggregateCommitIntent intent,
+            ZLinkStoreCancellation cancellation) {
+        return authority.commitAggregate(fence, intent, cancellation);
+    }
+
+    @Override
     public CompletionStage<ZLinkAggregateAbortResult> abortAggregate(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
-        return authority.abortAggregate(fence, cancellation);
+        return authority
+                .abortAggregate(fence, cancellation)
+                .thenCompose(
+                        result ->
+                                result == ZLinkAggregateAbortResult.ABORTED
+                                                || result
+                                                        == ZLinkAggregateAbortResult.ALREADY_ABORTED
+                                        ? deleteAggregateInventory(fence, cancellation)
+                                                .thenApply(ignored -> result)
+                                        : CompletableFuture.completedFuture(result));
     }
 
     @Override

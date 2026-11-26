@@ -180,7 +180,7 @@ public final class ZLinkDirectJoinRelocationAuthority {
                                                                 ZLinkAuthorityGenerationTransition
                                                                         .NEW_OWNER,
                                                                 targetAuthority,
-                                                                new byte[0]);
+                                                                new byte[] {'[', ']'});
                                                 var coordinator =
                                                         new ZLinkAggregateRelocationCoordinator(
                                                                 authority);
@@ -275,7 +275,11 @@ public final class ZLinkDirectJoinRelocationAuthority {
             UUID aggregateId, long aggregateGeneration, ZLinkBackendActorRef actor) {
         Objects.requireNonNull(actor, "actor");
         return authority
-                .commitAggregate(new ZLinkAggregateFence(aggregateId, aggregateGeneration), NEVER)
+                .commitAggregate(
+                        new ZLinkAggregateFence(aggregateId, aggregateGeneration),
+                        new ZLinkAggregateCommitIntent(
+                                ZLinkAuthorityKeyCodec.actor(actor.actorId()), 1, null),
+                        NEVER)
                 .thenCompose(
                         result ->
                                 result == ZLinkAggregateCommitResult.COMMITTED

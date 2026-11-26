@@ -22,8 +22,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationR
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 import systems.zlink.framework.testsupport.ZLinkLocationContentionFixture;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -234,7 +232,7 @@ final class ZLinkLocationStoreFormatStartupTest {
         claimLegacyOwner(store, Duration.ofSeconds(1));
         var aggregate = UUID.fromString("00000000-0000-4000-8000-0000000000a2");
         var aggregateKey = new ZLinkStoreKey("zlink:v11:aggregate:" + aggregate + ":1");
-        put(store, aggregateKey, legacyAggregateRecord(aggregate, state));
+        put(store, aggregateKey, aggregateRecord(aggregate, state));
         put(store, legacy("a"), legacyUsage("{}", "{}", 2, prepared ? 1 : 0));
         clock.now = clock.now.plusSeconds(1);
 
@@ -258,11 +256,11 @@ final class ZLinkLocationStoreFormatStartupTest {
         put(
                 store,
                 new ZLinkStoreKey("zlink:v11:aggregate:" + earlier + ":1"),
-                legacyAggregateRecord(earlier, 0, "expired-owner"));
+                aggregateRecord(earlier, 0, "expired-owner"));
         put(
                 store,
                 new ZLinkStoreKey("zlink:v11:aggregate:" + live + ":1"),
-                legacyAggregateRecord(live, state));
+                aggregateRecord(live, state));
         put(store, legacy("a"), legacyUsage("{}", "{}", 2, state == 1 ? 1 : 0));
         var before = snapshot(store);
 
@@ -330,8 +328,8 @@ final class ZLinkLocationStoreFormatStartupTest {
         var preparedId = UUID.fromString("00000000-0000-4000-8000-0000000000a3");
         var stagingKey = new ZLinkStoreKey("zlink:v11:aggregate:" + stagingId + ":1");
         var preparedKey = new ZLinkStoreKey("zlink:v11:aggregate:" + preparedId + ":1");
-        byte[] staging = legacyAggregateRecord(stagingId, false);
-        byte[] prepared = legacyAggregateRecord(preparedId, true);
+        byte[] staging = aggregateRecord(stagingId, false);
+        byte[] prepared = aggregateRecord(preparedId, true);
         put(store, stagingKey, staging);
         put(store, preparedKey, prepared);
         var capacityKey = legacy("a");
@@ -445,38 +443,30 @@ final class ZLinkLocationStoreFormatStartupTest {
                         .status());
     }
 
-    private static byte[] legacyAggregateRecord(UUID aggregate, boolean prepared) throws Exception {
-        return legacyAggregateRecord(aggregate, prepared ? 1 : 0);
+    private static byte[] aggregateRecord(UUID aggregate, boolean prepared) {
+        return aggregateRecord(aggregate, prepared ? 1 : 0);
     }
 
-    /** State 0 staging, 1 prepared, 2 committed (v11 aggregate record layout). */
-    private static byte[] legacyAggregateRecord(UUID aggregate, int state) throws Exception {
-        return legacyAggregateRecord(aggregate, state, "v11-owner");
+    private static byte[] aggregateRecord(UUID aggregate, int state) {
+        return aggregateRecord(aggregate, state, "v11-owner");
     }
 
-    private static byte[] legacyAggregateRecord(UUID aggregate, int state, String owner)
-            throws Exception {
-        var bytes = new ByteArrayOutputStream();
-        try (var record = new DataOutputStream(bytes)) {
-            record.writeByte(state);
-            record.writeLong(aggregate.getMostSignificantBits());
-            record.writeLong(aggregate.getLeastSignificantBits());
-            record.writeLong(1);
-            record.writeUTF("mesh");
-            record.writeUTF("61");
-            record.writeLong(1);
-            record.writeUTF(owner);
-            record.writeLong(1);
-            record.writeInt(32);
-            record.write(new byte[32]);
-            record.writeInt(1);
-            record.writeInt(0);
-            record.writeBoolean(false);
-            record.writeInt(1);
-            record.writeInt(32);
-            record.write(new byte[32]);
-        }
-        return bytes.toByteArray();
+    private static byte[] aggregateRecord(UUID aggregate, int state, String owner) {
+        String phase =
+                switch (state) {
+                    case 0 -> "preparing";
+                    case 1 -> "prepared";
+                    case 2 -> "committed";
+                    default -> throw new IllegalArgumentException("unknown aggregate state");
+                };
+        return ("{\"aggregateGeneration\":\"1\",\"aggregateId\":\"%s\","
+                        + "\"capacity\":{\"actors\":1,\"spotType\":null,\"spots\":0},"
+                        + "\"inventoryDigestSha256\":\"%s\",\"participantCount\":1,\"state\":\"%s\","
+                        + "\"targetDescriptor\":{\"meshName\":\"mesh\",\"routingIdHex\":\"61\"},"
+                        + "\"targetDescriptorLifecycleGeneration\":\"1\","
+                        + "\"targetOwner\":{\"ownerId\":\"%s\",\"ownerLeaseGeneration\":\"1\"}}")
+                .formatted(aggregate, "0".repeat(64), phase, owner)
+                .getBytes(StandardCharsets.UTF_8);
     }
 
     private static String types(int count, int value) {

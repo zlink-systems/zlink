@@ -29,6 +29,7 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.spots.ZLinkUserSpotAggregateStagingOwner.StagingBackend;
@@ -48,7 +49,6 @@ import java.net.Socket;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -208,6 +208,8 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
                                 Duration.ofSeconds(3),
                                 ignored -> CompletableFuture.completedFuture(null));
                 var controlTarget = ZLinkSpotRetireControl.install(peer, endpoint);
+                var targetRequest =
+                        targetRequest(targetCoordinator, request, targetOwner, targetDescriptor);
                 byte[] ready =
                         controlTarget
                                 .handle(
@@ -221,8 +223,6 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
                 prepared.relayCapturedIngress(noOpTransitionClient(), Duration.ofSeconds(3))
                         .toCompletableFuture()
                         .get(10, TimeUnit.SECONDS);
-                var targetRequest =
-                        targetRequest(repository, request, targetOwner, targetDescriptor);
                 var targetPrepared =
                         targetCoordinator
                                 .prepare(targetRequest, NEVER)
@@ -365,42 +365,60 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
     }
 
     private static ZLinkAggregateRelocationCoordinator.Request targetRequest(
-            ZLinkLocationRepository repository,
+            ZLinkAggregateRelocationCoordinator coordinator,
             ZLinkSpotRetireControl.StageRequest request,
             ZLinkLocationOwnerToken targetOwner,
             ZLinkMeshNodeDescriptor targetDescriptor)
             throws Exception {
-        List<ZLinkAggregateRelocationCoordinator.Participant> participants = new ArrayList<>();
-        ZLinkAuthoritySnapshot spot = null;
-        for (var participant : request.participants()) {
-            var snapshot =
-                    assertInstanceOf(
-                            ZLinkAuthoritySnapshot.class,
-                            repository
-                                    .read(participant.authorityKey(), NEVER)
-                                    .toCompletableFuture()
-                                    .get(5, TimeUnit.SECONDS));
-            var kind =
-                    participant.objectKind() == ZLinkPlacementObjectKind.ACTOR.value()
-                            ? ZLinkPlacementObjectKind.ACTOR
-                            : ZLinkPlacementObjectKind.USER_SPOT;
-            participants.add(
-                    new ZLinkAggregateRelocationCoordinator.Participant(
-                            participant.authorityKey(),
-                            kind,
-                            participant.objectGeneration(),
-                            participant.sourceAuthorityOwnerGeneration(),
-                            snapshot.storeVersion(),
-                            ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                            snapshot.payload(),
-                            new byte[0]));
-            if (kind == ZLinkPlacementObjectKind.USER_SPOT) spot = snapshot;
-        }
-        assertNotNull(spot);
+        var primaryKey = ZLinkAuthorityKeyCodec.spot(request.spotId());
+        var fence = ZLinkAggregateFence.forRelocation(request.fence().aggregateId());
+        var expected =
+                request.participants().stream()
+                        .map(
+                                participant ->
+                                        new ZLinkAggregateRelocationCoordinator.ExpectedParticipant(
+                                                participant.authorityKey(),
+                                                participant.objectGeneration(),
+                                                participant.sourceAuthorityOwnerGeneration()))
+                        .toList();
+        var primary =
+                coordinator
+                        .captureSource(
+                                expected,
+                                primaryKey,
+                                fence,
+                                ZLinkCanonicalUserSpotRelocationEnvelope.APPLICATION_VERSION,
+                                NEVER)
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+        var participants =
+                coordinator
+                        .readSealedInventory(fence, primaryKey, NEVER)
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS)
+                        .stream()
+                        .map(
+                                participant -> {
+                                    var authority = participant.authority();
+                                    var snapshot = authority.snapshot();
+                                    return new ZLinkAggregateRelocationCoordinator.Participant(
+                                            authority.key(),
+                                            snapshot.allocation().objectKind(),
+                                            snapshot.objectGeneration(),
+                                            snapshot.authorityOwnerGeneration(),
+                                            participant.expectedStoreVersion(),
+                                            participant.ownerTransition(),
+                                            participant.authorityPayload(),
+                                            participant.membershipMutation(),
+                                            authority.key().equals(primaryKey)
+                                                    ? snapshot.storeVersion()
+                                                    : participant.expectedStoreVersion());
+                                })
+                        .toList();
         return new ZLinkAggregateRelocationCoordinator.Request(
-                request.fence().aggregateId(),
+                fence.aggregateId(),
+                fence.aggregateGeneration(),
                 request.fence().aggregateGeneration(),
-                1,
                 participants,
                 request.relocationPayload(),
                 new ZLinkMeshNodeDescriptorKey(MESH, TARGET_RID),
@@ -412,7 +430,7 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
                                 new ZLinkSpotTypeCapacityDelta(
                                         ZLinkPlacementObjectKind.USER_SPOT, SPOT_TYPE, 1))),
                 targetOwner,
-                spot.storeVersion());
+                primary.relocation().coordinatorExpectedStoreVersion());
     }
 
     private static ZLinkMeshNodeDescriptor descriptor(

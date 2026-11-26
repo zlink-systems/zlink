@@ -319,7 +319,7 @@ final class ZLinkTargetEarlyAdmissionTest {
                                                                     .NEW_OWNER,
                                                             sourceAuthority(
                                                                     participant.objectId(), SOURCE),
-                                                            new byte[0]))
+                                                            new byte[] {'[', ']'}))
                                     .toList(),
                             root,
                             new ZLinkMeshNodeDescriptorKey("mesh", TARGET),

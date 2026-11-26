@@ -294,9 +294,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return coordinator
                 .readTargetAuthorities(
                         expectedParticipants(request),
-                        new ZLinkAggregateFence(
-                                request.fence().aggregateId(),
-                                request.fence().aggregateGeneration()),
+                        ZLinkAggregateFence.forRelocation(request.fence().aggregateId()),
                         new ZLinkLocationOwnerToken(
                                 request.targetOwnerId(), request.targetOwnerLeaseGeneration()),
                         OPEN)
@@ -627,9 +625,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             check =
                     coordinator.confirmTargetIngress(
                             authority,
-                            new ZLinkAggregateFence(
-                                    stage.fence().aggregateId(),
-                                    stage.fence().aggregateGeneration()),
+                            ZLinkAggregateFence.forRelocation(stage.fence().aggregateId()),
                             new ZLinkLocationOwnerToken(
                                     stage.targetOwnerId(), stage.targetOwnerLeaseGeneration()),
                             new ZLinkLocationOwnerToken(
@@ -1201,9 +1197,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return coordinator
                 .readTargetOwnerGenerations(
                         expectedParticipants(request),
-                        new ZLinkAggregateFence(
-                                request.fence().aggregateId(),
-                                request.fence().aggregateGeneration()),
+                        ZLinkAggregateFence.forRelocation(request.fence().aggregateId()),
                         new ZLinkLocationOwnerToken(
                                 request.targetOwnerId(), request.targetOwnerLeaseGeneration()),
                         OPEN)
@@ -1241,9 +1235,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return ZLinkSerialExecutionQueue.yieldCurrent(
                         coordinator.readTargetOwnerGenerations(
                                 expectedParticipants(request),
-                                new ZLinkAggregateFence(
-                                        request.fence().aggregateId(),
-                                        request.fence().aggregateGeneration()),
+                                ZLinkAggregateFence.forRelocation(request.fence().aggregateId()),
                                 new ZLinkLocationOwnerToken(
                                         request.targetOwnerId(),
                                         request.targetOwnerLeaseGeneration()),

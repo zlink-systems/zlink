@@ -843,6 +843,10 @@ final class ZLinkInMemoryAuthorityStore {
         }
     }
 
+    private static boolean isEmptyMembership(byte[] membership) {
+        return membership.length == 0 || Arrays.equals(membership, new byte[] {'[', ']'});
+    }
+
     public CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
             ZLinkAggregatePrepareRequest request, ZLinkStoreCancellation cancellation) {
         return inStateLane(
@@ -852,7 +856,27 @@ final class ZLinkInMemoryAuthorityStore {
                             new ZLinkAggregateFence(
                                     request.aggregateId(), request.aggregateGeneration());
                     if (existing != null) {
-                        if (exactAggregateRequest(existing.request, request)) {
+                        if (existing.state == State.PREPARED
+                                && exactAggregateRequest(existing.request, request)) {
+                            String key = request.representativeKey();
+                            if (key != null) {
+                                var row = rows.get(key);
+                                long attempt =
+                                        representativeParticipant(request)
+                                                .relocation()
+                                                .targetAttemptGeneration();
+                                long current = row.relocation.targetAttemptGeneration();
+                                if (attempt != current) {
+                                    if (current == Long.MAX_VALUE || attempt != current + 1) {
+                                        return completed(new ZLinkAggregateConflict());
+                                    }
+                                    rows.put(
+                                            key,
+                                            row.withRelocation(
+                                                    row.relocation.replacePreparedAttempt(
+                                                            attempt)));
+                                }
+                            }
                             return completed(new ZLinkAggregateAlreadyPrepared(fence));
                         }
                         boolean nextCommittedGeneration =
@@ -884,7 +908,8 @@ final class ZLinkInMemoryAuthorityStore {
                             && request.participants().stream()
                                     .anyMatch(
                                             participant ->
-                                                    participant.membershipMutation().length != 0)) {
+                                                    !isEmptyMembership(
+                                                            participant.membershipMutation()))) {
                         return completed(new ZLinkAggregateConflict());
                     }
                     if (!hasCounterRoom(authorityOwnerGeneration, ownerGenerationCount)
@@ -896,7 +921,7 @@ final class ZLinkInMemoryAuthorityStore {
                         if (row == null
                                 || participantIsPrepared(participant.authorityKey())
                                 || row.allocation.state() != ZLinkPlacementAllocationState.ACTIVE
-                                || !row.storeVersion.equals(participant.expectedStoreVersion())
+                                || !row.storeVersion.equals(participant.casStoreVersion())
                                 || (participant.ownerTransition()
                                                 == ZLinkAuthorityGenerationTransition.NEW_OWNER
                                         && !targetSupportsAllocation(request, row.allocation))) {
@@ -912,11 +937,28 @@ final class ZLinkInMemoryAuthorityStore {
                                     != DescriptorAdmission.ACCEPTED) {
                         return completed(new ZLinkAggregateConflict());
                     }
+                    if (request.representativeKey() != null) {
+                        var primary = representativeParticipant(request);
+                        rows.put(
+                                primary.authorityKey(),
+                                rows.get(primary.authorityKey())
+                                        .withRelocation(primary.relocation()));
+                    }
                     adjustPending(aggregateTargetAllocation(request), request.capacityBundle(), 1);
                     aggregates.put(
                             request.aggregateId(), new AggregateState(request, State.PREPARED));
                     return completed(new ZLinkAggregatePrepared(fence));
                 });
+    }
+
+    private static ZLinkAggregateParticipant representativeParticipant(
+            ZLinkAggregatePrepareRequest request) {
+        return request.participants().stream()
+                .filter(
+                        participant ->
+                                participant.authorityKey().equals(request.representativeKey()))
+                .findFirst()
+                .orElseThrow();
     }
 
     private boolean participantIsPrepared(String authorityKey) {
@@ -934,10 +976,28 @@ final class ZLinkInMemoryAuthorityStore {
 
     public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+        return commitAggregate(fence, null, cancellation);
+    }
+
+    public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
+            ZLinkAggregateFence fence,
+            ZLinkAggregateCommitIntent intent,
+            ZLinkStoreCancellation cancellation) {
         return inStateLane(
                 () -> {
                     AggregateState state = aggregates.get(fence.aggregateId());
                     if (!sameAggregate(state, fence)) {
+                        return completed(ZLinkAggregateCommitResult.STALE);
+                    }
+                    var representative =
+                            state.request.representativeKey() == null
+                                    ? null
+                                    : rows.get(state.request.representativeKey()).relocation;
+                    if (intent != null
+                            && (representative == null
+                                    || !representative.relocationId().equals(fence.aggregateId())
+                                    || representative.targetAttemptGeneration()
+                                            != intent.targetAttemptGeneration())) {
                         return completed(ZLinkAggregateCommitResult.STALE);
                     }
                     if (state.state == State.COMMITTED) {
@@ -952,10 +1012,23 @@ final class ZLinkInMemoryAuthorityStore {
                     if (!aggregateStateIsCurrent(state.request, fence)) {
                         return completed(ZLinkAggregateCommitResult.STALE);
                     }
+                    var payloads = new HashMap<String, byte[]>();
                     for (var participant : state.request.participants()) {
-                        var actor =
-                                new ZLinkActorAuthorityPayloadCodec()
-                                        .decode(participant.authorityPayload());
+                        byte[] payload = participant.authorityPayload();
+                        if (representative != null
+                                && participant.ownerTransition()
+                                        == ZLinkAuthorityGenerationTransition.NEW_OWNER) {
+                            payload =
+                                    ZLinkAggregateRelocationCoordinator.projectAuthorityPayload(
+                                            payload,
+                                            state.request.targetDescriptor(),
+                                            state.request.targetDescriptorLifecycleGeneration(),
+                                            state.request.targetOwner(),
+                                            participant.ownerTransition(),
+                                            intent == null ? null : intent.actorMembership());
+                        }
+                        payloads.put(participant.authorityKey(), payload);
+                        var actor = new ZLinkActorAuthorityPayloadCodec().decode(payload);
                         if (actor.isPresent()) {
                             var target =
                                     state.request.participants().stream()
@@ -987,7 +1060,7 @@ final class ZLinkInMemoryAuthorityStore {
                         }
                         if (spotMembershipFailure(
                                         rows.get(participant.authorityKey()).payload,
-                                        participant.authorityPayload(),
+                                        payload,
                                         state)
                                 != null) return completed(ZLinkAggregateCommitResult.STALE);
                     }
@@ -1022,14 +1095,18 @@ final class ZLinkInMemoryAuthorityStore {
                                 participant.authorityKey(),
                                 new Row(
                                         nextVersion(),
-                                        participant.authorityPayload(),
+                                        payloads.get(participant.authorityKey()),
                                         current.objectGeneration,
                                         ownerGeneration,
                                         changesOwner ? state.request.targetOwner() : current.owner,
                                         targetAllocation,
-                                        participant.relocation() == null
-                                                ? current.relocation
-                                                : participant.relocation().phase("committed")));
+                                        representative != null
+                                                ? representative.phase("committed")
+                                                : participant.relocation() == null
+                                                        ? current.relocation
+                                                        : participant
+                                                                .relocation()
+                                                                .phase("committed")));
                         membershipMutations.put(
                                 participant.authorityKey(), participant.membershipMutation());
                         if (changesOwner) {
@@ -1056,6 +1133,9 @@ final class ZLinkInMemoryAuthorityStore {
         return inStateLane(
                 () -> {
                     AggregateState state = aggregates.get(fence.aggregateId());
+                    if (state == null) {
+                        return completed(ZLinkAggregateAbortResult.ALREADY_ABORTED);
+                    }
                     if (!sameAggregate(state, fence)) {
                         return completed(ZLinkAggregateAbortResult.STALE);
                     }
@@ -1556,8 +1636,7 @@ final class ZLinkInMemoryAuthorityStore {
         }
         for (ZLinkAggregateParticipant participant : request.participants()) {
             Row current = rows.get(participant.authorityKey());
-            if (current == null
-                    || !current.storeVersion.equals(participant.expectedStoreVersion())) {
+            if (current == null || !current.storeVersion.equals(participant.casStoreVersion())) {
                 return false;
             }
             if (participant.ownerTransition() != ZLinkAuthorityGenerationTransition.NEW_OWNER) {
@@ -1660,6 +1739,17 @@ final class ZLinkInMemoryAuthorityStore {
 
         private Row {
             payload = payload.clone();
+        }
+
+        private Row withRelocation(ZLinkAuthorityRelocation value) {
+            return new Row(
+                    storeVersion,
+                    payload,
+                    objectGeneration,
+                    authorityOwnerGeneration,
+                    owner,
+                    allocation,
+                    value);
         }
 
         private Row withPayloadAndAllocation(

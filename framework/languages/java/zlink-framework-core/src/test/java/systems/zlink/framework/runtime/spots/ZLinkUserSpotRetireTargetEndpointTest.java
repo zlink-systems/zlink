@@ -298,7 +298,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                                         "mesh",
                                                         sourceRid,
                                                         11),
-                                        new byte[0])),
+                                        new byte[] {'[', ']'})),
                         root,
                         new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
                         targetNodeGeneration,
@@ -754,7 +754,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         "actor-version-1",
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         sourceAuthority(actorId, sourceRid),
-                                        new byte[0]),
+                                        new byte[] {'[', ']'}),
                                 new ZLinkAggregateRelocationCoordinator.Participant(
                                         authorityKey,
                                         ZLinkPlacementObjectKind.USER_SPOT,
@@ -763,7 +763,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         "version-1",
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         sourceAuthority(spotId, sourceRid),
-                                        new byte[0])),
+                                        new byte[] {'[', ']'})),
                         ZLinkCanonicalUserSpotRelocationEnvelope.encode(
                                 envelope, aggregateId, 5, participants),
                         new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
@@ -1156,7 +1156,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                 "actor-version-1",
                                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                 sourceAuthority(actorId, sourceRid),
-                                new byte[0]),
+                                new byte[] {'[', ']'}),
                         new ZLinkAggregateRelocationCoordinator.Participant(
                                 authorityKey,
                                 ZLinkPlacementObjectKind.USER_SPOT,
@@ -1165,11 +1165,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                 "version-1",
                                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                 sourceAuthority(spotId, sourceRid),
-                                new byte[0]));
+                                new byte[] {'[', ']'}));
         var storeRequest =
                 new ZLinkAggregateRelocationCoordinator.Request(
                         aggregateId,
-                        targetAttemptGeneration,
+                        1,
                         targetAttemptGeneration,
                         storeParticipants,
                         ZLinkCanonicalUserSpotRelocationEnvelope.encode(
@@ -1520,7 +1520,12 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                                         (ZLinkAggregatePrepareRequest)
                                                                 arguments[0]);
                                         case "commitAggregate" ->
-                                                commit((ZLinkAggregateFence) arguments[0]);
+                                                commit(
+                                                        (ZLinkAggregateFence) arguments[0],
+                                                        arguments.length == 3
+                                                                ? (ZLinkAggregateCommitIntent)
+                                                                        arguments[1]
+                                                                : null);
                                         case "abortAggregate" ->
                                                 CompletableFuture.completedFuture(
                                                         ZLinkAggregateAbortResult.ABORTED);
@@ -1572,19 +1577,37 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                     request.aggregateId(), request.aggregateGeneration())));
         }
 
-        private CompletionStage<ZLinkAggregateCommitResult> commit(ZLinkAggregateFence fence) {
+        private CompletionStage<ZLinkAggregateCommitResult> commit(
+                ZLinkAggregateFence fence, ZLinkAggregateCommitIntent intent) {
             if (prepared == null
                     || !prepared.aggregateId().equals(fence.aggregateId())
                     || prepared.aggregateGeneration() != fence.aggregateGeneration()) {
                 return CompletableFuture.completedFuture(ZLinkAggregateCommitResult.STALE);
             }
+            var relocation =
+                    prepared.participants().stream()
+                            .filter(
+                                    participant ->
+                                            participant
+                                                    .authorityKey()
+                                                    .equals(prepared.representativeKey()))
+                            .findFirst()
+                            .orElseThrow()
+                            .relocation()
+                            .phase("committed");
             for (var participant : prepared.participants()) {
                 boolean actor = participant.authorityKey().contains(":a:");
                 rows.put(
                         participant.authorityKey(),
                         new ZLinkAuthoritySnapshot(
                                 "version-2",
-                                participant.authorityPayload(),
+                                ZLinkAggregateRelocationCoordinator.projectAuthorityPayload(
+                                        participant.authorityPayload(),
+                                        prepared.targetDescriptor(),
+                                        prepared.targetDescriptorLifecycleGeneration(),
+                                        prepared.targetOwner(),
+                                        participant.ownerTransition(),
+                                        intent == null ? null : intent.actorMembership()),
                                 actor ? 4 : 3,
                                 actor ? 8 : 6,
                                 prepared.targetOwner().ownerId(),
@@ -1600,9 +1623,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         prepared.capacityBundle()),
                                 Optional.empty(),
                                 Instant.now(),
-                                participant.relocation() == null
-                                        ? null
-                                        : participant.relocation().phase("committed"),
+                                relocation,
                                 0));
             }
             progress = true;

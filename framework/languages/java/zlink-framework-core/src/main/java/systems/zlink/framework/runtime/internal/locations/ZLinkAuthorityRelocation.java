@@ -102,6 +102,40 @@ public final class ZLinkAuthorityRelocation {
         return value.get("target").deepCopy();
     }
 
+    public long targetAttemptGeneration() {
+        return value.get("target").isNull()
+                ? 0
+                : integer(value.get("target").get("attemptGeneration"));
+    }
+
+    boolean hasTarget(RoutingId nodeRid, long nodeGeneration, ZLinkLocationOwnerToken owner) {
+        JsonNode target = value.get("target");
+        return !target.isNull()
+                && target.get("nodeRid").asText().equals(nodeRid.toHex())
+                && integer(target.get("nodeGeneration")) == nodeGeneration
+                && target.get("ownerId").asText().equals(owner.ownerId())
+                && integer(target.get("ownerLeaseGeneration")) == owner.leaseGeneration();
+    }
+
+    public ZLinkAuthorityRelocation replacePreparedAttempt(long attempt) {
+        long current = targetAttemptGeneration();
+        if (!phase().equals("prepared") || current == Long.MAX_VALUE || attempt != current + 1) {
+            throw new IllegalArgumentException(
+                    "Relocation replacement must be the next prepared attempt");
+        }
+        var next = json();
+        ((ObjectNode) next.get("target")).put("attemptGeneration", Long.toUnsignedString(attempt));
+        return new ZLinkAuthorityRelocation(next);
+    }
+
+    long restoreAttempt(RoutingId nodeRid, long nodeGeneration, ZLinkLocationOwnerToken owner) {
+        if (phase().equals("captured")) return 1;
+        if (phase().equals("prepared") && hasTarget(nodeRid, nodeGeneration, owner)) {
+            return targetAttemptGeneration();
+        }
+        return 0;
+    }
+
     public JsonNode coordinator() {
         return value.get("coordinator").deepCopy();
     }
@@ -259,7 +293,12 @@ public final class ZLinkAuthorityRelocation {
                 "ownerLeaseGeneration",
                 Long.toUnsignedString(request.targetOwner().leaseGeneration()));
         target.put("attemptGeneration", Long.toUnsignedString(request.targetAttemptGeneration()));
-        if (existing != null && !existing.target().isNull() && !existing.target().equals(target))
+        if (existing != null
+                && !existing.target().isNull()
+                && !existing.hasTarget(
+                        request.targetDescriptor().rid(),
+                        request.targetDescriptorLifecycleGeneration(),
+                        request.targetOwner()))
             throw new IllegalArgumentException("Relocation successor target fence differs");
         value.set("target", target);
         return new ZLinkAuthorityRelocation(value);

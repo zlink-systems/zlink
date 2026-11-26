@@ -21,6 +21,8 @@ import java.util.function.Function;
 
 /** Projects one User Spot aggregate onto canonical relocation-envelope-v1. */
 final class ZLinkCanonicalUserSpotRelocationEnvelope {
+    static final long APPLICATION_VERSION = 1;
+
     private ZLinkCanonicalUserSpotRelocationEnvelope() {}
 
     static byte[] encode(
@@ -157,7 +159,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
                                     request.spotId(),
                                     request.objectGeneration(),
                                     expectedAuthorityOwnerGeneration),
-                            1,
+                            APPLICATION_VERSION,
                             states,
                             work,
                             registrations,

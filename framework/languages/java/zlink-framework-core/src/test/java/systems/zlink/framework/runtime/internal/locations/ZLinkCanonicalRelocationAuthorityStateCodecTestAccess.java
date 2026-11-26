@@ -20,15 +20,12 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodecTestAccess {
             String phase,
             long applicationVersion,
             String expectedStoreVersion,
-            boolean legacy) {
+            boolean legacy,
+            String digest) {
         if (!legacy) {
             var record =
                     ZLinkAuthorityRelocation.preparing(
-                                    snapshot,
-                                    snapshot,
-                                    relocationId,
-                                    "0".repeat(64),
-                                    applicationVersion)
+                                    snapshot, snapshot, relocationId, digest, applicationVersion)
                             .json();
             record.put("phase", phase);
             record.withObjectProperty("coordinator")
@@ -65,8 +62,8 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodecTestAccess {
                                 preparing ? 1 : 2,
                                 applicationVersion,
                                 0));
-        return new ZLinkAuthorityPut(
-                ZLinkLegacyRelocationAuthorityFixture.withRelocationSlot(
-                        snapshot.payload(), state));
+        return ZLinkAuthorityPut.relocation(
+                ZLinkLegacyRelocationAuthorityFixture.withRelocationSlot(snapshot.payload(), state),
+                null);
     }
 }
