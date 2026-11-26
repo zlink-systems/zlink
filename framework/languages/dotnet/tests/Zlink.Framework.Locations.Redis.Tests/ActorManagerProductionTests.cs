@@ -553,6 +553,9 @@ public sealed partial class ActorManagerProductionTests
 
         public IZLinkEntrySpotContext Context { get; } = context;
 
+        public void Configure() =>
+            Context.Handlers.AddActorPacket<ClosingProbeHandler, TestActor>();
+
         public static int CreateCount => Volatile.Read(ref _createCount);
 
         public static void Reset() => Volatile.Write(ref _createCount, 0);

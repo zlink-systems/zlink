@@ -218,6 +218,12 @@ public sealed partial class ActorManagerProductionTests
             ZLinkProviderLocationRepository.AuthorityMetaKey(key);
         private int _deleteCalls;
 
+        public bool FailClosing { get; set; }
+        public TaskCompletionSource ClosingStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseClosing { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public TaskCompletionSource DeleteStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseDelete { get; } =
@@ -252,6 +258,17 @@ public sealed partial class ActorManagerProductionTests
             CancellationToken cancellationToken
         )
         {
+            if (
+                FailClosing
+                && request
+                    .Mutations.OfType<ZLinkStoreMutation.Put>()
+                    .Any(put => put.Key == _authorityKey)
+            )
+            {
+                ClosingStarted.TrySetResult();
+                await ReleaseClosing.Task.WaitAsync(cancellationToken);
+                throw new InvalidOperationException("Injected Actor Closing CAS failure.");
+            }
             if (
                 request
                     .Mutations.OfType<ZLinkStoreMutation.Delete>()
