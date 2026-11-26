@@ -5,6 +5,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.eventing.PollEventFlags;
+import systems.zlink.contracts.eventing.PollEvents;
+import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -28,10 +33,12 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
@@ -169,6 +176,93 @@ final class ZLinkActorDestroyContractTest {
                         ZLinkFrameworkErrorKind.INVALID_OPERATION,
                         assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
                 assertEquals(current, await(owner.actorManager().find(ACTOR_ID)).orElseThrow());
+            }
+        }
+    }
+
+    @Test
+    void remoteDestroyWithoutAdmittedOwnerIsUnavailable() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var repository = new ZLinkProviderLocationRepository(locations);
+        var key = ZLinkAuthorityKeyCodec.actor(ACTOR_ID);
+        var wire = new ZLinkServiceM6AWireCodec();
+        var deadline = new DefaultZLinkFrameworkOptions().defaultRequestTimeout();
+        try (var owner = start(locations);
+                var context = Zlink.createContext();
+                var unadmittedPeer = context.createRouterSocket();
+                var poller = Zlink.createPoller();
+                var inbound = new Received()) {
+            var actor = create(owner);
+            var before =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class, await(repository.read(key, () -> false)));
+            assertTrue(before.steadyReady());
+            // The peer uses the authority's RID and leaves each HELLO unanswered.
+            unadmittedPeer.setRoutingId(actor.nodeRid());
+            unadmittedPeer.bind("tcp://127.0.0.1:0");
+            poller.add(unadmittedPeer, 0, PollEventFlags.POLLIN);
+            var events = new PollEvents(1);
+            try (var caller =
+                    start(locations, "destroy-caller", unadmittedPeer.options().lastEndpoint())) {
+                unadmittedPeer.options().recvTimeout(Duration.ofSeconds(5));
+                do {
+                    assertTrue(
+                            unadmittedPeer.recv(inbound, RecvFlags.NONE), "expected caller HELLO");
+                } while (inbound.parts().getFirst().isEmpty());
+                assertEquals(
+                        ServiceWireConstants.COMMAND_HELLO,
+                        wire.decodeHeader(inbound.parts().getFirst().toByteArray()).command());
+                assertEquals(0, caller.routeMeshRuntime().snapshot(MESH).readyPeerCount());
+
+                long started = System.nanoTime();
+                var destroy = caller.actorManager().destroy(actor).toCompletableFuture();
+                var failure =
+                        assertThrows(
+                                ExecutionException.class,
+                                () ->
+                                        destroy.get(
+                                                deadline.plusSeconds(5).toMillis(),
+                                                TimeUnit.MILLISECONDS));
+                var elapsed = Duration.ofNanos(System.nanoTime() - started);
+
+                int sent = 0;
+                while (poller.wait(events, Duration.ofMillis(100)) > 0) {
+                    assertTrue(unadmittedPeer.recv(inbound, RecvFlags.DONT_WAIT));
+                    var header = inbound.parts().getFirst();
+                    if (!header.isEmpty()
+                            && wire.decodeHeader(header.toByteArray()).command()
+                                    == ServiceWireConstants.COMMAND_ACTOR_DESTROY) {
+                        sent++;
+                    }
+                }
+                var after =
+                        assertInstanceOf(
+                                ZLinkAuthoritySnapshot.class,
+                                await(repository.read(key, () -> false)));
+                int commandsSent = sent;
+                assertAll(
+                        () ->
+                                assertEquals(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        assertInstanceOf(
+                                                        ZLinkFrameworkException.class,
+                                                        failure.getCause())
+                                                .kind()),
+                        () ->
+                                assertTrue(
+                                        elapsed.compareTo(deadline) < 0,
+                                        () -> "destroy took " + elapsed),
+                        () -> assertEquals(0, commandsSent, "command 27 count"),
+                        () -> assertEquals(before.storeVersion(), after.storeVersion()),
+                        () -> assertTrue(after.steadyReady()),
+                        () ->
+                                assertEquals(
+                                        actor.objectGeneration(),
+                                        await(
+                                                owner.actorClient()
+                                                        .requestToActor(
+                                                                ACTOR_ID, new ReadGeneration())
+                                                        .submit(Long.class))));
             }
         }
     }

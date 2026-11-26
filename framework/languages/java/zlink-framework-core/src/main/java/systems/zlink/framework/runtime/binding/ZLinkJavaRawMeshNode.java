@@ -4109,10 +4109,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     @Override
     public CompletionStage<Void> sendActorDestroy(ZLinkServiceM6BWireCodec.ActorRouteFence actor) {
-        return port.send(
-                requireStarted(),
-                actor.actor().nodeRid(),
-                List.of(statefulWire.encodeActorDestroy(allocateCorrelation(), actor)));
+        return inSourceTurn(
+                () -> {
+                    var socket = requireStarted();
+                    var target = actor.actor().nodeRid();
+                    if (!observePeerRoute(target, actor.targetNodeGeneration()).ready()) {
+                        return CompletableFuture.failedFuture(
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "Actor destroy owner route is unavailable"));
+                    }
+                    return port.send(
+                            socket,
+                            target,
+                            List.of(statefulWire.encodeActorDestroy(allocateCorrelation(), actor)));
+                });
     }
 
     @Override
