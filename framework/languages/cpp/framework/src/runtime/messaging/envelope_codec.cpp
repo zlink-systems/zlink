@@ -3,6 +3,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include "runtime/diagnostics/flow_context.hpp"
+#include "runtime/mesh/mesh_metadata_codec.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include <channel-header-v1.pb.h>
@@ -232,7 +233,6 @@ struct header_presence_t
 {
     bool correlation_id = false;
     bool metadata_duplicate = false;
-    std::size_t metadata_encoded_size = 0;
 };
 
 result_t<void> validate_protocol_header (const envelope_header_t &header,
@@ -261,23 +261,21 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "ZLink envelope header string is invalid");
     std::size_t encoded_metadata_size = 0;
-    const auto validate_metadata_entry = [&] (std::string_view key, std::string_view value,
-                                              std::size_t entry_size) -> result_t<void> {
+    const auto validate_metadata_entry = [&] (std::string_view key,
+                                              std::string_view value) -> result_t<void> {
         if (key.empty () || !valid_text (key) || !valid_text (value)) {
             if (metadata_invalid)
                 *metadata_invalid = true;
             return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                             "ZLink envelope metadata key/value is invalid");
         }
-        if (entry_size
-            > protocol::metadataBytes
-                - std::min<std::uint64_t> (encoded_metadata_size, protocol::metadataBytes)) {
+        if (!zlink::framework::detail::mesh_metadata_codec_t::add_field13 (encoded_metadata_size,
+                                                                           key, value)) {
             if (metadata_invalid)
                 *metadata_invalid = true;
             return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                             "ZLink envelope metadata exceeds 1024 bytes");
         }
-        encoded_metadata_size += entry_size;
         return result_t<void>::success ();
     };
     if (presence && presence->metadata_duplicate) {
@@ -287,20 +285,9 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
                                         "ZLink envelope metadata key is duplicated");
     }
     for (const auto &[key, value] : header.metadata) {
-        const auto nested_size =
-          1 + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (key.size ()) + 1
-          + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (value.size ());
-        const auto entry_size =
-          1 + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (nested_size);
-        auto valid = validate_metadata_entry (key, value, presence ? 0 : entry_size);
+        auto valid = validate_metadata_entry (key, value);
         if (!valid)
             return valid;
-    }
-    if (presence && presence->metadata_encoded_size > protocol::metadataBytes) {
-        if (metadata_invalid)
-            *metadata_invalid = true;
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "ZLink envelope metadata exceeds 1024 bytes");
     }
     if (capture_flow) {
         const bool has_flow_id = flow_id_override || header.flow_id;
@@ -449,7 +436,6 @@ bool parse_channel_header_view (std::span<const std::byte> bytes,
             std::string_view entry_bytes;
             if (!read_wire_string_view (input, entry_bytes))
                 return false;
-            presence.metadata_encoded_size += 1 + wire_t::LengthDelimitedSize (entry_bytes.size ());
             std::string key;
             std::string value;
             if (!parse_metadata_entry_view (entry_bytes, key, value))

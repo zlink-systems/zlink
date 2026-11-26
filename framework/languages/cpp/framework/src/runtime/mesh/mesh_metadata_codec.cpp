@@ -2,6 +2,7 @@
 
 #include "runtime/mesh/mesh_metadata_codec.hpp"
 #include <service_wire_constants.hpp>
+#include <google/protobuf/wire_format_lite.h>
 #include <zlink/framework/detail/utf8.hpp>
 
 #include <zlink/framework/contracts/errors/error.hpp>
@@ -24,6 +25,21 @@ constexpr std::uint8_t version = 1;
 
 } // namespace
 
+bool mesh_metadata_codec_t::add_field13 (std::size_t &size,
+                                         std::string_view key,
+                                         std::string_view value)
+{
+    using wire_t = google::protobuf::internal::WireFormatLite;
+    const auto field_size = [] (std::string_view field) -> std::size_t {
+        return field.empty () ? 0 : 1 + wire_t::LengthDelimitedSize (field.size ());
+    };
+    const auto entry_size = 1 + wire_t::LengthDelimitedSize (field_size (key) + field_size (value));
+    if (entry_size > runtime::protocol::metadataBytes - size)
+        return false;
+    size += entry_size;
+    return true;
+}
+
 std::vector<std::uint8_t>
 mesh_metadata_codec_t::encode (const std::map<std::string, std::string> &metadata)
 {
@@ -33,6 +49,7 @@ mesh_metadata_codec_t::encode (const std::map<std::string, std::string> &metadat
         invalid_metadata ("application metadata may contain at most 255 entries");
 
     std::size_t size = 2;
+    std::size_t field13_bytes = 0;
     for (const auto &[key, value] : metadata) {
         if (key.empty () || key.size () > std::numeric_limits<std::uint8_t>::max ()
             || !zlink::framework::detail::is_valid_non_nul_utf8 (key)) {
@@ -44,7 +61,7 @@ mesh_metadata_codec_t::encode (const std::map<std::string, std::string> &metadat
               "application metadata values must contain at most 65535 non-NUL UTF-8 bytes");
         }
         size += 1 + key.size () + 2 + value.size ();
-        if (size > runtime::protocol::metadataBytes)
+        if (!add_field13 (field13_bytes, key, value))
             invalid_metadata ("encoded application metadata exceeds 1024 bytes");
     }
 
@@ -74,6 +91,7 @@ bool mesh_metadata_codec_t::decode (const std::vector<std::uint8_t> &encoded,
 
     const std::size_t count = encoded[1];
     std::size_t offset = 2;
+    std::size_t field13_bytes = 0;
     for (std::size_t entry = 0; entry < count; ++entry) {
         if (offset >= encoded.size ())
             return false;
@@ -93,7 +111,8 @@ bool mesh_metadata_codec_t::decode (const std::vector<std::uint8_t> &encoded,
         std::string value (encoded.begin () + static_cast<std::ptrdiff_t> (offset),
                            encoded.begin () + static_cast<std::ptrdiff_t> (offset + value_size));
         offset += value_size;
-        if (!zlink::framework::detail::is_valid_non_nul_utf8 (value)
+        if (!add_field13 (field13_bytes, key, value)
+            || !zlink::framework::detail::is_valid_non_nul_utf8 (value)
             || !metadata.emplace (std::move (key), std::move (value)).second)
             return false;
     }
