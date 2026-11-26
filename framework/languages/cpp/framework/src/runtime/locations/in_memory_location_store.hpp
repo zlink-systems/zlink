@@ -9,7 +9,6 @@
 #include <zlink/framework/detail/binary_text_codec.hpp>
 
 #include "runtime/locations/location_key_codec.hpp"
-#include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_store_limits.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -1054,7 +1053,6 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<aggregate_prepare_result_t> ();
-        const auto inventory_tree = aggregate_inventory::build_tree (request.participants);
         return _lane
           .run ([&] {
               if (request.aggregate_generation == 0 || request.aggregate_generation > max_generation
@@ -1068,8 +1066,7 @@ class in_memory_location_repository_t : public location_repository_t
                   || std::any_of (request.participants.begin (), request.participants.end (),
                                   [] (const aggregate_participant_t &participant) {
                                       return !participant.membership_mutation.empty ();
-                                  })
-                  || !inventory_tree)
+                                  }))
                   return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
 
               const auto aggregate_key = aggregate_id_key (request.aggregate_id);
@@ -1133,7 +1130,6 @@ class in_memory_location_repository_t : public location_repository_t
 
               aggregate_state_t state;
               state.request = std::move (request);
-              state.inventory = *inventory_tree;
               _aggregates.emplace (aggregate_key, std::move (state));
               const auto &stored = _aggregates.at (aggregate_key).request;
               apply_capacity_bundle (_pending_by_placement, target, stored.capacity_bundle, true);
@@ -1340,7 +1336,6 @@ class in_memory_location_repository_t : public location_repository_t
     struct aggregate_state_t
     {
         aggregate_prepare_request_t request;
-        aggregate_inventory::tree_t inventory;
         aggregate_status_t status = aggregate_status_t::prepared;
     };
 
@@ -1500,7 +1495,7 @@ class in_memory_location_repository_t : public location_repository_t
     // Location runtime §6.1: every Actor membership of the old User Spot incarnation must
     // belong to an ended-owner member (steady Ready, activated, outside any aggregate, owner
     // lease invalid). The release must fit one provider batch; the key set mirrors the
-    // provider repository batch (authority, aggregate lock, owner lease, descriptor and capacity).
+    // provider repository batch (authority, owner lease, descriptor and capacity).
     std::vector<std::string> ended_spot_members_on_lane (const std::string &spot_key,
                                                          const authority_snapshot_t &spot,
                                                          const object_reserve_request_t &request,
@@ -1509,9 +1504,7 @@ class in_memory_location_repository_t : public location_repository_t
         const auto node = [] (const object_creation_target_t &target) {
             return mesh_node_key (target.mesh_name, std::string (target.node_rid.value ()));
         };
-        std::set<std::string> batch_keys{"authority:" + spot_key,
-                                         "aggregate-lock:" + spot_key,
-                                         "owner:" + spot.owner.owner_id,
+        std::set<std::string> batch_keys{"authority:" + spot_key, "owner:" + spot.owner.owner_id,
                                          "descriptor:" + node (spot.allocation.target),
                                          "descriptor:" + node (request.target),
                                          "capacity:" + node (spot.allocation.target)};
@@ -1537,7 +1530,6 @@ class in_memory_location_repository_t : public location_repository_t
                 wait_elapsed = false;
             members.push_back (member_key);
             batch_keys.insert ("authority:" + member_key);
-            batch_keys.insert ("aggregate-lock:" + member_key);
             batch_keys.insert ("owner:" + authority.owner.owner_id);
             batch_keys.insert ("capacity:" + node (authority.allocation.target));
         }

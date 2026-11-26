@@ -374,12 +374,33 @@ TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregat
            spot.authority_owner_generation, mesh_name, source_rid},
           {stateful::object_kind_t::actor, "fenced-member", actor.object_generation,
            actor.authority_owner_generation, mesh_name, source_rid}};
-        stateful::relocation_authority_fence_t fence{participants.front ().kind,
-                                                     room_id,
-                                                     spot.store_version,
-                                                     spot.owner,
-                                                     target_owner,
-                                                     {4718, 2}};
+        const auto source_generation = spot.allocation.target.node_lifecycle_generation;
+        const auto source_node = zlink::routing_id_t::from (source_rid).to_bytes ();
+        const fw::runtime::protocol::relocation_prepare_t prepare{
+          .relocation = {4718, 2},
+          .target_attempt_generation = 1,
+          .coordinator = {spot.owner.owner_id,
+                          static_cast<std::uint64_t> (spot.owner.lease_generation), source_node,
+                          source_generation, spot.store_version},
+          .target = {destination->rid.to_bytes (), destination->lifecycle_generation,
+                     target_owner.owner_id,
+                     static_cast<std::uint64_t> (target_owner.lease_generation)},
+          .source_node_routing_id = source_node,
+          .source_node_generation = source_generation,
+          .application_version = 1};
+        auto fence =
+          stateful::relocation_authority_fence_t::from_prepare (participants.front (), prepare);
+        stateful::public_authority_store_adapter_t authority (repository);
+        const auto preparing = authority
+                                 .begin_source_capture (participants, fence, target_rid,
+                                                        destination->lifecycle_generation, 1)
+                                 .result ()
+                                 .value ();
+        ASSERT_TRUE (preparing);
+        ASSERT_TRUE (
+          authority.capture_source (participants.front (), *preparing).result ().value ());
+        ASSERT_TRUE (
+          authority.record_target_prepared (participants.front (), prepare).result ().value ());
         if (std::string_view (changed) == "owner")
             fence.source_owner.owner_id += "-other";
         if (std::string_view (changed) == "lease")

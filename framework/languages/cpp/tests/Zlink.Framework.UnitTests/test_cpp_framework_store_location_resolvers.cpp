@@ -2302,7 +2302,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ReadySpotMissCountsRawProviderReadsB
     const std::string owner_key{"owner-lease\0owner-raw", 21};
     EXPECT_EQ (1u, counted_provider.exact_read_count (authority_key));
     EXPECT_EQ (1u, counted_provider.exact_read_count (owner_key));
-    EXPECT_EQ (1u, counted_provider.read_count ("zlink:v11:aggregate-lock:"));
+    EXPECT_EQ (0u, counted_provider.read_count ("zlink:v11:aggregate:"));
 
     auto unrelated_descriptor = descriptor;
     unrelated_descriptor.mesh_name = "noise-mesh";
@@ -2349,14 +2349,14 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ReadySpotMissCountsRawProviderReadsB
     const std::string unrelated_authority_key{"authority\0spot\0spot-noise", 25};
     EXPECT_EQ (1u, counted_provider.exact_read_count (unrelated_authority_key));
     EXPECT_EQ (1u, counted_provider.exact_read_count (owner_key));
-    EXPECT_EQ (1u, counted_provider.read_count ("zlink:v11:aggregate-lock:"));
+    EXPECT_EQ (0u, counted_provider.read_count ("zlink:v11:aggregate:"));
 
     counted_provider.clear_read_counts ();
     ASSERT_TRUE (resolvers.resolve_actor_address ("actor-raw").result ().value ());
     const std::string actor_authority_key{"authority\0actor\0actor-raw", 25};
     EXPECT_EQ (1u, counted_provider.exact_read_count (actor_authority_key));
     EXPECT_EQ (1u, counted_provider.exact_read_count (owner_key));
-    EXPECT_EQ (1u, counted_provider.read_count ("zlink:v11:aggregate-lock:"));
+    EXPECT_EQ (0u, counted_provider.read_count ("zlink:v11:aggregate:"));
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, DirectReadyRouteUsesPositiveCacheOnly)
