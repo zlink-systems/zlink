@@ -8,7 +8,6 @@ public sealed partial class RelocationRuntimeTests
     [Fact]
     public async Task AggregatePublicationProbeIsBoundedAndParallelForTenThousandParticipants()
     {
-        var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore
         {
             AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
@@ -16,8 +15,7 @@ public sealed partial class RelocationRuntimeTests
         };
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new AuditRuntimeFailureReporter(),
-            authority,
-            relocation
+            authority
         );
         var envelope = CreateLargeEnvelope(10_000);
         var request = new ZLinkAggregateRelocationRequest(
@@ -46,18 +44,15 @@ public sealed partial class RelocationRuntimeTests
 
         Assert.InRange(authority.MaximumConcurrentReads, 2, 64);
         Assert.Contains(authority.Events, static item => item.Name == "abort");
-        Assert.Contains(relocation.Events, static item => item.Name == "delete");
     }
 
     [Fact]
     public async Task AggregatePrepareResponseLossReconcilesPublishedAggregate()
     {
-        var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore { ThrowAfterPublishingAggregatePrepare = true };
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new AuditRuntimeFailureReporter(),
-            authority,
-            relocation
+            authority
         );
         var request = CreateAggregateRelocationRequest(CreateEnvelope());
 
@@ -70,12 +65,10 @@ public sealed partial class RelocationRuntimeTests
     [Fact]
     public async Task ConcurrentCommitDuringPrepareProbeReconcilesPublication()
     {
-        var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore { ThrowBeforeConcurrentAggregateCommit = true };
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new AuditRuntimeFailureReporter(),
-            authority,
-            relocation
+            authority
         );
         var request = CreateAggregateRelocationRequest(CreateEnvelope());
 
@@ -86,7 +79,7 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public async Task AggregatePublicationProbeUsesTargetLifetimeCancellationAndPreservesUnknownRoot()
+    public async Task AggregatePublicationProbeUsesTargetLifetimeCancellation()
     {
         using var lifetime = new CancellationTokenSource();
         var releaseRead = new TaskCompletionSource(
@@ -95,7 +88,6 @@ public sealed partial class RelocationRuntimeTests
         var readStarted = new TaskCompletionSource<Task>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore
         {
             AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
@@ -107,7 +99,7 @@ public sealed partial class RelocationRuntimeTests
             },
         };
         var failures = new AuditRuntimeFailureReporter();
-        var coordinator = new ZLinkAggregateRelocationCoordinator(failures, authority, relocation);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(failures, authority);
         var request = CreatePublicationProbeRequest();
 
         var publication = coordinator.PublishAsync(request, lifetime.Token).AsTask();
@@ -125,15 +117,12 @@ public sealed partial class RelocationRuntimeTests
         );
 
         Assert.DoesNotContain(authority.Events, static item => item.Name == "abort");
-        Assert.DoesNotContain(relocation.Events, static item => item.Name == "delete");
-        Assert.NotEmpty(relocation.Payloads);
         Assert.Contains(failures.Failures, static error => error is OperationCanceledException);
     }
 
     [Fact]
-    public async Task AggregatePublicationProbeMixedResultPreservesUnknownRoot()
+    public async Task AggregatePublicationProbeMixedResultDoesNotAbort()
     {
-        var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore
         {
             AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
@@ -141,8 +130,7 @@ public sealed partial class RelocationRuntimeTests
         };
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new AuditRuntimeFailureReporter(),
-            authority,
-            relocation
+            authority
         );
         var request = CreatePublicationProbeRequest();
 
@@ -152,22 +140,18 @@ public sealed partial class RelocationRuntimeTests
 
         Assert.Equal(1, authority.PublishedCount);
         Assert.DoesNotContain(authority.Events, static item => item.Name == "abort");
-        Assert.DoesNotContain(relocation.Events, static item => item.Name == "delete");
-        Assert.NotEmpty(relocation.Payloads);
     }
 
     [Fact]
-    public async Task AggregatePrepareConflictDeletesUnpublishedRoot()
+    public async Task AggregatePrepareConflictAbortsUnpublishedAggregate()
     {
-        var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore
         {
             AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
         };
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new AuditRuntimeFailureReporter(),
-            authority,
-            relocation
+            authority
         );
         var envelope = CreateEnvelope();
         var request = new ZLinkAggregateRelocationRequest(
@@ -198,10 +182,7 @@ public sealed partial class RelocationRuntimeTests
             await coordinator.PublishAsync(request)
         );
 
-        Assert.DoesNotContain(
-            relocation.Payloads.Values,
-            static payload => payload.Take(4).SequenceEqual("ZLTM"u8.ToArray())
-        );
+        Assert.Contains(authority.Events, static item => item.Name == "abort");
     }
 
     private static ZLinkAggregateRelocationRequest CreatePublicationProbeRequest() =>

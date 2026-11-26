@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
@@ -111,24 +110,15 @@ internal sealed partial class ZLinkFrameworkRuntime
 
         var actorStates = new List<ZLinkActorRuntimeState>();
         var actorTargetAuthorityOwnerGenerations = new Dictionary<ZLinkActorId, ulong>();
-        var boundActorIds = new ConcurrentDictionary<ZLinkActorId, byte>();
-        var stagedActorStates = new ConcurrentDictionary<ZLinkActorId, ZLinkActorRuntimeState>();
+        var stagedActorStates = new List<ZLinkActorRuntimeState>();
         ZLinkSpotRelocationSeal? targetAdmissionSeal = null;
         try
         {
-            await preparedSpot
-                .Activation.RestoreSpotRelocationStateAsync(
-                    spotParticipant.ApplicationState,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-
             var restoredActors = await RestoreInboundAggregateActorParticipantsAsync(
                     request,
                     envelope,
                     node,
                     preparedSpot,
-                    boundActorIds,
                     stagedActorStates,
                     cancellationToken
                 )
@@ -141,6 +131,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                 );
                 actorStates.Add(restored.State);
             }
+
+            await preparedSpot
+                .Activation.RestoreSpotRelocationStateAsync(
+                    spotParticipant.ApplicationState,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
 
             targetAdmissionSeal = await preparedSpot
                 .Activation.TrySealRelocationAsync()
@@ -165,8 +162,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     request.SourceOwnerLeaseGeneration
                 ),
                 request.CoordinatorExpectedAuthorityStoreVersion,
-                request.RelocationReference,
-                request.RelocationChecksum,
+                string.Empty,
+                request.PayloadChecksum,
                 Stopwatch.GetElapsedTime(0) + ZLinkSpotRetireTargetRuntime.StageRetention,
                 ZLinkSpotRetireTargetRuntime.ComputeStageRequestDigest(request),
                 targetAdmissionSeal
@@ -193,17 +190,15 @@ internal sealed partial class ZLinkFrameworkRuntime
                             .ConfigureAwait(false)
                     )
                     .ConfigureAwait(false);
-            foreach (var actorId in boundActorIds.Keys)
+            foreach (var actorState in stagedActorStates)
             {
                 failures.Capture(() =>
-                {
-                    if (stagedActorStates.TryGetValue(actorId, out var actorState))
-                        actorState.Handoff.AbortImport(envelope.AggregateId.ToString("N"));
-                });
+                    actorState.Handoff.AbortImport(envelope.AggregateId.ToString("N"))
+                );
                 await failures
                     .CaptureAsync(() =>
                         _actorSessionManager.RollbackTransferredActorAsync(
-                            actorId.Value,
+                            actorState.ActorId,
                             CancellationToken.None
                         )
                     )
@@ -223,9 +218,9 @@ internal sealed partial class ZLinkFrameworkRuntime
     /// authority, rebinds the Actor, stages its relocation session route and
     /// canonical maintenance import, and prepares its transferred join.
     /// Successfully bound Actors are recorded in
-    /// <paramref name="boundActorIds"/>/<paramref name="stagedActorStates"/>
+    /// <paramref name="stagedActorStates"/>
     /// as they land so the staging owner's failure path can roll them back.
-    /// Returns the restored Actors ordered by Actor id.
+    /// Returns the restored Actors in inventory order.
     /// </summary>
     private async ValueTask<
         IReadOnlyList<(ZLinkActorRuntimeState State, ulong TargetAuthorityOwnerGeneration)>
@@ -234,151 +229,117 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRelocationEnvelope envelope,
         ZLinkSpotNodeRuntime node,
         PreparedReservedSpot preparedSpot,
-        ConcurrentDictionary<ZLinkActorId, byte> boundActorIds,
-        ConcurrentDictionary<ZLinkActorId, ZLinkActorRuntimeState> stagedActorStates,
+        List<ZLinkActorRuntimeState> stagedActorStates,
         CancellationToken cancellationToken
     )
     {
-        //  AuthorityKey(actorId) is the injective wire encoding of the Actor
-        //  id, so keying the request descriptors by it once replaces the
-        //  former per-participant scan that recomputed every candidate's
-        //  AuthorityKey (O(participants x descriptors) key encodings).
-        //  Duplicate Actor ids still fail at this materialization, exactly
-        //  as the previous ActorId-keyed dictionary did.
-        var descriptors = request.Actors.ToDictionary(static actor =>
-            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId)
-        );
         var actorParticipants = envelope
             .Participants.Where(static participant =>
                 participant.ObjectKind == ZLinkPlacementObjectKind.Actor
             )
             .ToArray();
-        var restoredActors =
-            new ConcurrentBag<(
-                ZLinkActorRuntimeState State,
-                ulong TargetAuthorityOwnerGeneration
-            )>();
-        using var restoreConcurrency = new SemaphoreSlim(64);
-        await Task.WhenAll(
-                actorParticipants.Select(async participant =>
-                {
-                    await restoreConcurrency.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    try
-                    {
-                        if (!descriptors.TryGetValue(participant.AuthorityKey, out var descriptor))
-                            throw new InvalidOperationException(
-                                $"Actor participant '{participant.AuthorityKey.Value}' has no staged descriptor."
-                            );
-                        var hasActor = ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                            descriptor.AuthorityPayload,
-                            out var authority
-                        );
-                        var hasRelocation = ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
-                            descriptor.AuthorityPayload,
-                            out var relocationAuthority
-                        );
-                        var hasRegistration = node.Registration.ActorRelocations.TryGetValue(
-                            hasActor ? authority.StableType : string.Empty,
-                            out var relocation
-                        );
-                        hasRegistration &= hasActor;
-                        var steadySource =
-                            !hasRelocation
-                            && hasActor
-                            && authority.State == ZLinkActorAuthorityState.Ready;
-                        if (
-                            !hasActor
-                            || !steadySource
-                                && (
-                                    !hasRelocation
-                                    || relocationAuthority.RelocationId != envelope.AggregateId
-                                    || relocationAuthority.Phase
-                                        is not (
-                                            ZLinkActorRelocationAuthorityPhase.Activated
-                                            or ZLinkActorRelocationAuthorityPhase.Steady
-                                        )
-                                )
-                            || !hasRegistration
-                        )
-                        {
-                            throw new InvalidDataException(
-                                $"Actor participant '{participant.AuthorityKey.Value}' cannot be restored on the target."
-                            );
-                        }
-
-                        var actorTargetAuthorityOwnerGeneration =
-                            participant.AuthorityOwnerGeneration;
-                        var actorState = GetOrCreateActorState(authority.ActorId);
-                        await _actorSessionManager
-                            .PrepareForTransferredActivationAsync(actorState, cancellationToken)
-                            .ConfigureAwait(false);
-                        var creation = await _actorSessionManager
-                            .RelocateAndBindActorAsync(
-                                authority.ActorId,
-                                authority.StableType,
-                                relocation!,
-                                participant.ApplicationState,
-                                participant.ObjectGeneration,
-                                actorTargetAuthorityOwnerGeneration,
-                                ZLinkActorClaimMode.StagedRelocation,
-                                publishActorRef: false,
-                                cancellationToken
+        var restoredActors = new List<(
+            ZLinkActorRuntimeState State,
+            ulong TargetAuthorityOwnerGeneration
+        )>(actorParticipants.Length);
+        foreach (var participant in actorParticipants)
+        {
+            var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
+                participant.RecoveryPayload.Span
+            );
+            var hasActor = ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                recovery.AuthorityPayload.Span,
+                out var authority
+            );
+            var hasRelocation = ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
+                recovery.AuthorityPayload.Span,
+                out var relocationAuthority
+            );
+            var hasRegistration = node.Registration.ActorRelocations.TryGetValue(
+                hasActor ? authority.StableType : string.Empty,
+                out var relocation
+            );
+            hasRegistration &= hasActor;
+            var steadySource =
+                !hasRelocation && hasActor && authority.State == ZLinkActorAuthorityState.Ready;
+            if (
+                !hasActor
+                || !steadySource
+                    && (
+                        !hasRelocation
+                        || relocationAuthority.RelocationId != envelope.AggregateId
+                        || relocationAuthority.Phase
+                            is not (
+                                ZLinkActorRelocationAuthorityPhase.Activated
+                                or ZLinkActorRelocationAuthorityPhase.Steady
                             )
-                            .ConfigureAwait(false);
-                        var actorKey = ZLinkActorId.FromBoundary(
-                            authority.ActorId,
-                            nameof(authority.ActorId)
-                        );
-                        boundActorIds.TryAdd(actorKey, 0);
-                        stagedActorStates.TryAdd(actorKey, actorState);
-                        var boundRoute = ZLinkSessionRelocationWire.RestoreBinding(
-                            participant,
-                            request.MeshName,
-                            request.SourceNodeLifecycleGeneration,
-                            request.SourceOwnerLeaseGeneration
-                        );
-                        var wireContext = boundRoute.IsBound
-                            ? ZLinkSessionRelocationContext.Create(
-                                envelope.AggregateId,
-                                request.SourceOwnerId,
-                                request.SourceOwnerLeaseGeneration,
-                                RoutingId.FromHex(request.SourceNodeRid),
-                                request.SourceNodeLifecycleGeneration,
-                                request.CoordinatorExpectedAuthorityStoreVersion
-                            )
-                            : default;
-                        actorState.StageRelocationSessionRoute(
-                            envelope.AggregateId.ToString("N"),
-                            boundRoute,
-                            wireContext
-                        );
-                        var acceptedFrames = ZLinkStandaloneActorRelocationRuntime
-                            .DecodeAcceptedRecords(participant.AcceptedJobs)
-                            .Select(static accepted => accepted.Frame)
-                            .ToArray();
-                        actorState.Handoff.BeginCanonicalMaintenanceImport(
-                            envelope.AggregateId.ToString("N"),
-                            acceptedFrames
-                        );
-                        await preparedSpot
-                            .Activation.PrepareTransferredActorJoinAndReplayAsync(
-                                creation.Actor,
-                                actorState,
-                                cancellationToken
-                            )
-                            .ConfigureAwait(false);
-                        restoredActors.Add((actorState, actorTargetAuthorityOwnerGeneration));
-                    }
-                    finally
-                    {
-                        restoreConcurrency.Release();
-                    }
-                })
+                    )
+                || !hasRegistration
             )
-            .ConfigureAwait(false);
-        return restoredActors
-            .OrderBy(static actor => actor.State.ActorId, StringComparer.Ordinal)
-            .ToArray();
+            {
+                throw new InvalidDataException(
+                    $"Actor participant '{participant.AuthorityKey.Value}' cannot be restored on the target."
+                );
+            }
+
+            var actorTargetAuthorityOwnerGeneration = participant.AuthorityOwnerGeneration;
+            var actorState = GetOrCreateActorState(authority.ActorId);
+            await _actorSessionManager
+                .PrepareForTransferredActivationAsync(actorState, cancellationToken)
+                .ConfigureAwait(false);
+            var creation = await _actorSessionManager
+                .RelocateAndBindActorAsync(
+                    authority.ActorId,
+                    authority.StableType,
+                    relocation!,
+                    participant.ApplicationState,
+                    participant.ObjectGeneration,
+                    actorTargetAuthorityOwnerGeneration,
+                    ZLinkActorClaimMode.StagedRelocation,
+                    publishActorRef: false,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            stagedActorStates.Add(actorState);
+            var boundRoute = ZLinkSessionRelocationWire.RestoreBinding(
+                participant,
+                request.MeshName,
+                request.SourceNodeLifecycleGeneration,
+                request.SourceOwnerLeaseGeneration
+            );
+            var wireContext = boundRoute.IsBound
+                ? ZLinkSessionRelocationContext.Create(
+                    envelope.AggregateId,
+                    request.SourceOwnerId,
+                    request.SourceOwnerLeaseGeneration,
+                    RoutingId.FromHex(request.SourceNodeRid),
+                    request.SourceNodeLifecycleGeneration,
+                    request.CoordinatorExpectedAuthorityStoreVersion
+                )
+                : default;
+            actorState.StageRelocationSessionRoute(
+                envelope.AggregateId.ToString("N"),
+                boundRoute,
+                wireContext
+            );
+            var acceptedFrames = ZLinkStandaloneActorRelocationRuntime
+                .DecodeAcceptedRecords(participant.AcceptedJobs)
+                .Select(static accepted => accepted.Frame)
+                .ToArray();
+            actorState.Handoff.BeginCanonicalMaintenanceImport(
+                envelope.AggregateId.ToString("N"),
+                acceptedFrames
+            );
+            await preparedSpot
+                .Activation.PrepareTransferredActorJoinAndReplayAsync(
+                    creation.Actor,
+                    actorState,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            restoredActors.Add((actorState, actorTargetAuthorityOwnerGeneration));
+        }
+        return restoredActors;
     }
 
     // The caller owns the stage publish gate through CAS settlement and publication.

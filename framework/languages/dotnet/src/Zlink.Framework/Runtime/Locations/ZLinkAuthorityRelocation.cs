@@ -79,14 +79,16 @@ internal sealed record ZLinkAuthorityRelocation(
         && authority.OwnerLeaseGeneration > 0
         && target.OwnerLeaseGeneration == (ulong)authority.OwnerLeaseGeneration;
 
-    internal bool HoldsCapturedSource(
+    internal bool HoldsRestoreSource(
         Guid relocationId,
         ZLinkAuthoritySnapshot authority,
         Fence coordinator,
         string originalStoreVersion
     ) =>
         RelocationId == relocationId
-        && Phase == ServiceWireCodec.RelocationPhase.Captured
+        && Phase
+            is ServiceWireCodec.RelocationPhase.Captured
+                or ServiceWireCodec.RelocationPhase.Prepared
         && Source.NodeRid == authority.Allocation.Descriptor.Rid.ToHex()
         && Source.NodeGeneration == authority.Allocation.DescriptorLifecycleGeneration
         && Source.OwnerId == authority.OwnerId
@@ -97,6 +99,19 @@ internal sealed record ZLinkAuthorityRelocation(
         && Coordinator.OwnerId == coordinator.OwnerId
         && Coordinator.OwnerLeaseGeneration == coordinator.OwnerLeaseGeneration
         && Coordinator.ExpectedStoreVersion == originalStoreVersion;
+
+    internal bool AcceptsRestoreTarget(Fence target) =>
+        Phase == ServiceWireCodec.RelocationPhase.Captured
+        || Phase == ServiceWireCodec.RelocationPhase.Prepared && Target?.Identity == target;
+
+    internal bool AcceptsAttempt(TargetFence target) =>
+        AcceptsRestoreTarget(target.Identity)
+        && (
+            Target?.AttemptGeneration is { } current
+                ? target.AttemptGeneration == current
+                    || current < long.MaxValue && target.AttemptGeneration == current + 1
+                : target.AttemptGeneration == 1
+        );
 
     internal static ZLinkAuthorityRelocation FromState(
         Guid id,

@@ -6828,14 +6828,12 @@ public sealed partial class EntrySpotActorDispatchTests
         var expectedKnowledge = (ZLinkRelocationCommitKnowledge)expectedKnowledgeValue;
         IZLinkLocationRepository? authorityStore = null;
         var relocationStore = new SchedulerProbeRelocationStore();
-        var relocationRepository = new ZLinkProviderRelocationRepository(relocationStore);
         var target = new SchedulerProbeTarget(
             () =>
                 authorityStore
                 ?? throw new InvalidOperationException(
                     "The scheduler probe authority store is not initialized."
                 ),
-            relocationRepository,
             publishMode
         );
         var node = new CapturingSpotNode();
@@ -14820,7 +14818,6 @@ public sealed partial class EntrySpotActorDispatchTests
 
     private sealed class SchedulerProbeTarget(
         Func<IZLinkLocationRepository> authorityStore,
-        IZLinkRelocationRepository relocationStore,
         SchedulerProbePublishMode publishMode
     ) : IZLinkSpotRetireTarget
     {
@@ -14909,11 +14906,30 @@ public sealed partial class EntrySpotActorDispatchTests
                 ?? throw new InvalidOperationException(
                     "The scheduler probe has no staged aggregate."
                 );
+            var store = authorityStore();
+            var primary = staging.Participants.Single(participant =>
+                participant.Envelope.ObjectKind == ZLinkPlacementObjectKind.UserSpot
+            );
+            var spotKey = primary.Envelope.AuthorityKey;
+            var captured = Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await store.ReadAuthorityAsync(spotKey, cancellationToken).ConfigureAwait(false)
+                )
+                .Snapshot;
             var request = new ZLinkAggregateRelocationRequest(
                 relocation.Envelope.AggregateId,
                 relocation.Envelope.AggregateGeneration,
                 1,
-                staging.Participants,
+                staging
+                    .Participants.Select(participant =>
+                        participant == primary
+                            ? participant with
+                            {
+                                CapturedStoreVersion = captured.StoreVersion,
+                            }
+                            : participant
+                    )
+                    .ToArray(),
                 reservation.TargetDescriptor,
                 reservation.TargetDescriptorLifecycleGeneration,
                 reservation.Capacity,
@@ -14923,30 +14939,17 @@ public sealed partial class EntrySpotActorDispatchTests
                     reservation.Inventory.SourceNodeLifecycleGeneration,
                     reservation.Inventory.SourceOwner.OwnerId,
                     checked((ulong)reservation.Inventory.SourceOwner.LeaseGeneration),
-                    staging
-                        .Participants.Single(participant =>
-                            participant.Envelope.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-                        )
-                        .ExpectedStoreVersion
+                    primary.ExpectedStoreVersion
                 ),
                 relocation.Envelope
             );
-            var store = authorityStore();
             var coordinator = new ZLinkAggregateRelocationCoordinator(
                 new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-                store,
-                relocationStore
+                store
             );
             _ = await coordinator
-                .PublishAsync(request, CancellationToken.None, relocation.Relocation)
+                .PublishAsync(request, CancellationToken.None)
                 .ConfigureAwait(false);
-            var spotKey = relocation
-                .Envelope.Participants.Single(static participant =>
-                    participant.ObjectKind
-                        is ZLinkPlacementObjectKind.UserSpot
-                            or ZLinkPlacementObjectKind.InstanceSpot
-                )
-                .AuthorityKey;
             var read = await store
                 .ReadAuthorityAsync(spotKey, CancellationToken.None)
                 .ConfigureAwait(false);

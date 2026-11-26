@@ -297,10 +297,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         if (
             snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
             || snapshot.ObjectGeneration != actorRef.ObjectGeneration
-            || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                snapshot.Payload.Span,
-                out var authority
-            )
+            || !TryReadActorAuthority(snapshot, out var authority)
             || authority.State != ZLinkActorAuthorityState.Ready
             || !string.Equals(authority.ActorId, actorId.Value, StringComparison.Ordinal)
             || !string.Equals(authority.StableType, actorType, StringComparison.Ordinal)
@@ -327,6 +324,36 @@ internal sealed class ZLinkActorOwnershipCoordinator(
 
         await TrackCommittedActorAuthorityAsync(actorId, snapshot, authority, deactivate)
             .ConfigureAwait(false);
+    }
+
+    private static bool TryReadActorAuthority(
+        ZLinkAuthoritySnapshot snapshot,
+        out ZLinkActorAuthorityPayload authority
+    )
+    {
+        if (
+            !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                snapshot.Payload.Span,
+                out authority
+            )
+        )
+            return false;
+        if (
+            snapshot.Relocation is { Target: { } target } relocation
+            && ZLinkAuthorityRelocation.MatchesCommittedTarget(
+                snapshot,
+                relocation.RelocationId,
+                target.AttemptGeneration
+            )
+        )
+            authority = authority with
+            {
+                NodeRid = snapshot.Allocation.Descriptor.Rid,
+                NodeGeneration = snapshot.Allocation.DescriptorLifecycleGeneration,
+                OwnerId = snapshot.OwnerId,
+                OwnerLeaseGeneration = checked((ulong)snapshot.OwnerLeaseGeneration),
+            };
+        return true;
     }
 
     internal ValueTask AdoptCommittedActorAuthorityAsync(
@@ -1508,10 +1535,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     .ConfigureAwait(false);
                 if (
                     read is not ZLinkAuthorityReadResult.Found found
-                    || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                        found.Snapshot.Payload.Span,
-                        out var payload
-                    )
+                    || !TryReadActorAuthority(found.Snapshot, out var payload)
                 )
                     break;
                 firstStoreVersion ??= found.Snapshot.StoreVersion;

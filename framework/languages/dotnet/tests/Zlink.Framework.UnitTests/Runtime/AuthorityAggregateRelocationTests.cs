@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
@@ -39,11 +40,11 @@ public sealed class AuthorityAggregateRelocationTests
     public void Single_actor_inventory_hashes_the_canonical_utf8_of_opaque_store_versions()
     {
         var digest = ZLinkDirectRelocationInventory.Digest(
-            new("zla1:a:golden-actor"),
+            ZLinkAuthorityKeyCodec.EncodeActor("golden-actor"),
             "v\"\u2028\U0001f680\n\u0001",
-            "abc"u8
+            "abc"u8.ToArray()
         );
-        Assert.Equal("41caf8f396eaff59b4500fbdda6f4bc7651522c4b375d40602ee851e77504446", digest);
+        Assert.Equal("c0a435f32ba87bb4687a6a721cac6023f65e30bb9a2f6441b649b9fdd15d40ae", digest);
     }
 
     private static JsonDocument ReadGolden()
@@ -135,7 +136,6 @@ public sealed class AuthorityAggregateRelocationTests
         var preparing = await coordinator.BeginPreparingAsync(
             steady,
             actor,
-            StandaloneActorRelocationPrecommitTests.Authority(actor.ActorId, target, targetOwner),
             relocationId,
             42,
             CancellationToken.None
@@ -181,6 +181,40 @@ public sealed class AuthorityAggregateRelocationTests
             steady.StoreVersion,
             actual.GetProperty("coordinator").GetProperty("expectedStoreVersion").GetString()
         );
+
+        var fence = new ZLinkAggregateFence(relocationId, root.AggregateGeneration);
+        var targetRepository = new ZLinkProviderLocationRepository(provider);
+        var targetCoordinator = new ZLinkStandaloneActorRelocationPrecommitCoordinator(
+            targetRepository
+        );
+        await targetCoordinator.VerifyCapturedInventoryAsync(
+            captured,
+            root,
+            prepare,
+            CancellationToken.None
+        );
+
+        var mutationKey = ZLinkAggregateInventory.ParticipantKey(
+            "zlink:v11:",
+            fence,
+            0,
+            membership: true
+        );
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await provider.WriteAsync(
+                new ZLinkStoreWriteRequest([], [new ZLinkStoreMutation.Delete(mutationKey)])
+            )
+        );
+        var registration = new ZLinkFrameworkRegistration();
+        registration.Locations._repository = targetRepository;
+        var targetRuntime = new ZLinkStandaloneActorRelocationRuntime(null!, null!, registration);
+        var failure = await Assert.ThrowsAsync<ZLinkRelocationDataLostException>(() =>
+            targetRuntime
+                .StageTargetAsync(prepare, root, prepare.SourceNodeRid, CancellationToken.None)
+                .AsTask()
+        );
+        Assert.Contains(mutationKey.Value, failure.Message, StringComparison.Ordinal);
+        Assert.Empty(targetRuntime.SnapshotPendingAttemptNames());
 
         var state = captured.Relocation!.Project(captured.Payload, root.AggregateGeneration).State;
         var legacy = captured with
@@ -317,8 +351,29 @@ public sealed class AuthorityAggregateRelocationTests
             targetOwner
         );
         var exactTarget = foreignPrepare with { TargetAttemptGeneration = 2 };
+        var exactPreparedSource = snapshot with
+        {
+            Relocation = snapshot.Relocation! with
+            {
+                Phase = Systems
+                    .Zlink
+                    .Framework
+                    .Runtime
+                    .Protocol
+                    .ServiceWireCodec
+                    .RelocationPhase
+                    .Prepared,
+                Target = new(
+                    exactTarget.Target.NodeRid.ToHex(),
+                    exactTarget.Target.NodeGeneration,
+                    exactTarget.Target.OwnerId,
+                    exactTarget.Target.OwnerLeaseGeneration,
+                    exactTarget.TargetAttemptGeneration
+                ),
+            },
+        };
         var observed = await coordinator.CommitTargetAsync(
-            snapshot,
+            exactPreparedSource,
             root,
             exactTarget,
             targetAuthority,
@@ -330,7 +385,7 @@ public sealed class AuthorityAggregateRelocationTests
         Assert.Equal((ulong)2, observed.Relocation!.Target!.AttemptGeneration);
         await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
             await coordinator.CommitTargetAsync(
-                snapshot,
+                exactPreparedSource,
                 root,
                 exactTarget with
                 {
@@ -361,7 +416,7 @@ public sealed class AuthorityAggregateRelocationTests
         );
         await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
             await coordinator.CommitTargetAsync(
-                snapshot,
+                exactPreparedSource,
                 root,
                 exactTarget,
                 targetAuthority,

@@ -1,14 +1,15 @@
-using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Internal;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Spots;
+using AggregateInventoryLeafEntry = Zlink.Framework.Runtime.Locations.ZLinkAggregateInventory.Entry;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -20,19 +21,6 @@ internal sealed partial class ZLinkProviderLocationRepository
     private const int WriteConflictRetryLimit = 64;
     private static readonly TimeSpan AggregateStagingRetention = TimeSpan.FromHours(24);
     private const int MaximumStoreConcurrency = 64;
-    private const int MaxInventoryPageEntries = 1024;
-    private const int MaxInventoryPageBytes = 1024 * 1024;
-    private const int MaxInventoryTreeLevels = 32;
-    private const uint InventoryCodecMagic = 0x5A4C4956; // ZLIV
-    private const byte InventoryCodecVersion = 1;
-    private const byte InventoryRootRecordKind = 1;
-    private const byte InventoryPageRecordKind = 2;
-    private const byte InventoryLeafEntryRecordKind = 3;
-    private const uint AggregateFingerprintMagic = 0x5A4C4146; // ZLAF
-    private const byte AggregateFingerprintVersion = 1;
-    private const byte AggregateHeaderRecordKind = 1;
-    private const byte AggregateRequestRecordKind = 2;
-    private static readonly UTF8Encoding InventoryUtf8 = new(false, true);
     private readonly SemaphoreSlim aggregateRecoveryGate = new(1, 1);
     private int aggregateStagingRecoveryCompleted;
 
@@ -244,9 +232,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 meta = current.Meta with
                 {
                     Payload = restore.Payload.ToArray(),
-                    Aggregate = restore.ClearRelocation
-                        ? ZLinkAuthorityAggregateCodec.Replace(current.Meta.Aggregate, null)
-                        : current.Meta.Aggregate,
+                    Aggregate = ApplyAuthorityRelocation(current, restore),
                 };
             }
             else if (mutation is ZLinkAuthorityMutation.Delete)
@@ -425,13 +411,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 meta = current.Meta with
                 {
                     Payload = put.Payload.ToArray(),
-                    Aggregate =
-                        put.Relocation is not null || put.ClearRelocation
-                            ? ZLinkAuthorityAggregateCodec.Replace(
-                                current.Meta.Aggregate,
-                                put.ApplyRelocation(current.Snapshot)
-                            )
-                            : current.Meta.Aggregate,
+                    Aggregate = ApplyAuthorityRelocation(current, put),
                     ObjectGeneration = nextObjectGeneration,
                     AuthorityOwnerGeneration = nextAuthorityOwnerGeneration,
                     OwnerId = targetOwner.OwnerId,
@@ -1312,6 +1292,63 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
     }
 
+    public async ValueTask RemoveSealedInventoryAsync(
+        ZLinkAggregateFence fence,
+        CancellationToken cancellationToken
+    )
+    {
+        var key = AggregateKey(fence);
+        var aggregate = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
+            .ConfigureAwait(false);
+        if (aggregate is null)
+        {
+            await ZLinkAggregateInventory
+                .RemoveInventoryAsync(_provider, Prefix, fence, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
+        aggregate = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
+            .ConfigureAwait(false);
+        if (aggregate?.Record.ParticipantsCleaned != true)
+            return;
+
+        await _provider
+            .WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Version(key, aggregate.Version)],
+                    [
+                        new ZLinkStoreMutation.Delete(AggregateHousekeepingKey(key)),
+                        new ZLinkStoreMutation.Delete(key),
+                    ]
+                ),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+    }
+
+    public ValueTask<string> SealAggregateInventoryAsync(
+        ZLinkAggregateFence fence,
+        IReadOnlyList<ZLinkAggregateParticipant> participants,
+        CancellationToken cancellationToken
+    ) =>
+        ZLinkAggregateInventory.SealAsync(
+            _provider,
+            Prefix,
+            fence,
+            participants,
+            cancellationToken
+        );
+
+    public ValueTask<
+        IReadOnlyList<ZLinkAggregateInventory.Participant>
+    > ReadAggregateInventoryAsync(
+        ZLinkAggregateFence fence,
+        string digest,
+        CancellationToken cancellationToken
+    ) => ZLinkAggregateInventory.ReadAsync(_provider, Prefix, fence, digest, cancellationToken);
+
     public async ValueTask<ZLinkAggregatePrepareResult> PrepareAggregateAsync(
         ZLinkAggregatePrepareRequest request,
         CancellationToken cancellationToken = default
@@ -1324,9 +1361,16 @@ internal sealed partial class ZLinkProviderLocationRepository
         var retryDeadline = Stopwatch.GetElapsedTime(0) + WriteConflictRetryWindow;
         var fence = new ZLinkAggregateFence(request.AggregateId, request.AggregateGeneration);
         var key = AggregateKey(fence);
-        var requestFingerprint = AggregateRequestFingerprint(request);
+        var inventoryParticipants = ZLinkAggregateInventory.Prepare(request.Participants);
+        var inventory = ZLinkAggregateInventory.Build(
+            inventoryParticipants.Select(static participant => participant.Entry).ToArray()
+        );
+        request = request with
+        {
+            InventoryDigest = Convert.FromHexString(inventory.Root.DigestSha256),
+        };
         var header = CreateAggregateHeader(request);
-        var inventory = BuildAggregateInventory(request);
+        var requestFingerprint = AggregateRequestFingerprint(header, request.Participants.Count);
         var existing = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
             .ConfigureAwait(false);
         if (existing is not null && existing.Record.Status != AggregateStatus.Staging)
@@ -1345,7 +1389,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                     existing.Record.RequestFingerprint,
                     requestFingerprint
                 )
-                || !AggregateInventoryRootEquals(existing.Record.Inventory, inventory.Root)
             )
         )
             return new ZLinkAggregatePrepareResult.Conflict();
@@ -1416,7 +1459,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 authority is null
                 || !ownsExistingFence
                     && (
-                        authority.Version.Value != participant.ExpectedStoreVersion
+                        authority.Version.Value != participant.CompareExchangeStoreVersion
                         || authority.Meta.AggregateFence is not null
                     )
                 || participant.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
@@ -1436,7 +1479,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                     header,
                     request.Participants.Count,
                     requestFingerprint,
-                    inventory.Root,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -1460,12 +1502,19 @@ internal sealed partial class ZLinkProviderLocationRepository
                         raced.Record.RequestFingerprint,
                         requestFingerprint
                     )
-                    || !AggregateInventoryRootEquals(raced.Record.Inventory, inventory.Root)
                 )
                     return new ZLinkAggregatePrepareResult.Conflict();
                 staging = raced;
             }
-            await StageAggregateInventoryAsync(fence, inventory, cancellationToken)
+            await ZLinkAggregateInventory
+                .WriteAsync(
+                    _provider,
+                    Prefix,
+                    fence,
+                    inventory,
+                    inventoryParticipants,
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             var stagedParticipants = request
                 .Participants.Select(
@@ -1475,20 +1524,13 @@ internal sealed partial class ZLinkProviderLocationRepository
                             participant.Key.Value,
                             participant.ExpectedStoreVersion,
                             participant.OwnerTransition,
-                            Sha256(participant.AuthorityPayload),
-                            Sha256(participant.MembershipMutation),
                             0,
                             requestFingerprint
                         )
                 )
                 .ToArray();
             if (
-                !await StageAggregateParticipantsAsync(
-                        fence,
-                        request.Participants,
-                        stagedParticipants,
-                        cancellationToken
-                    )
+                !await StageAggregateParticipantsAsync(fence, stagedParticipants, cancellationToken)
                     .ConfigureAwait(false)
             )
             {
@@ -1518,6 +1560,72 @@ internal sealed partial class ZLinkProviderLocationRepository
                     null
                 ),
             };
+            ZLinkStoreCondition.Version? representativeVersion = null;
+            if (request.RepresentativeKey is { } representative)
+            {
+                var primary = await ReadAuthorityRecordAsync(
+                        representative,
+                        knownMeta: null,
+                        projectCommittedAggregate: false,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                var progress = primary?.Snapshot.Relocation;
+                if (
+                    primary is null
+                    || primary.Meta.AggregateFence != fence
+                    || progress is not { Phase: ServiceWireCodec.RelocationPhase.Captured }
+                    || request.Relocation?.Target is not { } attempt
+                    || !progress.HoldsRestoreSource(
+                        request.AggregateId,
+                        primary.Snapshot,
+                        request.Relocation.Source,
+                        request.Relocation.Coordinator.ExpectedStoreVersion
+                    )
+                    || !progress.AcceptsAttempt(attempt)
+                )
+                {
+                    var observed = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (
+                        observed?.Record.Status
+                        is AggregateStatus.Prepared
+                            or AggregateStatus.Committed
+                    )
+                        return await ReconcileExistingAggregateAsync(
+                                fence,
+                                observed.Record,
+                                request,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false);
+                    await AbortAggregateStagingAsync(fence, staging, cancellationToken)
+                        .ConfigureAwait(false);
+                    return new ZLinkAggregatePrepareResult.Conflict();
+                }
+
+                var authorityKey = AuthorityMetaKey(representative);
+                representativeVersion = new(authorityKey, primary.Version);
+                mutations.Add(
+                    new ZLinkStoreMutation.Put(
+                        authorityKey,
+                        Encode(
+                            primary.Meta with
+                            {
+                                Aggregate = ZLinkAuthorityAggregateCodec.Replace(
+                                    primary.Meta.Aggregate,
+                                    progress with
+                                    {
+                                        Phase = ServiceWireCodec.RelocationPhase.Prepared,
+                                        Target = attempt,
+                                    }
+                                ),
+                            }
+                        ),
+                        null
+                    )
+                );
+            }
             AddCapacityMutations(mutations, request.TargetDescriptor, request.Capacity, pending: 1);
             ZLinkStoreWriteResult result;
             try
@@ -1530,6 +1638,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                         target.DescriptorCondition,
                         target.OwnerCondition,
                     };
+                    if (representativeVersion is not null)
+                        conditions.Add(representativeVersion);
                     conditions.AddRange(capacityConditions);
                     result = await _provider
                         .WriteAsync(
@@ -1636,7 +1746,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                     fence,
                     header,
                     requestFingerprint,
-                    inventory.Root,
                     request
                 )
                 .ConfigureAwait(false);
@@ -1664,10 +1773,17 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ConfigureAwait(false);
     }
 
+    public ValueTask<ZLinkAggregateCommitResult> CommitAggregateAttemptAsync(
+        ZLinkAggregateFence fence,
+        ulong attempt,
+        CancellationToken cancellationToken
+    ) => CommitAggregateCoreAsync(fence, cancellationToken, allowPreparingTarget: false, attempt);
+
     private async ValueTask<ZLinkAggregateCommitResult> CommitAggregateCoreAsync(
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken,
-        bool allowPreparingTarget
+        bool allowPreparingTarget,
+        ulong? attempt = null
     )
     {
         for (; ; )
@@ -1682,6 +1798,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                 return ZLinkAggregateCommitResult.Stale;
             if (aggregate.Record.Status == AggregateStatus.Committed)
             {
+                if (!MatchesCommittedAttempt(aggregate.Record, attempt))
+                    return ZLinkAggregateCommitResult.Stale;
                 await NormalizeCommittedAggregateAsync(fence, aggregate.Record, cancellationToken)
                     .ConfigureAwait(false);
                 return ZLinkAggregateCommitResult.AlreadyCommitted;
@@ -1745,11 +1863,42 @@ internal sealed partial class ZLinkProviderLocationRepository
                 target.DescriptorCondition,
                 target.OwnerCondition,
             };
+            var committed = aggregate.Record with { Status = AggregateStatus.Committed };
+            if (request.RepresentativeKey is { } representative)
+            {
+                var authority = authorities.Single(item => item!.Key == representative)!;
+                if (
+                    authority.Snapshot.Relocation
+                        is not { Phase: ServiceWireCodec.RelocationPhase.Prepared } relocation
+                    || relocation.RelocationId != fence.AggregateId
+                    || relocation.Target?.AttemptGeneration != attempt
+                )
+                    return ZLinkAggregateCommitResult.Stale;
+                conditions.Add(
+                    new ZLinkStoreCondition.Version(
+                        AuthorityMetaKey(representative),
+                        authority.Version
+                    )
+                );
+                committed = committed with
+                {
+                    Header = committed.Header with
+                    {
+                        Relocation = relocation with
+                        {
+                            Phase = ServiceWireCodec.RelocationPhase.Committed,
+                        },
+                    },
+                };
+            }
             for (var index = 0; index < request.Participants.Count; index++)
                 if (
                     (
                         await AddMembershipCommitConditionsAsync(
-                                request.Participants[index].AuthorityPayload,
+                                aggregate.Record.Header.ProjectPayload(
+                                    authorities[index]!.Meta.Allocation.ObjectKind,
+                                    request.Participants[index].AuthorityPayload
+                                ),
                                 authorities[index]!.Snapshot,
                                 conditions,
                                 cancellationToken,
@@ -1793,13 +1942,15 @@ internal sealed partial class ZLinkProviderLocationRepository
                 }
             }
             AppendCapacityMutations(mutations, deltas);
-            mutations.Add(
-                new ZLinkStoreMutation.Put(
-                    key,
-                    Encode(aggregate.Record with { Status = AggregateStatus.Committed }),
-                    null
-                )
-            );
+            mutations.Add(new ZLinkStoreMutation.Put(key, Encode(committed), null));
+            if (request.RepresentativeKey is not null)
+                mutations.Add(
+                    new ZLinkStoreMutation.Put(
+                        AggregateHousekeepingKey(key),
+                        EncodeAggregateHousekeeping(committed),
+                        null
+                    )
+                );
             ZLinkStoreWriteResult result;
             try
             {
@@ -1816,6 +1967,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                     .ConfigureAwait(false);
                 if (reconciled?.Record.Status != AggregateStatus.Committed)
                     throw;
+                if (!MatchesCommittedAttempt(reconciled.Record, attempt))
+                    return ZLinkAggregateCommitResult.Stale;
                 await NormalizeCommittedAggregateForAmbiguousAsync(fence, reconciled.Record)
                     .ConfigureAwait(false);
                 return ZLinkAggregateCommitResult.AlreadyCommitted;
@@ -1826,6 +1979,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                     .ConfigureAwait(false);
                 if (reconciled?.Record.Status == AggregateStatus.Committed)
                 {
+                    if (!MatchesCommittedAttempt(reconciled.Record, attempt))
+                        return ZLinkAggregateCommitResult.Stale;
                     await NormalizeCommittedAggregateAsync(
                             fence,
                             reconciled.Record,
@@ -1840,18 +1995,15 @@ internal sealed partial class ZLinkProviderLocationRepository
                 }
                 return ZLinkAggregateCommitResult.Stale;
             }
-            await NormalizeCommittedAggregateAsync(
-                    fence,
-                    aggregate.Record with
-                    {
-                        Status = AggregateStatus.Committed,
-                    },
-                    cancellationToken
-                )
+            await NormalizeCommittedAggregateAsync(fence, committed, cancellationToken)
                 .ConfigureAwait(false);
             return ZLinkAggregateCommitResult.Committed;
         }
     }
+
+    private static bool MatchesCommittedAttempt(AggregateRecord aggregate, ulong? attempt) =>
+        aggregate.Header.RepresentativeKey is null
+        || aggregate.Header.Relocation?.Target?.AttemptGeneration == attempt;
 
     private async ValueTask NormalizeCommittedAggregateAsync(
         ZLinkAggregateFence fence,
@@ -1863,9 +2015,13 @@ internal sealed partial class ZLinkProviderLocationRepository
             throw new ZLinkRelocationDataLostException(
                 $"Aggregate '{fence.AggregateId:N}' is not a committed authority publication."
             );
+        if (await IsAggregateRootMissingAsync(fence, cancellationToken).ConfigureAwait(false))
+            return;
         if (aggregate.ParticipantsNormalized)
         {
-            await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
+            if (aggregate.Header.RepresentativeKey is null)
+                await CleanupAggregateParticipantsAsync(fence, cancellationToken)
+                    .ConfigureAwait(false);
             return;
         }
 
@@ -1906,7 +2062,13 @@ internal sealed partial class ZLinkProviderLocationRepository
                             if (
                                 !IsNormalizedAggregateParticipant(
                                     authority,
-                                    participant,
+                                    participant with
+                                    {
+                                        AuthorityPayload = aggregate.Header.ProjectPayload(
+                                            authority.Meta.Allocation.ObjectKind,
+                                            participant.AuthorityPayload
+                                        ),
+                                    },
                                     aggregate,
                                     storedParticipant.Metadata
                                 )
@@ -1967,7 +2129,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                                 Encode(
                                     authority.Meta with
                                     {
-                                        Payload = participant.AuthorityPayload.ToArray(),
+                                        Payload = aggregate
+                                            .Header.ProjectPayload(
+                                                authority.Meta.Allocation.ObjectKind,
+                                                participant.AuthorityPayload
+                                            )
+                                            .ToArray(),
                                         Aggregate = aggregate.Header.ApplyRelocation(
                                             authority.Meta.Aggregate
                                         ),
@@ -2005,7 +2172,8 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ConfigureAwait(false);
         await MarkAggregateParticipantsNormalizedAsync(fence, cancellationToken)
             .ConfigureAwait(false);
-        await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
+        if (aggregate.Header.RepresentativeKey is null)
+            await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask MarkAggregateParticipantsNormalizedAsync(
@@ -2032,9 +2200,15 @@ internal sealed partial class ZLinkProviderLocationRepository
                     new ZLinkStoreWriteRequest(
                         [new ZLinkStoreCondition.Version(key, aggregate.Version)],
                         [
+                            new ZLinkStoreMutation.Put(key, Encode(aggregate.Record), null),
                             new ZLinkStoreMutation.Put(
-                                key,
-                                Encode(aggregate.Record with { ParticipantsNormalized = true }),
+                                AggregateHousekeepingKey(key),
+                                EncodeAggregateHousekeeping(
+                                    aggregate.Record with
+                                    {
+                                        ParticipantsNormalized = true,
+                                    }
+                                ),
                                 null
                             ),
                         ]
@@ -2056,138 +2230,67 @@ internal sealed partial class ZLinkProviderLocationRepository
     )
     {
         var key = AggregateKey(fence);
-        var aggregate = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
-            .ConfigureAwait(false);
-        if (aggregate is null || aggregate.Record.ParticipantsCleaned)
-            return;
-        if (
-            aggregate.Record.Status == AggregateStatus.Committed
-            && !aggregate.Record.ParticipantsNormalized
-        )
-            return;
-        if (aggregate.Record.Status is not (AggregateStatus.Committed or AggregateStatus.Aborted))
-            return;
-
-        // The inventory is the authority for participant identity and index.
-        // Validate it before deleting any row so corruption cannot turn a
-        // recoverable aggregate into an unrecoverable partial cleanup.
-        var inventory = await ReadAndValidateAggregateInventoryAsync(
-                fence,
-                aggregate.Record,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        await DeleteAggregateParticipantRowsAsync(
-                fence,
-                inventory,
-                payloadRows: true,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        await DeleteAggregateParticipantRowsAsync(
-                fence,
-                inventory,
-                payloadRows: false,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        await DeleteAggregateInventoryPagesAsync(
-                fence,
-                aggregate.Record.Inventory,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-
         for (var attempt = 0; attempt < 8; attempt++)
         {
-            aggregate = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
+            var aggregate = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
                 .ConfigureAwait(false);
-            if (aggregate is null || aggregate.Record.ParticipantsCleaned)
+            if (aggregate is null)
                 return;
-            var result = await _provider
-                .WriteAsync(
-                    new ZLinkStoreWriteRequest(
-                        [new ZLinkStoreCondition.Version(key, aggregate.Version)],
-                        [
-                            new ZLinkStoreMutation.Put(
-                                key,
-                                Encode(aggregate.Record with { ParticipantsCleaned = true }),
-                                null
-                            ),
-                        ]
-                    ),
-                    cancellationToken
-                )
+            var record = aggregate.Record;
+            if (record.Status is not (AggregateStatus.Committed or AggregateStatus.Aborted))
+                return;
+            var rootMissing = await IsAggregateRootMissingAsync(fence, cancellationToken)
                 .ConfigureAwait(false);
-            if (result is ZLinkStoreWriteResult.Applied)
+            if (
+                record.Status == AggregateStatus.Committed
+                && !record.ParticipantsNormalized
+                && !rootMissing
+            )
                 return;
+
+            if (!record.ParticipantsCleaned)
+            {
+                var result = await _provider
+                    .WriteAsync(
+                        new ZLinkStoreWriteRequest(
+                            [new ZLinkStoreCondition.Version(key, aggregate.Version)],
+                            [
+                                new ZLinkStoreMutation.Put(key, Encode(record), null),
+                                new ZLinkStoreMutation.Put(
+                                    AggregateHousekeepingKey(key),
+                                    EncodeAggregateHousekeeping(
+                                        record with
+                                        {
+                                            ParticipantsCleaned = true,
+                                        }
+                                    ),
+                                    null
+                                ),
+                            ]
+                        ),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                if (result is not ZLinkStoreWriteResult.Applied)
+                    continue;
+            }
+
+            await CleanupUnfencedAggregateChildrenAsync(fence, cancellationToken)
+                .ConfigureAwait(false);
+            return;
         }
         throw new IOException(
             $"Aggregate '{fence.AggregateId:N}' cleanup marker could not be stored."
         );
     }
 
-    private async ValueTask DeleteAggregateParticipantRowsAsync(
+    private async ValueTask<bool> IsAggregateRootMissingAsync(
         ZLinkAggregateFence fence,
-        IReadOnlyList<AggregateInventoryLeafEntry> inventory,
-        bool payloadRows,
         CancellationToken cancellationToken
-    )
-    {
-        const int maximumDeletesPerBatch = 1024;
-        for (var offset = 0; offset < inventory.Count; offset += maximumDeletesPerBatch)
-        {
-            var count = Math.Min(maximumDeletesPerBatch, inventory.Count - offset);
-            var mutations = inventory
-                .Skip(offset)
-                .Take(count)
-                .Select(entry =>
-                    (ZLinkStoreMutation)
-                        new ZLinkStoreMutation.Delete(
-                            payloadRows
-                                ? AggregateParticipantPayloadKey(fence, checked((int)entry.Index))
-                                : AggregateParticipantMetaKey(fence, checked((int)entry.Index))
-                        )
-                )
-                .ToArray();
-            await _provider
-                .WriteAsync(new ZLinkStoreWriteRequest([], mutations), cancellationToken)
-                .ConfigureAwait(false);
-        }
-    }
-
-    private async ValueTask DeleteAggregateInventoryPagesAsync(
-        ZLinkAggregateFence fence,
-        AggregateInventoryRoot inventory,
-        CancellationToken cancellationToken
-    )
-    {
-        const int maximumDeletesPerBatch = 1024;
-        if (inventory.PageCountsByLevel is null)
-            throw InventoryDataLost(fence, "page counts are missing");
-        for (var level = 0; level < inventory.PageCountsByLevel.Count; level++)
-        {
-            var pageCount = inventory.PageCountsByLevel[level];
-            if (pageCount < 1 || pageCount > inventory.TotalCount)
-                throw InventoryDataLost(fence, $"level {level} page count is invalid");
-            for (var offset = 0; offset < pageCount; offset += maximumDeletesPerBatch)
-            {
-                var count = Math.Min(maximumDeletesPerBatch, pageCount - offset);
-                var mutations = Enumerable
-                    .Range(offset, count)
-                    .Select(index =>
-                        (ZLinkStoreMutation)
-                            new ZLinkStoreMutation.Delete(
-                                AggregateInventoryPageKey(fence, level, index)
-                            )
-                    )
-                    .ToArray();
-                await _provider
-                    .WriteAsync(new ZLinkStoreWriteRequest([], mutations), cancellationToken)
-                    .ConfigureAwait(false);
-            }
-        }
-    }
+    ) =>
+        await _provider
+            .ReadAsync(ZLinkAggregateInventory.RootKey(Prefix, fence), cancellationToken)
+            .ConfigureAwait(false) is ZLinkStoreReadResult.Missing;
 
     private static bool IsNormalizedAggregateParticipant(
         StoredAuthority authority,
@@ -2228,7 +2331,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         AggregateHeader header,
         int participantCount,
         byte[] requestFingerprint,
-        AggregateInventoryRoot inventory,
         CancellationToken cancellationToken
     )
     {
@@ -2237,7 +2339,6 @@ internal sealed partial class ZLinkProviderLocationRepository
             header,
             participantCount,
             requestFingerprint,
-            inventory,
             AggregateStatus.Staging,
             storeNow,
             false,
@@ -2249,7 +2350,14 @@ internal sealed partial class ZLinkProviderLocationRepository
                 .WriteAsync(
                     new ZLinkStoreWriteRequest(
                         [new ZLinkStoreCondition.Missing(key)],
-                        [new ZLinkStoreMutation.Put(key, Encode(staged), null)]
+                        [
+                            new ZLinkStoreMutation.Put(key, Encode(staged), null),
+                            new ZLinkStoreMutation.Put(
+                                AggregateHousekeepingKey(key),
+                                EncodeAggregateHousekeeping(staged),
+                                null
+                            ),
+                        ]
                     ),
                     cancellationToken
                 )
@@ -2274,7 +2382,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                     reconciled.Record.RequestFingerprint,
                     requestFingerprint
                 )
-                && AggregateInventoryRootEquals(reconciled.Record.Inventory, inventory)
             )
                 return reconciled;
             throw;
@@ -2290,6 +2397,51 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (staging.Record.Status != AggregateStatus.Staging)
             return false;
         var key = AggregateKey(fence);
+        var rootKey = ZLinkAggregateInventory.RootKey(Prefix, fence);
+        if (
+            await _provider.ReadAsync(rootKey, cancellationToken).ConfigureAwait(false)
+            is ZLinkStoreReadResult.Missing
+        )
+        {
+            if (staging.Record.Header.RepresentativeKey is not null)
+                throw ZLinkAggregateInventory.DataLost(rootKey);
+            var abandoned = await _provider
+                .WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [
+                            new ZLinkStoreCondition.Version(key, staging.Version),
+                            new ZLinkStoreCondition.Missing(rootKey),
+                        ],
+                        [
+                            new ZLinkStoreMutation.Put(
+                                key,
+                                Encode(staging.Record with { Status = AggregateStatus.Aborted }),
+                                null
+                            ),
+                            new ZLinkStoreMutation.Put(
+                                AggregateHousekeepingKey(key),
+                                EncodeAggregateHousekeeping(
+                                    staging.Record with
+                                    {
+                                        ParticipantsCleaned = true,
+                                    }
+                                ),
+                                null
+                            ),
+                        ]
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (abandoned is ZLinkStoreWriteResult.Applied)
+                await CleanupUnfencedAggregateChildrenAsync(fence, cancellationToken)
+                    .ConfigureAwait(false);
+            return abandoned is ZLinkStoreWriteResult.Applied;
+        }
+        var inventory = staging.Record.Header.RepresentativeKey is null
+            ? null
+            : await ReadAndValidateAggregateInventoryAsync(fence, staging.Record, cancellationToken)
+                .ConfigureAwait(false);
         var result = await _provider
             .WriteAsync(
                 new ZLinkStoreWriteRequest(
@@ -2319,7 +2471,12 @@ internal sealed partial class ZLinkProviderLocationRepository
             return false;
         if (!aborted.ParticipantsCleaned)
         {
-            await ReleaseAggregateParticipantFencesAsync(fence, aborted, cancellationToken)
+            await ReleaseAggregateParticipantFencesAsync(
+                    fence,
+                    aborted,
+                    cancellationToken,
+                    inventory
+                )
                 .ConfigureAwait(false);
             await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
         }
@@ -2330,7 +2487,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         ZLinkAggregateFence fence,
         AggregateHeader header,
         byte[] requestFingerprint,
-        AggregateInventoryRoot inventory,
         ZLinkAggregatePrepareRequest? request = null
     )
     {
@@ -2353,7 +2509,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                         aggregate.Record.RequestFingerprint,
                         requestFingerprint
                     )
-                    || !AggregateInventoryRootEquals(aggregate.Record.Inventory, inventory)
                 )
                     return new ZLinkAggregatePrepareResult.Conflict();
 
@@ -2494,45 +2649,29 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken
     )
     {
-        var childPrefix = AggregateKey(fence).Value + ":";
-        var keys = new List<ZLinkStoreKey>();
-        ZLinkStoreScanCursor? cursor = null;
-        do
-        {
-            var scan = await _provider
-                .ScanAsync(new ZLinkStoreScanRequest(childPrefix, cursor, 1000), cancellationToken)
-                .ConfigureAwait(false);
-            if (scan is ZLinkStoreScanResult.Expired)
-            {
-                keys.Clear();
-                cursor = null;
-                continue;
-            }
-            var page = ((ZLinkStoreScanResult.Page)scan).Value;
-            keys.AddRange(page.Items.Select(static item => item.Key));
-            cursor = page.NextCursor;
-        } while (cursor is not null);
-
-        const int maximumDeletesPerBatch = 1024;
-        for (var offset = 0; offset < keys.Count; offset += maximumDeletesPerBatch)
-        {
-            var mutations = keys.Skip(offset)
-                .Take(maximumDeletesPerBatch)
-                .Select(static key => (ZLinkStoreMutation)new ZLinkStoreMutation.Delete(key))
-                .ToArray();
-            await _provider
-                .WriteAsync(new ZLinkStoreWriteRequest([], mutations), cancellationToken)
-                .ConfigureAwait(false);
-        }
+        await CleanupAggregateRowsAsync(
+                AggregateKey(fence).Value + ":participant:",
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        await ZLinkAggregateInventory
+            .RemoveInventoryAsync(_provider, Prefix, fence, cancellationToken)
+            .ConfigureAwait(false);
     }
+
+    private ValueTask CleanupAggregateRowsAsync(
+        string childPrefix,
+        CancellationToken cancellationToken
+    ) => ZLinkAggregateInventory.RemoveAsync(_provider, childPrefix, cancellationToken);
 
     private async ValueTask ReleaseAggregateParticipantFencesAsync(
         ZLinkAggregateFence fence,
         AggregateRecord aggregate,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        IReadOnlyList<AggregateInventoryLeafEntry>? inventory = null
     )
     {
-        var inventory = await ReadAndValidateAggregateInventoryAsync(
+        inventory ??= await ReadAndValidateAggregateInventoryAsync(
                 fence,
                 aggregate,
                 cancellationToken
@@ -2549,7 +2688,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 async (entry, token) =>
                 {
                     var index = checked((int)entry.Index);
-                    var key = new ZLinkAuthorityKey(entry.Key);
+                    var key = new ZLinkAuthorityKey(entry.AuthorityKey);
                     for (var attempt = 0; attempt < 8; attempt++)
                     {
                         var authority = await ReadAuthorityRecordAsync(
@@ -2592,6 +2731,13 @@ internal sealed partial class ZLinkProviderLocationRepository
                                             Encode(
                                                 authority.Meta with
                                                 {
+                                                    Aggregate =
+                                                        key == aggregate.Header.RepresentativeKey
+                                                            ? ZLinkAuthorityAggregateCodec.Replace(
+                                                                authority.Meta.Aggregate,
+                                                                null
+                                                            )
+                                                            : authority.Meta.Aggregate,
                                                     AggregateFence = null,
                                                     AggregateParticipantIndex = null,
                                                     AggregateExpectedStoreVersion = null,
@@ -2666,14 +2812,15 @@ internal sealed partial class ZLinkProviderLocationRepository
             {
                 if (
                     pair.Key.Value.Contains(":participant:", StringComparison.Ordinal)
-                    || pair.Key.Value.Contains(":inventory:", StringComparison.Ordinal)
+                    || pair.Key.Value.EndsWith(":housekeeping", StringComparison.Ordinal)
                 )
                     continue;
 
                 AggregateRecord aggregate;
                 try
                 {
-                    aggregate = Decode<AggregateRecord>(pair.Value.Bytes);
+                    aggregate = await DecodeAggregateAsync(pair.Key, pair.Value, cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 catch (Exception error)
                     when (error
@@ -2737,9 +2884,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                     }
                     continue;
                 }
-                if (!beforeConversion && terminal && aggregate.ParticipantsCleaned)
-                    continue;
-
                 recovery.Add((fence, new(aggregate, pair.Value.Version, pair.Value.StoreNow)));
             }
             cursor = page.NextCursor;
@@ -2828,12 +2972,20 @@ internal sealed partial class ZLinkProviderLocationRepository
                                 .ConfigureAwait(false);
                             break;
                         case AggregateStatus.Committed:
-                            await NormalizeCommittedAggregateAsync(
-                                    fence,
-                                    stored.Record,
-                                    cancellationToken
-                                )
-                                .ConfigureAwait(false);
+                            if (
+                                stored.Record.ParticipantsCleaned
+                                || await IsAggregateRootMissingAsync(fence, cancellationToken)
+                                    .ConfigureAwait(false)
+                            )
+                                await RemoveSealedInventoryAsync(fence, cancellationToken)
+                                    .ConfigureAwait(false);
+                            else
+                                await NormalizeCommittedAggregateAsync(
+                                        fence,
+                                        stored.Record,
+                                        cancellationToken
+                                    )
+                                    .ConfigureAwait(false);
                             break;
                     }
             }
@@ -2873,7 +3025,10 @@ internal sealed partial class ZLinkProviderLocationRepository
             var removed = await WriteMigrationBatchAsync(
                     new(
                         [new ZLinkStoreCondition.Version(key, settled.Version)],
-                        [new ZLinkStoreMutation.Delete(key)]
+                        [
+                            new ZLinkStoreMutation.Delete(key),
+                            new ZLinkStoreMutation.Delete(AggregateHousekeepingKey(key)),
+                        ]
                     ),
                     cancellationToken
                 )
@@ -2891,608 +3046,72 @@ internal sealed partial class ZLinkProviderLocationRepository
 
     private async ValueTask<bool> StageAggregateParticipantsAsync(
         ZLinkAggregateFence fence,
-        IReadOnlyList<ZLinkAggregateParticipant> participants,
         IReadOnlyList<AggregateParticipantRecord> records,
         CancellationToken cancellationToken
     )
     {
-        var exact = new bool[participants.Count];
+        var exact = new bool[records.Count];
         await Parallel
             .ForEachAsync(
-                Enumerable.Range(0, participants.Count),
+                records,
                 new ParallelOptions
                 {
                     MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
-                async (index, token) =>
+                async (record, token) =>
                 {
-                    var participant = participants[index];
-                    var record = records[index];
-                    var metaKey = AggregateParticipantMetaKey(fence, index);
-                    var payloadKey = AggregateParticipantPayloadKey(fence, index);
-                    ZLinkStoreWriteResult result;
-                    try
+                    var key = AggregateParticipantMetaKey(fence, record.Index);
+                    var result = await _provider
+                        .WriteAsync(
+                            new ZLinkStoreWriteRequest(
+                                [new ZLinkStoreCondition.Missing(key)],
+                                [new ZLinkStoreMutation.Put(key, Encode(record), null)]
+                            ),
+                            token
+                        )
+                        .ConfigureAwait(false);
+                    if (result is ZLinkStoreWriteResult.Applied)
                     {
-                        result = await _provider
-                            .WriteAsync(
-                                new ZLinkStoreWriteRequest(
-                                    [
-                                        new ZLinkStoreCondition.Missing(metaKey),
-                                        new ZLinkStoreCondition.Missing(payloadKey),
-                                    ],
-                                    [
-                                        new ZLinkStoreMutation.Put(metaKey, Encode(record), null),
-                                        new ZLinkStoreMutation.Put(
-                                            payloadKey,
-                                            participant.AuthorityPayload.ToArray(),
-                                            null
-                                        ),
-                                    ]
-                                ),
-                                token
-                            )
-                            .ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        exact[index] = await IsExactStagedParticipantForReconciliationAsync(
-                                metaKey,
-                                payloadKey,
-                                record,
-                                participant.AuthorityPayload
-                            )
-                            .ConfigureAwait(false);
-                        if (!exact[index])
-                            throw;
+                        exact[record.Index] = true;
                         return;
                     }
-                    exact[index] =
-                        result is ZLinkStoreWriteResult.Applied
-                        || await IsExactStagedParticipantAsync(
-                                metaKey,
-                                payloadKey,
-                                record,
-                                participant.AuthorityPayload,
-                                token
-                            )
-                            .ConfigureAwait(false);
+                    var existing = await ReadRecordAsync<AggregateParticipantRecord>(key, token)
+                        .ConfigureAwait(false);
+                    exact[record.Index] =
+                        existing is not null
+                        && existing.Record.Index == record.Index
+                        && existing.Record.Key == record.Key
+                        && existing
+                            .Record.RequestFingerprint.AsSpan()
+                            .SequenceEqual(record.RequestFingerprint);
                 }
             )
             .ConfigureAwait(false);
         return exact.All(static value => value);
     }
 
-    private static AggregateInventoryTree BuildAggregateInventory(
-        ZLinkAggregatePrepareRequest request
-    )
-    {
-        var entries = request
-            .Participants.OrderBy(
-                static participant => participant.Key.Value,
-                StringComparer.Ordinal
-            )
-            .Select(
-                (participant, index) =>
-                    new AggregateInventoryLeafEntry(
-                        index,
-                        participant.Key.Value,
-                        participant.ExpectedStoreVersion,
-                        participant.OwnerTransition,
-                        Sha256(participant.AuthorityPayload),
-                        Sha256(participant.MembershipMutation)
-                    )
-            )
-            .ToArray();
-        using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var entry in entries)
-            digest.AppendData(EncodeAggregateInventoryLeafEntry(entry));
-        var pages = new List<AggregateInventoryPage>();
-        var references = PackInventoryLeafPages(entries, pages);
-        var level = 0;
-        while (
-            references.Count > MaxInventoryPageEntries
-            || EncodeAggregateInventoryRoot(
-                new AggregateInventoryRoot(
-                    entries.Length,
-                    new byte[SHA256.HashSizeInBytes],
-                    level,
-                    references,
-                    []
-                )
-            ).Length > MaxInventoryPageBytes
-        )
-        {
-            level++;
-            references = PackInventoryUpperPages(level, references, pages);
-        }
-        var pageCounts = pages
-            .GroupBy(static page => page.Level)
-            .OrderBy(static group => group.Key)
-            .Select(static group => group.Count())
-            .ToArray();
-        var root = new AggregateInventoryRoot(
-            entries.Length,
-            digest.GetHashAndReset(),
-            level,
-            references,
-            pageCounts
-        );
-        if (EncodeAggregateInventoryRoot(root).Length > MaxInventoryPageBytes)
-            throw new ArgumentOutOfRangeException(
-                nameof(request),
-                "The aggregate inventory root exceeds 1 MiB."
-            );
-        return new AggregateInventoryTree(root, pages);
-    }
-
-    private static byte[] EncodeAggregateInventoryRoot(AggregateInventoryRoot root)
-    {
-        using var stream = new MemoryStream();
-        WriteInventoryHeader(stream, InventoryRootRecordKind);
-        WriteInventoryInt32(stream, root.TotalCount);
-        WriteInventoryHash(stream, root.Digest);
-        WriteInventoryInt32(stream, root.TopLevel);
-        WriteInventoryInt32(stream, root.TopPages.Count);
-        foreach (var reference in root.TopPages)
-            WriteInventoryReference(stream, reference);
-        WriteInventoryInt32(stream, root.PageCountsByLevel.Count);
-        foreach (var count in root.PageCountsByLevel)
-            WriteInventoryInt32(stream, count);
-        return stream.ToArray();
-    }
-
-    private static byte[] EncodeAggregateInventoryPage(AggregateInventoryPage page)
-    {
-        using var stream = new MemoryStream();
-        WriteInventoryHeader(stream, InventoryPageRecordKind);
-        WriteInventoryInt32(stream, page.Level);
-        WriteInventoryInt32(stream, page.Index);
-        WriteInventoryInt32(stream, page.StartIndex);
-        WriteInventoryInt32(stream, page.EntryCount);
-        WriteInventoryInt32(stream, page.Entries.Count);
-        foreach (var entry in page.Entries)
-            WriteInventoryLeafEntry(stream, entry);
-        WriteInventoryInt32(stream, page.Children.Count);
-        foreach (var child in page.Children)
-            WriteInventoryReference(stream, child);
-        return stream.ToArray();
-    }
-
-    private static byte[] EncodeAggregateInventoryLeafEntry(AggregateInventoryLeafEntry entry)
-    {
-        using var stream = new MemoryStream();
-        WriteInventoryHeader(stream, InventoryLeafEntryRecordKind);
-        WriteInventoryLeafEntry(stream, entry);
-        return stream.ToArray();
-    }
-
-    private static AggregateInventoryPage DecodeAggregateInventoryPage(ReadOnlyMemory<byte> encoded)
-    {
-        var reader = new AggregateInventoryReader(encoded.Span);
-        reader.ReadHeader(InventoryPageRecordKind);
-        var level = reader.ReadInt32();
-        var index = reader.ReadInt32();
-        var startIndex = reader.ReadInt32();
-        var entryCount = reader.ReadInt32();
-        var leafCount = reader.ReadBoundedCount(MaxInventoryPageEntries);
-        var entries = new AggregateInventoryLeafEntry[leafCount];
-        for (var entryIndex = 0; entryIndex < leafCount; entryIndex++)
-            entries[entryIndex] = reader.ReadLeafEntry();
-        var childCount = reader.ReadBoundedCount(MaxInventoryPageEntries);
-        var children = new AggregateInventoryPageReference[childCount];
-        for (var childIndex = 0; childIndex < childCount; childIndex++)
-            children[childIndex] = reader.ReadReference();
-        reader.RequireEnd();
-        return new AggregateInventoryPage(level, index, startIndex, entryCount, entries, children);
-    }
-
-    private static void WriteInventoryHeader(Stream stream, byte recordKind)
-    {
-        Span<byte> header = stackalloc byte[6];
-        BinaryPrimitives.WriteUInt32BigEndian(header, InventoryCodecMagic);
-        header[4] = InventoryCodecVersion;
-        header[5] = recordKind;
-        stream.Write(header);
-    }
-
-    private static void WriteInventoryInt32(Stream stream, int value)
-    {
-        Span<byte> encoded = stackalloc byte[sizeof(int)];
-        BinaryPrimitives.WriteInt32BigEndian(encoded, value);
-        stream.Write(encoded);
-    }
-
-    private static void WriteInventoryString(Stream stream, string value)
-    {
-        var encoded = InventoryUtf8.GetBytes(value);
-        WriteInventoryInt32(stream, encoded.Length);
-        stream.Write(encoded);
-    }
-
-    private static void WriteInventoryHash(Stream stream, byte[] hash)
-    {
-        if (hash.Length != SHA256.HashSizeInBytes)
-            throw new InvalidDataException("An aggregate inventory SHA-256 value is invalid.");
-        stream.Write(hash);
-    }
-
-    private static void WriteInventoryLeafEntry(Stream stream, AggregateInventoryLeafEntry entry)
-    {
-        WriteInventoryInt32(stream, entry.Index);
-        WriteInventoryString(stream, entry.Key);
-        WriteInventoryString(stream, entry.ExpectedStoreVersion);
-        stream.WriteByte((byte)entry.OwnerTransition);
-        WriteInventoryHash(stream, entry.AuthorityPayloadSha256);
-        WriteInventoryHash(stream, entry.MembershipMutationSha256);
-    }
-
-    private static void WriteInventoryReference(
-        Stream stream,
-        AggregateInventoryPageReference reference
-    )
-    {
-        WriteInventoryInt32(stream, reference.Level);
-        WriteInventoryInt32(stream, reference.Index);
-        WriteInventoryInt32(stream, reference.StartIndex);
-        WriteInventoryInt32(stream, reference.EntryCount);
-        WriteInventoryHash(stream, reference.Sha256);
-    }
-
-    private static IReadOnlyList<AggregateInventoryPageReference> PackInventoryLeafPages(
-        IReadOnlyList<AggregateInventoryLeafEntry> entries,
-        ICollection<AggregateInventoryPage> pages
-    )
-    {
-        var references = new List<AggregateInventoryPageReference>();
-        for (var offset = 0; offset < entries.Count; )
-        {
-            var count = Math.Min(MaxInventoryPageEntries, entries.Count - offset);
-            AggregateInventoryPage page;
-            byte[] encoded;
-            do
-            {
-                page = new AggregateInventoryPage(
-                    0,
-                    references.Count,
-                    offset,
-                    count,
-                    entries.Skip(offset).Take(count).ToArray(),
-                    []
-                );
-                encoded = EncodeAggregateInventoryPage(page);
-                if (encoded.Length <= MaxInventoryPageBytes)
-                    break;
-                count /= 2;
-            } while (count > 0);
-            if (count == 0 || encoded.Length > MaxInventoryPageBytes)
-                throw new ArgumentOutOfRangeException(
-                    nameof(entries),
-                    "An aggregate inventory entry exceeds 1 MiB."
-                );
-            pages.Add(page);
-            references.Add(InventoryReference(page, encoded));
-            offset += count;
-        }
-        return references;
-    }
-
-    private static IReadOnlyList<AggregateInventoryPageReference> PackInventoryUpperPages(
-        int level,
-        IReadOnlyList<AggregateInventoryPageReference> children,
-        ICollection<AggregateInventoryPage> pages
-    )
-    {
-        var references = new List<AggregateInventoryPageReference>();
-        for (var offset = 0; offset < children.Count; )
-        {
-            var count = Math.Min(MaxInventoryPageEntries, children.Count - offset);
-            AggregateInventoryPage page;
-            byte[] encoded;
-            do
-            {
-                var selected = children.Skip(offset).Take(count).ToArray();
-                page = new AggregateInventoryPage(
-                    level,
-                    references.Count,
-                    selected[0].StartIndex,
-                    selected.Sum(static child => child.EntryCount),
-                    [],
-                    selected
-                );
-                encoded = EncodeAggregateInventoryPage(page);
-                if (encoded.Length <= MaxInventoryPageBytes)
-                    break;
-                count /= 2;
-            } while (count > 0);
-            if (count == 0 || encoded.Length > MaxInventoryPageBytes)
-                throw new ArgumentOutOfRangeException(
-                    nameof(children),
-                    "An aggregate inventory index entry exceeds 1 MiB."
-                );
-            pages.Add(page);
-            references.Add(InventoryReference(page, encoded));
-            offset += count;
-        }
-        return references;
-    }
-
-    private static AggregateInventoryPageReference InventoryReference(
-        AggregateInventoryPage page,
-        ReadOnlySpan<byte> encoded
-    ) => new(page.Level, page.Index, page.StartIndex, page.EntryCount, SHA256.HashData(encoded));
-
-    private async ValueTask StageAggregateInventoryAsync(
-        ZLinkAggregateFence fence,
-        AggregateInventoryTree inventory,
-        CancellationToken cancellationToken
-    )
-    {
-        await Parallel
-            .ForEachAsync(
-                inventory.Pages,
-                new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = MaximumStoreConcurrency,
-                    CancellationToken = cancellationToken,
-                },
-                async (page, token) =>
-                {
-                    var key = AggregateInventoryPageKey(fence, page.Level, page.Index);
-                    var encoded = EncodeAggregateInventoryPage(page);
-                    if (encoded.Length > MaxInventoryPageBytes)
-                        throw new InvalidDataException(
-                            $"Aggregate inventory page {page.Level}:{page.Index} exceeds 1 MiB."
-                        );
-                    var result = await _provider
-                        .WriteAsync(
-                            new ZLinkStoreWriteRequest(
-                                [new ZLinkStoreCondition.Missing(key)],
-                                [new ZLinkStoreMutation.Put(key, encoded, null)]
-                            ),
-                            token
-                        )
-                        .ConfigureAwait(false);
-                    if (result is ZLinkStoreWriteResult.Applied)
-                        return;
-                    var read = await _provider.ReadAsync(key, token).ConfigureAwait(false);
-                    if (
-                        read is not ZLinkStoreReadResult.Found found
-                        || !found.Value.Bytes.Span.SequenceEqual(encoded)
-                    )
-                        throw new ZLinkRelocationDataLostException(
-                            $"Aggregate inventory page {page.Level}:{page.Index} changed."
-                        );
-                }
-            )
-            .ConfigureAwait(false);
-    }
-
-    private static bool AggregateInventoryRootEquals(
-        AggregateInventoryRoot left,
-        AggregateInventoryRoot right
-    ) =>
-        EncodeAggregateInventoryRoot(left)
-            .AsSpan()
-            .SequenceEqual(EncodeAggregateInventoryRoot(right));
-
-    private async ValueTask<AggregateInventoryLeafEntry[]> ReadAndValidateAggregateInventoryAsync(
+    private async ValueTask<
+        IReadOnlyList<AggregateInventoryLeafEntry>
+    > ReadAndValidateAggregateInventoryAsync(
         ZLinkAggregateFence fence,
         AggregateRecord aggregate,
         CancellationToken cancellationToken
     )
     {
-        var root = aggregate.Inventory;
-        if (
-            root is null
-            || root.TotalCount != aggregate.ParticipantCount
-            || root.TotalCount < 1
-            || root.Digest is null
-            || root.Digest.Length != SHA256.HashSizeInBytes
-            || root.TopLevel < 0
-            || root.TopLevel >= MaxInventoryTreeLevels
-            || root.TopPages is null
-            || root.TopPages.Count is < 1 or > MaxInventoryPageEntries
-            || root.PageCountsByLevel is null
-            || root.PageCountsByLevel.Count != root.TopLevel + 1
-            || root.PageCountsByLevel.Any(count => count < 1 || count > root.TotalCount)
-            || EncodeAggregateInventoryRoot(root).Length > MaxInventoryPageBytes
-        )
-            throw InventoryDataLost(fence, "root metadata is invalid");
-
-        var leafPageCount = root.PageCountsByLevel[0];
-        if (
-            leafPageCount > root.TotalCount
-            || (long)root.TotalCount > (long)leafPageCount * MaxInventoryPageEntries
-        )
-            throw InventoryDataLost(fence, "leaf page count cannot contain the declared total");
-        for (var level = 1; level < root.PageCountsByLevel.Count; level++)
-        {
-            var lowerCount = root.PageCountsByLevel[level - 1];
-            var currentCount = root.PageCountsByLevel[level];
-            var minimum =
-                ((long)lowerCount + MaxInventoryPageEntries - 1) / MaxInventoryPageEntries;
-            if (currentCount < minimum || currentCount > lowerCount)
-                throw InventoryDataLost(
-                    fence,
-                    $"level {level} page count cannot index level {level - 1}"
-                );
-        }
-        if (root.TopPages.Count != root.PageCountsByLevel[root.TopLevel])
-            throw InventoryDataLost(fence, "top page count does not match the root");
-
-        var entries = new List<AggregateInventoryLeafEntry>();
-        var observedPageCounts = new int[root.TopLevel + 1];
-        var visited = new HashSet<(int Level, int Index)>();
-        long expectedStart = 0;
-        foreach (var reference in root.TopPages)
-        {
-            if (reference.Level != root.TopLevel || reference.StartIndex != expectedStart)
-                throw InventoryDataLost(fence, "top page references are reordered");
-            await ReadInventoryPageAsync(reference).ConfigureAwait(false);
-            expectedStart += reference.EntryCount;
-        }
-        if (
-            expectedStart != root.TotalCount
-            || entries.Count != root.TotalCount
-            || !observedPageCounts.SequenceEqual(root.PageCountsByLevel)
-        )
-            throw InventoryDataLost(fence, "page counts do not match the root");
-        for (var level = 0; level < observedPageCounts.Length; level++)
-        {
-            for (var index = 0; index < observedPageCounts[level]; index++)
-            {
-                if (!visited.Contains((level, index)))
-                    throw InventoryDataLost(
-                        fence,
-                        $"level {level} page indexes are not contiguous"
-                    );
-            }
-        }
-
-        using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        for (var index = 0; index < entries.Count; index++)
-        {
-            var entry = entries[index];
-            if (
-                entry.Index != index
-                || string.IsNullOrEmpty(entry.Key)
-                || string.IsNullOrEmpty(entry.ExpectedStoreVersion)
-                || entry.AuthorityPayloadSha256 is null
-                || entry.AuthorityPayloadSha256.Length != SHA256.HashSizeInBytes
-                || entry.MembershipMutationSha256 is null
-                || entry.MembershipMutationSha256.Length != SHA256.HashSizeInBytes
+        var entries = await ZLinkAggregateInventory
+            .ReadEntriesAsync(
+                _provider,
+                Prefix,
+                fence,
+                Convert.ToHexString(aggregate.Header.InventoryDigest).ToLowerInvariant(),
+                cancellationToken
             )
-                throw InventoryDataLost(fence, $"leaf entry {index} is invalid or reordered");
-            digest.AppendData(EncodeAggregateInventoryLeafEntry(entry));
-        }
-        if (!CryptographicOperations.FixedTimeEquals(digest.GetHashAndReset(), root.Digest))
-            throw InventoryDataLost(fence, "digest does not match");
-        return entries.ToArray();
-
-        async ValueTask ReadInventoryPageAsync(AggregateInventoryPageReference reference)
-        {
-            if (
-                reference.Level < 0
-                || reference.Level > root.TopLevel
-                || reference.Index < 0
-                || reference.StartIndex < 0
-                || reference.EntryCount < 1
-                || reference.Sha256 is null
-                || reference.Sha256.Length != SHA256.HashSizeInBytes
-                || !visited.Add((reference.Level, reference.Index))
-            )
-                throw InventoryDataLost(fence, "a page reference is invalid or duplicated");
-
-            var read = await _provider
-                .ReadAsync(
-                    AggregateInventoryPageKey(fence, reference.Level, reference.Index),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (read is not ZLinkStoreReadResult.Found found)
-                throw InventoryDataLost(
-                    fence,
-                    $"page {reference.Level}:{reference.Index} is missing"
-                );
-            if (
-                found.Value.Bytes.Length > MaxInventoryPageBytes
-                || !CryptographicOperations.FixedTimeEquals(
-                    SHA256.HashData(found.Value.Bytes.Span),
-                    reference.Sha256
-                )
-            )
-                throw InventoryDataLost(
-                    fence,
-                    $"page {reference.Level}:{reference.Index} checksum is invalid"
-                );
-
-            AggregateInventoryPage page;
-            try
-            {
-                page = DecodeAggregateInventoryPage(found.Value.Bytes);
-            }
-            catch (Exception error)
-                when (error
-                        is InvalidDataException
-                            or DecoderFallbackException
-                            or JsonException
-                            or NotSupportedException
-                            or ArgumentException
-                )
-            {
-                throw InventoryDataLost(
-                    fence,
-                    $"page {reference.Level}:{reference.Index} cannot be decoded ({error.GetType().Name})"
-                );
-            }
-            if (
-                page.Level != reference.Level
-                || page.Index != reference.Index
-                || page.StartIndex != reference.StartIndex
-                || page.EntryCount != reference.EntryCount
-            )
-                throw InventoryDataLost(
-                    fence,
-                    $"page {reference.Level}:{reference.Index} metadata changed"
-                );
-            observedPageCounts[page.Level]++;
-
-            if (page.Level == 0)
-            {
-                if (
-                    page.Entries is null
-                    || page.Entries.Count is < 1 or > MaxInventoryPageEntries
-                    || page.Children is null
-                    || page.Children.Count != 0
-                    || page.Entries.Count != page.EntryCount
-                )
-                    throw InventoryDataLost(fence, $"leaf page {page.Index} has invalid bounds");
-                for (var offset = 0; offset < page.Entries.Count; offset++)
-                {
-                    var entry = page.Entries[offset];
-                    if (entry.Index != (long)page.StartIndex + offset)
-                        throw InventoryDataLost(fence, $"leaf page {page.Index} is reordered");
-                    if (entries.Count >= root.TotalCount)
-                        throw InventoryDataLost(fence, "leaf entries exceed the declared total");
-                    entries.Add(entry);
-                }
-                return;
-            }
-
-            if (
-                page.Entries is null
-                || page.Entries.Count != 0
-                || page.Children is null
-                || page.Children.Count is < 1 or > MaxInventoryPageEntries
-            )
-                throw InventoryDataLost(
-                    fence,
-                    $"index page {page.Level}:{page.Index} has invalid bounds"
-                );
-            long childStart = page.StartIndex;
-            foreach (var child in page.Children)
-            {
-                if (child.Level != page.Level - 1 || child.StartIndex != childStart)
-                    throw InventoryDataLost(
-                        fence,
-                        $"index page {page.Level}:{page.Index} is reordered"
-                    );
-                await ReadInventoryPageAsync(child).ConfigureAwait(false);
-                childStart += child.EntryCount;
-            }
-            if (childStart != (long)page.StartIndex + page.EntryCount)
-                throw InventoryDataLost(
-                    fence,
-                    $"index page {page.Level}:{page.Index} entry count changed"
-                );
-        }
+            .ConfigureAwait(false);
+        if (entries.Count != aggregate.ParticipantCount)
+            throw ZLinkAggregateInventory.DataLost(ZLinkAggregateInventory.RootKey(Prefix, fence));
+        return entries;
     }
-
-    private static ZLinkRelocationDataLostException InventoryDataLost(
-        ZLinkAggregateFence fence,
-        string reason
-    ) => new($"Aggregate '{fence.AggregateId:N}' authoritative inventory {reason}.");
 
     private async ValueTask<ulong[]> InstallAggregateParticipantFencesAsync(
         ZLinkAggregateFence fence,
@@ -3552,7 +3171,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                             authority.Meta.AggregateFence is not null
                             || !string.Equals(
                                 authority.Version.Value,
-                                participant.ExpectedStoreVersion,
+                                participant.CompareExchangeStoreVersion,
                                 StringComparison.Ordinal
                             )
                         )
@@ -3621,129 +3240,40 @@ internal sealed partial class ZLinkProviderLocationRepository
         return generations;
     }
 
-    private async ValueTask<bool> IsExactStagedParticipantAsync(
-        ZLinkStoreKey metaKey,
-        ZLinkStoreKey payloadKey,
-        AggregateParticipantRecord expected,
-        ReadOnlyMemory<byte> expectedPayload,
-        CancellationToken cancellationToken
-    )
-    {
-        var meta = await ReadRecordAsync<AggregateParticipantRecord>(metaKey, cancellationToken)
-            .ConfigureAwait(false);
-        var payload = await _provider
-            .ReadAsync(payloadKey, cancellationToken)
-            .ConfigureAwait(false);
-        return meta is not null
-            && meta.Record.Index == expected.Index
-            && string.Equals(meta.Record.Key, expected.Key, StringComparison.Ordinal)
-            && string.Equals(
-                meta.Record.ExpectedStoreVersion,
-                expected.ExpectedStoreVersion,
-                StringComparison.Ordinal
-            )
-            && meta.Record.OwnerTransition == expected.OwnerTransition
-            && CryptographicOperations.FixedTimeEquals(
-                meta.Record.AuthorityPayloadSha256,
-                expected.AuthorityPayloadSha256
-            )
-            && CryptographicOperations.FixedTimeEquals(
-                meta.Record.MembershipMutationSha256,
-                expected.MembershipMutationSha256
-            )
-            && CryptographicOperations.FixedTimeEquals(
-                meta.Record.RequestFingerprint,
-                expected.RequestFingerprint
-            )
-            && payload is ZLinkStoreReadResult.Found found
-            && CryptographicOperations.FixedTimeEquals(
-                found.Value.Bytes.Span,
-                expectedPayload.Span
-            );
-    }
-
-    private async ValueTask<bool> IsExactStagedParticipantForReconciliationAsync(
-        ZLinkStoreKey metaKey,
-        ZLinkStoreKey payloadKey,
-        AggregateParticipantRecord expected,
-        ReadOnlyMemory<byte> expectedPayload
-    )
-    {
-        using var deadline = new CancellationTokenSource(AmbiguousReconciliationTimeout);
-        return await IsExactStagedParticipantAsync(
-                metaKey,
-                payloadKey,
-                expected,
-                expectedPayload,
-                deadline.Token
-            )
-            .AsTask()
-            .WaitAsync(deadline.Token)
-            .ConfigureAwait(false);
-    }
-
     private async ValueTask<StoredAggregateParticipant[]> ReadAggregateParticipantsAsync(
         ZLinkAggregateFence fence,
         AggregateRecord aggregate,
         CancellationToken cancellationToken
     )
     {
-        if (aggregate.ParticipantCount < 1)
-            throw new ZLinkRelocationDataLostException(
-                $"Aggregate '{fence.AggregateId:N}' has an invalid participant count."
-            );
-        var inventory = await ReadAndValidateAggregateInventoryAsync(
+        var inventory = await ZLinkAggregateInventory
+            .ReadAsync(
+                _provider,
+                Prefix,
                 fence,
-                aggregate,
+                Convert.ToHexString(aggregate.Header.InventoryDigest).ToLowerInvariant(),
                 cancellationToken
             )
             .ConfigureAwait(false);
-        var participants = new StoredAggregateParticipant[aggregate.ParticipantCount];
+        if (inventory.Count != aggregate.ParticipantCount)
+            throw ZLinkAggregateInventory.DataLost(ZLinkAggregateInventory.RootKey(Prefix, fence));
+        var participants = new StoredAggregateParticipant[inventory.Count];
         await Parallel
             .ForEachAsync(
-                Enumerable.Range(0, aggregate.ParticipantCount),
+                inventory,
                 new ParallelOptions
                 {
                     MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
-                async (index, token) =>
-                {
-                    var meta =
-                        await ReadRecordAsync<AggregateParticipantRecord>(
-                                AggregateParticipantMetaKey(fence, index),
-                                token
-                            )
-                            .ConfigureAwait(false)
-                        ?? throw new ZLinkRelocationDataLostException(
-                            $"Aggregate '{fence.AggregateId:N}' participant {index} is missing."
-                        );
-                    var payload = await _provider
-                        .ReadAsync(AggregateParticipantPayloadKey(fence, index), token)
-                        .ConfigureAwait(false);
-                    if (
-                        payload is not ZLinkStoreReadResult.Found found
-                        || meta.Record.Index != index
-                        || !AggregateInventoryEntryEquals(inventory[index], meta.Record)
-                        || !CryptographicOperations.FixedTimeEquals(
-                            meta.Record.RequestFingerprint,
-                            aggregate.RequestFingerprint
+                async (participant, token) =>
+                    participants[participant.Entry.Index] = await BindAggregateParticipantAsync(
+                            fence,
+                            aggregate,
+                            participant,
+                            token
                         )
-                        || !CryptographicOperations.FixedTimeEquals(
-                            meta.Record.AuthorityPayloadSha256,
-                            Sha256(found.Value.Bytes)
-                        )
-                    )
-                    {
-                        throw new ZLinkRelocationDataLostException(
-                            $"Aggregate '{fence.AggregateId:N}' participant {index} is invalid."
-                        );
-                    }
-                    participants[index] = new StoredAggregateParticipant(
-                        meta.Record,
-                        found.Value.Bytes
-                    );
-                }
+                        .ConfigureAwait(false)
             )
             .ConfigureAwait(false);
         return participants;
@@ -3756,225 +3286,78 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken
     )
     {
-        if (index < 0 || index >= aggregate.ParticipantCount)
-            throw new ZLinkRelocationDataLostException(
-                $"Aggregate '{fence.AggregateId:N}' participant index is invalid."
-            );
-        var inventoryEntry = await ReadAndValidateAggregateInventoryEntryAsync(
+        var root = await ZLinkAggregateInventory
+            .ReadRootAsync(
+                _provider,
+                Prefix,
                 fence,
-                aggregate,
-                index,
+                Convert.ToHexString(aggregate.Header.InventoryDigest).ToLowerInvariant(),
                 cancellationToken
             )
             .ConfigureAwait(false);
-        var meta =
-            await ReadRecordAsync<AggregateParticipantRecord>(
-                    AggregateParticipantMetaKey(fence, index),
-                    cancellationToken
-                )
-                .ConfigureAwait(false)
-            ?? throw new ZLinkRelocationDataLostException(
-                $"Aggregate '{fence.AggregateId:N}' participant {index} is missing."
+        if (root.TotalCount != aggregate.ParticipantCount || index < 0 || index >= root.TotalCount)
+            throw ZLinkAggregateInventory.DataLost(ZLinkAggregateInventory.RootKey(Prefix, fence));
+        var reference = root.TopPages[0];
+        while (true)
+        {
+            var page = await ZLinkAggregateInventory
+                .ReadPageAsync(_provider, Prefix, fence, reference, cancellationToken)
+                .ConfigureAwait(false);
+            if (page.Level == 0)
+            {
+                var participant = await ZLinkAggregateInventory
+                    .ReadParticipantAsync(
+                        _provider,
+                        Prefix,
+                        fence,
+                        page.Entries[index - page.StartIndex],
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                return await BindAggregateParticipantAsync(
+                        fence,
+                        aggregate,
+                        participant,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+            }
+            reference = page.Children.First(child =>
+                (long)child.StartIndex + child.EntryCount > index
             );
-        var payload = await _provider
-            .ReadAsync(AggregateParticipantPayloadKey(fence, index), cancellationToken)
-            .ConfigureAwait(false);
-        if (
-            payload is not ZLinkStoreReadResult.Found found
-            || meta.Record.Index != index
-            || !AggregateInventoryEntryEquals(inventoryEntry, meta.Record)
-            || !CryptographicOperations.FixedTimeEquals(
-                meta.Record.RequestFingerprint,
-                aggregate.RequestFingerprint
-            )
-            || !CryptographicOperations.FixedTimeEquals(
-                meta.Record.AuthorityPayloadSha256,
-                Sha256(found.Value.Bytes)
-            )
-        )
-            throw new ZLinkRelocationDataLostException(
-                $"Aggregate '{fence.AggregateId:N}' participant {index} is invalid."
-            );
-        return new StoredAggregateParticipant(meta.Record, found.Value.Bytes);
+        }
     }
 
-    private async ValueTask<AggregateInventoryLeafEntry> ReadAndValidateAggregateInventoryEntryAsync(
+    private async ValueTask<StoredAggregateParticipant> BindAggregateParticipantAsync(
         ZLinkAggregateFence fence,
         AggregateRecord aggregate,
-        int participantIndex,
+        ZLinkAggregateInventory.Participant participant,
         CancellationToken cancellationToken
     )
     {
-        var root = aggregate.Inventory;
+        var entry = participant.Entry;
+        var key = AggregateParticipantMetaKey(fence, entry.Index);
+        var meta = await ReadRecordAsync<AggregateParticipantRecord>(key, cancellationToken)
+            .ConfigureAwait(false);
         if (
-            root is null
-            || root.TotalCount != aggregate.ParticipantCount
-            || participantIndex < 0
-            || participantIndex >= root.TotalCount
-            || root.TopLevel < 0
-            || root.TopLevel >= MaxInventoryTreeLevels
-            || root.TopPages is null
-            || root.TopPages.Count is < 1 or > MaxInventoryPageEntries
-            || root.PageCountsByLevel is null
-            || root.PageCountsByLevel.Count != root.TopLevel + 1
-            || root.Digest is null
-            || root.Digest.Length != SHA256.HashSizeInBytes
+            meta is null
+            || meta.Record.Index != entry.Index
+            || meta.Record.Key != entry.AuthorityKey
+            || meta.Record.ExpectedStoreVersion != entry.ExpectedStoreVersion
+            || (
+                meta.Record.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
+                    ? "newOwner"
+                    : "preserve"
+            ) != entry.OwnerTransition
+            || !meta.Record.RequestFingerprint.AsSpan().SequenceEqual(aggregate.RequestFingerprint)
         )
-            throw InventoryDataLost(fence, "root metadata is invalid");
-
-        AggregateInventoryPageReference? selected = null;
-        long expectedStart = 0;
-        foreach (var reference in root.TopPages)
-        {
-            if (
-                reference.Level != root.TopLevel
-                || reference.StartIndex != expectedStart
-                || reference.EntryCount < 1
-                || reference.Sha256 is null
-                || reference.Sha256.Length != SHA256.HashSizeInBytes
-            )
-                throw InventoryDataLost(fence, "top page references are invalid or reordered");
-            var end = checked((long)reference.StartIndex + reference.EntryCount);
-            if (participantIndex >= reference.StartIndex && participantIndex < end)
-                selected = reference;
-            expectedStart = end;
-        }
-        if (expectedStart != root.TotalCount || selected is null)
-            throw InventoryDataLost(fence, "top page references do not contain the participant");
-        return await ReadEntryAsync(selected).ConfigureAwait(false);
-
-        async ValueTask<AggregateInventoryLeafEntry> ReadEntryAsync(
-            AggregateInventoryPageReference reference
-        )
-        {
-            var read = await _provider
-                .ReadAsync(
-                    AggregateInventoryPageKey(fence, reference.Level, reference.Index),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (
-                read is not ZLinkStoreReadResult.Found found
-                || found.Value.Bytes.Length > MaxInventoryPageBytes
-                || !CryptographicOperations.FixedTimeEquals(
-                    SHA256.HashData(found.Value.Bytes.Span),
-                    reference.Sha256
-                )
-            )
-                throw InventoryDataLost(
-                    fence,
-                    $"page {reference.Level}:{reference.Index} is missing or corrupt"
-                );
-            AggregateInventoryPage page;
-            try
-            {
-                page = DecodeAggregateInventoryPage(found.Value.Bytes);
-            }
-            catch (Exception error)
-                when (error
-                        is InvalidDataException
-                            or DecoderFallbackException
-                            or JsonException
-                            or NotSupportedException
-                            or ArgumentException
-                )
-            {
-                throw InventoryDataLost(
-                    fence,
-                    $"page {reference.Level}:{reference.Index} cannot be decoded ({error.GetType().Name})"
-                );
-            }
-            if (
-                page.Level != reference.Level
-                || page.Index != reference.Index
-                || page.StartIndex != reference.StartIndex
-                || page.EntryCount != reference.EntryCount
-            )
-                throw InventoryDataLost(
-                    fence,
-                    $"page {reference.Level}:{reference.Index} metadata changed"
-                );
-            if (page.Level == 0)
-            {
-                if (
-                    page.Entries is null
-                    || page.Entries.Count != page.EntryCount
-                    || page.Children is null
-                    || page.Children.Count != 0
-                )
-                    throw InventoryDataLost(fence, $"leaf page {page.Index} has invalid bounds");
-                var offset = participantIndex - page.StartIndex;
-                if (offset < 0 || offset >= page.Entries.Count)
-                    throw InventoryDataLost(
-                        fence,
-                        $"leaf page {page.Index} does not contain the participant"
-                    );
-                var entry = page.Entries[offset];
-                if (entry.Index != participantIndex)
-                    throw InventoryDataLost(
-                        fence,
-                        $"leaf page {page.Index} participant is reordered"
-                    );
-                return entry;
-            }
-
-            if (
-                page.Entries is null
-                || page.Entries.Count != 0
-                || page.Children is null
-                || page.Children.Count is < 1 or > MaxInventoryPageEntries
-            )
-                throw InventoryDataLost(
-                    fence,
-                    $"index page {page.Level}:{page.Index} has invalid bounds"
-                );
-            AggregateInventoryPageReference? child = null;
-            long childStart = page.StartIndex;
-            foreach (var candidate in page.Children)
-            {
-                if (
-                    candidate.Level != page.Level - 1
-                    || candidate.StartIndex != childStart
-                    || candidate.EntryCount < 1
-                )
-                    throw InventoryDataLost(
-                        fence,
-                        $"index page {page.Level}:{page.Index} is reordered"
-                    );
-                var childEnd = checked((long)candidate.StartIndex + candidate.EntryCount);
-                if (participantIndex >= candidate.StartIndex && participantIndex < childEnd)
-                    child = candidate;
-                childStart = childEnd;
-            }
-            if (childStart != (long)page.StartIndex + page.EntryCount || child is null)
-                throw InventoryDataLost(
-                    fence,
-                    $"index page {page.Level}:{page.Index} does not contain the participant"
-                );
-            return await ReadEntryAsync(child).ConfigureAwait(false);
-        }
-    }
-
-    private static bool AggregateInventoryEntryEquals(
-        AggregateInventoryLeafEntry entry,
-        AggregateParticipantRecord participant
-    ) =>
-        entry.Index == participant.Index
-        && string.Equals(entry.Key, participant.Key, StringComparison.Ordinal)
-        && string.Equals(
-            entry.ExpectedStoreVersion,
-            participant.ExpectedStoreVersion,
-            StringComparison.Ordinal
-        )
-        && entry.OwnerTransition == participant.OwnerTransition
-        && CryptographicOperations.FixedTimeEquals(
-            entry.AuthorityPayloadSha256,
-            participant.AuthorityPayloadSha256
-        )
-        && CryptographicOperations.FixedTimeEquals(
-            entry.MembershipMutationSha256,
-            participant.MembershipMutationSha256
+            throw ZLinkAggregateInventory.DataLost(key);
+        return new StoredAggregateParticipant(
+            meta.Record,
+            participant.Payload,
+            participant.Mutation
         );
+    }
 
     private async ValueTask<
         IReadOnlyDictionary<ZLinkAuthorityKey, ulong>
@@ -4025,15 +3408,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (
             aggregate.Status is not (AggregateStatus.Prepared or AggregateStatus.Committed)
             || !AggregateHeaderEquals(aggregate.Header, CreateAggregateHeader(request))
-            || !CryptographicOperations.FixedTimeEquals(
-                aggregate.RequestFingerprint,
-                AggregateRequestFingerprint(request)
-            )
             || aggregate.ParticipantCount != request.Participants.Count
-            || !AggregateInventoryRootEquals(
-                aggregate.Inventory,
-                BuildAggregateInventory(request).Root
-            )
         )
             return new ZLinkAggregatePrepareResult.Conflict();
 
@@ -4059,10 +3434,85 @@ internal sealed partial class ZLinkProviderLocationRepository
                     cancellationToken
                 )
                 .ConfigureAwait(false);
+        if (aggregate.Header.RepresentativeKey is { } representative)
+        {
+            if (request.Relocation?.Target is not { } target)
+                return new ZLinkAggregatePrepareResult.Conflict();
+            if (aggregate.Status == AggregateStatus.Committed)
+            {
+                if (aggregate.Header.Relocation?.Target != target)
+                    return new ZLinkAggregatePrepareResult.Conflict();
+            }
+            else if (
+                !await ReplacePreparedAttemptAsync(fence, representative, target, cancellationToken)
+                    .ConfigureAwait(false)
+            )
+                return new ZLinkAggregatePrepareResult.Conflict();
+        }
+
         return new ZLinkAggregatePrepareResult.AlreadyPrepared(fence)
         {
             TargetAuthorityOwnerGenerations = generations,
         };
+    }
+
+    private async ValueTask<bool> ReplacePreparedAttemptAsync(
+        ZLinkAggregateFence fence,
+        ZLinkAuthorityKey key,
+        ZLinkAuthorityRelocation.TargetFence target,
+        CancellationToken cancellationToken
+    )
+    {
+        var aggregateKey = AggregateKey(fence);
+        var aggregate = await ReadRecordAsync<AggregateRecord>(aggregateKey, cancellationToken)
+            .ConfigureAwait(false);
+        if (
+            aggregate?.Record.Status != AggregateStatus.Prepared
+            || aggregate.Record.Header.RepresentativeKey != key
+        )
+            return false;
+        var authority = await ReadAuthorityRecordAsync(
+                key,
+                knownMeta: null,
+                projectCommittedAggregate: false,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        if (
+            authority is null
+            || authority.Meta.AggregateFence != fence
+            || authority.Snapshot.Relocation
+                is not { Phase: ServiceWireCodec.RelocationPhase.Prepared } relocation
+            || relocation.RelocationId != fence.AggregateId
+            || !relocation.AcceptsAttempt(target)
+        )
+            return false;
+        if (relocation.Target == target)
+            return true;
+
+        var authorityKey = AuthorityMetaKey(key);
+        var updated = authority.Meta with
+        {
+            Aggregate = ZLinkAuthorityAggregateCodec.Replace(
+                authority.Meta.Aggregate,
+                relocation with
+                {
+                    Target = target,
+                }
+            ),
+        };
+        return await _provider
+                .WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [
+                            new ZLinkStoreCondition.Version(authorityKey, authority.Version),
+                            new ZLinkStoreCondition.Version(aggregateKey, aggregate.Version),
+                        ],
+                        [new ZLinkStoreMutation.Put(authorityKey, Encode(updated), null)]
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false) is ZLinkStoreWriteResult.Applied;
     }
 
     private async ValueTask<ZLinkAggregatePrepareResult> ReconcileExistingAggregateForAmbiguousAsync(
@@ -4113,10 +3563,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     actual.Payload.Span,
                     expected.AuthorityPayload.Span
                 )
-                || !CryptographicOperations.FixedTimeEquals(
-                    actual.Metadata.MembershipMutationSha256,
-                    Sha256(expected.MembershipMutation)
-                )
+                || !actual.MembershipMutation.Span.SequenceEqual(expected.MembershipMutation.Span)
             )
                 return false;
         }
@@ -4136,7 +3583,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     participant.Metadata.ExpectedStoreVersion,
                     participant.Metadata.OwnerTransition,
                     participant.Payload,
-                    ReadOnlyMemory<byte>.Empty
+                    participant.MembershipMutation
                 ))
                 .ToArray(),
             aggregate.Header.InventoryDigest,
@@ -4147,6 +3594,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         )
         {
             Relocation = aggregate.Header.Relocation,
+            RepresentativeKey = aggregate.Header.RepresentativeKey,
             ClearRelocation = aggregate.Header.ClearRelocation,
         };
 
@@ -4161,91 +3609,23 @@ internal sealed partial class ZLinkProviderLocationRepository
             request.TargetOwner
         )
         {
-            Relocation = request.Relocation,
+            Relocation = request.RepresentativeKey is null ? request.Relocation : null,
+            RepresentativeKey = request.RepresentativeKey,
             ClearRelocation = request.ClearRelocation,
         };
 
     private static bool AggregateHeaderEquals(AggregateHeader left, AggregateHeader right) =>
-        EncodeAggregateHeader(left).AsSpan().SequenceEqual(EncodeAggregateHeader(right));
-
-    private static byte[] AggregateRequestFingerprint(ZLinkAggregatePrepareRequest request)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData(EncodeAggregateHeader(CreateAggregateHeader(request)));
-        using var stream = new MemoryStream();
-        WriteAggregateFingerprintHeader(stream, AggregateRequestRecordKind);
-        WriteInventoryInt32(stream, request.Participants.Count);
-        foreach (
-            var participant in request.Participants.OrderBy(
-                static participant => participant.Key.Value,
-                StringComparer.Ordinal
-            )
-        )
+        left with
         {
-            WriteInventoryString(stream, participant.Key.Value);
-            WriteInventoryString(stream, participant.ExpectedStoreVersion);
-            stream.WriteByte((byte)participant.OwnerTransition);
-            WriteInventoryHash(stream, Sha256(participant.AuthorityPayload));
-            WriteInventoryHash(stream, Sha256(participant.MembershipMutation));
-        }
-        hash.AppendData(stream.GetBuffer().AsSpan(0, checked((int)stream.Length)));
-        return hash.GetHashAndReset();
-    }
+            InventoryDigest = right.InventoryDigest,
+            Relocation = left.RepresentativeKey is not null ? right.Relocation : left.Relocation,
+        } == right
+        && left.InventoryDigest.AsSpan().SequenceEqual(right.InventoryDigest);
 
-    private static byte[] EncodeAggregateHeader(AggregateHeader header)
-    {
-        using var stream = new MemoryStream();
-        WriteAggregateFingerprintHeader(stream, AggregateHeaderRecordKind);
-        stream.Write(header.AggregateId.ToByteArray());
-        WriteInventoryUInt64(stream, header.AggregateGeneration);
-        WriteInventoryHash(stream, header.InventoryDigest);
-        WriteInventoryString(stream, header.TargetDescriptor.MeshName);
-        WriteInventoryString(stream, header.TargetDescriptor.Rid.ToHex());
-        WriteInventoryUInt64(stream, header.TargetDescriptorLifecycleGeneration);
-        WriteInventoryInt32(stream, header.Capacity.Actors);
-        WriteInventoryInt32(stream, header.Capacity.Spots);
-        if (header.Capacity.SpotType is { } spotType)
-        {
-            stream.WriteByte(1);
-            stream.WriteByte((byte)spotType.ObjectKind);
-            WriteInventoryString(stream, spotType.StableType);
-            WriteInventoryInt32(stream, spotType.Count);
-        }
-        else
-            stream.WriteByte(0);
-        WriteInventoryString(stream, header.TargetOwner.OwnerId);
-        WriteInventoryInt64(stream, header.TargetOwner.LeaseGeneration);
-        if (header.ClearRelocation || header.Relocation is not null)
-        {
-            stream.WriteByte(header.ClearRelocation ? (byte)0 : (byte)1);
-            if (header.Relocation is { } relocation)
-                WriteInventoryHash(stream, SHA256.HashData(Encode(relocation)));
-        }
-        return stream.ToArray();
-    }
-
-    private static void WriteAggregateFingerprintHeader(Stream stream, byte recordKind)
-    {
-        Span<byte> header = stackalloc byte[6];
-        BinaryPrimitives.WriteUInt32BigEndian(header, AggregateFingerprintMagic);
-        header[4] = AggregateFingerprintVersion;
-        header[5] = recordKind;
-        stream.Write(header);
-    }
-
-    private static void WriteInventoryUInt64(Stream stream, ulong value)
-    {
-        Span<byte> encoded = stackalloc byte[sizeof(ulong)];
-        BinaryPrimitives.WriteUInt64BigEndian(encoded, value);
-        stream.Write(encoded);
-    }
-
-    private static void WriteInventoryInt64(Stream stream, long value)
-    {
-        Span<byte> encoded = stackalloc byte[sizeof(long)];
-        BinaryPrimitives.WriteInt64BigEndian(encoded, value);
-        stream.Write(encoded);
-    }
+    private static byte[] AggregateRequestFingerprint(AggregateHeader header, int count) =>
+        SHA256.HashData(
+            ZLinkAggregateInventory.Encode(AggregateBody(header, count, AggregateStatus.Staging))
+        );
 
     private static ZLinkAggregatePrepareRequest CanonicalizeAggregateRequest(
         ZLinkAggregatePrepareRequest request
@@ -4255,6 +3635,14 @@ internal sealed partial class ZLinkProviderLocationRepository
             .Participants.OrderBy(
                 static participant => participant.Key.Value,
                 StringComparer.Ordinal
+            )
+            .Select(static participant =>
+                participant.MembershipMutation.IsEmpty
+                    ? participant with
+                    {
+                        MembershipMutation = ZLinkAggregateInventory.NoMembershipMutation,
+                    }
+                    : participant
             )
             .ToArray();
         return request with { Participants = participants };
@@ -4285,10 +3673,17 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken = default
     ) => AbortAggregateAsync(fence, beforeConversion: false, cancellationToken);
 
+    public ValueTask<ZLinkAggregateAbortResult> AbortAggregateAttemptAsync(
+        ZLinkAggregateFence fence,
+        ulong attempt,
+        CancellationToken cancellationToken
+    ) => AbortAggregateAsync(fence, beforeConversion: false, cancellationToken, attempt);
+
     private async ValueTask<ZLinkAggregateAbortResult> AbortAggregateAsync(
         ZLinkAggregateFence fence,
         bool beforeConversion,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ulong? attempt = null
     )
     {
         var key = AggregateKey(fence);
@@ -4300,14 +3695,17 @@ internal sealed partial class ZLinkProviderLocationRepository
                 return ZLinkAggregateAbortResult.Stale;
             if (aggregate.Record.Status == AggregateStatus.Aborted)
             {
-                if (aggregate.Record.ParticipantsCleaned)
-                    return ZLinkAggregateAbortResult.AlreadyAborted;
-                await ReleaseAggregateParticipantFencesAsync(
-                        fence,
-                        aggregate.Record,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
+                if (
+                    !aggregate.Record.ParticipantsCleaned
+                    && !await IsAggregateRootMissingAsync(fence, cancellationToken)
+                        .ConfigureAwait(false)
+                )
+                    await ReleaseAggregateParticipantFencesAsync(
+                            fence,
+                            aggregate.Record,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
                 await CleanupAggregateParticipantsAsync(fence, cancellationToken)
                     .ConfigureAwait(false);
                 return ZLinkAggregateAbortResult.AlreadyAborted;
@@ -4322,11 +3720,38 @@ internal sealed partial class ZLinkProviderLocationRepository
             // Abort needs the target capacity vector from the durable aggregate
             // header. Participant meta is not authoritative for fence release and
             // may already be missing after a partial cleanup.
+            var inventory = await ReadAndValidateAggregateInventoryAsync(
+                    fence,
+                    aggregate.Record,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
             var header = aggregate.Record.Header;
             var conditions = new List<ZLinkStoreCondition>
             {
                 new ZLinkStoreCondition.Version(key, aggregate.Version),
             };
+            if (attempt is not null && header.RepresentativeKey is { } representative)
+            {
+                var authority = await ReadAuthorityRecordAsync(
+                        representative,
+                        knownMeta: null,
+                        projectCommittedAggregate: false,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                if (
+                    authority?.Meta.AggregateFence != fence
+                    || authority.Snapshot.Relocation?.Target?.AttemptGeneration != attempt
+                )
+                    return ZLinkAggregateAbortResult.Stale;
+                conditions.Add(
+                    new ZLinkStoreCondition.Version(
+                        AuthorityMetaKey(representative),
+                        authority.Version
+                    )
+                );
+            }
             var mutations = new List<ZLinkStoreMutation>
             {
                 new ZLinkStoreMutation.Put(
@@ -4380,7 +3805,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                 }
                 return ZLinkAggregateAbortResult.Stale;
             }
-            await ReleaseAggregateParticipantFencesAsync(fence, aggregate.Record, cancellationToken)
+            await ReleaseAggregateParticipantFencesAsync(
+                    fence,
+                    aggregate.Record,
+                    cancellationToken,
+                    inventory
+                )
                 .ConfigureAwait(false);
             await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
             return ZLinkAggregateAbortResult.Aborted;
@@ -4554,9 +3984,19 @@ internal sealed partial class ZLinkProviderLocationRepository
                         cancellationToken
                     )
                     .ConfigureAwait(false);
-                // Normalization can finish between the authority and aggregate reads.
-                // The captured participant row still needs its committed projection.
-                if (aggregate?.Record.Status == AggregateStatus.Committed)
+                if (aggregate is null)
+                {
+                    var currentMeta = await _provider
+                        .ReadAsync(metaKey, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (
+                        currentMeta is not ZLinkStoreReadResult.Found current
+                        || current.Value.Version != found.Version
+                    )
+                        continue;
+                    throw ZLinkAggregateInventory.DataLost(AggregateKey(aggregateFence));
+                }
+                if (aggregate.Record.Status == AggregateStatus.Committed)
                 {
                     if (meta.AggregateParticipantIndex is not { } index)
                         throw new ZLinkRelocationDataLostException(
@@ -4614,9 +4054,13 @@ internal sealed partial class ZLinkProviderLocationRepository
                     var changesOwner =
                         participant.Metadata.OwnerTransition
                         == ZLinkAuthorityGenerationTransition.NewOwner;
+                    payloadBytes = aggregate.Record.Header.ProjectPayload(
+                        meta.Allocation.ObjectKind,
+                        participant.Payload
+                    );
                     meta = meta with
                     {
-                        Payload = participant.Payload.ToArray(),
+                        Payload = payloadBytes.ToArray(),
                         Aggregate = aggregate.Record.Header.ApplyRelocation(meta.Aggregate),
                         AuthorityOwnerGeneration = changesOwner
                             ? targetAuthorityOwnerGeneration
@@ -4638,7 +4082,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                             }
                             : meta.Allocation,
                     };
-                    payloadBytes = participant.Payload;
                 }
             }
             return new StoredAuthority(
@@ -4783,7 +4226,12 @@ internal sealed partial class ZLinkProviderLocationRepository
         try
         {
             return new StoredRecord<T>(
-                Decode<T>(found.Value.Bytes),
+                typeof(T) == typeof(AggregateRecord)
+                    ? (T)
+                        (object)
+                            await DecodeAggregateAsync(key, found.Value, cancellationToken)
+                                .ConfigureAwait(false)
+                    : Decode<T>(found.Value.Bytes),
                 found.Value.Version,
                 found.Value.StoreNow
             );
@@ -4793,6 +4241,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 && error
                     is JsonException
                         or InvalidDataException
+                        or FormatException
                         or NotSupportedException
                         or ArgumentException
             )
@@ -4802,6 +4251,163 @@ internal sealed partial class ZLinkProviderLocationRepository
             );
         }
     }
+
+    private static ZLinkStoreKey AggregateHousekeepingKey(ZLinkStoreKey key) =>
+        Key(key.Value + ":housekeeping");
+
+    private static ZLinkAggregateInventory.Aggregate AggregateBody(
+        AggregateHeader header,
+        int count,
+        AggregateStatus status
+    ) =>
+        ZLinkAggregateInventory.Describe(
+            new ZLinkAggregateFence(header.AggregateId, header.AggregateGeneration),
+            status switch
+            {
+                AggregateStatus.Staging => "preparing",
+                AggregateStatus.Prepared => "prepared",
+                AggregateStatus.Committed => "committed",
+                AggregateStatus.Aborted => "aborted",
+                _ => throw new ArgumentOutOfRangeException(nameof(status)),
+            },
+            count,
+            Convert.ToHexString(header.InventoryDigest).ToLowerInvariant(),
+            header.TargetDescriptor,
+            header.TargetDescriptorLifecycleGeneration,
+            header.Capacity,
+            header.TargetOwner
+        );
+
+    private static byte[] Encode(AggregateRecord aggregate) =>
+        ZLinkAggregateInventory.Encode(
+            AggregateBody(aggregate.Header, aggregate.ParticipantCount, aggregate.Status)
+        );
+
+    private async ValueTask<AggregateRecord> DecodeAggregateAsync(
+        ZLinkStoreKey key,
+        ZLinkStoreValue value,
+        CancellationToken cancellationToken
+    )
+    {
+        var body = ZLinkAggregateInventory.Decode<ZLinkAggregateInventory.Aggregate>(value.Bytes);
+        if (
+            body.Capacity is null
+            || body.TargetDescriptor is null
+            || body.TargetOwner is null
+            || !Guid.TryParseExact(body.AggregateId, "D", out var id)
+            || !ulong.TryParse(
+                body.AggregateGeneration,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var generation
+            )
+            || !ulong.TryParse(
+                body.TargetDescriptorLifecycleGeneration,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var lifecycle
+            )
+            || !long.TryParse(
+                body.TargetOwner.OwnerLeaseGeneration,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var ownerLease
+            )
+            || generation is 0 or > long.MaxValue
+            || lifecycle == 0
+            || ownerLease <= 0
+            || string.IsNullOrEmpty(body.TargetOwner.OwnerId)
+            || string.IsNullOrEmpty(body.TargetDescriptor.MeshName)
+            || body.ParticipantCount < 0
+            || body.Capacity.Actors < 0
+            || body.Capacity.Spots < 0
+            || body.InventoryDigestSha256 is not { Length: 64 }
+        )
+            throw ZLinkAggregateInventory.DataLost(key);
+        var status = body.State switch
+        {
+            "preparing" => AggregateStatus.Staging,
+            "prepared" => AggregateStatus.Prepared,
+            "committed" => AggregateStatus.Committed,
+            "aborted" => AggregateStatus.Aborted,
+            _ => throw ZLinkAggregateInventory.DataLost(key),
+        };
+        var header = new AggregateHeader(
+            id,
+            generation,
+            Convert.FromHexString(body.InventoryDigestSha256),
+            new ZLinkMeshNodeDescriptorKey(
+                body.TargetDescriptor.MeshName,
+                RoutingId.FromHex(body.TargetDescriptor.RoutingIdHex)
+            ),
+            lifecycle,
+            new ZLinkCapacityVector(
+                body.Capacity.Actors,
+                body.Capacity.Spots,
+                body.Capacity.SpotType is { } spot
+                    ? new ZLinkSpotTypeCapacityDelta(
+                        spot.ObjectKind switch
+                        {
+                            "userSpot" => ZLinkPlacementObjectKind.UserSpot,
+                            "instanceSpot" => ZLinkPlacementObjectKind.InstanceSpot,
+                            _ => throw ZLinkAggregateInventory.DataLost(key),
+                        },
+                        spot.StableType,
+                        spot.Count
+                    )
+                    : null
+            ),
+            new ZLinkLocationOwnerToken(body.TargetOwner.OwnerId, ownerLease)
+        );
+        if (
+            key != AggregateKey(new ZLinkAggregateFence(id, generation))
+            || body != AggregateBody(header, body.ParticipantCount, status)
+        )
+            throw ZLinkAggregateInventory.DataLost(key);
+        var housekeeping = (
+            await ReadRecordAsync<AggregateHousekeeping>(
+                    AggregateHousekeepingKey(key),
+                    cancellationToken
+                )
+                .ConfigureAwait(false)
+        )?.Record;
+        header = header with
+        {
+            Relocation = housekeeping?.Relocation,
+            RepresentativeKey = housekeeping?.RepresentativeKey,
+            ClearRelocation = housekeeping?.ClearRelocation ?? false,
+        };
+        return new AggregateRecord(
+            header,
+            body.ParticipantCount,
+            AggregateRequestFingerprint(header, body.ParticipantCount),
+            status,
+            housekeeping?.StagedAt ?? value.StoreNow,
+            housekeeping?.ParticipantsNormalized ?? false,
+            housekeeping?.ParticipantsCleaned ?? false
+        );
+    }
+
+    private static byte[] EncodeAggregateHousekeeping(AggregateRecord aggregate) =>
+        Encode(
+            new AggregateHousekeeping(
+                aggregate.StagedAt,
+                aggregate.ParticipantsNormalized,
+                aggregate.ParticipantsCleaned,
+                aggregate.Header.Relocation,
+                aggregate.Header.ClearRelocation,
+                aggregate.Header.RepresentativeKey
+            )
+        );
+
+    private sealed record AggregateHousekeeping(
+        DateTimeOffset StagedAt,
+        bool ParticipantsNormalized,
+        bool ParticipantsCleaned,
+        ZLinkAuthorityRelocation? Relocation,
+        bool ClearRelocation,
+        ZLinkAuthorityKey? RepresentativeKey = null
+    );
 
     private static bool IsAggregateDurableRecord<T>() =>
         typeof(T) == typeof(AggregateRecord) || typeof(T) == typeof(AggregateParticipantRecord);
@@ -4877,6 +4483,17 @@ internal sealed partial class ZLinkProviderLocationRepository
                 : new ZLinkAuthorityReadResult.Found(current.Snapshot)
         );
 
+    private static JsonElement? ApplyAuthorityRelocation(
+        StoredAuthority current,
+        ZLinkAuthorityMutation mutation
+    ) =>
+        mutation.Relocation is not null || mutation.ClearRelocation
+            ? ZLinkAuthorityAggregateCodec.Replace(
+                current.Meta.Aggregate,
+                mutation.ApplyRelocation(current.Snapshot)
+            )
+            : current.Meta.Aggregate;
+
     private static ZLinkAuthoritySnapshot Snapshot(
         AuthorityMeta meta,
         ZLinkStoreVersion version,
@@ -4895,6 +4512,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             now
         )
         {
+            AggregateExpectedStoreVersion = meta.AggregateExpectedStoreVersion,
             Relocation = meta.Aggregate is { } aggregate
                 ? ZLinkAuthorityAggregateCodec.Read(aggregate)
                 : null,
@@ -5154,35 +4772,12 @@ internal sealed partial class ZLinkProviderLocationRepository
         + $"{operation.OperationIdLow.ToString("x16", CultureInfo.InvariantCulture)}";
 
     private static ZLinkStoreKey AggregateKey(ZLinkAggregateFence fence) =>
-        Key($"{AggregatePrefix}{fence.AggregateId:N}:" + fence.AggregateGeneration);
+        ZLinkAggregateInventory.AggregateKey(Prefix, fence);
 
     private static ZLinkStoreKey AggregateParticipantMetaKey(
         ZLinkAggregateFence fence,
         int index
-    ) =>
-        Key(
-            $"{AggregatePrefix}{fence.AggregateId:N}:"
-                + $"{fence.AggregateGeneration}:participant:{index}:meta"
-        );
-
-    private static ZLinkStoreKey AggregateParticipantPayloadKey(
-        ZLinkAggregateFence fence,
-        int index
-    ) =>
-        Key(
-            $"{AggregatePrefix}{fence.AggregateId:N}:"
-                + $"{fence.AggregateGeneration}:participant:{index}:payload"
-        );
-
-    private static ZLinkStoreKey AggregateInventoryPageKey(
-        ZLinkAggregateFence fence,
-        int level,
-        int index
-    ) =>
-        Key(
-            $"{AggregatePrefix}{fence.AggregateId:N}:"
-                + $"{fence.AggregateGeneration}:inventory:{level}:{index}"
-        );
+    ) => Key(AggregateKey(fence).Value + FormattableString.Invariant($":participant:{index}:meta"));
 
     // Canonical single-row authority envelope (21-location-runtime.md#2.4):
     // Payload is the application-opaque bytes directly -- there is no
@@ -5268,6 +4863,23 @@ internal sealed partial class ZLinkProviderLocationRepository
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool ClearRelocation { get; init; }
 
+        public ZLinkAuthorityKey? RepresentativeKey { get; init; }
+
+        internal ReadOnlyMemory<byte> ProjectPayload(
+            ZLinkPlacementObjectKind kind,
+            ReadOnlyMemory<byte> payload
+        ) =>
+            RepresentativeKey is null
+                ? payload
+                : ZLinkAggregateRelocationCoordinator.ProjectParticipantPayload(
+                    kind,
+                    payload,
+                    TargetDescriptor,
+                    TargetDescriptorLifecycleGeneration,
+                    TargetOwner,
+                    AggregateId
+                );
+
         internal JsonElement? ApplyRelocation(JsonElement? aggregate) =>
             ClearRelocation || Relocation is not null
                 ? ZLinkAuthorityAggregateCodec.Replace(aggregate, Relocation)
@@ -5278,166 +4890,25 @@ internal sealed partial class ZLinkProviderLocationRepository
         AggregateHeader Header,
         int ParticipantCount,
         byte[] RequestFingerprint,
-        AggregateInventoryRoot Inventory,
         AggregateStatus Status,
         DateTimeOffset StagedAt,
         bool ParticipantsNormalized,
         bool ParticipantsCleaned
     );
 
-    private sealed record AggregateInventoryRoot(
-        int TotalCount,
-        byte[] Digest,
-        int TopLevel,
-        IReadOnlyList<AggregateInventoryPageReference> TopPages,
-        IReadOnlyList<int> PageCountsByLevel
-    );
-
-    private sealed record AggregateInventoryPageReference(
-        int Level,
-        int Index,
-        int StartIndex,
-        int EntryCount,
-        byte[] Sha256
-    );
-
-    private sealed record AggregateInventoryPage(
-        int Level,
-        int Index,
-        int StartIndex,
-        int EntryCount,
-        IReadOnlyList<AggregateInventoryLeafEntry> Entries,
-        IReadOnlyList<AggregateInventoryPageReference> Children
-    );
-
-    private sealed record AggregateInventoryLeafEntry(
-        int Index,
-        string Key,
-        string ExpectedStoreVersion,
-        ZLinkAuthorityGenerationTransition OwnerTransition,
-        byte[] AuthorityPayloadSha256,
-        byte[] MembershipMutationSha256
-    );
-
-    private sealed record AggregateInventoryTree(
-        AggregateInventoryRoot Root,
-        IReadOnlyList<AggregateInventoryPage> Pages
-    );
-
-    private ref struct AggregateInventoryReader
-    {
-        private ReadOnlySpan<byte> remaining;
-
-        internal AggregateInventoryReader(ReadOnlySpan<byte> encoded)
-        {
-            remaining = encoded;
-        }
-
-        internal void ReadHeader(byte expectedRecordKind)
-        {
-            if (
-                ReadUInt32() != InventoryCodecMagic
-                || ReadByte() != InventoryCodecVersion
-                || ReadByte() != expectedRecordKind
-            )
-                throw new InvalidDataException("The aggregate inventory codec header is invalid.");
-        }
-
-        internal int ReadInt32()
-        {
-            var bytes = ReadBytes(sizeof(int));
-            return BinaryPrimitives.ReadInt32BigEndian(bytes);
-        }
-
-        internal int ReadBoundedCount(int maximum)
-        {
-            var count = ReadInt32();
-            if (count < 0 || count > maximum)
-                throw new InvalidDataException(
-                    "An aggregate inventory collection count is invalid."
-                );
-            return count;
-        }
-
-        internal AggregateInventoryLeafEntry ReadLeafEntry()
-        {
-            var index = ReadInt32();
-            var key = ReadString();
-            var expectedStoreVersion = ReadString();
-            var transition = (ZLinkAuthorityGenerationTransition)ReadByte();
-            if (
-                transition
-                is not (
-                    ZLinkAuthorityGenerationTransition.Preserve
-                    or ZLinkAuthorityGenerationTransition.NewOwner
-                )
-            )
-                throw new InvalidDataException(
-                    "An aggregate inventory owner transition is invalid."
-                );
-            return new AggregateInventoryLeafEntry(
-                index,
-                key,
-                expectedStoreVersion,
-                transition,
-                ReadHash(),
-                ReadHash()
-            );
-        }
-
-        internal AggregateInventoryPageReference ReadReference() =>
-            new(ReadInt32(), ReadInt32(), ReadInt32(), ReadInt32(), ReadHash());
-
-        internal void RequireEnd()
-        {
-            if (!remaining.IsEmpty)
-                throw new InvalidDataException(
-                    "The aggregate inventory record has trailing bytes."
-                );
-        }
-
-        private uint ReadUInt32()
-        {
-            var bytes = ReadBytes(sizeof(uint));
-            return BinaryPrimitives.ReadUInt32BigEndian(bytes);
-        }
-
-        private byte ReadByte() => ReadBytes(1)[0];
-
-        private string ReadString()
-        {
-            var length = ReadInt32();
-            if (length < 1 || length > remaining.Length)
-                throw new InvalidDataException("An aggregate inventory string length is invalid.");
-            return InventoryUtf8.GetString(ReadBytes(length));
-        }
-
-        private byte[] ReadHash() => ReadBytes(SHA256.HashSizeInBytes).ToArray();
-
-        private ReadOnlySpan<byte> ReadBytes(int count)
-        {
-            if (count < 0 || count > remaining.Length)
-                throw new InvalidDataException("The aggregate inventory record is truncated.");
-            var value = remaining[..count];
-            remaining = remaining[count..];
-            return value;
-        }
-    }
-
     private sealed record AggregateParticipantRecord(
         int Index,
         string Key,
         string ExpectedStoreVersion,
         ZLinkAuthorityGenerationTransition OwnerTransition,
-        byte[] AuthorityPayloadSha256,
-        byte[] MembershipMutationSha256,
         ulong TargetAuthorityOwnerGeneration,
         byte[] RequestFingerprint
     );
 
     private sealed record StoredAggregateParticipant(
         AggregateParticipantRecord Metadata,
-        ReadOnlyMemory<byte> Payload
+        ReadOnlyMemory<byte> Payload,
+        ReadOnlyMemory<byte> MembershipMutation
     );
 
     private sealed record StoredRecord<T>(

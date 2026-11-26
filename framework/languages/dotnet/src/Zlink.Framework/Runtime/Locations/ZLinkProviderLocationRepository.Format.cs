@@ -509,7 +509,14 @@ internal sealed partial class ZLinkProviderLocationRepository
             .WriteAsync(
                 new(
                     [new ZLinkStoreCondition.Version(key, stored.Version)],
-                    [new ZLinkStoreMutation.Put(key, Encode(terminal), null)]
+                    [
+                        new ZLinkStoreMutation.Put(key, Encode(terminal), null),
+                        new ZLinkStoreMutation.Put(
+                            AggregateHousekeepingKey(key),
+                            EncodeAggregateHousekeeping(terminal),
+                            null
+                        ),
+                    ]
                 ),
                 cancellationToken
             )

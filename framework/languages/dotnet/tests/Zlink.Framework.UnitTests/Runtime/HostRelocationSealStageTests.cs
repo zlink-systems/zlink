@@ -13,7 +13,7 @@ using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class HostRelocationSealStageTests
+public sealed partial class HostRelocationSealStageTests
 {
     [Theory]
     [InlineData(false, false)]
@@ -534,7 +534,29 @@ public sealed class HostRelocationSealStageTests
                 try
                 {
                     if (commitStore is not null)
+                    {
                         await commitStore.Committed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                        Assert.True(
+                            ZLinkActorAuthorityPayloadCodec.TryDecode(
+                                commitStore.SealedAuthorityPayload,
+                                out var sealedActor
+                            )
+                        );
+                        Assert.True(
+                            ZLinkActorAuthorityPayloadCodec.TryDecode(
+                                commitStore.CommittedAuthorityPayload,
+                                out var committedActor
+                            )
+                        );
+                        Assert.Equal(commitStore.SourceRid, sealedActor.NodeRid);
+                        Assert.Equal(commitStore.TargetRid, committedActor.NodeRid);
+                        Assert.Equal(commitStore.TargetOwnerId, committedActor.OwnerId);
+                        Assert.Equal(sealedActor.CurrentSpotId, committedActor.CurrentSpotId);
+                        Assert.Equal(
+                            sealedActor.CurrentSpotGeneration,
+                            committedActor.CurrentSpotGeneration
+                        );
+                    }
                     Assert.Equal(
                         ZLinkFrameworkRelocationOutcome.Relocated,
                         (await relocation.WaitAsync(TimeSpan.FromSeconds(15))).Outcome
@@ -763,10 +785,25 @@ public sealed class HostRelocationSealStageTests
         internal TaskCompletionSource Release { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+        internal RoutingId SourceRid => sourceRid;
+        internal RoutingId TargetRid { get; private set; }
+        internal string TargetOwnerId { get; private set; } = string.Empty;
+        internal byte[] SealedAuthorityPayload { get; private set; } = [];
+        internal byte[] CommittedAuthorityPayload { get; private set; } = [];
+
+        public async ValueTask<ZLinkStoreReadResult> ReadAsync(
             ZLinkStoreKey key,
             CancellationToken cancellationToken = default
-        ) => inner.ReadAsync(key, cancellationToken);
+        )
+        {
+            var result = await inner.ReadAsync(key, cancellationToken);
+            if (
+                result is ZLinkStoreReadResult.Found found
+                && key.Value.EndsWith(":participant:0:authorityPayload", StringComparison.Ordinal)
+            )
+                SealedAuthorityPayload = found.Value.Bytes.ToArray();
+            return result;
+        }
 
         public ValueTask<ZLinkStoreScanResult> ScanAsync(
             ZLinkStoreScanRequest request,
@@ -790,6 +827,9 @@ public sealed class HostRelocationSealStageTests
                     && found.Snapshot.Allocation.Descriptor.Rid != sourceRid
                 )
                 {
+                    TargetRid = found.Snapshot.Allocation.Descriptor.Rid;
+                    TargetOwnerId = found.Snapshot.OwnerId;
+                    CommittedAuthorityPayload = found.Snapshot.Payload.ToArray();
                     Committed.TrySetResult();
                     await Release.Task.WaitAsync(cancellationToken);
                 }

@@ -71,6 +71,7 @@ internal sealed record ZLinkAuthoritySnapshot(
 )
 {
     internal Zlink.Framework.Runtime.Locations.ZLinkAuthorityRelocation? Relocation { get; init; }
+    internal string? AggregateExpectedStoreVersion { get; init; }
 }
 
 internal abstract record ZLinkAuthorityReadResult
@@ -119,33 +120,29 @@ internal abstract record ZLinkAuthorityMutation
 {
     private protected ZLinkAuthorityMutation() { }
 
+    internal Zlink.Framework.Runtime.Locations.ZLinkAuthorityRelocation? Relocation { get; init; }
+    internal bool ClearRelocation { get; init; }
+
+    internal Zlink.Framework.Runtime.Locations.ZLinkAuthorityRelocation? ApplyRelocation(
+        ZLinkAuthoritySnapshot current
+    ) => ClearRelocation ? null : Relocation ?? current.Relocation;
+
     public sealed record Put(
         ReadOnlyMemory<byte> Payload,
         ZLinkAuthorityGenerationTransition GenerationTransition,
         ZLinkLocationOwnerToken? TargetOwner,
         ZLinkPlacementAllocation? TargetAllocation,
         ulong TargetAuthorityOwnerGeneration = 0
-    ) : ZLinkAuthorityMutation
-    {
-        internal Zlink.Framework.Runtime.Locations.ZLinkAuthorityRelocation? Relocation { get; init; }
-        internal bool ClearRelocation { get; init; }
-
-        internal Zlink.Framework.Runtime.Locations.ZLinkAuthorityRelocation? ApplyRelocation(
-            ZLinkAuthoritySnapshot current
-        ) => ClearRelocation ? null : Relocation ?? current.Relocation;
-    }
+    ) : ZLinkAuthorityMutation;
 
     /// <summary>
-    /// Replaces only the opaque payload after matching the exact store version
-    /// and owner token. The current owner lease need not still be live.
+    /// Updates payload and relocation progress after matching the exact store
+    /// version and owner token. The current owner lease need not still be live.
     /// </summary>
     public sealed record Restore(
         ReadOnlyMemory<byte> Payload,
         ZLinkLocationOwnerToken ExpectedOwner
-    ) : ZLinkAuthorityMutation
-    {
-        internal bool ClearRelocation { get; init; }
-    }
+    ) : ZLinkAuthorityMutation;
 
     internal static void Validate(ZLinkAuthorityMutation mutation)
     {
@@ -371,7 +368,11 @@ internal sealed record ZLinkAggregateParticipant(
     ZLinkAuthorityGenerationTransition OwnerTransition,
     ReadOnlyMemory<byte> AuthorityPayload,
     ReadOnlyMemory<byte> MembershipMutation
-);
+)
+{
+    internal string? CapturedStoreVersion { get; init; }
+    internal string CompareExchangeStoreVersion => CapturedStoreVersion ?? ExpectedStoreVersion;
+}
 
 internal sealed record ZLinkAggregatePrepareRequest(
     Guid AggregateId,
@@ -386,6 +387,7 @@ internal sealed record ZLinkAggregatePrepareRequest(
 )
 {
     internal ZLinkAuthorityRelocation? Relocation { get; init; }
+    internal ZLinkAuthorityKey? RepresentativeKey { get; init; }
     internal bool ClearRelocation { get; init; }
 
     internal ZLinkAuthorityRelocation? ApplyRelocation(ZLinkAuthorityRelocation? current) =>

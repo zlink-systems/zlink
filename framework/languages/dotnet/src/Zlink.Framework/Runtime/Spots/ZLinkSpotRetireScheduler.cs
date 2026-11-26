@@ -150,14 +150,9 @@ internal sealed record ZLinkSpotRetireReservation(
 );
 
 internal sealed record ZLinkPreparedSpotRetireStaging(
-    ZLinkPreparedRelocation Root,
+    ZLinkRelocationEnvelope Envelope,
     IReadOnlyList<ZLinkAggregateRelocationParticipant> Participants
-)
-{
-    internal ZLinkRelocationStored Relocation => Root.Relocation;
-
-    internal ZLinkRelocationEnvelope Envelope => Root.Envelope;
-}
+);
 
 /// <summary>
 /// Runs one source Spot relocation transaction. Any failure before authority
@@ -165,7 +160,6 @@ internal sealed record ZLinkPreparedSpotRetireStaging(
 /// </summary>
 internal sealed class ZLinkSpotRetireScheduler(
     IZLinkLocationRepository authorityStore,
-    IZLinkRelocationRepository relocationStore,
     IZLinkSpotRetireTarget target,
     ZLinkFrameworkRuntime runtime
 )
@@ -319,9 +313,40 @@ internal sealed class ZLinkSpotRetireScheduler(
             perActorShell ? activation.SnapshotActorIds() : actorIds,
             perActorShell
         );
-        var reservation = await target
-            .TryReserveAsync(inventory, selection, cancellationToken)
-            .ConfigureAwait(false);
+        var aggregateId = Guid.NewGuid();
+        var fence = ZLinkAggregateInventory.RelocationFence(aggregateId);
+        var spotKey = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(activation.SpotId);
+        var spotTask = ReadOwnedAsync(spotKey, cancellationToken).AsTask();
+        var actorsTask = ReadActorAuthoritiesAsync(actorIds, cancellationToken).AsTask();
+        await Task.WhenAll(spotTask, actorsTask).ConfigureAwait(false);
+        var spot = await spotTask.ConfigureAwait(false);
+        var actorAuthorities = await actorsTask.ConfigureAwait(false);
+        var sealedAuthorities = new ZLinkAggregateParticipant[actorIds.Count + 1];
+        sealedAuthorities[0] = InventoryParticipant(spotKey, spot);
+        for (var index = 0; index < actorIds.Count; index++)
+            sealedAuthorities[index + 1] = InventoryParticipant(
+                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorIds[index]),
+                actorAuthorities[index]
+            );
+
+        ZLinkSpotRetireReservation? reservation = null;
+        string digest;
+        try
+        {
+            digest = await authorityStore
+                .SealAggregateInventoryAsync(fence, sealedAuthorities, cancellationToken)
+                .ConfigureAwait(false);
+            reservation = await target
+                .TryReserveAsync(inventory, selection, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            if (reservation is null)
+                await authorityStore
+                    .RemoveSealedInventoryAsync(fence, cleanupDeadline.Token)
+                    .ConfigureAwait(false);
+        }
         if (reservation is null)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -329,12 +354,10 @@ internal sealed class ZLinkSpotRetireScheduler(
             );
             return ZLinkRelocationUnitResult.Pending();
         }
-        ZLinkSpotRetireReservation activeReservation = reservation;
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"relocation_reserved spot={activation.SpotId} target={reservation.TargetDescriptor.Rid}"
         );
 
-        var aggregateId = Guid.NewGuid();
         var sealedSessionRoutes = new Dictionary<ZLinkActorId, ZLinkRemoteActorBoundSessionRoute>();
         var sessionRelocationContext = default(ZLinkSessionRelocationContext);
         try
@@ -348,18 +371,13 @@ internal sealed class ZLinkSpotRetireScheduler(
                 // and never reach the source handoff backlog.
                 if (actorIds.Count != 0)
                 {
-                    var coordinatorAuthority = await ReadOwnedAsync(
-                            ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(activation.SpotId),
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
                     sessionRelocationContext = ZLinkSessionRelocationContext.Create(
                         aggregateId,
                         inventory.SourceOwner.OwnerId,
                         checked((ulong)inventory.SourceOwner.LeaseGeneration),
                         inventory.SourceNodeRid,
                         inventory.SourceNodeLifecycleGeneration,
-                        coordinatorAuthority.StoreVersion
+                        spot.StoreVersion
                     );
                     var sealedRoutes = new ZLinkRemoteActorBoundSessionRoute[actorIds.Count];
                     try
@@ -421,6 +439,11 @@ internal sealed class ZLinkSpotRetireScheduler(
                 await failures
                     .CaptureAsync(() => target.AbortAsync(reservation, fence: null))
                     .ConfigureAwait(false);
+                await failures
+                    .CaptureAsync(() =>
+                        authorityStore.RemoveSealedInventoryAsync(fence, cleanupDeadline.Token)
+                    )
+                    .ConfigureAwait(false);
                 failures.ThrowIfAny();
                 throw;
             }
@@ -429,7 +452,7 @@ internal sealed class ZLinkSpotRetireScheduler(
             var interruption = activation.StartRelocationInterruption(instanceSpot);
 
             ZLinkSpotRelocationSeal? seal = admittedSeal;
-            ZLinkPreparedSpotRetireStaging? staging = null;
+
             ZLinkAggregateRelocationPublished? published = null;
             IReadOnlyList<ZLinkAcceptedWorkRecord> heldAtCutoff = [];
             IReadOnlyList<ZLinkAcceptedWorkRecord> committedHeld = [];
@@ -444,9 +467,6 @@ internal sealed class ZLinkSpotRetireScheduler(
             var sourceCompleted = false;
             var actorCaptures = new Dictionary<ZLinkActorId, SourceActorCapture>();
             var actorMessageFollowBacklog = new List<Task<bool>>();
-            Dictionary<ZLinkActorId, SourceActorCapture> activeActorCaptures = actorCaptures;
-            List<Task<bool>> activeActorMessageFollowBacklog = actorMessageFollowBacklog;
-            ZLinkSpotRetireInventory activeInventory = inventory;
             try
             {
                 // The seal read the membership once and captured exactly those
@@ -512,7 +532,8 @@ internal sealed class ZLinkSpotRetireScheduler(
                         seal,
                         application,
                         actorIds,
-                        aggregateId,
+                        spot,
+                        actorAuthorities,
                         sealedSessionRoutes,
                         actorCaptures,
                         inventory.RequiredCapabilities,
@@ -551,11 +572,22 @@ internal sealed class ZLinkSpotRetireScheduler(
                         cancellationToken
                     )
                     .ConfigureAwait(false);
+                await ZLinkSpotRelocationSourceInventory
+                    .CaptureAsync(
+                        authorityStore,
+                        fence,
+                        spotKey,
+                        spot,
+                        digest,
+                        checked((ulong)sourceDescriptor.ApplicationVersion),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
                 var stagingEnvelope = ZLinkCanonicalSpotRelocationWriter.CreateInitial(
                     new ZLinkRelocationEnvelope(
                         aggregateId,
-                        1,
-                        ZLinkAggregateInventoryDigest.Compute(participants),
+                        fence.AggregateGeneration,
+                        Convert.FromHexString(digest),
                         participants.Select(static participant => participant.Envelope).ToArray()
                     ),
                     activation.SpotId,
@@ -563,22 +595,11 @@ internal sealed class ZLinkSpotRetireScheduler(
                     inventory.SourceNodeRid,
                     sourceDescriptor.ApplicationVersion
                 );
-                var stagingRoot = await new ZLinkRelocationPublicationCoordinator(
-                    runtime.ErrorSink,
-                    authorityStore,
-                    relocationStore
-                )
-                    .PrepareAsync(stagingEnvelope, cancellationToken)
-                    .ConfigureAwait(false);
-                staging = new ZLinkPreparedSpotRetireStaging(stagingRoot, participants);
+                var staging = new ZLinkPreparedSpotRetireStaging(stagingEnvelope, participants);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"relocation_stage_begin spot={activation.SpotId} aggregate={aggregateId:N}"
                 );
-                published = new ZLinkAggregateRelocationPublished(
-                    new ZLinkAggregateFence(aggregateId, 1),
-                    staging.Relocation,
-                    staging.Envelope
-                );
+                published = new ZLinkAggregateRelocationPublished(fence, staging.Envelope);
                 stageStarted = true;
                 await target
                     .StageAsync(reservation, staging, deadline, cancellationToken)
@@ -600,11 +621,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                 {
                     await ExecutePrecommitAbortAsync(
                             null,
-                            () =>
-                                target.AbortAsync(
-                                    reservation,
-                                    new ZLinkAggregateFence(aggregateId, 1)
-                                ),
+                            () => target.AbortAsync(reservation, fence),
                             DiscardStagingAsync,
                             async () =>
                             {
@@ -691,11 +708,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                     {
                         await ExecutePrecommitAbortAsync(
                                 null,
-                                () =>
-                                    target.AbortAsync(
-                                        reservation,
-                                        new ZLinkAggregateFence(aggregateId, 1)
-                                    ),
+                                () => target.AbortAsync(reservation, fence),
                                 DiscardStagingAsync,
                                 async () =>
                                 {
@@ -810,8 +823,7 @@ internal sealed class ZLinkSpotRetireScheduler(
             {
                 await ExecutePrecommitAbortAsync(
                         null,
-                        () =>
-                            target.AbortAsync(reservation, new ZLinkAggregateFence(aggregateId, 1)),
+                        () => target.AbortAsync(reservation, fence),
                         DiscardStagingAsync,
                         async () =>
                         {
@@ -961,9 +973,9 @@ internal sealed class ZLinkSpotRetireScheduler(
                             if (!targetCompletionDelivered)
                             {
                                 if (
-                                    activeActorMessageFollowBacklog.Count != 0
+                                    actorMessageFollowBacklog.Count != 0
                                     && (
-                                        await Task.WhenAll(activeActorMessageFollowBacklog)
+                                        await Task.WhenAll(actorMessageFollowBacklog)
                                             .ConfigureAwait(false)
                                     ).Any(static delivered => !delivered)
                                 )
@@ -972,7 +984,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                                     );
                                 await target
                                     .RelayCommittedAsync(
-                                        activeReservation,
+                                        reservation,
                                         committedPublication,
                                         committedHeld,
                                         completionToken
@@ -988,7 +1000,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                                 activation.InvokeRelocationClosingAfterCommitAsync(deadline)
                             )
                             .ConfigureAwait(false);
-                    foreach (var capture in activeActorCaptures.Values)
+                    foreach (var capture in actorCaptures.Values)
                         await failures
                             .CaptureAsync(() =>
                                 runtime.FinalizeMigratedActorSourceAsync(
@@ -1021,7 +1033,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                 CancellationToken completionToken
             )
             {
-                var followTasks = activeActorCaptures.Values.Select(async capture =>
+                var followTasks = actorCaptures.Values.Select(async capture =>
                 {
                     var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(capture.State.ActorId);
                     var participant = committedPublication.Envelope.Participants.Single(candidate =>
@@ -1036,7 +1048,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                             $"Actor '{capture.State.ActorId}' target authority is unavailable after aggregate commit."
                         );
                     var targetActor = new ZLinkBackendActorRef(
-                        activeReservation.TargetDescriptor.Rid,
+                        reservation.TargetDescriptor.Rid,
                         capture.State.ActorId,
                         capture.SourceActor.Generation
                     );
@@ -1045,12 +1057,12 @@ internal sealed class ZLinkSpotRetireScheduler(
                         capture.SourceActor,
                         targetActor,
                         activation.MeshName,
-                        activeInventory.SourceNodeLifecycleGeneration,
-                        activeReservation.TargetDescriptorLifecycleGeneration,
+                        inventory.SourceNodeLifecycleGeneration,
+                        reservation.TargetDescriptorLifecycleGeneration,
                         participant.AuthorityOwnerGeneration,
                         targetFound.Snapshot.AuthorityOwnerGeneration,
-                        checked((ulong)activeInventory.SourceOwner.LeaseGeneration),
-                        checked((ulong)activeReservation.TargetOwner.LeaseGeneration),
+                        checked((ulong)inventory.SourceOwner.LeaseGeneration),
+                        checked((ulong)reservation.TargetOwner.LeaseGeneration),
                         runtime.Registration.Locations.Options.MessageFollowDuration,
                         runtime.Registration.Locations.Options.RelocationCutoverWaitTimeout
                     );
@@ -1062,7 +1074,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                     return backlog;
                 });
                 foreach (var backlog in await Task.WhenAll(followTasks).ConfigureAwait(false))
-                    activeActorMessageFollowBacklog.AddRange(backlog);
+                    actorMessageFollowBacklog.AddRange(backlog);
             }
 
             async ValueTask RestoreSourceActorsAsync()
@@ -1080,16 +1092,8 @@ internal sealed class ZLinkSpotRetireScheduler(
 
             async ValueTask DiscardStagingAsync()
             {
-                if (staging is null)
-                    return;
-                var discard = staging;
-                staging = null;
-                await new ZLinkRelocationPublicationCoordinator(
-                    runtime.ErrorSink,
-                    authorityStore,
-                    relocationStore
-                )
-                    .DiscardPreparedAsync(discard.Root)
+                await ZLinkSpotRelocationSourceInventory
+                    .AbortAsync(authorityStore, fence, spotKey, CancellationToken.None)
                     .ConfigureAwait(false);
             }
         }
@@ -1151,7 +1155,8 @@ internal sealed class ZLinkSpotRetireScheduler(
         ZLinkSpotRelocationSeal seal,
         ZLinkSpotRelocationApplicationState application,
         IReadOnlyList<string> actorIds,
-        Guid aggregateId,
+        ZLinkAuthoritySnapshot spot,
+        IReadOnlyList<ZLinkAuthoritySnapshot> actorAuthorities,
         IReadOnlyDictionary<ZLinkActorId, ZLinkRemoteActorBoundSessionRoute> sealedSessionRoutes,
         IReadOnlyDictionary<ZLinkActorId, SourceActorCapture> actorCaptures,
         IReadOnlyList<ZLinkObjectCapability> requiredCapabilities,
@@ -1163,17 +1168,12 @@ internal sealed class ZLinkSpotRetireScheduler(
             checked(actorIds.Count + 1)
         );
         var spotKey = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(activation.SpotId);
-        var spotTask = ReadOwnedAsync(spotKey, cancellationToken).AsTask();
-        var capturedJobsTask = ResolveAcceptedJobsAsync(
+        var capturedJobs = await ResolveAcceptedJobsAsync(
                 activation.MeshName,
                 seal.QueueSeal.QueueSeal.Captured,
                 cancellationToken
             )
-            .AsTask();
-        var actorAuthoritiesTask = ReadActorAuthoritiesAsync(actorIds, cancellationToken).AsTask();
-        var spot = await spotTask.ConfigureAwait(false);
-        var capturedJobs = await capturedJobsTask.ConfigureAwait(false);
-        var actorAuthorities = await actorAuthoritiesTask.ConfigureAwait(false);
+            .ConfigureAwait(false);
         var spotKind = activation.PlacementKind;
         var spotStableType =
             spotKind == ZLinkPlacementObjectKind.InstanceSpot
@@ -1202,7 +1202,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                 spot.StoreVersion,
                 spotStableType,
                 spot.Payload,
-                ReadOnlyMemory<byte>.Empty,
+                ZLinkAggregateInventory.NoMembershipMutation,
                 MaintenancePolicy: requiredCapabilities
                     .Single(capability =>
                         capability.ObjectKind == spotKind
@@ -1226,7 +1226,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                 spot.StoreVersion,
                 ZLinkAuthorityGenerationTransition.NewOwner,
                 spot.Payload,
-                ReadOnlyMemory<byte>.Empty
+                ZLinkAggregateInventory.NoMembershipMutation
             )
         );
 
@@ -1239,14 +1239,6 @@ internal sealed class ZLinkSpotRetireScheduler(
             var boundRoute = sealedSessionRoutes.TryGetValue(actorKey, out var sealedRoute)
                 ? sealedRoute
                 : default;
-            var relocationAuthority = ZLinkActorRelocationAuthorityPayloadCodec.Encode(
-                new ZLinkActorRelocationAuthorityPayload(
-                    aggregateId,
-                    ZLinkActorRelocationAuthorityPhase.Activated,
-                    default,
-                    actor.Payload
-                )
-            );
             if (
                 !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
                     actor.Payload.Span,
@@ -1264,8 +1256,8 @@ internal sealed class ZLinkSpotRetireScheduler(
                     actor.AuthorityOwnerGeneration,
                     actor.StoreVersion,
                     actorAuthority.StableType,
-                    relocationAuthority,
-                    ReadOnlyMemory<byte>.Empty,
+                    actor.Payload,
+                    ZLinkAggregateInventory.NoMembershipMutation,
                     MaintenancePolicy: requiredCapabilities
                         .Single(capability =>
                             capability.ObjectKind == ZLinkPlacementObjectKind.Actor
@@ -1294,8 +1286,8 @@ internal sealed class ZLinkSpotRetireScheduler(
                     },
                     actor.StoreVersion,
                     ZLinkAuthorityGenerationTransition.NewOwner,
-                    relocationAuthority,
-                    ReadOnlyMemory<byte>.Empty
+                    actor.Payload,
+                    ZLinkAggregateInventory.NoMembershipMutation
                 )
             );
         }
@@ -1461,6 +1453,18 @@ internal sealed class ZLinkSpotRetireScheduler(
                 return false;
         return true;
     }
+
+    private static ZLinkAggregateParticipant InventoryParticipant(
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot authority
+    ) =>
+        new(
+            key,
+            authority.StoreVersion,
+            ZLinkAuthorityGenerationTransition.NewOwner,
+            authority.Payload,
+            ZLinkAggregateInventory.NoMembershipMutation
+        );
 
     private async ValueTask<ZLinkAuthoritySnapshot> ReadOwnedAsync(
         ZLinkAuthorityKey key,

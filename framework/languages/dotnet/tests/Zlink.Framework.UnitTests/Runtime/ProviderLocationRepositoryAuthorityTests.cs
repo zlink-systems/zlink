@@ -1,7 +1,7 @@
-using System.Buffers.Binary;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -1684,7 +1684,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                         spotReady.Snapshot.StoreVersion,
                         ZLinkAuthorityGenerationTransition.NewOwner,
                         spotPayload,
-                        ReadOnlyMemory<byte>.Empty
+                        ZLinkAggregateInventory.NoMembershipMutation
                     ),
                 ],
                 descriptor,
@@ -5988,9 +5988,18 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         );
 
         provider.ThrowAfterNextWrite = true;
-        // Root claim, inventory, participant staging, and its fence
-        // precede the final Prepared response.
-        provider.SkipWritesBeforeThrow = 4;
+        var aggregateKey = new ZLinkStoreKey(
+            AggregatePrefix(new(request.AggregateId, request.AggregateGeneration))
+        );
+        provider.ShouldThrowAfterWrite = write =>
+            write
+                .Mutations.OfType<ZLinkStoreMutation.Put>()
+                .Any(put =>
+                    put.Key == aggregateKey
+                    && ZLinkAggregateInventory
+                        .Decode<ZLinkAggregateInventory.Aggregate>(put.Bytes)
+                        .State == "prepared"
+                );
         var reconciled = Assert.IsType<ZLinkAggregatePrepareResult.AlreadyPrepared>(
             await repository.PrepareAggregateAsync(request)
         );
@@ -6935,8 +6944,8 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             Assert.Equal(targetOwner.OwnerId, visible.OwnerId);
         }
         Assert.Contains(
-            await ScanKeysAsync(inner, AggregatePrefix(prepared.Fence)),
-            static key => key.EndsWith(":payload", StringComparison.Ordinal)
+            await ScanInventoryKeysAsync(inner, prepared.Fence),
+            static key => key.EndsWith(":authorityPayload", StringComparison.Ordinal)
         );
 
         provider.BlockWrites = false;
@@ -7068,8 +7077,8 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             await repository.CommitAggregateAsync(fence)
         );
         Assert.Contains(
-            await ScanKeysAsync(inner, AggregatePrefix(fence)),
-            static key => key.Contains(":inventory:", StringComparison.Ordinal)
+            await ScanInventoryKeysAsync(inner, fence),
+            static key => key.Contains(":page:", StringComparison.Ordinal)
         );
 
         provider.BlockWrites = false;
@@ -7202,7 +7211,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             await ScanKeysAsync(inner, AggregatePrefix(fence)),
             static key =>
                 key.Contains(":participant:", StringComparison.Ordinal)
-                || key.Contains(":inventory:", StringComparison.Ordinal)
+                || key.Contains(":page:", StringComparison.Ordinal)
         );
 
         var authority = Assert
@@ -7254,7 +7263,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                     initial.StoreVersion,
                     ZLinkAuthorityGenerationTransition.Preserve,
                     new byte[] { 0x32 },
-                    ReadOnlyMemory<byte>.Empty
+                    ZLinkAggregateInventory.NoMembershipMutation
                 ),
             ],
             descriptor,
@@ -7402,9 +7411,9 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         );
 
         Assert.True(root.Value.Bytes.Length < 1024 * 1024);
-        var preparedKeys = await ScanKeysAsync(provider, AggregatePrefix(prepared.Fence));
+        var preparedKeys = await ScanInventoryKeysAsync(provider, prepared.Fence);
         var inventoryLeafKeys = preparedKeys
-            .Where(static key => key.Contains(":inventory:0:", StringComparison.Ordinal))
+            .Where(static key => key.Contains(":page:0:", StringComparison.Ordinal))
             .ToArray();
         Assert.Equal(10, inventoryLeafKeys.Length);
         var inventoryPageBytes = new Dictionary<string, byte[]>(StringComparer.Ordinal);
@@ -7414,14 +7423,9 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 await provider.ReadAsync(new ZLinkStoreKey(inventoryLeafKey))
             );
             Assert.InRange(page.Value.Bytes.Length, 1, 1024 * 1024);
-            Assert.Equal(0x5A4C4956u, BinaryPrimitives.ReadUInt32BigEndian(page.Value.Bytes.Span));
-            Assert.Equal(1, page.Value.Bytes.Span[4]);
-            Assert.Equal(2, page.Value.Bytes.Span[5]);
-            Assert.InRange(
-                BinaryPrimitives.ReadInt32BigEndian(page.Value.Bytes.Span.Slice(22, sizeof(int))),
-                1,
-                1024
-            );
+            using var json = JsonDocument.Parse(page.Value.Bytes);
+            Assert.Equal(0, json.RootElement.GetProperty("level").GetInt32());
+            Assert.InRange(json.RootElement.GetProperty("entries").GetArrayLength(), 1, 1024);
             inventoryPageBytes[inventoryLeafKey] = page.Value.Bytes.ToArray();
         }
         Assert.Equal(participantCount, prepared.TargetAuthorityOwnerGenerations.Count);
@@ -7461,9 +7465,20 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             static key => key.Contains(":participant:", StringComparison.Ordinal)
         );
         Assert.DoesNotContain(
-            await ScanKeysAsync(provider, AggregatePrefix(prepared.Fence)),
-            static key => key.Contains(":inventory:", StringComparison.Ordinal)
+            await ScanInventoryKeysAsync(provider, prepared.Fence),
+            static key => key.Contains(":page:", StringComparison.Ordinal)
         );
+    }
+
+    [Fact]
+    public async Task SharedOpaqueProvider_PrepareWritesCanonicalInventoryRoot()
+    {
+        var fixture = await PrepareInventoryFixtureAsync(1);
+        var fence = fixture.Prepared.Fence;
+        var key = new ZLinkStoreKey(
+            $"zlink:v11:aggregate-inventory:{fence.AggregateId:D}:{fence.AggregateGeneration}:root"
+        );
+        Assert.IsType<ZLinkStoreReadResult.Found>(await fixture.Provider.ReadAsync(key));
     }
 
     [Fact]
@@ -7581,8 +7596,8 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         {
             var fixture = await PrepareInventoryFixtureAsync(2);
             var inventoryKey = (
-                await ScanKeysAsync(fixture.Provider, AggregatePrefix(fixture.Prepared.Fence))
-            ).Single(static key => key.Contains(":inventory:0:", StringComparison.Ordinal));
+                await ScanInventoryKeysAsync(fixture.Provider, fixture.Prepared.Fence)
+            ).Single(static key => key.Contains(":page:0:", StringComparison.Ordinal));
             var key = new ZLinkStoreKey(inventoryKey);
             var page = Assert.IsType<ZLinkStoreReadResult.Found>(
                 await fixture.Provider.ReadAsync(key)
@@ -7642,9 +7657,9 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
     public async Task SharedOpaqueProvider_AbortPreservesRowsWhenInventoryIsCorrupt()
     {
         var fixture = await PrepareInventoryFixtureAsync(2);
-        var keys = await ScanKeysAsync(fixture.Provider, AggregatePrefix(fixture.Prepared.Fence));
+        var keys = await ScanInventoryKeysAsync(fixture.Provider, fixture.Prepared.Fence);
         var inventoryKey = keys.Single(static key =>
-            key.Contains(":inventory:0:", StringComparison.Ordinal)
+            key.Contains(":page:0:", StringComparison.Ordinal)
         );
         var key = new ZLinkStoreKey(inventoryKey);
         var page = Assert.IsType<ZLinkStoreReadResult.Found>(await fixture.Provider.ReadAsync(key));
@@ -7676,7 +7691,9 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
     {
         var fixture = await PrepareInventoryFixtureAsync(2);
         var aggregatePrefix = AggregatePrefix(fixture.Prepared.Fence);
-        var keys = await ScanKeysAsync(fixture.Provider, aggregatePrefix);
+        var keys = (await ScanKeysAsync(fixture.Provider, aggregatePrefix)).Concat(
+            await ScanInventoryKeysAsync(fixture.Provider, fixture.Prepared.Fence)
+        );
         var selected = record switch
         {
             "root" => aggregatePrefix,
@@ -7684,7 +7701,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 key.EndsWith(":participant:0:meta", StringComparison.Ordinal)
             ),
             _ => keys.Single(static key =>
-                key.EndsWith(":participant:0:payload", StringComparison.Ordinal)
+                key.EndsWith(":participant:0:authorityPayload", StringComparison.Ordinal)
             ),
         };
         var key = new ZLinkStoreKey(selected);
@@ -7750,17 +7767,13 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
     public async Task SharedOpaqueProvider_ReorderedInventoryRootIsDataLost()
     {
         var fixture = await PrepareInventoryFixtureAsync(1025);
-        var rootKey = new ZLinkStoreKey(AggregatePrefix(fixture.Prepared.Fence));
+        var rootKey = ZLinkAggregateInventory.RootKey("zlink:v11:", fixture.Prepared.Fence);
         var root = Assert.IsType<ZLinkStoreReadResult.Found>(
             await fixture.Provider.ReadAsync(rootKey)
         );
         var json = JsonNode.Parse(root.Value.Bytes.Span) ?? throw new InvalidDataException();
-        var inventory = Property(json.AsObject(), "inventory").AsObject();
-        var topPages = Property(inventory, "topPages").AsArray();
-        Assert.Equal(2, topPages.Count);
-        var first = topPages[0]!.DeepClone();
-        topPages[0] = topPages[1]!.DeepClone();
-        topPages[1] = first;
+        var topPages = Property(json.AsObject(), "topPages").AsArray();
+        SetJsonNumber(Assert.Single(topPages)!.AsObject(), "index", 1);
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
             await fixture.Provider.WriteAsync(
                 new ZLinkStoreWriteRequest(
@@ -7810,19 +7823,29 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         );
         var json = JsonNode.Parse(root.Value.Bytes.Span) ?? throw new InvalidDataException();
         SetJsonNumber(json.AsObject(), "participantCount", int.MaxValue);
-        SetJsonNumber(
-            Property(json.AsObject(), "inventory").AsObject(),
-            "totalCount",
-            int.MaxValue
+        var inventoryKey = ZLinkAggregateInventory.RootKey("zlink:v11:", fixture.Prepared.Fence);
+        var inventoryRead = Assert.IsType<ZLinkStoreReadResult.Found>(
+            await fixture.Provider.ReadAsync(inventoryKey)
         );
+        var inventory =
+            JsonNode.Parse(inventoryRead.Value.Bytes.Span) ?? throw new InvalidDataException();
+        SetJsonNumber(inventory.AsObject(), "totalCount", int.MaxValue);
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
             await fixture.Provider.WriteAsync(
                 new ZLinkStoreWriteRequest(
-                    [new ZLinkStoreCondition.Version(rootKey, root.Value.Version)],
+                    [
+                        new ZLinkStoreCondition.Version(rootKey, root.Value.Version),
+                        new ZLinkStoreCondition.Version(inventoryKey, inventoryRead.Value.Version),
+                    ],
                     [
                         new ZLinkStoreMutation.Put(
                             rootKey,
                             Encoding.UTF8.GetBytes(json.ToJsonString()),
+                            null
+                        ),
+                        new ZLinkStoreMutation.Put(
+                            inventoryKey,
+                            Encoding.UTF8.GetBytes(inventory.ToJsonString()),
                             null
                         ),
                     ]
@@ -8172,7 +8195,12 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         );
 
     private static string AggregatePrefix(ZLinkAggregateFence fence) =>
-        $"zlink:v11:aggregate:{fence.AggregateId:N}:" + fence.AggregateGeneration;
+        ZLinkAggregateInventory.AggregateKey("zlink:v11:", fence).Value;
+
+    private static ValueTask<IReadOnlyList<string>> ScanInventoryKeysAsync(
+        IZLinkLocationStore store,
+        ZLinkAggregateFence fence
+    ) => ScanKeysAsync(store, ZLinkAggregateInventory.KeyPrefix("zlink:v11:", fence));
 
     private static async ValueTask<IReadOnlyList<string>> ScanKeysAsync(
         IZLinkLocationStore store,
@@ -8197,7 +8225,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         ZLinkAggregateFence fence
     )
     {
-        var rootKey = new ZLinkStoreKey(AggregatePrefix(fence));
+        var rootKey = new ZLinkStoreKey(AggregatePrefix(fence) + ":housekeeping");
         var read = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(rootKey));
         var json = JsonNode.Parse(read.Value.Bytes.Span) ?? throw new InvalidDataException();
         var property = json.AsObject()
@@ -8225,6 +8253,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
     {
         public bool ThrowAfterNextWrite { get; set; }
         public int SkipWritesBeforeThrow { get; set; }
+        public Func<ZLinkStoreWriteRequest, bool>? ShouldThrowAfterWrite { get; set; }
         public bool BlockWritesAfterThrownResponse { get; set; }
         public bool BlockWrites { get; set; }
         public int DeleteBatchCalls { get; private set; }
@@ -8239,7 +8268,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             CancellationToken cancellationToken = default
         )
         {
-            if (key.Value.Contains(":inventory:", StringComparison.Ordinal))
+            if (key.Value.Contains(":page:", StringComparison.Ordinal))
                 Interlocked.Increment(ref _inventoryReadCount);
             return await inner.ReadAsync(key, cancellationToken);
         }
@@ -8254,7 +8283,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             if (request.Mutations.Any(static mutation => mutation is ZLinkStoreMutation.Delete))
                 DeleteBatchCalls++;
             var result = await inner.WriteAsync(request, cancellationToken);
-            if (ThrowAfterNextWrite)
+            if (ThrowAfterNextWrite && (ShouldThrowAfterWrite?.Invoke(request) ?? true))
             {
                 if (SkipWritesBeforeThrow > 0)
                 {
@@ -8674,7 +8703,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         )
         {
             var result = await inner.WriteAsync(request, cancellationToken);
-            var aggregateRoot = $"zlink:v11:aggregate:{FailAggregateId:N}:1";
+            var aggregateRoot = $"zlink:v11:aggregate:{FailAggregateId:D}:1";
             if (
                 FailAggregateId != Guid.Empty
                 && Volatile.Read(ref _cancelled) == 0
@@ -8794,7 +8823,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                         && !put.Key.Value.Contains(":participant:", StringComparison.Ordinal)
                         && Encoding
                             .UTF8.GetString(put.Bytes.Span)
-                            .Contains("\"status\":2", StringComparison.Ordinal)
+                            .Contains("\"state\":\"committed\"", StringComparison.Ordinal)
                     )
                 && request.Mutations.Any(static mutation => mutation is ZLinkStoreMutation.Add)
             )

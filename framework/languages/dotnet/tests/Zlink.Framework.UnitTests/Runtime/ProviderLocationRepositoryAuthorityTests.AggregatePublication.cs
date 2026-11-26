@@ -1,4 +1,3 @@
-using System.Text;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Locations;
 
@@ -53,9 +52,9 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                     .Mutations.OfType<ZLinkStoreMutation.Put>()
                     .Any(put =>
                         put.Key.Value == root
-                        && Encoding
-                            .UTF8.GetString(put.Bytes.Span)
-                            .Contains("\"status\":1", StringComparison.Ordinal)
+                        && ZLinkAggregateInventory
+                            .Decode<ZLinkAggregateInventory.Aggregate>(put.Bytes)
+                            .State == "prepared"
                     )
             )
                 return;

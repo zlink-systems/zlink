@@ -13,12 +13,6 @@ using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Spots;
 
-internal sealed record ZLinkCanonicalSpotActorDescriptor(
-    string ActorId,
-    string StableType,
-    byte[] AuthorityPayload
-);
-
 internal sealed record ZLinkCanonicalSpotStageContext(
     Guid AggregateId,
     ulong AggregateGeneration,
@@ -35,9 +29,7 @@ internal sealed record ZLinkCanonicalSpotStageContext(
     string SpotId,
     string StableType,
     bool InstanceSpot,
-    string RelocationReference,
-    uint RelocationChecksum,
-    ZLinkCanonicalSpotActorDescriptor[] Actors,
+    uint PayloadChecksum,
     string CoordinatorExpectedAuthorityStoreVersion = ""
 );
 
@@ -239,11 +231,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             );
             if (relocationId.IsEmpty)
                 throw new InvalidDataException("Canonical relocation ID is empty.");
-            var targetAttemptGeneration = relocation.Envelope.AggregateGeneration;
-            if (targetAttemptGeneration == 0)
-                throw new InvalidDataException(
-                    "Canonical relocation target attempt generation is empty."
-                );
+            const ulong targetAttemptGeneration = 1;
             //  Direct transfer (spec 28 §4.2): encode the captured aggregate
             //  envelope once into source memory and stream it as
             //  relocationState chunks behind command 40.
@@ -546,18 +534,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         Append(request.SpotId);
         Append(request.StableType);
         Append(request.InstanceSpot ? "1" : "0");
-        Append(request.RelocationReference);
-        Append(request.RelocationChecksum.ToString());
+        Append(request.PayloadChecksum.ToString());
         Append(request.CoordinatorExpectedAuthorityStoreVersion);
-        Span<byte> payloadLength = stackalloc byte[4];
-        foreach (var actor in request.Actors)
-        {
-            Append(actor.ActorId);
-            Append(actor.StableType);
-            BinaryPrimitives.WriteInt32BigEndian(payloadLength, actor.AuthorityPayload.Length);
-            hash.AppendData(payloadLength);
-            hash.AppendData(actor.AuthorityPayload);
-        }
         return hash.GetHashAndReset();
 
         void Append(string value)
@@ -583,13 +561,11 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             );
         //  Spec 28 §4.3: the aggregate envelope arrived over relocationState
         //  chunks and was verified before this call — no store handoff read.
-        var actors = await ReadCanonicalActorInventoryAsync(prepare, cancellationToken)
-            .ConfigureAwait(false);
         var stableType = await ResolveCanonicalSpotStableTypeAsync(prepare, cancellationToken)
             .ConfigureAwait(false);
         var context = new ZLinkCanonicalSpotStageContext(
             envelope.AggregateId,
-            envelope.AggregateGeneration,
+            ZLinkAggregateInventory.RelocationFence(envelope.AggregateId).AggregateGeneration,
             prepare.TargetAttemptGeneration,
             runtime.GetSpotNodeRuntime(prepare.Target.NodeRid).Node.MeshStatus().MeshName,
             prepare.SourceNodeRid.ToHex(),
@@ -603,9 +579,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             prepare.Object.ObjectId,
             stableType,
             prepare.Object.Kind == (byte)ServiceWireCodec.StatefulObjectKind.InstanceSpot,
-            string.Empty,
             prepare.PayloadChecksumCrc32c,
-            actors,
             prepare.Coordinator.ExpectedAuthorityStoreVersion
         );
         var staged = await StageInboundAsync(context, envelope, sourceNodeRid, cancellationToken)
@@ -616,58 +590,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 "Canonical target staging was rejected.",
                 ZLinkRetryAdvice.RetryAfterBackoff
             );
-    }
-
-    private async ValueTask<ZLinkCanonicalSpotActorDescriptor[]> ReadCanonicalActorInventoryAsync(
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        CancellationToken cancellationToken
-    )
-    {
-        var store =
-            registration.Locations.ResolveStore()
-            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
-        var actors = new List<ZLinkCanonicalSpotActorDescriptor>();
-        ZLinkAuthorityScanCursor? cursor = null;
-        do
-        {
-            var scan = await store
-                .ListAuthoritiesAsync(
-                    ZLinkAuthorityKeyCodec.Prefix(ZLinkAuthorityKeyKind.Actor),
-                    cursor,
-                    ZLinkPageRequestPolicy.MaximumPageSize,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (scan is not ZLinkAuthorityScanResult.Page page)
-                throw new ZLinkRelocationDataLostException(
-                    "Actor authority scan expired during relocation."
-                );
-            foreach (var authority in page.Value.Items)
-                if (
-                    ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                        authority.Snapshot.Payload.Span,
-                        out var actor
-                    )
-                    && actor.CurrentSpotId == prepare.Object.ObjectId
-                    && actor.CurrentSpotGeneration == prepare.Object.ObjectGeneration
-                    && actor.NodeRid == prepare.SourceNodeRid
-                    && actor.NodeGeneration == prepare.SourceNodeGeneration
-                )
-                    actors.Add(
-                        new ZLinkCanonicalSpotActorDescriptor(
-                            actor.ActorId,
-                            actor.StableType,
-                            authority.Snapshot.Payload.ToArray()
-                        )
-                    );
-            cursor = page.Value.NextCursor;
-        } while (cursor is not null);
-        return actors
-            .OrderBy(
-                static actor => ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId).Value,
-                StringComparer.Ordinal
-            )
-            .ToArray();
     }
 
     private async ValueTask<string> ResolveCanonicalSpotStableTypeAsync(
@@ -858,7 +780,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     _ = await AbortLocalTargetStageAsync(
                             new ZLinkAggregateFence(
                                 stage.Envelope.AggregateId,
-                                stage.Envelope.AggregateGeneration
+                                stage.TargetAttemptGeneration
                             ),
                             stage,
                             CancellationToken.None
@@ -940,7 +862,15 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 TryCleanupExpiredStageAsync(
                     stage,
                     () => ConfirmStageAuthorityAsync(stage, CancellationToken.None),
-                    () => authorityStore.AbortAggregateAsync(fence, CancellationToken.None),
+                    () =>
+                        authorityStore.AbortAggregateAttemptAsync(
+                            new ZLinkAggregateFence(
+                                stage.Envelope.AggregateId,
+                                stage.Envelope.AggregateGeneration
+                            ),
+                            stage.TargetAttemptGeneration,
+                            CancellationToken.None
+                        ),
                     () => TryCompleteStage(fence, stage, TargetStageTerminalOutcome.Aborted),
                     () => runtime.AbortInboundSpotAggregateAsync(stage)
                 ),
@@ -1101,69 +1031,15 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         var authorityStore =
             registration.Locations.ResolveStore()
             ?? throw new ZLinkConfigurationException("Location Store is not registered.");
-        var relocationStore =
-            registration.Locations.ResolveRelocationStore()
-            ?? throw new ZLinkConfigurationException("Relocation Store is not registered.");
-        var targetOwner =
-            runtime.LocationLifecycle?.OwnerToken
-            ?? throw new ZLinkConfigurationException("The target owner lease is not established.");
-        var participants = stage
-            .Envelope.Participants.Select(state =>
-            {
-                var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
-                    stage.SourceRecoveries[state.AuthorityKey].Span
-                );
-                // Commit the member's target owner identity while preserving its
-                // relocation phase until steady normalization.
-                return new ZLinkAggregateRelocationParticipant(
-                    state with
-                    {
-                        RecoveryPayload = stage.SourceRecoveries[state.AuthorityKey],
-                    },
-                    recovery.ExpectedStoreVersion,
-                    ZLinkAuthorityGenerationTransition.NewOwner,
-                    state.ObjectKind == ZLinkPlacementObjectKind.Actor
-                        ? BuildTargetReadyPayload(
-                            state.ObjectKind,
-                            recovery.AuthorityPayload,
-                            stage,
-                            targetOwner,
-                            ZLinkActorRelocationAuthorityPhase.Activated
-                        )
-                        : recovery.AuthorityPayload,
-                    recovery.MembershipMutation
-                );
-            })
-            .ToArray();
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             runtime.ErrorSink,
-            authorityStore,
-            relocationStore
+            authorityStore
         );
-        var request = new ZLinkAggregateRelocationRequest(
-            stage.Envelope.AggregateId,
-            stage.Envelope.AggregateGeneration,
-            stage.TargetAttemptGeneration,
-            participants,
-            new ZLinkMeshNodeDescriptorKey(stage.TargetMeshName, stage.Node.Node.RoutingId),
-            stage.TargetNodeLifecycleGeneration,
-            new ZLinkCapacityVector(0, 0, null),
-            targetOwner,
-            new ZLinkAuthorityRelocation.CoordinatorFence(
-                stage.SourceNodeRid.ToHex(),
-                stage.SourceNodeLifecycleGeneration,
-                stage.SourceOwner.OwnerId,
-                checked((ulong)stage.SourceOwner.LeaseGeneration),
-                stage.CoordinatorExpectedAuthorityStoreVersion.Length == 0
-                    ? participants
-                        .Single(participant =>
-                            participant.Envelope.AuthorityKey == stage.SpotParticipant.AuthorityKey
-                        )
-                        .ExpectedStoreVersion
-                    : stage.CoordinatorExpectedAuthorityStoreVersion
-            ),
-            stage.Envelope
-        );
+        var publication =
+            stage.Publication
+            ?? throw new ZLinkRelocationDataLostException(
+                "SPOT target has no prepared authority publication."
+            );
         //  Location runtime §10: the target owns its whole-unit NewOwner
         //  commit. It resubmits the same request (same RelocationId and
         //  expected source StoreVersion) after an indeterminate result while
@@ -1179,13 +1055,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 );
             try
             {
-                var published = await coordinator
-                    .PublishAsync(request, cancellationToken)
+                await coordinator
+                    .CommitPublicationAsync(publication, cancellationToken)
                     .ConfigureAwait(false);
-                stage.RememberFinalRoot(
-                    published.Relocation.Reference,
-                    published.Relocation.ChecksumCrc32c
-                );
                 return;
             }
             catch (Exception error)
@@ -1233,14 +1105,19 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
     {
         var spot = stage.SpotParticipant;
         var expectedVersion = ZLinkCanonicalParticipantRecoveryCodec
-            .Decode(stage.SourceRecoveries[spot.AuthorityKey].Span)
+            .Decode(spot.RecoveryPayload.Span)
             .ExpectedStoreVersion;
         var targetOwner = StageOwner(stage);
         var inventory = Convert.ToHexString(stage.Envelope.InventoryDigest.Span).ToLowerInvariant();
         return ZLinkRelocationTargetFence.ReadAsync(
             authorityStore,
             spot.AuthorityKey,
-            current => current.StoreVersion == expectedVersion,
+            current =>
+                current.StoreVersion == expectedVersion
+                || current.Relocation
+                    is { Phase: ServiceWireCodec.RelocationPhase.Prepared } prepared
+                    && prepared.RelocationId == stage.Envelope.AggregateId
+                    && prepared.Target?.AttemptGeneration == stage.TargetAttemptGeneration,
             current => MatchesStageAuthority(stage, spot, current, targetOwner, inventory),
             cancellationToken
         );
@@ -1266,6 +1143,15 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             await existingDrain.ConfigureAwait(false);
         await FinalizeStageCoreAsync(stage, cancellationToken).ConfigureAwait(false);
         await NormalizeAuthorityAsync(stage, cancellationToken).ConfigureAwait(false);
+        var store =
+            registration.Locations.ResolveStore()
+            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
+        await store
+            .RemoveSealedInventoryAsync(
+                new(stage.Envelope.AggregateId, stage.Envelope.AggregateGeneration),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
         CompleteStage(stage, TargetStageTerminalOutcome.Completed);
     }
 
@@ -1294,7 +1180,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             || exactLocalOwner.LeaseGeneration != checked((long)request.TargetOwnerLeaseGeneration)
         )
             return false;
-        var fence = new ZLinkAggregateFence(request.AggregateId, request.AggregateGeneration);
+        var fence = new ZLinkAggregateFence(request.AggregateId, request.TargetAttemptGeneration);
         if (_staged.TryGetValue(fence, out var existing))
             return existing switch
             {
@@ -1307,14 +1193,17 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 ),
                 _ => false,
             };
-        var (envelope, sourceRecoveries) = await BindCanonicalAuthorityInventoryAsync(
-                registration.Locations.ResolveStore()
-                    ?? throw new ZLinkConfigurationException("Location Store is not registered."),
-                transferredEnvelope,
-                request,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        var store =
+            registration.Locations.ResolveStore()
+            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
+        var (envelope, publicationParticipants, preparedTarget) =
+            await BindCanonicalAuthorityInventoryAsync(
+                    store,
+                    transferredEnvelope,
+                    request,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
         if (
             envelope.AggregateId != request.AggregateId
             || envelope.AggregateGeneration != request.AggregateGeneration
@@ -1322,17 +1211,76 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             throw new InvalidDataException(
                 "SPOT relocation aggregate fence does not match its root."
             );
-        if (!ValidateActorDescriptors(envelope, request))
-            return false;
         if (
-            !await IsSourceFenceCurrentAsync(request, envelope, cancellationToken)
-                .ConfigureAwait(false)
+            preparedTarget is { } previous
+            && previous.AttemptGeneration != request.TargetAttemptGeneration
         )
-            return false;
+        {
+            var previousFence = new ZLinkAggregateFence(
+                request.AggregateId,
+                previous.AttemptGeneration
+            );
+            if (
+                _staged.TryGetValue(previousFence, out var staged)
+                && staged is TargetStage previousStage
+            )
+            {
+                await previousStage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    if (Volatile.Read(ref previousStage.AuthorityPublished) != 0)
+                        throw RestoreConflict();
+                    await AbortLocalTargetStageAsync(
+                            previousFence,
+                            previousStage,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    previousStage.PublishGate.Release();
+                }
+            }
+        }
+
         var stage = await runtime
             .StageInboundSpotAggregateAsync(request, envelope, cancellationToken)
             .ConfigureAwait(false);
-        stage = stage with { SourceRecoveries = sourceRecoveries };
+        try
+        {
+            var coordinator = new ZLinkAggregateRelocationCoordinator(runtime.ErrorSink, store);
+            var publication = await coordinator
+                .PreparePublicationAsync(
+                    new ZLinkAggregateRelocationRequest(
+                        request.AggregateId,
+                        request.AggregateGeneration,
+                        request.TargetAttemptGeneration,
+                        publicationParticipants,
+                        new(request.MeshName, targetNode.Node.RoutingId),
+                        request.TargetNodeLifecycleGeneration,
+                        new(0, 0, null),
+                        exactLocalOwner,
+                        new(
+                            request.SourceNodeRid,
+                            request.SourceNodeLifecycleGeneration,
+                            request.SourceOwnerId,
+                            request.SourceOwnerLeaseGeneration,
+                            request.CoordinatorExpectedAuthorityStoreVersion
+                        ),
+                        envelope,
+                        stage.SpotParticipant.AuthorityKey
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            stage = stage with { Publication = publication };
+        }
+        catch
+        {
+            await AbortTargetStageAsync(stage).ConfigureAwait(false);
+            throw;
+        }
         if (!TryTrackStage(fence, stage))
         {
             await AbortTargetStageAsync(stage).ConfigureAwait(false);
@@ -1344,9 +1292,27 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         return true;
     }
 
+    private static ZLinkAuthorityRelocation.TargetFence RestoreTarget(
+        ZLinkCanonicalSpotStageContext request
+    ) =>
+        new(
+            request.TargetNodeRid,
+            request.TargetNodeLifecycleGeneration,
+            request.TargetOwnerId,
+            request.TargetOwnerLeaseGeneration,
+            request.TargetAttemptGeneration
+        );
+
+    private static ZLinkFrameworkException RestoreConflict() =>
+        new(
+            ZLinkFrameworkErrorKind.AlreadyExists,
+            "The representative authority has a different target attempt."
+        );
+
     internal static async ValueTask<(
         ZLinkRelocationEnvelope Envelope,
-        IReadOnlyDictionary<ZLinkAuthorityKey, ReadOnlyMemory<byte>> SourceRecoveries
+        IReadOnlyList<ZLinkAggregateRelocationParticipant> PublicationParticipants,
+        ZLinkAuthorityRelocation.TargetFence? PreparedTarget
     )> BindCanonicalAuthorityInventoryAsync(
         IZLinkLocationRepository authorityStore,
         ZLinkRelocationEnvelope envelope,
@@ -1354,232 +1320,159 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         CancellationToken cancellationToken
     )
     {
-        if (envelope.CanonicalLogicalStream.IsEmpty)
-            return (
-                envelope,
-                envelope.Participants.ToDictionary(
-                    static state => state.AuthorityKey,
-                    static state => state.RecoveryPayload
-                )
-            );
-        var orderedStates = envelope
-            .Participants.OrderBy(static participant => participant.CanonicalParticipantId)
-            .ToArray();
-        if (orderedStates.Length != request.Actors.Length + 1)
-            throw new ZLinkRelocationDataLostException(
-                "Canonical relocation state count does not match its authority inventory."
-            );
         var spotKey = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(request.SpotId);
-        var actorsByKey = request.Actors.ToDictionary(static actor =>
-            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId)
-        );
-        var keys = actorsByKey
-            .Keys.Append(spotKey)
-            .OrderBy(static key => key.Value, StringComparer.Ordinal)
-            .ToArray();
-        var bound = new ZLinkRelocationParticipantEnvelope[orderedStates.Length];
-        var sourceRecoveries = new Dictionary<ZLinkAuthorityKey, ReadOnlyMemory<byte>>();
-        for (var index = 0; index < keys.Length; index++)
-        {
-            var read = await authorityStore
-                .ReadAuthorityAsync(keys[index], cancellationToken)
-                .ConfigureAwait(false);
-            if (read is not ZLinkAuthorityReadResult.Found found)
-                throw new ZLinkRelocationDataLostException(
-                    $"Canonical relocation authority '{keys[index].Value}' is unavailable."
-                );
-            var state = orderedStates[index];
-            var objectKind =
-                keys[index] == spotKey
-                    ? request.InstanceSpot
-                        ? ZLinkPlacementObjectKind.InstanceSpot
-                        : ZLinkPlacementObjectKind.UserSpot
-                    : ZLinkPlacementObjectKind.Actor;
-            var stableType =
-                keys[index] == spotKey ? request.StableType : actorsByKey[keys[index]].StableType;
-            var authorityPayload =
-                keys[index] == spotKey
-                    ? found.Snapshot.Payload
-                    : actorsByKey[keys[index]].AuthorityPayload;
-            bound[index] = state with
-            {
-                AuthorityKey = keys[index],
-                ObjectKind = objectKind,
-                ObjectGeneration = found.Snapshot.ObjectGeneration,
-                AuthorityOwnerGeneration = found.Snapshot.AuthorityOwnerGeneration,
-            };
-            sourceRecoveries.Add(
-                keys[index],
-                ZLinkCanonicalParticipantRecoveryCodec.Encode(
-                    new ZLinkCanonicalParticipantRecovery(
-                        keys[index],
-                        objectKind,
-                        found.Snapshot.ObjectGeneration,
-                        found.Snapshot.AuthorityOwnerGeneration,
-                        found.Snapshot.StoreVersion,
-                        stableType,
-                        authorityPayload,
-                        ReadOnlyMemory<byte>.Empty
-                    )
-                )
-            );
-        }
-        return (
-            envelope with
-            {
-                AggregateGeneration = request.AggregateGeneration,
-                Participants = bound,
-            },
-            sourceRecoveries
-        );
-    }
-
-    private async ValueTask<bool> IsSourceFenceCurrentAsync(
-        ZLinkCanonicalSpotStageContext request,
-        ZLinkRelocationEnvelope envelope,
-        CancellationToken cancellationToken
-    )
-    {
-        var authorityStore = registration.Locations.ResolveStore();
-        if (authorityStore is null)
-            return false;
-        var spot = envelope.Participants.Single(static participant =>
-            participant.ObjectKind
-                is ZLinkPlacementObjectKind.UserSpot
-                    or ZLinkPlacementObjectKind.InstanceSpot
-        );
-        var requestAggregateBytes = request.AggregateId.ToByteArray(bigEndian: true);
-        var requestRelocationHigh = BinaryPrimitives.ReadUInt64BigEndian(
-            requestAggregateBytes.AsSpan(0, 8)
-        );
-        var requestRelocationLow = BinaryPrimitives.ReadUInt64BigEndian(
-            requestAggregateBytes.AsSpan(8, 8)
-        );
         var coordinator = new ZLinkAuthorityRelocation.Fence(
             request.SourceNodeRid,
             request.SourceNodeLifecycleGeneration,
             request.SourceOwnerId,
             request.SourceOwnerLeaseGeneration
         );
-        ZLinkAuthoritySnapshot? spotSnapshot = null;
-        foreach (var participant in envelope.Participants)
+        var primary = await ReadAuthorityAsync(spotKey).ConfigureAwait(false);
+        var progress = primary.Relocation;
+        if (
+            progress is null
+            || !progress.HoldsRestoreSource(
+                request.AggregateId,
+                primary,
+                coordinator,
+                request.CoordinatorExpectedAuthorityStoreVersion
+            )
+        )
+            throw new ZLinkRelocationDataLostException(
+                "SPOT relocation source inventory is not captured."
+            );
+        if (!progress.AcceptsAttempt(RestoreTarget(request)))
+            throw RestoreConflict();
+
+        if (
+            !envelope.CanonicalLogicalStream.IsEmpty
+            && (
+                envelope.Participants[0].ObjectGeneration != primary.ObjectGeneration
+                || !request.InstanceSpot
+                    && envelope.CanonicalSourceAuthorityOwnerGeneration
+                        != primary.AuthorityOwnerGeneration
+            )
+        )
+            throw new ZLinkRelocationDataLostException(
+                "SPOT relocation object generation differs from its captured source."
+            );
+
+        var inventory = await authorityStore
+            .ReadAggregateInventoryAsync(
+                new ZLinkAggregateFence(request.AggregateId, request.AggregateGeneration),
+                progress.SourceInventorySha256,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        var states = ZLinkAggregateInventory.BindRestoreOrder(inventory, envelope.Participants);
+        var participants = new ZLinkAggregateRelocationParticipant[inventory.Count];
+        var bound = new ZLinkRelocationParticipantEnvelope[inventory.Count];
+        for (var index = 0; index < inventory.Count; index++)
         {
-            var read = await authorityStore
-                .ReadAuthorityAsync(participant.AuthorityKey, cancellationToken)
-                .ConfigureAwait(false);
+            var entry = inventory[index];
+            var key = new ZLinkAuthorityKey(entry.Entry.AuthorityKey);
+            var root = key == spotKey;
+            var authority = root ? primary : await ReadAuthorityAsync(key).ConfigureAwait(false);
             if (
-                read is not ZLinkAuthorityReadResult.Found found
-                || found.Snapshot.ObjectGeneration != participant.ObjectGeneration
-                || found.Snapshot.AuthorityOwnerGeneration != participant.AuthorityOwnerGeneration
-                || found.Snapshot.OwnerId != request.SourceOwnerId
-                || found.Snapshot.OwnerLeaseGeneration <= 0
-                || checked((ulong)found.Snapshot.OwnerLeaseGeneration)
-                    != request.SourceOwnerLeaseGeneration
+                (
+                    root
+                        ? progress.Coordinator.ExpectedStoreVersion
+                        : authority.AggregateExpectedStoreVersion ?? authority.StoreVersion
+                ) != entry.Entry.ExpectedStoreVersion
+                || authority.Allocation.Descriptor.MeshName != request.MeshName
+                || authority.OwnerId != primary.OwnerId
+                || authority.OwnerLeaseGeneration != primary.OwnerLeaseGeneration
+                || authority.Allocation.Descriptor != primary.Allocation.Descriptor
+                || authority.Allocation.DescriptorLifecycleGeneration
+                    != primary.Allocation.DescriptorLifecycleGeneration
             )
-                return false;
+                throw new ZLinkRelocationDataLostException(
+                    $"SPOT relocation participant '{key.Value}' differs from its captured source."
+                );
 
-            if (found.Snapshot.Relocation is { } relocation)
+            var kind = root
+                ? request.InstanceSpot
+                    ? ZLinkPlacementObjectKind.InstanceSpot
+                    : ZLinkPlacementObjectKind.UserSpot
+                : ZLinkPlacementObjectKind.Actor;
+            var stableType = request.StableType;
+            if (!root)
             {
                 if (
-                    !relocation.HoldsCapturedSource(
-                        request.AggregateId,
-                        found.Snapshot,
-                        coordinator,
-                        request.CoordinatorExpectedAuthorityStoreVersion
-                    )
-                )
-                    return false;
-            }
-            // A durable relocation state for the same RelocationId that
-            // already names a different target fences this staging request:
-            // the contract has no different-target transition, so a second
-            // target for the same relocation is always illegitimate.
-            else if (
-                ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    found.Snapshot.Payload.Span,
-                    out var recordedRelocation
-                )
-                && recordedRelocation.RelocationHigh == requestRelocationHigh
-                && recordedRelocation.RelocationLow == requestRelocationLow
-                && !string.IsNullOrEmpty(recordedRelocation.State.TargetNodeRid)
-                && !StringComparer.Ordinal.Equals(
-                    recordedRelocation.State.TargetNodeRid,
-                    request.TargetNodeRid
-                )
-            )
-                return false;
-
-            if (participant.ObjectKind == ZLinkPlacementObjectKind.Actor)
-            {
-                if (
-                    !ZLinkActorAuthorityPayloadCodec.TryDecode(
-                        found.Snapshot.Payload.Span,
+                    !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                        entry.Payload.Span,
                         out var actor
                     )
-                    || actor.MeshName != request.MeshName
-                    || actor.NodeRid.ToHex() != request.SourceNodeRid
-                    || actor.NodeGeneration != request.SourceNodeLifecycleGeneration
+                    || ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId) != key
                 )
-                    return false;
+                    throw new ZLinkRelocationDataLostException(
+                        $"SPOT relocation Actor '{key.Value}' is invalid."
+                    );
+                stableType = actor.StableType;
             }
-            else
-            {
-                spotSnapshot = found.Snapshot;
-            }
-        }
-        if (spotSnapshot is null)
-            return false;
-        if (request.InstanceSpot)
-            return ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                    spotSnapshot.Payload.Span,
-                    out var instance
-                )
-                && instance.SpotId == request.SpotId
-                && instance.StableType == request.StableType
-                && instance.MeshName == request.MeshName
-                && instance.NodeRid.ToHex() == request.SourceNodeRid
-                && instance.NodeGeneration == request.SourceNodeLifecycleGeneration;
-        return ZLinkUserSpotAuthorityPayloadCodec.TryDecode(spotSnapshot.Payload.Span, out var user)
-            && user.SpotId == request.SpotId
-            && user.StableType == request.StableType
-            && user.MeshName == request.MeshName
-            && user.NodeRid.ToHex() == request.SourceNodeRid
-            && user.NodeGeneration == request.SourceNodeLifecycleGeneration;
-    }
-
-    private static bool ValidateActorDescriptors(
-        ZLinkRelocationEnvelope envelope,
-        ZLinkCanonicalSpotStageContext request
-    )
-    {
-        var participants = envelope
-            .Participants.Where(static participant =>
-                participant.ObjectKind == ZLinkPlacementObjectKind.Actor
-            )
-            .ToDictionary(
-                static participant => participant.AuthorityKey,
-                static participant => participant
-            );
-        if (participants.Count != request.Actors.Length)
-            return false;
-        var actorIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var descriptor in request.Actors)
-        {
             if (
-                !actorIds.Add(descriptor.ActorId)
-                || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                    descriptor.AuthorityPayload,
-                    out var actor
-                )
-                || actor.ActorId != descriptor.ActorId
-                || actor.StableType != descriptor.StableType
-                || !participants.ContainsKey(
-                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(descriptor.ActorId)
-                )
+                authority.Allocation.ObjectKind != kind
+                || authority.Allocation.StableType != stableType
             )
-                return false;
+                throw new ZLinkRelocationDataLostException(
+                    $"SPOT relocation participant '{key.Value}' differs from its allocation."
+                );
+
+            bound[index] = states[index] with
+            {
+                AuthorityKey = key,
+                ObjectKind = kind,
+                ObjectGeneration = authority.ObjectGeneration,
+                AuthorityOwnerGeneration = authority.AuthorityOwnerGeneration,
+                RecoveryPayload = ZLinkCanonicalParticipantRecoveryCodec.Encode(
+                    new ZLinkCanonicalParticipantRecovery(
+                        key,
+                        kind,
+                        authority.ObjectGeneration,
+                        authority.AuthorityOwnerGeneration,
+                        authority.StoreVersion,
+                        stableType,
+                        entry.Payload,
+                        entry.Mutation
+                    )
+                ),
+            };
+            participants[index] = new ZLinkAggregateRelocationParticipant(
+                bound[index],
+                entry.Entry.ExpectedStoreVersion,
+                entry.Entry.OwnerTransition == "newOwner"
+                    ? ZLinkAuthorityGenerationTransition.NewOwner
+                    : ZLinkAuthorityGenerationTransition.Preserve,
+                entry.Payload,
+                entry.Mutation
+            )
+            {
+                CapturedStoreVersion = root ? authority.StoreVersion : null,
+            };
         }
-        return true;
+        if (!bound.Any(state => state.AuthorityKey == spotKey))
+            throw new ZLinkRelocationDataLostException(
+                "SPOT relocation inventory omits its primary authority."
+            );
+
+        return (
+            envelope with
+            {
+                AggregateGeneration = request.AggregateGeneration,
+                InventoryDigest = Convert.FromHexString(progress.SourceInventorySha256),
+                Participants = bound,
+            },
+            participants,
+            progress.Phase == ServiceWireCodec.RelocationPhase.Prepared ? progress.Target : null
+        );
+
+        async ValueTask<ZLinkAuthoritySnapshot> ReadAuthorityAsync(ZLinkAuthorityKey key) =>
+            await authorityStore.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false)
+                is ZLinkAuthorityReadResult.Found found
+                ? found.Snapshot
+                : throw new ZLinkRelocationDataLostException(
+                    $"SPOT relocation authority '{key.Value}' is missing."
+                );
     }
 
     internal async ValueTask<bool> PublishInboundAsync(
@@ -1935,12 +1828,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 || found.Snapshot.OwnerLeaseGeneration != exactLocalOwner.LeaseGeneration
                 || !ZLinkAggregateRelocationCoordinator.IsExactNormalizedTargetAuthority(
                     found.Snapshot,
-                    participant with
-                    {
-                        RecoveryPayload = stage.SourceRecoveries.GetValueOrDefault(
-                            participant.AuthorityKey
-                        ),
-                    },
+                    participant,
                     stage.Envelope.AggregateId,
                     new ZLinkMeshNodeDescriptorKey(stage.SourceMeshName, stage.Node.Node.RoutingId),
                     stage.Node.Node.MeshStatus().LifecycleGeneration,
@@ -1970,16 +1858,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
     )
     {
         if (await IsAuthorityNormalizedAsync(stage, cancellationToken).ConfigureAwait(false))
-        {
-            await ReleaseFinalRootAfterNormalizationAsync(
-                    stage,
-                    authorityAlreadyNormalized: true,
-                    commitNormalization: null,
-                    reference => DeleteFinalRootBestEffortAsync(reference, cancellationToken)
-                )
-                .ConfigureAwait(false);
             return;
-        }
         var authorityStore =
             registration.Locations.ResolveStore()
             ?? throw new ZLinkConfigurationException("Location Store is not registered.");
@@ -1997,11 +1876,13 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         foreach (var participant in stage.Envelope.Participants)
         {
             var authority = authorities[participant.AuthorityKey];
-            var ready = BuildTargetReadyPayload(
+            var ready = ZLinkAggregateRelocationCoordinator.ProjectParticipantPayload(
                 participant.ObjectKind,
                 authority.Payload,
-                stage,
-                localOwner
+                authority.Allocation.Descriptor,
+                authority.Allocation.DescriptorLifecycleGeneration,
+                localOwner,
+                stage.Envelope.AggregateId
             );
             participants.Add(
                 new ZLinkAggregateRelocationParticipant(
@@ -2009,7 +1890,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     authority.StoreVersion,
                     ZLinkAuthorityGenerationTransition.Preserve,
                     ready,
-                    ReadOnlyMemory<byte>.Empty
+                    ZLinkAggregateInventory.NoMembershipMutation
                 )
             );
         }
@@ -2031,7 +1912,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                             participant.ExpectedStoreVersion,
                             participant.OwnerTransition,
                             participant.ApplicationAuthorityPayload,
-                            participant.MembershipMutation
+                            ZLinkAggregateInventory.MembershipBody(participant.MembershipMutation)
                         ))
                         .ToArray(),
                     ZLinkAggregateInventoryDigest.Compute(participants),
@@ -2061,185 +1942,36 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 ZLinkRetryAdvice.RetryAfterBackoff
             ),
         };
-        await ReleaseFinalRootAfterNormalizationAsync(
-                stage,
-                authorityAlreadyNormalized: false,
-                () => authorityStore.CommitAggregateForRecoveryAsync(fence, cancellationToken),
-                reference => DeleteFinalRootBestEffortAsync(reference, cancellationToken)
+        await CommitNormalizationAsync(() =>
+                authorityStore.CommitAggregateForRecoveryAsync(fence, cancellationToken)
             )
+            .ConfigureAwait(false);
+        await authorityStore
+            .RemoveSealedInventoryAsync(fence, cancellationToken)
             .ConfigureAwait(false);
     }
 
-    internal static async ValueTask ReleaseFinalRootAfterNormalizationAsync(
-        TargetStage stage,
-        bool authorityAlreadyNormalized,
-        Func<ValueTask<ZLinkAggregateCommitResult>>? commitNormalization,
-        Func<string, ValueTask> deleteRoot
+    internal static async ValueTask CommitNormalizationAsync(
+        Func<ValueTask<ZLinkAggregateCommitResult>> commitNormalization
     )
     {
-        ArgumentNullException.ThrowIfNull(stage);
-        ArgumentNullException.ThrowIfNull(deleteRoot);
-        if (!authorityAlreadyNormalized)
-        {
-            ArgumentNullException.ThrowIfNull(commitNormalization);
-            var commit = await commitNormalization().ConfigureAwait(false);
-            if (commit == ZLinkAggregateCommitResult.GenerationExhausted)
-                throw new ZLinkAuthorityGenerationExhaustedException(
-                    "committing SPOT steady authority normalization"
-                );
-            if (
-                commit
-                is not (
-                    ZLinkAggregateCommitResult.Committed
-                    or ZLinkAggregateCommitResult.AlreadyCommitted
-                )
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    "SPOT steady authority normalization failed.",
-                    ZLinkRetryAdvice.RetryAfterBackoff
-                );
-        }
-        if (stage.GetFinalRoot() is { } root)
-            await deleteRoot(root.Reference).ConfigureAwait(false);
-    }
-
-    private async ValueTask DeleteFinalRootAsync(
-        string reference,
-        CancellationToken cancellationToken
-    )
-    {
-        var relocationStore =
-            registration.Locations.ResolveRelocationStore()
-            ?? throw new ZLinkConfigurationException("Relocation Store is not registered.");
-        await ZLinkRelocationTreeStore
-            .DeleteTreeAsync(relocationStore, reference, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private async ValueTask DeleteFinalRootBestEffortAsync(
-        string reference,
-        CancellationToken cancellationToken
-    )
-    {
-        try
-        {
-            await DeleteFinalRootAsync(reference, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            runtime.ErrorSink.ReportRuntimeTaskException("spot-relocation-root-cleanup", exception);
-        }
-    }
-
-    private static ReadOnlyMemory<byte> BuildTargetReadyPayload(
-        ZLinkPlacementObjectKind kind,
-        ReadOnlyMemory<byte> sourcePayload,
-        TargetStage stage,
-        ZLinkLocationOwnerToken targetOwner,
-        ZLinkActorRelocationAuthorityPhase actorPhase = ZLinkActorRelocationAuthorityPhase.Steady
-    ) =>
-        BuildTargetReadyPayload(
-            kind,
-            sourcePayload,
-            stage.Node.Node.RoutingId,
-            stage.Node.Node.MeshStatus().LifecycleGeneration,
-            targetOwner,
-            stage.Envelope.AggregateId,
-            actorPhase
-        );
-
-    internal static ReadOnlyMemory<byte> BuildTargetReadyPayload(
-        ZLinkPlacementObjectKind kind,
-        ReadOnlyMemory<byte> sourcePayload,
-        RoutingId targetNode,
-        ulong targetNodeGeneration,
-        ZLinkLocationOwnerToken targetOwner,
-        Guid relocationId,
-        ZLinkActorRelocationAuthorityPhase actorPhase = ZLinkActorRelocationAuthorityPhase.Steady
-    )
-    {
-        var ownerGeneration = checked((ulong)targetOwner.LeaseGeneration);
-        if (
-            kind == ZLinkPlacementObjectKind.UserSpot
-            && ZLinkUserSpotAuthorityPayloadCodec.TryDecode(sourcePayload.Span, out var user)
-        )
-            return ZLinkUserSpotAuthorityPayloadCodec.Encode(
-                user with
-                {
-                    State = ZLinkUserSpotAuthorityState.Ready,
-                    OwnerId = targetOwner.OwnerId,
-                    OwnerLeaseGeneration = ownerGeneration,
-                    NodeRid = targetNode,
-                    NodeGeneration = targetNodeGeneration,
-                }
+        var commit = await commitNormalization().ConfigureAwait(false);
+        if (commit == ZLinkAggregateCommitResult.GenerationExhausted)
+            throw new ZLinkAuthorityGenerationExhaustedException(
+                "committing SPOT steady authority normalization"
             );
         if (
-            kind == ZLinkPlacementObjectKind.InstanceSpot
-            && ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                sourcePayload.Span,
-                out var instance
+            commit
+            is not (
+                ZLinkAggregateCommitResult.Committed
+                or ZLinkAggregateCommitResult.AlreadyCommitted
             )
         )
-            return ZLinkInstanceSpotAuthorityPayloadCodec.Encode(
-                instance with
-                {
-                    State = ZLinkInstanceSpotAuthorityState.Ready,
-                    OwnerId = targetOwner.OwnerId,
-                    OwnerLeaseGeneration = ownerGeneration,
-                    NodeRid = targetNode,
-                    NodeGeneration = targetNodeGeneration,
-                }
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "SPOT steady authority normalization failed.",
+                ZLinkRetryAdvice.RetryAfterBackoff
             );
-        if (
-            kind == ZLinkPlacementObjectKind.Actor
-            && ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
-                sourcePayload.Span,
-                out var relocation
-            )
-            && relocation.RelocationId == relocationId
-            && relocation.Phase == ZLinkActorRelocationAuthorityPhase.Activated
-            && ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                relocation.ApplicationPayload.Span,
-                out var actor
-            )
-        )
-            return ZLinkActorRelocationAuthorityPayloadCodec.Encode(
-                relocation with
-                {
-                    Phase = actorPhase,
-                    ApplicationPayload = ZLinkActorAuthorityPayloadCodec.Encode(
-                        actor with
-                        {
-                            State = ZLinkActorAuthorityState.Ready,
-                            OwnerId = targetOwner.OwnerId,
-                            OwnerLeaseGeneration = ownerGeneration,
-                            NodeRid = targetNode,
-                            NodeGeneration = targetNodeGeneration,
-                        }
-                    ),
-                }
-            );
-        if (
-            kind == ZLinkPlacementObjectKind.Actor
-            && ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                sourcePayload.Span,
-                out var canonicalActor
-            )
-        )
-            return ZLinkActorAuthorityPayloadCodec.Encode(
-                canonicalActor with
-                {
-                    State = ZLinkActorAuthorityState.Ready,
-                    OwnerId = targetOwner.OwnerId,
-                    OwnerLeaseGeneration = ownerGeneration,
-                    NodeRid = targetNode,
-                    NodeGeneration = targetNodeGeneration,
-                }
-            );
-        throw new ZLinkRelocationDataLostException(
-            $"Relocation participant kind '{kind}' has an invalid authority payload."
-        );
     }
 
     internal void ScheduleReconciliation()
@@ -2399,11 +2131,12 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                             stage,
                             () => ConfirmStageAuthorityAsync(stage, CancellationToken.None),
                             () =>
-                                authorityStore.AbortAggregateAsync(
+                                authorityStore.AbortAggregateAttemptAsync(
                                     new ZLinkAggregateFence(
                                         stage.Envelope.AggregateId,
                                         stage.Envelope.AggregateGeneration
                                     ),
+                                    stage.TargetAttemptGeneration,
                                     CancellationToken.None
                                 ),
                             () =>
@@ -2481,7 +2214,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             return;
         var fence = new ZLinkAggregateFence(
             stage.Envelope.AggregateId,
-            stage.Envelope.AggregateGeneration
+            stage.TargetAttemptGeneration
         );
         _ = TryCompleteStage(fence, stage, outcome);
     }
@@ -2658,14 +2391,7 @@ internal sealed record TargetStage(
         );
     }
 
-    internal IReadOnlyDictionary<
-        ZLinkAuthorityKey,
-        ReadOnlyMemory<byte>
-    > SourceRecoveries { get; init; } =
-        Envelope.Participants.ToDictionary(
-            static participant => participant.AuthorityKey,
-            static participant => participant.RecoveryPayload
-        );
+    internal ZLinkAggregateRelocationCoordinator.PublicationState? Publication { get; init; }
 
     public int AuthorityPublished;
     public int Published;
@@ -2740,8 +2466,6 @@ internal sealed record TargetStage(
         );
     }
 
-    private string? _finalRootReference;
-    private uint _finalRootChecksum;
     private int _abortState;
     private TaskCompletionSource<bool>? _abortCleanup;
 
@@ -2825,34 +2549,6 @@ internal sealed record TargetStage(
 
     internal void EndSessionRouteConvergence() =>
         Volatile.Write(ref _sessionRouteConvergenceRunning, 0);
-
-    internal void RememberFinalRoot(string reference, uint checksum)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(reference);
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                // Accepted replay and reply ACKs publish successor immutable roots
-                // before steady normalization. Every caller validates the
-                // relocation/attempt and authority fence before recording the
-                // pointer, so cleanup must retain the latest verified root.
-                _finalRootReference = reference;
-                _finalRootChecksum = checksum;
-            })
-        );
-    }
-
-    internal (string Reference, uint Checksum)? GetFinalRoot()
-    {
-        return AwaitStateLane<(string Reference, uint Checksum)?>(
-            _lane.RunAsync<(string Reference, uint Checksum)?>(() =>
-            {
-                return _finalRootReference is null
-                    ? null
-                    : (_finalRootReference, _finalRootChecksum);
-            })
-        );
-    }
 
     internal bool TrySetHeldRecords(
         IReadOnlyList<ZLinkSpotRetireHeldRecord> records,

@@ -25,7 +25,7 @@ public sealed partial class RelocationRuntimeTests
         stage.AdmissionDrainTask = Task.FromCanceled(new CancellationToken(canceled: true));
         var fence = new ZLinkAggregateFence(
             stage.Envelope.AggregateId,
-            stage.Envelope.AggregateGeneration
+            stage.TargetAttemptGeneration
         );
         Assert.True(target.TryTrackStage(fence, stage));
 

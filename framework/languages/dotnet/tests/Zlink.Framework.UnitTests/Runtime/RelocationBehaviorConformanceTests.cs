@@ -809,8 +809,12 @@ public sealed partial class RelocationBehaviorConformanceTests
         }
     }
 
-    [Fact]
-    public async Task ActorJoin_cancelled_target_drain_rejects_new_prepare_and_preserves_active_slot()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActorJoin_preserves_one_active_stage_during_replacement_or_cancelled_drain(
+        bool replacePrepared
+    )
     {
         var trace = new RelocationBehaviorTrace();
         var transport = new CanonicalRelocationTransportProbe(trace, holdTargetReady: true);
@@ -894,15 +898,34 @@ public sealed partial class RelocationBehaviorConformanceTests
             var before = GetTargetAttemptState(target.Runtime);
             Assert.Equal(1, before.Count);
             Assert.Equal(1, before.Staged);
-            var rejectedDistinctAttempt = await Assert.ThrowsAsync<InvalidOperationException>(
+            if (replacePrepared)
+            {
+                var ready = await transport.PrepareNextTargetAttemptAsync(CancellationToken.None);
+                Assert.Equal(2UL, ready.TargetAttemptGeneration);
+                var authority = Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await target
+                            .Runtime.Registration.Locations.ResolveStore()!
+                            .ReadAuthorityAsync(
+                                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId)
+                            )
+                    )
+                    .Snapshot;
+                Assert.Equal(2UL, authority.Relocation!.Target!.AttemptGeneration);
+                Assert.Equal(trace.SourceNodeRid, authority.Allocation.Descriptor.Rid);
+                Assert.Equal(1, GetTargetAttemptState(target.Runtime).Staged);
+                await transport.AbortRetriedTargetPrepareAsync(attemptIncrement: 1);
+                return;
+            }
+
+            var rejectedDistinctAttempt = await Assert.ThrowsAsync<ZLinkFrameworkException>(
                 async () =>
-                    await transport.PrepareNextTargetAttemptAsync(CancellationToken.None)
+                    await transport.PrepareNextTargetAttemptAsync(
+                        CancellationToken.None,
+                        attemptIncrement: 2
+                    )
             );
-            Assert.Contains(
-                "already has an active local instance",
-                rejectedDistinctAttempt.Message,
-                StringComparison.Ordinal
-            );
+            Assert.Equal(ZLinkFrameworkErrorKind.AlreadyExists, rejectedDistinctAttempt.Kind);
             Assert.Equal(before.Count, GetTargetAttemptState(target.Runtime).Count);
             transport.ReleaseCutoverSend.TrySetResult();
             await transport.CutoverSendSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -3767,7 +3790,8 @@ internal sealed class CanonicalRelocationTransportProbe
         );
 
     internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareNextTargetAttemptAsync(
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ulong attemptIncrement = 1
     ) =>
         (
             _target
@@ -3778,7 +3802,9 @@ internal sealed class CanonicalRelocationTransportProbe
                 ?? throw new InvalidOperationException("No canonical prepare was captured.")
             ) with
             {
-                TargetAttemptGeneration = checked(_prepare.TargetAttemptGeneration + 1),
+                TargetAttemptGeneration = checked(
+                    _prepare.TargetAttemptGeneration + attemptIncrement
+                ),
             },
             ZLinkRelocationTransferPayload.DecodeEnvelope(
                 (
@@ -3793,12 +3819,20 @@ internal sealed class CanonicalRelocationTransportProbe
             cancellationToken
         );
 
-    internal ValueTask AbortRetriedTargetPrepareAsync() =>
+    internal ValueTask AbortRetriedTargetPrepareAsync(ulong attemptIncrement = 0) =>
         (
             _target
             ?? throw new InvalidOperationException("No canonical relocation target was captured.")
         ).AbortPreparedAsync(
-            _prepare ?? throw new InvalidOperationException("No canonical prepare was captured."),
+            (
+                _prepare
+                ?? throw new InvalidOperationException("No canonical prepare was captured.")
+            ) with
+            {
+                TargetAttemptGeneration = checked(
+                    _prepare.TargetAttemptGeneration + attemptIncrement
+                ),
+            },
             _prepareSourceNodeRid
         );
 

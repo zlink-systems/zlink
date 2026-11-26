@@ -419,7 +419,7 @@ public sealed class LocationLifecycleTests
                                 spot.StoreVersion,
                                 ZLinkAuthorityGenerationTransition.NewOwner,
                                 spot.Payload,
-                                ReadOnlyMemory<byte>.Empty
+                                ZLinkAggregateInventory.NoMembershipMutation
                             ),
                         ],
                         System.Security.Cryptography.SHA256.HashData([1]),

@@ -857,6 +857,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         string spotId,
         ZLinkActorRuntimeState actorState,
         ZLinkRemoteActorJoinRequest request,
+        bool hadPreparedAuthority,
         CancellationToken cancellationToken
     )
     {
@@ -875,7 +876,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         //  identity may have already evicted this attempt (late PREPARE
         //  for a dead identity) — abort the just-owned import instead of
         //  continuing into lifecycle/CAS work with a stale stage.
-        if (!CompleteActorJoinPrewarmMigration(request.HandoffId, actorState))
+        if (
+            !hadPreparedAuthority
+            && !CompleteActorJoinPrewarmMigration(request.HandoffId, actorState)
+        )
         {
             actorState.Handoff.AbortImport(request.HandoffId);
             throw new ZLinkFrameworkException(
@@ -1246,7 +1250,11 @@ internal sealed partial class ZLinkFrameworkRuntime
             if (createdTransferredActor)
             {
                 actorState.Handoff.Quarantine(request.HandoffId);
-                await RollbackPreparedTransferredActorAsync(actorState, CancellationToken.None)
+                await DiscardStagedRoutedActorJoinAsync(
+                        actorState,
+                        createdTransferredActor,
+                        CancellationToken.None
+                    )
                     .ConfigureAwait(false);
             }
             else
@@ -1273,8 +1281,27 @@ internal sealed partial class ZLinkFrameworkRuntime
         await _actorHandoffAdmissions.RollbackCommitAsync(request, spotId).ConfigureAwait(false);
         actorState.AbortRelocationSessionRoute(request.HandoffId);
         actorState.Handoff.AbortImport(request.HandoffId);
+        await DiscardStagedRoutedActorJoinAsync(
+                actorState,
+                createdTransferredActor,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask DiscardStagedRoutedActorJoinAsync(
+        ZLinkActorRuntimeState actorState,
+        bool createdTransferredActor,
+        CancellationToken cancellationToken
+    )
+    {
+        // Restore only staged the target's local membership. The source
+        // still owns the authority and no target Join callback has run.
+        if (actorState.LiveActivation is { } activation && actorState.Actor is { } actor)
+            activation.DetachRelocatedPerActorMember(actor, actorState);
         if (createdTransferredActor)
-            await RollbackPreparedTransferredActorAsync(actorState, cancellationToken)
+            await _actorSessionManager
+                .RollbackTransferredActorAsync(actorState.ActorId, cancellationToken)
                 .ConfigureAwait(false);
     }
 

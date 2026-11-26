@@ -412,11 +412,10 @@ internal sealed class ZLinkSpotNodeCatalog(
     )
     {
         var location = registration.Locations.ResolveStore();
-        var relocation = registration.Locations.ResolveRelocationStore();
         var target = services.GetService<IZLinkSpotRetireTarget>();
-        return location is null || relocation is null || target is null
+        return location is null || target is null
             ? null
-            : new ZLinkSpotRetireScheduler(location, relocation, target, runtime);
+            : new ZLinkSpotRetireScheduler(location, target, runtime);
     }
 
     internal async ValueTask RequestStopAsync()
@@ -2283,6 +2282,15 @@ internal sealed class ZLinkSpotNodeCatalog(
             return new CloseAuthority(CloseAuthorityState.Kept);
         var snapshot = found.Snapshot;
         ThrowIfOtherIncarnation(spotId, activation.ObjectGeneration, snapshot.ObjectGeneration);
+        if (snapshot.Relocation is not null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Spot '{spotId}' authority is still relocating.",
+                ZLinkRetryAdvice.RetryAfterBackoff
+            )
+            {
+                FrameworkFailureCode = (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving,
+            };
         var userDecoded = ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
             snapshot.Payload.Span,
             out var authority

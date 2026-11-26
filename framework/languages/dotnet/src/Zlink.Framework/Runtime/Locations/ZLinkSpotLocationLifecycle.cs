@@ -1,3 +1,4 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Spots;
@@ -162,6 +163,13 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
         if (tracked is null)
             return;
 
+        bool OwnsTracked(ZLinkAuthoritySnapshot snapshot) =>
+            snapshot.OwnerId == runtime.OwnerToken.OwnerId
+            && snapshot.OwnerLeaseGeneration == runtime.OwnerToken.LeaseGeneration
+            && snapshot.ObjectGeneration == tracked.SpotGeneration
+            && snapshot.AuthorityOwnerGeneration == tracked.AuthorityOwnerGeneration
+            && MatchesTrackedSpot(snapshot, spotId, tracked);
+
         if (tracked.StoreVersion is { } expectedVersion)
         {
             var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId.Value);
@@ -178,17 +186,36 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
                     is ZLinkAuthorityCompareExchangeResult.Conflict(
                         ZLinkAuthorityReadResult.Found current
                     )
-                && current.Snapshot.OwnerId == runtime.OwnerToken.OwnerId
-                && current.Snapshot.OwnerLeaseGeneration == runtime.OwnerToken.LeaseGeneration
-                && current.Snapshot.ObjectGeneration == tracked.SpotGeneration
-                && current.Snapshot.AuthorityOwnerGeneration == tracked.AuthorityOwnerGeneration
-                && MatchesTrackedSpot(current.Snapshot, spotId, tracked)
+                && OwnsTracked(current.Snapshot)
             )
             {
+                var snapshot = current.Snapshot;
+                if (
+                    snapshot.Relocation is
+                    { Phase: ServiceWireCodec.RelocationPhase.Prepared } prepared
+                )
+                {
+                    await ZLinkSpotRelocationSourceInventory
+                        .AbortAsync(
+                            runtime.Store,
+                            ZLinkAggregateInventory.RelocationFence(prepared.RelocationId),
+                            key,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    if (
+                        await runtime
+                            .Store.ReadAuthorityAsync(key, cancellationToken)
+                            .ConfigureAwait(false)
+                            is ZLinkAuthorityReadResult.Found released
+                        && OwnsTracked(released.Snapshot)
+                    )
+                        snapshot = released.Snapshot;
+                }
                 result = await runtime
                     .Store.CompareExchangeAuthorityAsync(
                         key,
-                        current.Snapshot.StoreVersion,
+                        snapshot.StoreVersion,
                         new ZLinkAuthorityMutation.Delete(),
                         cancellationToken
                     )

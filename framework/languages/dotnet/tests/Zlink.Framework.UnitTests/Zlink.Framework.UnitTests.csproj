@@ -87,6 +87,8 @@
         <Compile Include="Runtime/SpotRequestSourceDiscoveryTests.cs"/>
         <Compile Include="Runtime/SourceRequestOwnerContractTests.cs"/>
         <Compile Include="Runtime/HostRelocationSealStageTests.cs"/>
+        <Compile Include="Runtime/HostRelocationSealStageTests.Inventory.cs"/>
+        <Compile Include="Runtime/SpotRelocationInventoryTests.cs"/>
         <Compile Include="Runtime/StartupStoreStallTests.cs"/>
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
@@ -190,6 +192,7 @@
         <Compile Include="Runtime/DrainCoordinatorTests.cs"/>
         <Compile Include="Runtime/DurableAuthorityGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/AuthorityRelocationStateGoldenConformanceTests.cs"/>
+        <Compile Include="Runtime/AggregateInventoryGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinContractTests.cs"/>
         <Compile Include="Runtime/ActorRelocationCompletionOrderingTests.cs"/>
         <Compile Include="Runtime/DirectReplyCompletionRegistryTests.cs"/>
@@ -265,6 +268,7 @@
         <Compile Include="Runtime/SpotNodeInitializerTests.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.AggregatePublication.cs"/>
+        <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.InventoryLifecycle.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.CapacityReservation.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.FormatMigration.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.OwnerTokenReleaseWait.cs"/>

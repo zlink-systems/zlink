@@ -29,6 +29,62 @@ internal sealed partial class ZLinkInMemoryLocationStore
     private long _authorityObjectGeneration;
     private long _authorityOwnerGeneration;
 
+    private readonly ZLinkInMemoryProviderLocationStore _inventoryStore = new();
+
+    public async ValueTask RemoveSealedInventoryAsync(
+        ZLinkAggregateFence fence,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            await _lane
+                .RunAsync(() =>
+                    _authorityAggregates.TryGetValue(fence, out var aggregate)
+                    && aggregate.Status == AggregateStatus.Prepared
+                )
+                .ConfigureAwait(false)
+        )
+            return;
+        await RemoveInventoryAsync(fence, cancellationToken).ConfigureAwait(false);
+        await _lane
+            .RunAsync(() =>
+            {
+                if (
+                    _authorityAggregates.TryGetValue(fence, out var aggregate)
+                    && aggregate.Status is AggregateStatus.Committed or AggregateStatus.Aborted
+                )
+                    _authorityAggregates.Remove(fence);
+            })
+            .ConfigureAwait(false);
+    }
+
+    private ValueTask RemoveInventoryAsync(
+        ZLinkAggregateFence fence,
+        CancellationToken cancellationToken
+    ) =>
+        ZLinkAggregateInventory.RemoveInventoryAsync(_inventoryStore, "", fence, cancellationToken);
+
+    public ValueTask<string> SealAggregateInventoryAsync(
+        ZLinkAggregateFence fence,
+        IReadOnlyList<ZLinkAggregateParticipant> participants,
+        CancellationToken cancellationToken
+    ) =>
+        ZLinkAggregateInventory.SealAsync(
+            _inventoryStore,
+            "",
+            fence,
+            participants,
+            cancellationToken
+        );
+
+    public ValueTask<
+        IReadOnlyList<ZLinkAggregateInventory.Participant>
+    > ReadAggregateInventoryAsync(
+        ZLinkAggregateFence fence,
+        string digest,
+        CancellationToken cancellationToken
+    ) => ZLinkAggregateInventory.ReadAsync(_inventoryStore, "", fence, digest, cancellationToken);
+
     private ZLinkFrameworkErrorKind? MembershipCommitFailure(
         ReadOnlyMemory<byte> payload,
         ZLinkAuthoritySnapshot current,
@@ -166,7 +222,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     {
                         StoreVersion = Next(ref _authorityRevision).ToString(),
                         Payload = restore.Payload.ToArray(),
-                        Relocation = restore.ClearRelocation ? null : current.Relocation,
+                        Relocation = restore.ApplyRelocation(current),
                         StoreNow = now,
                     };
                     _authorities[key.Value] = restored;
@@ -1002,19 +1058,32 @@ internal sealed partial class ZLinkInMemoryLocationStore
             var fence = new ZLinkAggregateFence(request.AggregateId, request.AggregateGeneration);
             if (_authorityAggregates.TryGetValue(fence, out var existing))
             {
-                return
-                    (existing.Status is AggregateStatus.Prepared or AggregateStatus.Committed)
-                    && AggregateRequestsEqual(existing.Request, request)
-                    ? new ZLinkAggregatePrepareResult.AlreadyPrepared(fence)
-                    {
-                        TargetAuthorityOwnerGenerations = existing.TargetAuthorityOwnerGenerations,
-                    }
-                    : new ZLinkAggregatePrepareResult.Conflict();
+                if (
+                    existing.Status is not (AggregateStatus.Prepared or AggregateStatus.Committed)
+                    || !AggregateRequestsEqual(existing.Request, request)
+                )
+                    return new ZLinkAggregatePrepareResult.Conflict();
+                if (request.RepresentativeKey is { } representative)
+                {
+                    if (
+                        request.Relocation?.Target is not { } target
+                        || (
+                            existing.Status == AggregateStatus.Committed
+                                ? _authorities[representative.Value].Relocation?.Target != target
+                                : !ReplacePreparedAttempt(fence, representative, target)
+                        )
+                    )
+                        return new ZLinkAggregatePrepareResult.Conflict();
+                }
+                return new ZLinkAggregatePrepareResult.AlreadyPrepared(fence)
+                {
+                    TargetAuthorityOwnerGenerations = existing.TargetAuthorityOwnerGenerations,
+                };
             }
             if (
                 request.Participants.Any(participant =>
                     !_authorities.TryGetValue(participant.Key.Value, out var current)
-                    || current.StoreVersion != participant.ExpectedStoreVersion
+                    || current.StoreVersion != participant.CompareExchangeStoreVersion
                 )
             )
                 return new ZLinkAggregatePrepareResult.Conflict();
@@ -1057,6 +1126,34 @@ internal sealed partial class ZLinkInMemoryLocationStore
 
             if (_authorityOwnerGeneration > long.MaxValue - relocating.Length)
                 return new ZLinkAggregatePrepareResult.GenerationExhausted();
+            if (request.RepresentativeKey is { } key)
+            {
+                if (
+                    !_authorities.TryGetValue(key.Value, out var primary)
+                    || primary.Relocation
+                        is not { Phase: ServiceWireCodec.RelocationPhase.Captured } relocation
+                    || request.Relocation?.Target is not { } attempt
+                    || !relocation.HoldsRestoreSource(
+                        request.AggregateId,
+                        primary,
+                        request.Relocation.Source,
+                        request.Relocation.Coordinator.ExpectedStoreVersion
+                    )
+                    || !relocation.AcceptsAttempt(attempt)
+                )
+                    return new ZLinkAggregatePrepareResult.Conflict();
+                if (!CanIncrement(_authorityRevision))
+                    return new ZLinkAggregatePrepareResult.GenerationExhausted();
+                _authorities[key.Value] = primary with
+                {
+                    StoreVersion = Next(ref _authorityRevision).ToString(),
+                    Relocation = relocation with
+                    {
+                        Phase = ServiceWireCodec.RelocationPhase.Prepared,
+                        Target = attempt,
+                    },
+                };
+            }
             var targetAuthorityOwnerGenerations = new Dictionary<ZLinkAuthorityKey, ulong>(
                 request.Participants.Count
             );
@@ -1069,7 +1166,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
                         : current.AuthorityOwnerGeneration;
             }
             _authorityAggregates[fence] = new AggregateState(
-                CloneAggregateRequest(request),
+                CloneAggregateRequest(
+                    request.RepresentativeKey is null ? request : request with { Relocation = null }
+                ),
                 AggregateStatus.Prepared,
                 targetAuthorityOwnerGenerations
             );
@@ -1093,134 +1192,252 @@ internal sealed partial class ZLinkInMemoryLocationStore
         });
     }
 
+    private bool ReplacePreparedAttempt(
+        ZLinkAggregateFence fence,
+        ZLinkAuthorityKey key,
+        ZLinkAuthorityRelocation.TargetFence target
+    )
+    {
+        if (
+            !_authorityAggregates.TryGetValue(fence, out var aggregate)
+            || aggregate.Status != AggregateStatus.Prepared
+            || aggregate.Request.RepresentativeKey != key
+            || !_authorities.TryGetValue(key.Value, out var primary)
+            || primary.Relocation
+                is not { Phase: ServiceWireCodec.RelocationPhase.Prepared } relocation
+            || relocation.RelocationId != fence.AggregateId
+            || !relocation.AcceptsAttempt(target)
+        )
+            return false;
+        if (relocation.Target == target)
+            return true;
+        if (!CanIncrement(_authorityRevision))
+            return false;
+        _authorities[key.Value] = primary with
+        {
+            StoreVersion = Next(ref _authorityRevision).ToString(),
+            Relocation = relocation with { Target = target },
+        };
+        return true;
+    }
+
     public ValueTask<ZLinkAggregateCommitResult> CommitAggregateAsync(
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken = default
+    ) => CommitAggregateCoreAsync(fence, null, cancellationToken);
+
+    public ValueTask<ZLinkAggregateCommitResult> CommitAggregateAttemptAsync(
+        ZLinkAggregateFence fence,
+        ulong attempt,
+        CancellationToken cancellationToken
+    ) => CommitAggregateCoreAsync(fence, attempt, cancellationToken);
+
+    private async ValueTask<ZLinkAggregateCommitResult> CommitAggregateCoreAsync(
+        ZLinkAggregateFence fence,
+        ulong? attempt,
+        CancellationToken cancellationToken
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return _lane.RunAsync<ZLinkAggregateCommitResult>(() =>
-        {
-            if (
-                !_authorityAggregates.TryGetValue(fence, out var aggregate)
-                || aggregate.Status == AggregateStatus.Aborted
-            )
-                return ZLinkAggregateCommitResult.Stale;
-            if (aggregate.Status == AggregateStatus.Committed)
-                return ZLinkAggregateCommitResult.AlreadyCommitted;
-
-            if (_authorityRevision > long.MaxValue - aggregate.Request.Participants.Count)
-                return ZLinkAggregateCommitResult.GenerationExhausted;
-            if (
-                aggregate.Request.Participants.Any(participant =>
-                    !_authorities.TryGetValue(participant.Key.Value, out var current)
-                    || current.StoreVersion != participant.ExpectedStoreVersion
-                )
-            )
-                return ZLinkAggregateCommitResult.Stale;
-            var now = _time.GetUtcNow();
-            if (
-                !MatchesLiveTarget(
-                    aggregate.Request.TargetDescriptor,
-                    aggregate.Request.TargetDescriptorLifecycleGeneration,
-                    aggregate.Request.TargetOwner,
-                    now
-                )
-            )
-                return ZLinkAggregateCommitResult.Stale;
-
-            if (
-                aggregate.Request.Participants.Any(participant =>
-                    MembershipCommitFailure(
-                        participant.AuthorityPayload,
-                        _authorities[participant.Key.Value],
-                        now,
-                        aggregate.Request
-                    )
-                        is not null
-                )
-            )
-                return ZLinkAggregateCommitResult.Stale;
-
-            foreach (var participant in aggregate.Request.Participants)
+        var result = await _lane
+            .RunAsync<ZLinkAggregateCommitResult>(() =>
             {
-                var current = _authorities[participant.Key.Value];
-                var changesOwner =
-                    participant.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner;
-                var stored = current with
+                if (
+                    !_authorityAggregates.TryGetValue(fence, out var aggregate)
+                    || aggregate.Status == AggregateStatus.Aborted
+                )
+                    return ZLinkAggregateCommitResult.Stale;
+                ZLinkAuthorityRelocation? committedRelocation = null;
+                if (aggregate.Request.RepresentativeKey is { } key)
                 {
-                    StoreVersion = Next(ref _authorityRevision).ToString(),
-                    Payload = participant.AuthorityPayload.ToArray(),
-                    Relocation = aggregate.Request.ApplyRelocation(current.Relocation),
-                    AuthorityOwnerGeneration = changesOwner
-                        ? aggregate.TargetAuthorityOwnerGenerations[participant.Key]
-                        : current.AuthorityOwnerGeneration,
-                    OwnerId = changesOwner
-                        ? aggregate.Request.TargetOwner.OwnerId
-                        : current.OwnerId,
-                    OwnerLeaseGeneration = changesOwner
-                        ? aggregate.Request.TargetOwner.LeaseGeneration
-                        : current.OwnerLeaseGeneration,
-                    Allocation = changesOwner
-                        ? current.Allocation with
-                        {
-                            Descriptor = aggregate.Request.TargetDescriptor,
-                            DescriptorLifecycleGeneration = aggregate
-                                .Request
-                                .TargetDescriptorLifecycleGeneration,
-                        }
-                        : current.Allocation,
-                    StoreNow = now,
-                };
-                if (changesOwner)
-                {
-                    AdjustAllocationCapacity(_pendingPlacementCapacity, stored.Allocation, -1);
-                    AdjustAllocationCapacity(_activePlacementCapacity, current.Allocation, -1);
-                    AdjustAllocationCapacity(_activePlacementCapacity, stored.Allocation, 1);
+                    if (
+                        !_authorities.TryGetValue(key.Value, out var primary)
+                        || primary.Relocation is not { } relocation
+                        || relocation.RelocationId != fence.AggregateId
+                        || relocation.Target?.AttemptGeneration != attempt
+                    )
+                        return ZLinkAggregateCommitResult.Stale;
+                    committedRelocation = relocation with
+                    {
+                        Phase = ServiceWireCodec.RelocationPhase.Committed,
+                    };
                 }
-                _authorities[participant.Key.Value] = stored;
-            }
-            aggregate.Status = AggregateStatus.Committed;
-            return ZLinkAggregateCommitResult.Committed;
-        });
+                if (aggregate.Status == AggregateStatus.Committed)
+                    return ZLinkAggregateCommitResult.AlreadyCommitted;
+
+                if (_authorityRevision > long.MaxValue - aggregate.Request.Participants.Count)
+                    return ZLinkAggregateCommitResult.GenerationExhausted;
+                if (
+                    aggregate.Request.Participants.Any(participant =>
+                        !_authorities.TryGetValue(participant.Key.Value, out var current)
+                        || participant.Key != aggregate.Request.RepresentativeKey
+                            && current.StoreVersion != participant.CompareExchangeStoreVersion
+                    )
+                )
+                    return ZLinkAggregateCommitResult.Stale;
+                var now = _time.GetUtcNow();
+                if (
+                    !MatchesLiveTarget(
+                        aggregate.Request.TargetDescriptor,
+                        aggregate.Request.TargetDescriptorLifecycleGeneration,
+                        aggregate.Request.TargetOwner,
+                        now
+                    )
+                )
+                    return ZLinkAggregateCommitResult.Stale;
+
+                ReadOnlyMemory<byte> Payload(ZLinkAggregateParticipant participant) =>
+                    committedRelocation is null
+                        ? participant.AuthorityPayload
+                        : ZLinkAggregateRelocationCoordinator.ProjectParticipantPayload(
+                            _authorities[participant.Key.Value].Allocation.ObjectKind,
+                            participant.AuthorityPayload,
+                            aggregate.Request.TargetDescriptor,
+                            aggregate.Request.TargetDescriptorLifecycleGeneration,
+                            aggregate.Request.TargetOwner,
+                            fence.AggregateId
+                        );
+                if (
+                    aggregate.Request.Participants.Any(participant =>
+                        MembershipCommitFailure(
+                            Payload(participant),
+                            _authorities[participant.Key.Value],
+                            now,
+                            aggregate.Request
+                        )
+                            is not null
+                    )
+                )
+                    return ZLinkAggregateCommitResult.Stale;
+
+                foreach (var participant in aggregate.Request.Participants)
+                {
+                    var current = _authorities[participant.Key.Value];
+                    var changesOwner =
+                        participant.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner;
+                    var stored = current with
+                    {
+                        StoreVersion = Next(ref _authorityRevision).ToString(),
+                        Payload = Payload(participant).ToArray(),
+                        Relocation =
+                            committedRelocation
+                            ?? aggregate.Request.ApplyRelocation(current.Relocation),
+                        AuthorityOwnerGeneration = changesOwner
+                            ? aggregate.TargetAuthorityOwnerGenerations[participant.Key]
+                            : current.AuthorityOwnerGeneration,
+                        OwnerId = changesOwner
+                            ? aggregate.Request.TargetOwner.OwnerId
+                            : current.OwnerId,
+                        OwnerLeaseGeneration = changesOwner
+                            ? aggregate.Request.TargetOwner.LeaseGeneration
+                            : current.OwnerLeaseGeneration,
+                        Allocation = changesOwner
+                            ? current.Allocation with
+                            {
+                                Descriptor = aggregate.Request.TargetDescriptor,
+                                DescriptorLifecycleGeneration = aggregate
+                                    .Request
+                                    .TargetDescriptorLifecycleGeneration,
+                            }
+                            : current.Allocation,
+                        StoreNow = now,
+                    };
+                    if (changesOwner)
+                    {
+                        AdjustAllocationCapacity(_pendingPlacementCapacity, stored.Allocation, -1);
+                        AdjustAllocationCapacity(_activePlacementCapacity, current.Allocation, -1);
+                        AdjustAllocationCapacity(_activePlacementCapacity, stored.Allocation, 1);
+                    }
+                    _authorities[participant.Key.Value] = stored;
+                }
+                aggregate.Status = AggregateStatus.Committed;
+                return ZLinkAggregateCommitResult.Committed;
+            })
+            .ConfigureAwait(false);
+        if (
+            attempt is null
+            && result
+                is ZLinkAggregateCommitResult.Committed
+                    or ZLinkAggregateCommitResult.AlreadyCommitted
+        )
+            await RemoveInventoryAsync(fence, cancellationToken).ConfigureAwait(false);
+        return result;
     }
 
     public ValueTask<ZLinkAggregateAbortResult> AbortAggregateAsync(
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken = default
+    ) => AbortAggregateCoreAsync(fence, null, cancellationToken);
+
+    public ValueTask<ZLinkAggregateAbortResult> AbortAggregateAttemptAsync(
+        ZLinkAggregateFence fence,
+        ulong attempt,
+        CancellationToken cancellationToken
+    ) => AbortAggregateCoreAsync(fence, attempt, cancellationToken);
+
+    private async ValueTask<ZLinkAggregateAbortResult> AbortAggregateCoreAsync(
+        ZLinkAggregateFence fence,
+        ulong? attempt,
+        CancellationToken cancellationToken
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return _lane.RunAsync<ZLinkAggregateAbortResult>(() =>
-        {
-            if (!_authorityAggregates.TryGetValue(fence, out var aggregate))
-                return ZLinkAggregateAbortResult.Stale;
-            if (aggregate.Status == AggregateStatus.Aborted)
-                return ZLinkAggregateAbortResult.AlreadyAborted;
-            if (aggregate.Status == AggregateStatus.Committed)
-                return ZLinkAggregateAbortResult.Stale;
-            foreach (
-                var participant in aggregate.Request.Participants.Where(static participant =>
-                    participant.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
-                )
-            )
+        var result = await _lane
+            .RunAsync<ZLinkAggregateAbortResult>(() =>
             {
-                var source = _authorities[participant.Key.Value].Allocation;
-                AdjustAllocationCapacity(
-                    _pendingPlacementCapacity,
-                    source with
+                if (!_authorityAggregates.TryGetValue(fence, out var aggregate))
+                    return ZLinkAggregateAbortResult.Stale;
+                if (aggregate.Status == AggregateStatus.Aborted)
+                    return ZLinkAggregateAbortResult.AlreadyAborted;
+                if (aggregate.Status == AggregateStatus.Committed)
+                    return ZLinkAggregateAbortResult.Stale;
+                if (
+                    aggregate.Request.RepresentativeKey is { } representative
+                    && (
+                        !CanIncrement(_authorityRevision)
+                        || attempt is not null
+                            && _authorities[representative.Value]
+                                .Relocation
+                                ?.Target
+                                ?.AttemptGeneration != attempt
+                    )
+                )
+                    return ZLinkAggregateAbortResult.Stale;
+                foreach (
+                    var participant in aggregate.Request.Participants.Where(static participant =>
+                        participant.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
+                    )
+                )
+                {
+                    var source = _authorities[participant.Key.Value].Allocation;
+                    AdjustAllocationCapacity(
+                        _pendingPlacementCapacity,
+                        source with
+                        {
+                            Descriptor = aggregate.Request.TargetDescriptor,
+                            DescriptorLifecycleGeneration = aggregate
+                                .Request
+                                .TargetDescriptorLifecycleGeneration,
+                        },
+                        -1
+                    );
+                }
+                if (aggregate.Request.RepresentativeKey is { } key)
+                {
+                    var primary = _authorities[key.Value];
+                    _authorities[key.Value] = primary with
                     {
-                        Descriptor = aggregate.Request.TargetDescriptor,
-                        DescriptorLifecycleGeneration = aggregate
-                            .Request
-                            .TargetDescriptorLifecycleGeneration,
-                    },
-                    -1
-                );
-            }
-            aggregate.Status = AggregateStatus.Aborted;
-            return ZLinkAggregateAbortResult.Aborted;
-        });
+                        StoreVersion = Next(ref _authorityRevision).ToString(),
+                        Relocation = null,
+                    };
+                }
+                aggregate.Status = AggregateStatus.Aborted;
+                return ZLinkAggregateAbortResult.Aborted;
+            })
+            .ConfigureAwait(false);
+        if (result is ZLinkAggregateAbortResult.Aborted or ZLinkAggregateAbortResult.AlreadyAborted)
+            await RemoveInventoryAsync(fence, cancellationToken).ConfigureAwait(false);
+        return result;
     }
 
     private bool MatchesLiveTarget(
@@ -1565,7 +1782,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
             || left.TargetDescriptorLifecycleGeneration != right.TargetDescriptorLifecycleGeneration
             || left.Capacity != right.Capacity
             || left.AllowPreparingTarget != right.AllowPreparingTarget
-            || left.Relocation != right.Relocation
+            || left.RepresentativeKey != right.RepresentativeKey
+            || left.RepresentativeKey is null && left.Relocation != right.Relocation
             || left.ClearRelocation != right.ClearRelocation
             || !left.InventoryDigest.Span.SequenceEqual(right.InventoryDigest.Span)
             || left.Participants.Count != right.Participants.Count
@@ -1578,6 +1796,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
             var rightParticipant = right.Participants[index];
             if (
                 leftParticipant.Key != rightParticipant.Key
+                || left.RepresentativeKey is null
+                    && leftParticipant.CompareExchangeStoreVersion
+                        != rightParticipant.CompareExchangeStoreVersion
                 || !string.Equals(
                     leftParticipant.ExpectedStoreVersion,
                     rightParticipant.ExpectedStoreVersion,

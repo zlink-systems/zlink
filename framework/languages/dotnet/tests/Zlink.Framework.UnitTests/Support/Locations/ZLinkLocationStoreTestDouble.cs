@@ -1,10 +1,30 @@
 using Zlink.Framework.Contracts.Locations;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
 internal abstract class ZLinkLocationStoreTestDouble : IZLinkLocationRepository
 {
     public virtual Func<ZLinkAuthorityKey, string?, ValueTask>? AuthorityObservedAsync { get; set; }
+
+    public virtual ValueTask RemoveSealedInventoryAsync(
+        ZLinkAggregateFence fence,
+        CancellationToken cancellationToken
+    ) => ValueTask.CompletedTask;
+
+    public virtual ValueTask<string> SealAggregateInventoryAsync(
+        ZLinkAggregateFence fence,
+        IReadOnlyList<ZLinkAggregateParticipant> participants,
+        CancellationToken cancellationToken
+    ) => Unsupported<string>();
+
+    public virtual ValueTask<
+        IReadOnlyList<ZLinkAggregateInventory.Participant>
+    > ReadAggregateInventoryAsync(
+        ZLinkAggregateFence fence,
+        string digest,
+        CancellationToken cancellationToken
+    ) => Unsupported<IReadOnlyList<ZLinkAggregateInventory.Participant>>();
 
     public virtual ValueTask<ZLinkLocationWriteResult> UpdateMeshNodeAsync(
         ZLinkMeshNodeDescriptor descriptor,

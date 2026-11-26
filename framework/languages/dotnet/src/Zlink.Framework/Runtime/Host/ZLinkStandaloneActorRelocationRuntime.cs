@@ -73,7 +73,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     {
         var deadline = Stopwatch.GetElapsedTime(0) + (absoluteDeadline - DateTimeOffset.UtcNow);
         var sourceActivation = actorState.LiveActivation;
-        var destination = ResolveDestination(sourceActivation, target);
         var actor = actorState.Actor;
         var sourceRef = actorState.NativeActorRef;
         var actorType = actorState.ActorType;
@@ -249,12 +248,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 .BeginPreparingAsync(
                     found.Snapshot,
                     sourceAuthority,
-                    PlanTargetAuthority(sourceAuthority, destination),
                     relocationId,
                     registration.ApplicationVersion,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
+            var destination = ResolveDestination(sourceActivation, target);
             var initialEnvelope = ZLinkCanonicalActorRelocationWriter.CreateInitial(
                 CreateImmutableRoot(
                     precommitSnapshot,
@@ -926,16 +925,21 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             CanonicalParticipantId = ZLinkCanonicalActorRelocationWriter.ParticipantId,
             SessionBinding = ZLinkSessionRelocationWire.CaptureBinding(boundSessionRoute),
         };
-        var publicationParticipant = new ZLinkAggregateRelocationParticipant(
-            participant,
-            sourceSnapshot.StoreVersion,
-            ZLinkAuthorityGenerationTransition.NewOwner,
-            relocatingAuthority,
-            ReadOnlyMemory<byte>.Empty
+        var digest = Convert.FromHexString(
+            sourceSnapshot.Relocation?.SourceInventorySha256
+                ?? ZLinkDirectRelocationInventory.Digest(
+                    participant.AuthorityKey,
+                    sourceSnapshot.StoreVersion,
+                    sourceSnapshot.Payload
+                )
         );
-        var digest = ZLinkAggregateInventoryDigest.Compute([publicationParticipant]);
         var relocationBytes = relocationId.ToByteArray(bigEndian: true);
-        return new ZLinkRelocationEnvelope(relocationId, 1, digest, [participant])
+        return new ZLinkRelocationEnvelope(
+            relocationId,
+            ZLinkAggregateInventory.RelocationFence(relocationId).AggregateGeneration,
+            digest,
+            [participant]
+        )
         {
             CanonicalRelocationHigh = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(
                 relocationBytes.AsSpan(0, 8)
@@ -1899,19 +1903,36 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             || !ZLinkStandaloneActorRelocationPrecommitCoordinator.HoldsTargetCommitFence(
                 current.Snapshot,
                 envelope,
-                prepare
+                prepare,
+                acceptReplacement: true
             )
         )
+        {
+            if (
+                authority
+                    is ZLinkAuthorityReadResult.Found
+                    {
+                        Snapshot.Relocation:
+                        { Phase: ServiceWireCodec.RelocationPhase.Prepared } progress,
+                    }
+                && progress.RelocationId == envelope.AggregateId
+            )
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.AlreadyExists,
+                    "The Actor representative authority has a different target attempt."
+                );
             throw new ZLinkRelocationTargetSettledException(
                 "Standalone Actor PREPARE no longer holds its expected source fence."
             );
+        }
 
         var effectiveTargetAuthorityOwnerGeneration =
             remoteJoinRecovery?.TargetAuthorityOwnerGeneration
             ?? participant.AuthorityOwnerGeneration;
         if (
             ToWireId(envelope.AggregateId) != prepare.RelocationId
-            || envelope.AggregateGeneration != 1
+            || envelope.AggregateGeneration
+                != ZLinkAggregateInventory.RelocationFence(envelope.AggregateId).AggregateGeneration
             || participant.ObjectKind != ZLinkPlacementObjectKind.Actor
             || recovery.ObjectKind != ZLinkPlacementObjectKind.Actor
             || recovery.AuthorityKey != participant.AuthorityKey
@@ -1947,6 +1968,27 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             throw DataLost(
                 "Standalone Actor reservation returned an invalid target authority generation."
             );
+
+        var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(authorityStore);
+        await precommit
+            .VerifyCapturedInventoryAsync(current.Snapshot, envelope, prepare, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (
+            current.Snapshot.Relocation?.Target is { } previous
+            && previous.AttemptGeneration != prepare.TargetAttemptGeneration
+        )
+        {
+            await DiscardSupersededTargetAsync(
+                    new(
+                        prepare.RelocationId.High,
+                        prepare.RelocationId.Low,
+                        previous.AttemptGeneration
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
 
         var node = runtime.GetSpotNodeRuntime(prepare.Target.NodeRid);
         var targetActivation = remoteJoinRecovery is null
@@ -2045,6 +2087,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         remoteJoinRecovery!.TargetSpotId,
                         actorState,
                         remoteJoinRequest,
+                        current.Snapshot.Relocation?.Phase
+                            == ServiceWireCodec.RelocationPhase.Prepared,
                         cancellationToken
                     )
                     .ConfigureAwait(false);
@@ -2067,6 +2111,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 created,
                 admission
             );
+            await precommit
+                .PrepareTargetAsync(current.Snapshot, envelope, prepare, cancellationToken)
+                .ConfigureAwait(false);
             if (!slot.TrySetStage(stage))
                 throw new InvalidOperationException(
                     "Standalone Actor target stage owner changed under its attempt gate."
@@ -2309,7 +2356,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     ZLinkDirectRelocationInventory.Digest(
                         stage.Participant.AuthorityKey,
                         canonical.State.CoordinatorExpectedAuthorityStoreVersion,
-                        canonical.SteadyAuthorityPayload.Span
+                        canonical.SteadyAuthorityPayload
                     )
                 );
             var exchanged = await store
@@ -2329,6 +2376,13 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
+            if (remove && exchanged is ZLinkAuthorityCompareExchangeResult.Stored)
+                await store
+                    .RemoveSealedInventoryAsync(
+                        ZLinkAggregateInventory.RelocationFence(stage.Envelope.AggregateId),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
             if (
                 exchanged
                 is ZLinkAuthorityCompareExchangeResult.Stored
@@ -2597,6 +2651,37 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         return steady == targetAuthority;
     }
 
+    private async ValueTask DiscardSupersededTargetAsync(
+        AttemptKey key,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!TryAcquireTargetAttempt(key, out var lease))
+            return;
+        using var attemptLease = lease;
+        var terminal = await lease
+            .Slot.RunAsync(() =>
+            {
+                if (lease.Slot.Abort is { } abort)
+                    return abort.Terminal;
+                if (lease.Slot.Stage is not { } stage)
+                    return null;
+                if (
+                    stage.AuthorityPublished
+                    || stage.TryBeginSettledCleanup(() => lease.Slot.TryRemoveStage(stage))
+                        is not { } previousPhase
+                )
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.AlreadyExists,
+                        "The previous Actor target attempt has already submitted cutover."
+                    );
+                return RegisterTargetAbortLocked(key, lease.Slot, stage, previousPhase).Terminal;
+            })
+            .ConfigureAwait(false);
+        if (terminal is not null)
+            await terminal.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     internal async ValueTask AbortTargetAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         RoutingId authenticatedSourceNodeRid
@@ -2781,8 +2866,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 && stage.RemoteJoinRecovery is { } remoteJoinRecovery
             )
             {
-                if (!stage.CreatedTransferredActor)
-                    DetachTargetMembership(stage);
                 await runtime
                     .RollbackCanonicalRoutedActorJoinPreparationAsync(
                         remoteJoinRecovery.TargetSpotId,
