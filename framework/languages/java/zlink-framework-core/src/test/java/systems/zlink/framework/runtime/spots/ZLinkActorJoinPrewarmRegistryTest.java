@@ -13,6 +13,7 @@ import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAcce
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -447,6 +448,43 @@ final class ZLinkActorJoinPrewarmRegistryTest {
                         + "the placeholder eviction callback");
         assertFalse(registry.find(oldRelocationId).isPresent());
         assertTrue(registry.find(newRelocationId).isPresent());
+    }
+
+    @Test
+    void oldTargetTerminalKeepsTheReplacementAdmissionAndParkedIngress() {
+        List<UUID> released = new ArrayList<>();
+        var registry = new ZLinkActorJoinPrewarmRegistry(released::add);
+        UUID id = UUID.randomUUID();
+        var first = new CompletableFuture<Void>();
+        var second = new CompletableFuture<Void>();
+        registry.register(id, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        registry.begin(id, first, () -> {}).toCompletableFuture().join();
+        registry.completeMigration(
+                id,
+                message -> {
+                    throw new AssertionError("replacement ingress reached the old stage");
+                },
+                () -> {},
+                () -> {});
+
+        registry.begin(id, second, () -> {}).toCompletableFuture().join();
+        registry.releaseAsync(id, first).toCompletableFuture().join();
+        assertTrue(released.isEmpty());
+        assertEquals(
+                ZLinkActorJoinPrewarmRegistry.IngressRoute.PARKED,
+                registry.parkOrDeliver(
+                        ACTOR_ID,
+                        OBJECT_GENERATION,
+                        () ->
+                                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+                                        new byte[] {2}, null, null)));
+        List<Byte> delivered = new ArrayList<>();
+        registry.completeMigration(
+                id, message -> delivered.add(message.record()[0]), () -> {}, () -> {});
+        assertEquals(List.of((byte) 2), delivered);
+
+        registry.releaseAsync(id, second).toCompletableFuture().join();
+        assertEquals(List.of(id), released);
     }
 
     @Test

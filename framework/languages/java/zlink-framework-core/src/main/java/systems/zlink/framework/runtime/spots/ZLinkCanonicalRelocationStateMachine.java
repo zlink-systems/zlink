@@ -926,17 +926,9 @@ final class ZLinkCanonicalRelocationStateMachine
                             });
         }
         withTargetPreparationStage(
-                        target.beginPrepare(
-                                prepare.id(),
-                                attempt.terminal(),
-                                () ->
-                                        discardTarget(
-                                                fence,
-                                                attempt,
-                                                new ZLinkFrameworkException(
-                                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                        "canonical relocation target was"
-                                                                + " superseded"))),
+                        fence.attempt() == 1
+                                ? beginTargetPrepare(fence, attempt)
+                                : CompletableFuture.completedFuture(null),
                         "temporary_queue")
                 .thenCompose(
                         ignored ->
@@ -945,7 +937,8 @@ final class ZLinkCanonicalRelocationStateMachine
                 .thenCompose(
                         payload ->
                                 withTargetPreparationStage(
-                                        restoreFromInventory(prepare, payload), "reconstruct"))
+                                        restoreFromInventory(fence, attempt, payload),
+                                        "reconstruct"))
                 .thenCompose(
                         restore -> {
                             return withTargetPreparationStage(
@@ -1017,6 +1010,58 @@ final class ZLinkCanonicalRelocationStateMachine
                             return null;
                         });
         return CompletableFuture.completedFuture(null);
+    }
+
+    private CompletionStage<Void> beginTargetPrepare(Fence fence, TargetAttempt attempt) {
+        return target.beginPrepare(
+                fence.id(),
+                attempt.terminal(),
+                () ->
+                        discardTarget(
+                                fence,
+                                attempt,
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "canonical relocation target was superseded")));
+    }
+
+    private CompletionStage<Void> replacePreparedTarget(
+            Fence next, TargetAttempt replacement, ZLinkAuthoritySnapshot representative) {
+        var relocation = representative.relocation();
+        if (!relocation.phase().equals("prepared")
+                || relocation.targetAttemptGeneration() == next.attempt()) {
+            return beginTargetPrepare(next, replacement);
+        }
+        // The inventory read already validated the same target and the next attempt.
+        var previous = new Fence(next.id(), relocation.targetAttemptGeneration());
+        TargetAttempt attempt = inStateLane(() -> targets.get(previous));
+        if (attempt == null) {
+            return beginTargetPrepare(next, replacement);
+        }
+        CompletableFuture<Void> discard = new CompletableFuture<>();
+        if (!attempt.claimPublication(discard, null).owner()) {
+            if (attempt.receivedCutover() != null) {
+                return failed(
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.ALREADY_EXISTS,
+                                "previous relocation target already submitted cutover"));
+            }
+            return attempt.terminal().thenCompose(ignored -> beginTargetPrepare(next, replacement));
+        }
+        return beginTargetPrepare(next, replacement)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            settleTargetTerminal(
+                                    previous,
+                                    attempt,
+                                    discard,
+                                    failure == null ? target::abortSuperseded : target::abort);
+                            discard.completeExceptionally(
+                                    new ZLinkFrameworkException(
+                                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                            "canonical relocation target was superseded"));
+                        })
+                .thenCompose(ignored -> attempt.terminal());
     }
 
     private void reportTargetPreparationFailure(
@@ -1479,7 +1524,7 @@ final class ZLinkCanonicalRelocationStateMachine
         if (!attempt.claimPublication(created, null).owner()) {
             return;
         }
-        settleTargetTerminal(fence, attempt, created);
+        settleTargetTerminal(fence, attempt, created, target::abort);
         created.completeExceptionally(cause);
         // End an incomplete payload at the same terminal claim. An accepted restore
         // already running still owns installation and must settle before cleanup.
@@ -1488,7 +1533,11 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private void settleTargetTerminal(
-            Fence fence, TargetAttempt attempt, CompletableFuture<Void> publication) {
+            Fence fence,
+            TargetAttempt attempt,
+            CompletableFuture<Void> publication,
+            java.util.function.Function<ZLinkSpotRetireControl.StageRequest, CompletionStage<Void>>
+                    abort) {
         publication.whenComplete(
                 (ignored, failure) -> {
                     if (failure != null && attempt.committed() == null) {
@@ -1502,7 +1551,7 @@ final class ZLinkCanonicalRelocationStateMachine
                                         request ->
                                                 request == null
                                                         ? CompletableFuture.completedFuture(null)
-                                                        : target.abort(request))
+                                                        : abort.apply(request))
                                 .whenComplete(
                                         (discarded, discardFailure) -> {
                                             if (discardFailure == null) {
@@ -1523,7 +1572,7 @@ final class ZLinkCanonicalRelocationStateMachine
             TargetAttempt attempt,
             List<byte[]> verifiedBatch,
             CompletableFuture<Void> publication) {
-        settleTargetTerminal(fence, attempt, publication);
+        settleTargetTerminal(fence, attempt, publication, target::abort);
         //  Publish the claim before completed prepare/commit stages can run
         //  inline and make the target attempt observable again.
         attempt.request()
@@ -1618,7 +1667,7 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private void completeTargetTerminal(Fence fence, TargetAttempt attempt, Throwable failure) {
-        target.endPrepare(fence.id())
+        target.endPrepare(fence.id(), attempt.terminal())
                 .handle(
                         (ignored, cleanupFailure) -> {
                             Throwable cause = failure != null ? failure : cleanupFailure;
@@ -1847,7 +1896,8 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private CompletionStage<TargetRestore> restoreFromInventory(
-            ZLinkCanonicalRelocationProtocol.Prepare prepare, byte[] payload) {
+            Fence fence, TargetAttempt attempt, byte[] payload) {
+        var prepare = attempt.prepare();
         Objects.requireNonNull(payload, "payload");
         String primaryKey =
                 prepare.object().kind() == ZLinkPlacementObjectKind.ACTOR.value()
@@ -1874,8 +1924,27 @@ final class ZLinkCanonicalRelocationStateMachine
                                                             ::authority)
                                             .toList();
                             var profile = stageRequest(prepare, payload, entries);
-                            return target.applyTargetProfile(
-                                            profile, () -> awaitShellPublication(profile))
+                            CompletionStage<Void> admission =
+                                    fence.attempt() == 1
+                                            ? CompletableFuture.completedFuture(null)
+                                            : replacePreparedTarget(
+                                                    fence,
+                                                    attempt,
+                                                    entries.stream()
+                                                            .filter(
+                                                                    entry ->
+                                                                            entry.key()
+                                                                                    .equals(
+                                                                                            primaryKey))
+                                                            .findFirst()
+                                                            .orElseThrow()
+                                                            .snapshot());
+                            return admission
+                                    .thenCompose(
+                                            ignored ->
+                                                    target.applyTargetProfile(
+                                                            profile,
+                                                            () -> awaitShellPublication(profile)))
                                     .thenApply(
                                             resolved ->
                                                     new TargetRestore(

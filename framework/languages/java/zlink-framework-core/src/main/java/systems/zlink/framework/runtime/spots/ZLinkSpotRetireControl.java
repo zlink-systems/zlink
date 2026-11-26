@@ -278,7 +278,8 @@ final class ZLinkSpotRetireControl {
             return CompletableFuture.completedFuture(null);
         }
 
-        default CompletionStage<Void> endPrepare(UUID relocationId) {
+        default CompletionStage<Void> endPrepare(
+                UUID relocationId, CompletionStage<Void> terminal) {
             return CompletableFuture.completedFuture(null);
         }
 
@@ -305,6 +306,10 @@ final class ZLinkSpotRetireControl {
         }
 
         CompletionStage<Void> abort(StageRequest request);
+
+        default CompletionStage<Void> abortSuperseded(StageRequest request) {
+            return abort(request);
+        }
 
         default CompletionStage<ZLinkSpotRelocationReplyRoutes.Ack> relayReply(
                 RoutingId transportSource, ZLinkSpotRelocationReplyRoutes.Relay relay) {

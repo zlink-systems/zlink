@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
@@ -9,8 +8,6 @@ import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
-import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
-import systems.zlink.framework.runtime.spots.ZLinkCanonicalActorRelocationEnvelope;
 
 import java.util.List;
 import java.util.Objects;
@@ -56,221 +53,6 @@ public final class ZLinkDirectJoinRelocationAuthority {
      * committed by the target before it exposes the restored Actor or invokes the application
      * callback.
      */
-    public CompletionStage<PreparedPublication> prepareRelocation(
-            UUID relocationId,
-            ZLinkBackendActorRef actor,
-            String actorType,
-            String targetSpotId,
-            RoutingId targetNodeRid,
-            boolean restoreSnapshot,
-            byte[] applicationState,
-            List<ZLinkSerialExecutionQueue.QueuedRecord> acceptedJournal) {
-        String actorKey = ZLinkAuthorityKeyCodec.actor(actor.actorId());
-        String spotKey = ZLinkAuthorityKeyCodec.spot(targetSpotId);
-        return authority
-                .read(actorKey, NEVER)
-                .thenCompose(
-                        actorRead -> {
-                            if (!(actorRead instanceof ZLinkAuthoritySnapshot actorSnapshot)) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "Actor authority is missing for direct Join"
-                                                        + " relocation"));
-                            }
-                            var source =
-                                    new ZLinkActorAuthorityPayloadCodec()
-                                            .decode(actorSnapshot.payload())
-                                            .orElseThrow(
-                                                    () ->
-                                                            new IllegalStateException(
-                                                                    "Actor authority payload is"
-                                                                            + " invalid"));
-                            if (!source.actorId().equals(actor.actorId())
-                                    || !source.stableType().equals(actorType)
-                                    || actorSnapshot.objectGeneration() != actor.generation()) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "Actor authority changed before direct Join"
-                                                        + " relocation"));
-                            }
-                            return authority
-                                    .read(spotKey, NEVER)
-                                    .thenCompose(
-                                            spotRead -> {
-                                                if (!(spotRead
-                                                        instanceof
-                                                        ZLinkAuthoritySnapshot spotSnapshot)) {
-                                                    return CompletableFuture.failedFuture(
-                                                            new IllegalStateException(
-                                                                    "target Spot authority is"
-                                                                            + " missing"));
-                                                }
-                                                var target =
-                                                        new ZLinkServiceAuthorityPayloadCodec()
-                                                                .decode(spotSnapshot.payload())
-                                                                .orElseThrow(
-                                                                        () ->
-                                                                                new IllegalStateException(
-                                                                                        "target"
-                                                                                                + " Spot"
-                                                                                                + " authority"
-                                                                                                + " payload"
-                                                                                                + " is invalid"));
-                                                if (target.state()
-                                                                != ZLinkServiceAuthorityPayloadCodec
-                                                                        .State.READY
-                                                        || target.user().isEmpty()
-                                                        || !target.spotId().equals(targetSpotId)
-                                                        || !target.nodeRid()
-                                                                .equals(targetNodeRid)) {
-                                                    return CompletableFuture.failedFuture(
-                                                            new IllegalStateException(
-                                                                    "target Spot authority changed"
-                                                                            + " before relocation"));
-                                                }
-                                                List<ZLinkSerialExecutionQueue.QueuedRecord>
-                                                        journal = List.copyOf(acceptedJournal);
-                                                byte[] initial =
-                                                        ZLinkCanonicalActorRelocationEnvelope
-                                                                .encode(
-                                                                        relocationId,
-                                                                        actor.actorId(),
-                                                                        actor.generation(),
-                                                                        actorSnapshot
-                                                                                .authorityOwnerGeneration(),
-                                                                        restoreSnapshot,
-                                                                        applicationState,
-                                                                        journal);
-                                                byte[] root = initial;
-                                                byte[] targetAuthority =
-                                                        new ZLinkActorAuthorityPayloadCodec()
-                                                                .encode(
-                                                                        ZLinkActorAuthorityPayloadCodec
-                                                                                .State.CREATING,
-                                                                        actorType,
-                                                                        actor.actorId(),
-                                                                        targetSpotId,
-                                                                        spotSnapshot
-                                                                                .objectGeneration(),
-                                                                        2,
-                                                                        //  The aggregate codec
-                                                                        // records this owner as the
-                                                                        //  source fence before it
-                                                                        // projects owner and node
-                                                                        // to
-                                                                        //  the request's committed
-                                                                        // target. The Spot identity
-                                                                        //  is already the target
-                                                                        // identity.
-                                                                        actorSnapshot.ownerId(),
-                                                                        actorSnapshot
-                                                                                .ownerLeaseGeneration(),
-                                                                        source.meshName(),
-                                                                        source.nodeRid(),
-                                                                        source.nodeGeneration());
-                                                var participant =
-                                                        new ZLinkAggregateRelocationCoordinator
-                                                                .Participant(
-                                                                actorKey,
-                                                                ZLinkPlacementObjectKind.ACTOR,
-                                                                actorSnapshot.objectGeneration(),
-                                                                actorSnapshot
-                                                                        .authorityOwnerGeneration(),
-                                                                actorSnapshot.storeVersion(),
-                                                                ZLinkAuthorityGenerationTransition
-                                                                        .NEW_OWNER,
-                                                                targetAuthority,
-                                                                new byte[] {'[', ']'});
-                                                var coordinator =
-                                                        new ZLinkAggregateRelocationCoordinator(
-                                                                authority);
-                                                return authority
-                                                        .listMeshNodes(
-                                                                target.meshName(),
-                                                                new ZLinkPageRequest(1_000, null))
-                                                        .thenCompose(
-                                                                page -> {
-                                                                    var descriptor =
-                                                                            page.items().stream()
-                                                                                    .filter(
-                                                                                            candidate ->
-                                                                                                    candidate
-                                                                                                            .rid()
-                                                                                                            .equals(
-                                                                                                                    targetNodeRid))
-                                                                                    .findFirst()
-                                                                                    .orElseThrow(
-                                                                                            () ->
-                                                                                                    new IllegalStateException(
-                                                                                                            "target"
-                                                                                                                    + " MeshNode"
-                                                                                                                    + " descriptor"
-                                                                                                                    + " is missing"));
-                                                                    if (!descriptor
-                                                                                    .ownerId()
-                                                                                    .equals(
-                                                                                            spotSnapshot
-                                                                                                    .ownerId())
-                                                                            || descriptor
-                                                                                            .leaseGeneration()
-                                                                                    != spotSnapshot
-                                                                                            .ownerLeaseGeneration()
-                                                                            || descriptor
-                                                                                            .lifecycleGeneration()
-                                                                                    != spotSnapshot
-                                                                                            .allocation()
-                                                                                            .descriptorLifecycleGeneration()) {
-                                                                        return CompletableFuture
-                                                                                .failedFuture(
-                                                                                        new IllegalStateException(
-                                                                                                "target"
-                                                                                                        + " Spot"
-                                                                                                        + " and MeshNode"
-                                                                                                        + " owner"
-                                                                                                        + " fences"
-                                                                                                        + " differ"));
-                                                                    }
-                                                                    var request =
-                                                                            new ZLinkAggregateRelocationCoordinator
-                                                                                    .Request(
-                                                                                    relocationId,
-                                                                                    1,
-                                                                                    1,
-                                                                                    List.of(
-                                                                                            participant),
-                                                                                    root,
-                                                                                    new ZLinkMeshNodeDescriptorKey(
-                                                                                            descriptor
-                                                                                                    .meshName(),
-                                                                                            descriptor
-                                                                                                    .rid()),
-                                                                                    descriptor
-                                                                                            .lifecycleGeneration(),
-                                                                                    ZLinkPlacementCapacityBundle
-                                                                                            .actor(
-                                                                                                    1),
-                                                                                    new ZLinkLocationOwnerToken(
-                                                                                            descriptor
-                                                                                                    .ownerId(),
-                                                                                            descriptor
-                                                                                                    .leaseGeneration()),
-                                                                                    actorSnapshot
-                                                                                            .storeVersion());
-                                                                    return coordinator
-                                                                            .prepare(request, NEVER)
-                                                                            .thenApply(
-                                                                                    prepared ->
-                                                                                            new PreparedPublication(
-                                                                                                    root,
-                                                                                                    crc32c(
-                                                                                                            root),
-                                                                                                    prepared
-                                                                                                            .fence()));
-                                                                });
-                                            });
-                        });
-    }
-
     public CompletionStage<CommittedActorTenure> commitPrepared(
             UUID aggregateId, long aggregateGeneration, ZLinkBackendActorRef actor) {
         Objects.requireNonNull(actor, "actor");
@@ -612,18 +394,6 @@ public final class ZLinkDirectJoinRelocationAuthority {
         CRC32C checksum = new CRC32C();
         checksum.update(payload, 0, payload.length);
         return checksum.getValue();
-    }
-
-    public record PreparedPublication(byte[] root, long checksumCrc32c, ZLinkAggregateFence fence) {
-        public PreparedPublication {
-            root = Objects.requireNonNull(root, "root").clone();
-            Objects.requireNonNull(fence, "fence");
-        }
-
-        @Override
-        public byte[] root() {
-            return root.clone();
-        }
     }
 
     public record PreparedRoot(

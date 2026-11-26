@@ -214,10 +214,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
     }
 
     @Override
-    public CompletionStage<Void> endPrepare(UUID relocationId) {
+    public CompletionStage<Void> endPrepare(UUID relocationId, CompletionStage<Void> terminal) {
         return actorJoin == null
                 ? CompletableFuture.completedFuture(null)
-                : actorJoin.endTarget(relocationId);
+                : actorJoin.endTarget(relocationId, terminal);
     }
 
     @Override
@@ -1137,7 +1137,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     @Override
     public CompletionStage<Void> abort(ZLinkSpotRetireControl.StageRequest request) {
         if (isStandaloneActor(request)) {
-            return abortActor(request);
+            return abortActor(request, false);
         }
         TargetStage target = requireStage(request);
         return staging.discard(target.staged())
@@ -1464,7 +1464,13 @@ final class ZLinkUserSpotRetireTargetEndpoint
         }
     }
 
-    private CompletionStage<Void> abortActor(ZLinkSpotRetireControl.StageRequest request) {
+    @Override
+    public CompletionStage<Void> abortSuperseded(ZLinkSpotRetireControl.StageRequest request) {
+        return isStandaloneActor(request) ? abortActor(request, true) : abort(request);
+    }
+
+    private CompletionStage<Void> abortActor(
+            ZLinkSpotRetireControl.StageRequest request, boolean superseded) {
         ActorTargetStage target = requireActorStage(request);
         if (target.directAdmission() != null) {
             target.publishRequested()
@@ -1476,7 +1482,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 .thenRun(
                         () -> {
                             actorStages.remove(request.fence(), target);
-                            if (target.directAdmission() != null) {
+                            if (target.directAdmission() != null && !superseded) {
                                 //  Release the registry attempt so a later admission
                                 //  for the same object does not try to abort an
                                 //  already-discarded stage, and so its parked queue

@@ -208,6 +208,10 @@ final class ZLinkActorJoinPrewarmRegistry {
                 () -> {
                     Attempt current = byRelocation.get(relocationId);
                     if (current != null) {
+                        // A successor parks ingress until its own staging sink is installed.
+                        if (current.hasTargetOwner() && current.terminal != terminal) {
+                            current.installedSink = null;
+                        }
                         current.terminal = terminal;
                         current.liveAbort = superseded;
                     }
@@ -289,9 +293,26 @@ final class ZLinkActorJoinPrewarmRegistry {
     }
 
     CompletionStage<Void> releaseAsync(UUID relocationId) {
+        return releaseAsync(relocationId, null);
+    }
+
+    CompletionStage<Void> releaseAsync(UUID relocationId, CompletionStage<Void> terminal) {
         return stateLane
-                .runAsync(() -> releaseOnLane(relocationId))
-                .thenAccept(parked -> finishRelease(relocationId, parked));
+                .runAsync(
+                        () -> {
+                            Attempt attempt = byRelocation.get(relocationId);
+                            if (terminal != null
+                                    && (attempt == null || attempt.terminal != terminal)) {
+                                return null;
+                            }
+                            return releaseOnLane(relocationId);
+                        })
+                .thenAccept(
+                        parked -> {
+                            if (terminal == null || parked != null) {
+                                finishRelease(relocationId, parked);
+                            }
+                        });
     }
 
     private void finishRelease(UUID relocationId, List<ParkedMessage> parked) {

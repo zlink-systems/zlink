@@ -200,6 +200,65 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     }
 
     @Test
+    void lateFirstAttemptCutoverDoesNotDiscardReplacementStage() {
+        Fixture fixture = fixture();
+        var first = fixture.request(new byte[] {1}, 1);
+        var second = fixture.request(new byte[] {1}, 2);
+        fixture.source()
+                .stage(fixture.targetRid(), first, Duration.ofSeconds(2), STAGE_DEADLINE)
+                .toCompletableFuture()
+                .join();
+        var oldPrepare = fixture.sentPrepare().get();
+
+        fixture.source()
+                .stage(fixture.targetRid(), second, Duration.ofSeconds(2), STAGE_DEADLINE)
+                .toCompletableFuture()
+                .join();
+
+        fixture.source()
+                .relay(
+                        fixture.targetRid(),
+                        second.fence(),
+                        new byte[] {1, 2, 3},
+                        Duration.ofSeconds(2))
+                .toCompletableFuture()
+                .join();
+        fixture.target()
+                .apply(
+                        fixture.sourceRid(),
+                        ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
+                        ZLinkCanonicalRelocationProtocol.encodeCutover(
+                                new ZLinkCanonicalRelocationProtocol.Cutover(
+                                        oldPrepare.id(),
+                                        oldPrepare.targetAttemptGeneration(),
+                                        oldPrepare.coordinator(),
+                                        ZLinkCanonicalRelocationProtocol.SOURCE,
+                                        oldPrepare.object(),
+                                        0,
+                                        0)))
+                .toCompletableFuture()
+                .join();
+        assertEquals(1, fixture.endpoint().aborted.get());
+        assertEquals(1, fixture.endpoint().abortedAtLastStage);
+        assertEquals(second.fence(), fixture.endpoint().lastStaged.get().fence());
+        assertEquals(0, fixture.endpoint().published.get());
+        fixture.source()
+                .publish(fixture.targetRid(), second.fence(), Duration.ofSeconds(2))
+                .toCompletableFuture()
+                .join();
+        assertEquals(1, fixture.endpoint().relayed.get());
+        assertEquals(1, fixture.endpoint().published.get());
+        var authority =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        fixture.locations()
+                                .read(fixture.authorityKey(), OPEN)
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(fixture.targetOwner().ownerId(), authority.ownerId());
+    }
+
+    @Test
     void directJoinRetryAttemptTwoAbortsGenerationOnePreparedFence() {
         Fixture fixture = fixture();
         var first = fixture.request(new byte[] {1}, 1);
@@ -347,7 +406,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         CountingEndpoint endpoint =
                 new CountingEndpoint() {
                     @Override
-                    public CompletionStage<Void> endPrepare(UUID relocationId) {
+                    public CompletionStage<Void> endPrepare(
+                            UUID relocationId, CompletionStage<Void> terminal) {
                         cleanupEntered.complete(null);
                         return cleanup;
                     }
@@ -2222,10 +2282,12 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         private final AtomicReference<ZLinkSpotRetireControl.StageRequest> lastStaged =
                 new AtomicReference<>();
         private Runnable onPublish;
+        private int abortedAtLastStage;
 
         @Override
         public CompletionStage<Void> stage(ZLinkSpotRetireControl.StageRequest request) {
             staged.incrementAndGet();
+            abortedAtLastStage = aborted.get();
             lastStaged.set(request);
             return CompletableFuture.completedFuture(null);
         }

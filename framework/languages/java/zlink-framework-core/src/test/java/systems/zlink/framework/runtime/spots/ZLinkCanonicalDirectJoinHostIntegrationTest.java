@@ -523,8 +523,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         }
 
                         @Override
-                        public CompletionStage<Void> endPrepare(UUID id) {
-                            return endpoint.endPrepare(id);
+                        public CompletionStage<Void> endPrepare(
+                                UUID id, CompletionStage<Void> terminal) {
+                            return endpoint.endPrepare(id, terminal);
                         }
 
                         @Override
@@ -594,6 +595,12 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         public CompletionStage<Void> abort(
                                 ZLinkSpotRetireControl.StageRequest request) {
                             return endpoint.abort(request);
+                        }
+
+                        @Override
+                        public CompletionStage<Void> abortSuperseded(
+                                ZLinkSpotRetireControl.StageRequest request) {
+                            return endpoint.abortSuperseded(request);
                         }
                     };
             var targetMachine =

@@ -86,7 +86,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -475,37 +474,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     CompletionStage<Boolean> isActorRelocationDisabled(String actorId) {
         return actorRegistry.actorTypeAsync(actorId).thenApply(actorRelocationDisabled::test);
-    }
-
-    CompletionStage<ZLinkDirectJoinRelocation.Manifest> prepareDeferredJoinRelocation(
-            UUID relocationId,
-            ZLinkActorJoinOperationId operationId,
-            ZLinkBackendActorRef actor,
-            String actorType,
-            String targetSpotId,
-            RoutingId targetNodeRid,
-            boolean restoreSnapshot,
-            byte[] applicationState,
-            List<ZLinkSerialExecutionQueue.QueuedRecord> acceptedJournal,
-            byte[] rawReply) {
-        ZLinkDirectJoinRelocation relocation = directJoinRelocation;
-        if (relocation == null) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "cross-node deferred Actor Join requires Location and Relocation"
-                                    + " Stores"));
-        }
-        return relocation.prepareRelocation(
-                relocationId,
-                operationId,
-                actor,
-                actorType,
-                targetSpotId,
-                targetNodeRid,
-                restoreSnapshot,
-                applicationState,
-                acceptedJournal,
-                rawReply);
     }
 
     public CompletionStage<ZLinkDirectJoinRelocationAuthority.CommittedActorTenure>

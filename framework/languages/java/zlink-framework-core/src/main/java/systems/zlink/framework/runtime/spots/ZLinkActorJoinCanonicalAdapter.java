@@ -353,8 +353,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return prewarm.begin(relocationId, terminal, superseded);
     }
 
-    CompletionStage<Void> endTarget(UUID relocationId) {
-        return prewarm.releaseAsync(relocationId);
+    CompletionStage<Void> endTarget(UUID relocationId, CompletionStage<Void> terminal) {
+        return prewarm.releaseAsync(relocationId, terminal);
     }
 
     /**

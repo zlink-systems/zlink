@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.actors;
 
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
@@ -33,40 +32,6 @@ final class ZLinkDirectJoinRelocation {
         this.relocationAuthority =
                 new ZLinkDirectJoinRelocationAuthority(
                         Objects.requireNonNull(authority, "authority"));
-    }
-
-    CompletionStage<Manifest> prepareRelocation(
-            UUID relocationId,
-            ZLinkActorJoinOperationId operationId,
-            ZLinkBackendActorRef actor,
-            String actorType,
-            String targetSpotId,
-            RoutingId targetNodeRid,
-            boolean restoreSnapshot,
-            byte[] applicationState,
-            List<ZLinkSerialExecutionQueue.QueuedRecord> acceptedJournal,
-            byte[] rawReply) {
-        return relocationAuthority
-                .prepareRelocation(
-                        relocationId,
-                        actor,
-                        actorType,
-                        targetSpotId,
-                        targetNodeRid,
-                        restoreSnapshot,
-                        applicationState,
-                        acceptedJournal)
-                .thenApply(
-                        value ->
-                                new Manifest(
-                                        value.root(),
-                                        value.checksumCrc32c(),
-                                        operationId.high(),
-                                        operationId.low(),
-                                        value.fence().aggregateId().getMostSignificantBits(),
-                                        value.fence().aggregateId().getLeastSignificantBits(),
-                                        value.fence().aggregateGeneration(),
-                                        rawReply));
     }
 
     CompletionStage<ZLinkDirectJoinRelocationAuthority.CommittedActorTenure> commitPrepared(
