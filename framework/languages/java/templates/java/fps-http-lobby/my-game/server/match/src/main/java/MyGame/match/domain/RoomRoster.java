@@ -23,7 +23,8 @@ public final class RoomRoster {
                 || new HashSet<>(request.members()).size() != request.members().size())
             throw new IllegalArgumentException("Invalid room roster preparation");
         if (matchId != null) {
-            if (!matchId.equals(request.matchId()) || !members.equals(new HashSet<>(request.members())))
+            if (!matchId.equals(request.matchId())
+                    || !members.equals(new HashSet<>(request.members())))
                 throw new IllegalStateException("A prepared Room roster cannot be replaced");
             return new RoomPrepared(matchId);
         }
@@ -41,7 +42,8 @@ public final class RoomRoster {
     }
 
     public void restore(RosterSnapshot snapshot) {
-        if (matchId != null) throw new IllegalStateException("Cannot restore an already prepared Room roster");
+        if (matchId != null)
+            throw new IllegalStateException("Cannot restore an already prepared Room roster");
         if (snapshot == null || snapshot.members() == null)
             throw new IllegalArgumentException("Invalid Room roster snapshot");
         if (snapshot.matchId() != null)

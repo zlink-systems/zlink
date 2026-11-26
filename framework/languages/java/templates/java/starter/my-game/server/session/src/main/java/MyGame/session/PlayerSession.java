@@ -17,10 +17,12 @@ public final class PlayerSession implements ZLinkSession {
     }
 
     public CompletionStage<Void> onConnected() {
+        System.out.println("Client connected");
         return CompletableFuture.completedFuture(null);
     }
 
     public CompletionStage<Void> onDisconnected() {
+        System.out.println("Client disconnected");
         return CompletableFuture.completedFuture(null);
     }
 

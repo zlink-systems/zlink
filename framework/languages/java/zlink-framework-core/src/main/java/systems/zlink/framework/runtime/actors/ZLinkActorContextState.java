@@ -293,13 +293,6 @@ final class ZLinkActorContextState {
                 && Objects.equals(route.sessionRid(), sourceSessionRid);
     }
 
-    CompletionStage<Boolean> sendBoundSessionFrame(byte[] frameBytes) {
-        if (boundSession instanceof ZLinkNativeBoundSessionRuntime runtime) {
-            return runtime.sendFrame(frameBytes).thenApply(ignored -> true);
-        }
-        return CompletableFuture.completedFuture(false);
-    }
-
     CompletionStage<Void> disconnectBoundSessionForDestroy() {
         if (boundSession instanceof ZLinkSessionBoundSession current) {
             return current.disconnectForDestroy();
