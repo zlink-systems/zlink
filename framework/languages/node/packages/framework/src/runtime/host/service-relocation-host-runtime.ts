@@ -2366,7 +2366,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         return {
           boundSessionState: Buffer.alloc(0),
           queuedMessages: [],
-          timers: spotCapture.timers.map(toServiceTimer)
+          timers: []
         };
       },
       // PerActor User Spots are stateless shells. Application state and the

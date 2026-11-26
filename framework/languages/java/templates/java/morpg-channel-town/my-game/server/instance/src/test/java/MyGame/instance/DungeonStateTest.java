@@ -44,7 +44,11 @@ class DungeonStateTest {
                 Rules.RUN_MISMATCH,
                 state.prepare(
                         dungeonId,
-                        new PrepareDungeon("run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PARTY_ID, "town-2", initial.members())));
+                        new PrepareDungeon(
+                                "run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                PARTY_ID,
+                                "town-2",
+                                initial.members())));
         assertEquals(
                 Rules.RUN_MISMATCH,
                 state.prepare(

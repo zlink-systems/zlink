@@ -1154,6 +1154,117 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         };
     }
 
+    internal async ValueTask<bool> PublishClosingAsync(
+        ZLinkActorRuntimeState actor,
+        ZLinkBackendActorRef actorRef
+    )
+    {
+        var actorId = actor.RuntimeActorId;
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value);
+        var tracked = await _lane
+            .RunAsync(() => _actors.GetValueOrDefault(actorId))
+            .ConfigureAwait(false);
+        if (tracked is null)
+        {
+            if (
+                await runtime.Store.ReadAuthorityAsync(key).ConfigureAwait(false)
+                is ZLinkAuthorityReadResult.Missing
+            )
+                return false;
+            throw DestroyAuthorityChanged(actorId);
+        }
+
+        await tracked.WriteGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var snapshot = await _lane
+                .RunAsync(() =>
+                    _actors.GetValueOrDefault(actorId) == tracked ? tracked.Snapshot : null
+                )
+                .ConfigureAwait(false);
+            if (
+                snapshot is null
+                || snapshot.ObjectGeneration != actorRef.Generation
+                || tracked.Payload.NodeRid != actorRef.NodeRid
+                || snapshot.Relocation is not null
+            )
+                throw DestroyAuthorityChanged(actorId);
+            if (ZLinkActorAuthorityPayloadCodec.IsClosing(snapshot))
+                return true;
+            if (!ZLinkActorAuthorityPayloadCodec.IsSteadyReady(snapshot.Payload.Span))
+                throw DestroyAuthorityChanged(actorId);
+
+            var payload = tracked.Payload with { State = ZLinkActorAuthorityState.Closing };
+            var encoded = ZLinkActorAuthorityPayloadCodec.Encode(payload);
+            ZLinkAuthorityCompareExchangeResult exchanged;
+            try
+            {
+                exchanged = await runtime
+                    .Store.CompareExchangeAuthorityAsync(
+                        key,
+                        snapshot.StoreVersion,
+                        new ZLinkAuthorityMutation.Put(
+                            encoded,
+                            ZLinkAuthorityGenerationTransition.Preserve,
+                            null,
+                            null
+                        ),
+                        CancellationToken.None
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (ZLinkFrameworkException failure)
+                when (failure.Kind == ZLinkFrameworkErrorKind.Unavailable)
+            {
+                var read = await runtime.Store.ReadAuthorityAsync(key).ConfigureAwait(false);
+                if (
+                    read is not ZLinkAuthorityReadResult.Found found
+                    || !IsPublishedClosing(found.Snapshot)
+                )
+                    throw;
+                exchanged = new ZLinkAuthorityCompareExchangeResult.Stored(found.Snapshot);
+            }
+            var closing = exchanged switch
+            {
+                ZLinkAuthorityCompareExchangeResult.Stored stored => stored.Snapshot,
+                ZLinkAuthorityCompareExchangeResult.Conflict
+                {
+                    Current: ZLinkAuthorityReadResult.Found found
+                } when IsPublishedClosing(found.Snapshot) => found.Snapshot,
+                _ => throw DestroyAuthorityChanged(actorId),
+            };
+
+            await _lane
+                .RunAsync(() =>
+                {
+                    tracked.Payload = payload;
+                    tracked.Snapshot = closing;
+                })
+                .ConfigureAwait(false);
+            return true;
+
+            bool IsPublishedClosing(ZLinkAuthoritySnapshot observed) =>
+                observed.StoreVersion != snapshot.StoreVersion
+                && observed.ObjectGeneration == snapshot.ObjectGeneration
+                && observed.AuthorityOwnerGeneration == snapshot.AuthorityOwnerGeneration
+                && observed.OwnerId == snapshot.OwnerId
+                && observed.OwnerLeaseGeneration == snapshot.OwnerLeaseGeneration
+                && observed.Allocation == snapshot.Allocation
+                && observed.Relocation is null
+                && observed.Payload.Span.SequenceEqual(encoded);
+        }
+        finally
+        {
+            tracked.WriteGate.Release();
+        }
+    }
+
+    private static ZLinkFrameworkException DestroyAuthorityChanged(ZLinkActorId actorId) =>
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            $"Actor '{actorId}' authority changed before destroy."
+        );
+
     public async ValueTask ReleaseActorAsync(
         ZLinkActorId actorId,
         CancellationToken cancellationToken = default
@@ -1789,7 +1900,8 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 )
                 .ConfigureAwait(false);
             var transferred =
-                result
+                tracked.Payload.State != ZLinkActorAuthorityState.Closing
+                && result
                     is ZLinkAuthorityCompareExchangeResult.Conflict
                     {
                         Current: ZLinkAuthorityReadResult.Found transferredRead

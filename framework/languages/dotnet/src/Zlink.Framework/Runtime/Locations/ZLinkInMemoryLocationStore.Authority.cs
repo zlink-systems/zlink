@@ -843,10 +843,11 @@ internal sealed partial class ZLinkInMemoryLocationStore
         bool discarded = false
     )
     {
+        var actorClosing = ZLinkActorAuthorityPayloadCodec.IsClosing(current);
         if (
             (
                 current.Allocation.State == ZLinkPlacementAllocationState.Active
-                    ? creationTarget is null && !discarded
+                    ? creationTarget is null && !discarded && !actorClosing
                     : current.ReservedCreation is null
             ) || IsAuthorityInPreparedAggregate(key)
         )
@@ -868,7 +869,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
         {
             if (ownerLive)
                 return false;
-            if (!discarded && creationTarget is { } target)
+            if (!discarded && !actorClosing && creationTarget is { } target)
                 ZLinkAuthorityCleanup.RequireDisabledCreationPolicy(
                     key,
                     current.Allocation,
@@ -885,7 +886,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
         )
             return false;
         List<KeyValuePair<string, ZLinkAuthoritySnapshot>> members = [];
-        var endedUserSpotId = active ? ZLinkAuthorityCleanup.RequireSteadyReady(current) : null;
+        var endedUserSpotId = active
+            ? ZLinkAuthorityCleanup.RequireReclaimableAuthority(current)
+            : null;
         if (active && !ownerLive)
             _ownerLeaseReleaseWait.Observe(owner);
         if (endedUserSpotId is not null && !discarded && creationTarget is { } spotTarget)

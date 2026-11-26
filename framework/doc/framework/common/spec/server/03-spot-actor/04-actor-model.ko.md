@@ -506,6 +506,13 @@ Framework는 다음 순서로 destroy를 진행한다.
 
 Framework는 current `ActorRef`를 다시 찾아 새 incarnation을 종료하지 않는다.
 
+**Actor가 자신의 handler turn에서 자기 destroy를 호출하면, 그 incarnation의 종료 요청이 수락된 시점(1단계의
+`Closing` CAS 성공)에 반환한다.** 남은 2~4단계는 그 turn이 끝난 뒤 owner가 진행한다. 같은 turn이 자기 turn의
+종료를 기다리는 순환을 막기 위해서다. 2~4단계의 성공·실패는 owner가 그 incarnation의 destroy terminal에
+확정하고, 같은 incarnation에 대한 이후 destroy 호출은 위 표대로 그 terminal에 합류해 결과를 받는다. 남은
+단계가 실패해도 authority는 `Closing`으로 남아 새 작업을 받지 않으며, record 해제는
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)이 정한다.
+
 Destroy는 Actor의 owner node만 실행한다. Owner가 아닌 node에서 destroy를 호출하면 그 node는
 authority record가 가리키는 owner에게 command 27 `actorDestroy`
 ([wire command 표](../02-channel-transport/06-wire-protocol.ko.md#3-command-space))를 보낸다.

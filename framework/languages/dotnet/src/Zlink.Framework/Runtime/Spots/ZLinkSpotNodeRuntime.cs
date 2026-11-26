@@ -28,8 +28,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     private Task? _disposeTask;
     private IDisposable? _manualConnectionAttachment;
     private bool _stopSourceDisposed;
-    private IActorCreateOperationTarget? _actorCreateOperationTarget;
-    private IActorDestroyOperationTarget? _actorDestroyOperationTarget;
+    private ZLinkActorOperationTarget? _actorOperationTarget;
     private ZLinkInstanceSpotActivationTarget? _instanceSpotActivationTarget;
     private IUserSpotOperationTarget? _userSpotOperationTarget;
     private IRelocationReplyRelayTarget? _relocationReplyRelayTarget;
@@ -288,7 +287,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             && frameworkRegistration.Locations.ResolveStore() is { } actorAuthorityStore
         )
         {
-            var actorOperationTarget = new ZLinkActorOperationTarget(
+            _actorOperationTarget = new ZLinkActorOperationTarget(
                 actorAuthorityStore,
                 runtime,
                 node,
@@ -296,10 +295,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 registration,
                 frameworkRegistration.Codecs
             );
-            _actorCreateOperationTarget = actorOperationTarget;
-            _actorDestroyOperationTarget = actorOperationTarget;
-            node.SetActorCreateOperationTarget(_actorCreateOperationTarget);
-            node.SetActorDestroyOperationTarget(_actorDestroyOperationTarget);
+            node.SetActorCreateOperationTarget(_actorOperationTarget);
+            node.SetActorDestroyOperationTarget(_actorOperationTarget);
         }
         if (
             registration.InstanceSpotFactories.Count > 0
@@ -538,7 +535,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     )
     {
         var target =
-            _actorCreateOperationTarget
+            _actorOperationTarget
             ?? throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"MeshNode '{Name}' does not host Actor factories."
@@ -597,16 +594,17 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
     internal ValueTask<ActorDestroyOperationTerminal> DestroyActorLocalAsync(
         ActorDestroyOperation operation,
+        ZLinkAuthoritySnapshot snapshot,
         CancellationToken cancellationToken
     )
     {
         var target =
-            _actorDestroyOperationTarget
+            _actorOperationTarget
             ?? throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"MeshNode '{Name}' does not host Actor factories."
             );
-        return target.DestroyAsync(operation, cancellationToken);
+        return target.DestroyObservedAsync(operation, snapshot, cancellationToken);
     }
 
     internal bool UsesManualRouterAcquisition =>

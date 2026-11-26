@@ -4,9 +4,9 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load the balance once before the first admission or match request. Use the Actor or Spot state for gameplay requests.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
-- While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
+- While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot sends one `CommitRound` with all seat balances to the API node. Publish results after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
 - Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
@@ -23,7 +23,7 @@ Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/dot
 
 ## Project overview
 
-This C#/.NET 8 project is a board table server example in which players sit at a shared Table and play hands against each other. It runs a Session gateway for connections, Table hosts A and B, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.34.1`.
+This C#/.NET 8 project is a board table server example in which players sit at a shared Table and play hands against each other. It runs a Session gateway for connections, Table hosts A and B, a matchmaker node for the Pool, an API node for player records, and Redis. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.34.1`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -33,12 +33,12 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 Run one scenario with `./run-e2e.sh --scenario reconnect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
 
-Default builds and e2e run nodes and the client in Docker without a host SDK. Run these commands from this directory.
+Default builds and e2e run nodes and the client in Docker without a host SDK. Run these commands from this directory. Start the foreground server with `./run-server.sh` or `.\run-server.cmd`. A scenario run in a second terminal attaches after `Server ready`. Ctrl+C stops the server and clears `.logs/server.json`.
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,match,match-cancel,persist,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -47,7 +47,7 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,persist,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -61,9 +61,15 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 
 ### Entry and tables
 
-An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Table/PlayerActor.cs` holds only the player's identity and the bound Session, with no game state. A Spot is a state object that accepts Actors and executes shared game rules; `TableSpot` in `server/MyGame.Table/TableSpot.cs` owns seats, chips, the deck, cards, turns, and the pot, and decides admission in `OnActorJoinAsync`. Game rules and settlement belong in `TableSpot`, not in the Actor.
+An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Table/PlayerActor.cs` holds the player's bound Session, loaded balance, and matchmaking progress. The relocation adapter preserves Actor state. A Spot is a state object that accepts Actors and executes shared game rules; `TableSpot` in `server/MyGame.Table/TableSpot.cs` owns seats, chips, the deck, cards, turns, and the pot, and decides admission in `OnActorJoinAsync`. Game rules and settlement belong in `TableSpot`, not in the Actor.
 
-`server/MyGame.Table/Program.cs` registers the Entry Spot, the Actor factory, and the Table factory. `server/MyGame.Table/TableEntry.cs` receives the first packet and joins the Actor to a Table, and `server/MyGame.Table/Handlers.cs` holds the Table handlers and the delivery handlers that forward pushes to the client. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
+`server/MyGame.Table/Program.cs` registers the Entry Spot and factories for Player Actors, Tables, and the `RoomProvisioner` Instance Spot. `server/MyGame.Table/TableEntry.cs` receives the first packet and joins the Actor to a Table, and `server/MyGame.Table/Handlers.cs` holds the Table handlers and the delivery handlers that forward pushes to the client. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
+
+### Matchmaker and API node
+
+`server/MyGame.Matchmaker/PoolSpot.cs` owns the matchmaking queue and offers an assignment after the `RoomProvisioner` answers `PrepareRoom` with `RoomPrepared`. Keep ticket decisions in the Pool and seat decisions in the Table.
+
+`server/MyGame.Api/RedisPlayerRecords.cs` loads player balances and atomically writes each round with its idempotency marker. Play nodes discover the API through the shared Location Store and call it over `my-game-player-records`. The capability port and channel adapter are in `server/MyGame.Table/PlayerRecords.cs`.
 
 ### Shared contracts and hosting
 
@@ -71,13 +77,13 @@ An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame
 
 ### E2E client
 
-`e2e/MyGame.E2E/GameClient.cs` connects through the public connector, and `e2e/MyGame.E2E/Scenarios.cs` checks results observable by the client. `e2e/MyGame.E2E/TableRun.cs` manages processes and infrastructure for each run, while `e2e/MyGame.E2E/StructureCheck.cs` validates composition. Verify new gameplay through received client results; the project includes no separate unit-test project or formatter configuration.
+`e2e/MyGame.E2E/GameClient.cs` connects through the public connector, and `e2e/MyGame.E2E/Scenarios.cs` checks results observable by the client. `e2e/MyGame.E2E/TableRun.cs` manages processes and infrastructure for each run, while `e2e/MyGame.E2E/StructureCheck.cs` validates composition. Verify new gameplay through received client results; use the [C# formatting procedure](README.md#c-formatting) before submitting changes.
 
 ## ZLink concepts in this project
 
 ### RouteMesh
 
-A RouteMesh connects nodes that exchange messages between processes; this project uses `GameNames.WorldMesh`. The project registers no application channels, so `channels` in `zlink.structure.json` is empty. [Channel messaging](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/) describes registration and calls.
+A RouteMesh connects nodes that exchange messages between processes; this project uses `GameNames.WorldMesh`. The API serves `my-game-player-records` as a client-server channel and play nodes connect as clients. [Channel messaging](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/) describes registration and calls.
 
 ### Spots and Actors
 
@@ -103,10 +109,10 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
-1. The client connects to the Session node over STREAM and sends the first packet, `JoinTableRequest`. `PlayerSession` checks the first packet type, calls `GetOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
-2. A new Actor starts in the Entry Spot `TableEntry`. `EnterTableHandler` checks the identity. For first entry, it calls `GetOrCreate` for the Table, and requests `JoinSpot(...).Defer()`. Entry rejects a reconnect with `not-seated`.
+1. For direct entry, the client connects to the Session node over STREAM and sends `JoinTableRequest`. `PlayerSession` checks the first packet type, calls `GetOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
+2. A new Actor starts in the Entry Spot `TableEntry`. `EnterTableHandler` checks the identity. For first entry, it calls `GetOrCreate` for the Table and asks the Actor to load its balance and submit `JoinSpot(...).Defer()`. Entry rejects a reconnect with `not-seated`.
 3. `TableSpot.OnActorJoinAsync` assigns a seat or rejects a full table. `OnJoinedActorAsync` sends `TableView` to every seated player by player ID, and `TableViewDelivery` forwards it through each Actor's bound Session. A rejected join reaches the client as `ActionRejected` from `PlayerActor.OnJoinCompletedAsync`.
-4. `StartHandRequest` and `BetRequest` reach the Table's handlers (`StartHandler`, `BetHandler`). Rejections go through the requester's bound Session; deals, views, and the `HandResult` settlement go to each player by player ID and are forwarded by the delivery handlers.
+4. `StartHandRequest` and `BetRequest` reach the Table's handlers (`StartHandler`, `BetHandler`). Rejections go through the requester's bound Session; deals and views go to each player by ID. The Table sends `HandResult` after the API confirms `CommitRound`. Delivery handlers forward these messages to the bound Sessions.
 5. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `ReconnectHandler` checks the identity and resends the current table state and the player's own cards.
 6. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the table state from `TableRelocation` and restores it on another node.
 
@@ -137,7 +143,7 @@ To rename roles such as Table, update the type names, `GameNames`, `server/confi
 
 Use public NuGet packages at the centrally pinned versions, and keep project references between this project's own modules. Process typed messages with the default Framework JSON serializer so processes use the same contract. Limit direct serialization in relocation adapters to application state, keeping management of Framework execution state separate from game state.
 
-Manage each game fact in the object responsible for changing it. Seats, chips, cards, the turn, and the pot belong to `TableSpot`; `PlayerActor` holds only identity and the binding. Send to the player ID of a Table seat, and keep no copy of Actor references. Deliver replies inside a request handler through the `BoundSession` of the Actor the handler receives, and deliver other pushes by player ID through the public Actor client to a delivery handler that forwards them to the bound Session. Sessions forward packets after authentication and binding; the Table decides game outcomes.
+Manage each game fact in the object responsible for changing it. Seats, chips, cards, the turn, and the pot belong to `TableSpot`; `PlayerActor` carries the last committed balance for admission and updates it from the settlement the Table sends. Send to the player ID of a Table seat, and keep no copy of Actor references. Deliver replies inside a request handler through the `BoundSession` of the Actor the handler receives, and deliver other pushes by player ID through the public Actor client to a delivery handler that forwards them to the bound Session. Sessions forward packets after authentication and binding; the Table decides game outcomes.
 
 ### Asynchronous execution and lifecycle
 

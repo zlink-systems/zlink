@@ -18,12 +18,14 @@ public final class EntryActions {
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationPlayerView(Entry spot, Player actor, ZLinkMessageContext context, PlayerView message) {
+    public CompletionStage<Void> notificationPlayerView(
+            Entry spot, Player actor, ZLinkMessageContext context, PlayerView message) {
         return actor.deliver(message);
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationChannelView(Entry spot, Player actor, ZLinkMessageContext context, ChannelView message) {
+    public CompletionStage<Void> notificationChannelView(
+            Entry spot, Player actor, ZLinkMessageContext context, ChannelView message) {
         return actor.deliver(message);
     }
 }

@@ -88,6 +88,9 @@ class Client(endpoint: String, val playerId: String) {
         return next<DungeonView>()
     }
 
+    suspend fun leaveDungeon(): DungeonLeft =
+        connector.kotlin().request<DungeonLeft>(LeaveDungeonRequest()).await()
+
     suspend fun sessionInfo(): SessionInfo =
         connector.kotlin().request<SessionInfo>(SessionInfoRequest()).await()
 
@@ -98,7 +101,8 @@ class Client(endpoint: String, val playerId: String) {
         registrations.forEach { it.close() }
     }
 
-    inline fun <reified T> next(noinline predicate: (T) -> Boolean = { true }): T = next(T::class.java, predicate)
+    inline fun <reified T> next(noinline predicate: (T) -> Boolean = { true }): T =
+        next(T::class.java, predicate)
 
     fun <T> next(type: Class<T>, predicate: (T) -> Boolean = { true }): T {
         val expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(MESSAGE_SECONDS)

@@ -27,6 +27,10 @@ int main (int argc, char **argv)
         verify_node_request_submit_cost ();
         return 0;
     }
+    if (argc == 2 && std::string_view (argv[1]) == "--application-ingress-after-local-admit") {
+        verify_application_ingress_after_local_admit ();
+        return 0;
+    }
     verify_node_request_submit_cost ();
     verify_node_send_forwarding_allocations ();
     if (argc == 2 && std::string_view (argv[1]) == "--send-forwarding-allocations")
@@ -122,6 +126,7 @@ int main (int argc, char **argv)
         return 0;
     }
     verify_request_submission_results ();
+    verify_application_ingress_after_local_admit ();
     verify_unadmitted_route (false);
     verify_unadmitted_route (true);
     verify_prepare_does_not_replay_on_selected_route ();
