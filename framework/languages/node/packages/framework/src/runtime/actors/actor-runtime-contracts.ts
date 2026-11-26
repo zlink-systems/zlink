@@ -83,6 +83,7 @@ export interface ZLinkActorManagerOptions {
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly admission?: ZLinkRuntimeAdmissionGate;
   readonly activationAdmission?: ZLinkActivationAdmission;
+  readonly remoteDestroy?: (actor: ActorRef, signal?: AbortSignal) => Promise<boolean>;
   readonly placementCreate?: (
     actorId: string,
     actorType: string,

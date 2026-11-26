@@ -2353,11 +2353,28 @@ export class ZLinkFrameworkRuntimeHost
     | 'admission'
     | 'activationAdmission'
     | 'placementCreate'
+    | 'remoteDestroy'
   > {
     this.ensureLocationRuntime();
     return {
       ...this.actorRuntimeOptionsFactory().createActorManagerOptions(),
       activationAdmission: this.activationAdmission,
+      remoteDestroy: async (actor, signal) =>
+        (await this.actorPlacement?.destroy(
+          actor,
+          this.options.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+          async (meshName, fence) => {
+            const node = this.spotNodeRuntime?.meshNode(meshName);
+            if (node === undefined) {
+              throw createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+                `Actor '${actor.actorId}' owner route is unavailable.`
+              );
+            }
+            await node.sendActorDestroy(fence);
+          },
+          signal
+        )) ?? false,
       placementCreate: async (actorId, actorType, createOnly, call, signal) => {
         const placement = this.actorPlacement;
         if (placement === undefined) {
@@ -2739,6 +2756,15 @@ export class ZLinkFrameworkRuntimeHost
               },
               ...(payload === undefined ? {} : { payload })
             };
+          },
+          destroyActor: (fence) => {
+            const actors = this.actorManager;
+            const completions = runtime.meshCompletionTable(meshName);
+            if (actors !== undefined && completions !== undefined) {
+              this.detachedTaskRunner().runDetached('Remote Actor destroy', () =>
+                actors.destroyOwnedActor(fence, node, completions)
+              );
+            }
           },
           createActor: async (record, signal) => {
             const actorPlacement = this.actorPlacement;
