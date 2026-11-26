@@ -180,9 +180,9 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
     // The port's existing state lane and close claim serialize producers with disposal.
     // Do not acquire this monitor: the receive owner holds it during native wait.
     void signal() {
-        if (!closed && wakeTimer != null && scheduledManagementDeadline != null) {
-            scheduledManagementDeadline = null;
+        if (!closed && wakeTimer != null) {
             wakeTimer.start(WAKE_INTERVAL, WAKE_FIRE_COUNT);
+            scheduledManagementDeadline = null;
         }
     }
 
