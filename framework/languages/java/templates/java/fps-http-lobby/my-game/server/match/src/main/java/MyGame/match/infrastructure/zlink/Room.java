@@ -47,17 +47,20 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
+        System.out.println("Player entered Room " + context.spotId());
         return clients.sendToActor(actor.context().actorId(), new MatchFound(context.spotId()))
                 .submit()
                 .thenCompose(ignored -> broadcast(view()));
     }
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
+        System.out.println("Player left " + context.spotId());
         return CompletableFuture.completedFuture(null);
     }
 
     private RoomView view() {
-        return new RoomView(context.spotId(), config.id(), state.view(), state.phase(), state.winner());
+        return new RoomView(
+                context.spotId(), config.id(), state.view(), state.phase(), state.winner());
     }
 
     public CompletionStage<Void> current(Player actor) {
@@ -89,9 +92,13 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     private CompletionStage<Void> broadcast(Object message) {
+        if (message instanceof MatchEnded ended)
+            System.out.println("Match ended in " + context.spotId() + ", winner " + ended.winner());
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
         for (var player : state.players())
-            sends = sends.thenCompose(ignored -> clients.sendToActor(player.playerId(), message).submit());
+            sends =
+                    sends.thenCompose(
+                            ignored -> clients.sendToActor(player.playerId(), message).submit());
         return sends;
     }
 
@@ -100,7 +107,8 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     public byte[] capture() throws Exception {
-        return Json.MAPPER.writeValueAsBytes(new HttpRoomSnapshot(state.capture(), roster.capture()));
+        return Json.MAPPER.writeValueAsBytes(
+                new HttpRoomSnapshot(state.capture(), roster.capture()));
     }
 
     public void restore(byte[] payload) throws Exception {

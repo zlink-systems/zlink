@@ -13,7 +13,9 @@ import java.util.UUID;
 import java.util.concurrent.*;
 
 public final class Field implements ZLinkSpot<Player> {
-    public boolean isVisible(Player actor) { return state.visiblePlayers.containsKey(actor.context().actorId()); }
+    public boolean isVisible(Player actor) {
+        return state.visiblePlayers.containsKey(actor.context().actorId());
+    }
 
     private final ZLinkSpotContext context;
     private final ZLinkActorClient actors;
@@ -22,10 +24,7 @@ public final class Field implements ZLinkSpot<Player> {
     FieldState state = new FieldState();
     private final FieldPositionDomain positions;
 
-    public Field(
-            ZLinkSpotContext context,
-            ZLinkActorClient actors,
-            ZLinkSpotManager spots) {
+    public Field(ZLinkSpotContext context, ZLinkActorClient actors, ZLinkSpotManager spots) {
         this.spots = spots;
         this.context = context;
         this.actors = actors;
@@ -94,7 +93,8 @@ public final class Field implements ZLinkSpot<Player> {
         var result = positions.move(actor.context().actorId(), request);
         if (result.rejection() != null)
             return actor.context().boundSession().send(result.rejection()).submit();
-        var arrival = new EnterField(result.position().x(), result.sequence(), result.remainingMs());
+        var arrival =
+                new EnterField(result.position().x(), result.sequence(), result.remainingMs());
         if (result.relocates()) {
             actor.move(arrival);
             return CompletableFuture.completedFuture(null);
@@ -144,7 +144,8 @@ public final class Field implements ZLinkSpot<Player> {
 
     public CompletionStage<Void> party(Player actor, String partyId, boolean create) {
         if (actor.partyId() != null) return reject(actor, Rejection.INVALID_PARTY);
-        String partySpotId = create ? "party-" + UUID.randomUUID().toString().replace("-", "") : partyId;
+        String partySpotId =
+                create ? "party-" + UUID.randomUUID().toString().replace("-", "") : partyId;
         if (!PartyRun.validId(partySpotId, "party-")) return reject(actor, Rejection.INVALID_PARTY);
         if (create)
             return spots.getOrCreate(partySpotId, Names.PARTY)
@@ -175,21 +176,32 @@ public final class Field implements ZLinkSpot<Player> {
                         result ->
                                 result.rejection() == null
                                         ? CompletableFuture.completedFuture(null)
-                                        : actor.context().boundSession().send(result.rejection()).submit());
+                                        : actor.context()
+                                                .boundSession()
+                                                .send(result.rejection())
+                                                .submit());
     }
 
     public CompletionStage<Void> show(Player actor) {
         return actor.sendState()
                 .thenCompose(
                         ignored -> {
-                            if (actor.partyId() == null) return CompletableFuture.completedFuture(null);
+                            if (actor.partyId() == null)
+                                return CompletableFuture.completedFuture(null);
                             return context.outbound()
-                                    .requestToSpot(actor.partyId(), new PartyCommand(actor.context().actorId()))
+                                    .requestToSpot(
+                                            actor.partyId(),
+                                            new PartyCommand(actor.context().actorId()))
                                     .submit(PartyCommandResult.class)
                                     .thenCompose(
-                                            result -> result.view() == null
-                                                    ? CompletableFuture.completedFuture(null)
-                                                    : actor.context().boundSession().send(result.view()).submit());
+                                            result ->
+                                                    result.view() == null
+                                                            ? CompletableFuture.completedFuture(
+                                                                    null)
+                                                            : actor.context()
+                                                                    .boundSession()
+                                                                    .send(result.view())
+                                                                    .submit());
                         });
     }
 
@@ -200,7 +212,10 @@ public final class Field implements ZLinkSpot<Player> {
                 .thenCompose(
                         result -> {
                             if (result.rejection() != null)
-                                return actor.context().boundSession().send(result.rejection()).submit();
+                                return actor.context()
+                                        .boundSession()
+                                        .send(result.rejection())
+                                        .submit();
                             actor.setPartyId(partyId);
                             return CompletableFuture.completedFuture(null);
                         });
@@ -211,7 +226,8 @@ public final class Field implements ZLinkSpot<Player> {
     }
 
     public FieldSnapshot capture() {
-        return new FieldSnapshot(new java.util.LinkedHashMap<>(state.visiblePlayers), positions.capture());
+        return new FieldSnapshot(
+                new java.util.LinkedHashMap<>(state.visiblePlayers), positions.capture());
     }
 
     public void restore(FieldSnapshot snapshot) {

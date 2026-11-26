@@ -2966,7 +2966,19 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_location_runtime
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_destruction.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_auto_connect_publication.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_lease_heartbeat.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_lease_startup.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_auto_connect_worker.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_auto_connect_shutdown.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_outage_retention.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_outage_admission.cpp
+    tests/support/outage_recovery_fixture.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_outage_recovery.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_outage_owner_loss.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_outage_publication.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime_entry_spot_selection.cpp
     tests/support/allocation_counter.cpp)
   target_compile_features(test_cpp_framework_location_runtime PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_location_runtime)
@@ -2999,7 +3011,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-regression;framework-location"
     TIMEOUT 30)
   add_executable(test_cpp_framework_store_location_resolvers
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers_ready_routes.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers_actor_routing.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers_runtime_queries.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers_peer_publication.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers_user_spot_lifecycle.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers_user_spot_reclaim.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers_channel_discovery.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers_peer_reconciliation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers_stream_lifecycle.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers_resolver_execution.cpp
+    tests/support/store_location_resolver_repository_fixture.cpp)
   target_compile_features(test_cpp_framework_store_location_resolvers PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_store_location_resolvers)
   target_use_zlink_gtest_main(test_cpp_framework_store_location_resolvers)
@@ -3018,7 +3040,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
   add_executable(test_cpp_framework_spot_close_conformance
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance_preparation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance_callback_cause.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance_join_route.cpp
+    tests/support/spot_close_scenario_fixture.cpp
     # Keep the original GoogleTest registration order across translation units.
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_user_spot_creation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relay_admission.cpp
@@ -3362,6 +3388,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")
+  target_sources(test_cpp_framework_stream_framework PRIVATE
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework_dispatch.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework_listeners.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework_core_shutdown.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework_disconnect.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework_session_lifecycle.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework_binding.cpp
+    tests/support/stream_framework_native_fixture.cpp)
   if(ZLINK_FRAMEWORK_CPP_TEST_PROBES)
     zlink_framework_cpp_add_test(
       NAME test_cpp_framework_core_session_lifecycle_boundaries
@@ -3490,6 +3524,26 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
         TIMEOUT 30)
     endforeach()
   endforeach()
+  if(ZLINK_FRAMEWORK_CPP_TEST_PROBES)
+    add_executable(test_cpp_framework_stream_liveness_reader_expiry
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_liveness_reader_expiry.cpp)
+    zlink_framework_cpp_add_boost_headers(test_cpp_framework_stream_liveness_reader_expiry)
+    target_include_directories(test_cpp_framework_stream_liveness_reader_expiry PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_link_libraries(test_cpp_framework_stream_liveness_reader_expiry PRIVATE
+      zlink::framework opentelemetry-cpp::metrics)
+    foreach(_reader_transport IN ITEMS tcp websocket core)
+      foreach(_reader_frame IN ITEMS complete partial)
+        zlink_framework_cpp_add_test(
+          NAME test_cpp_framework_stream_liveness_reader_expiry_${_reader_transport}_${_reader_frame}
+          COMMAND test_cpp_framework_stream_liveness_reader_expiry ${_reader_transport} ${_reader_frame}
+          LABELS "framework-unit;framework-regression;stream;liveness"
+          TIER contract
+          TIMEOUT 30)
+      endforeach()
+    endforeach()
+  endif()
   add_zlink_framework_test(
     test_cpp_framework_poll_interval_wait
     tests/Zlink.Framework.UnitTests/test_cpp_framework_poll_interval_wait.cpp

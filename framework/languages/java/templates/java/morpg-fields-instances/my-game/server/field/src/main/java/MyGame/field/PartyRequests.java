@@ -1,6 +1,7 @@
 package MyGame.field;
 
 import MyGame.*;
+
 import systems.zlink.framework.handlers.ZLinkSpotRequest;
 
 import java.util.concurrent.CompletionStage;
@@ -12,7 +13,8 @@ public final class PartyRequests {
     }
 
     @ZLinkSpotRequest
-    public CompletionStage<PartyCommandResult> memberEntered(PartySpot spot, DungeonMemberEntered request) {
+    public CompletionStage<PartyCommandResult> memberEntered(
+            PartySpot spot, DungeonMemberEntered request) {
         return spot.progress(request.runId(), request.actorId(), false);
     }
 

@@ -12,12 +12,12 @@ object Scenarios {
     private const val CHANNEL_A2 = "channelA2"
     private const val CHANNEL_B = "channelB"
 
-    suspend fun run(scenario: Scenario, nodes: Nodes) {
+    suspend fun run(scenario: Scenario, target: ScenarioTarget) {
         when (scenario) {
-            Scenario.WORLDS -> worlds(nodes)
-            Scenario.CHANNEL -> channel(nodes)
-            Scenario.RECONNECT -> reconnect(nodes)
-            Scenario.UPDATE -> update(nodes)
+            Scenario.WORLDS -> worlds(target)
+            Scenario.CHANNEL -> channel(target)
+            Scenario.RECONNECT -> reconnect(target)
+            Scenario.UPDATE -> update(target)
         }
     }
 
@@ -41,11 +41,11 @@ object Scenarios {
         check(client.disconnects.get() == 0) { "Connection was interrupted" }
     }
 
-    private suspend fun worlds(n: Nodes) {
+    private suspend fun worlds(n: ScenarioTarget) {
         HttpClient.newHttpClient().use { http ->
             val reply =
                 http.send(
-                    HttpRequest.newBuilder(URI(n.accountsEndpoint + Names.WORLD_LIST_PATH))
+                    HttpRequest.newBuilder(URI(n.httpEndpoint + Names.WORLD_LIST_PATH))
                         .GET()
                         .build(),
                     HttpResponse.BodyHandlers.ofString(),
@@ -72,9 +72,9 @@ object Scenarios {
                 a.send(EarnRequest())
                 view(a, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
                 val rejected = a.rejection()
-                check(
-                    rejected.reason == Rejection.EARN_TOO_SOON && rejected.retryAfterMs > 0,
-                ) { "Early earn was not rejected with a retry delay" }
+                check(rejected.reason == Rejection.EARN_TOO_SOON && rejected.retryAfterMs > 0) {
+                    "Early earn was not rejected with a retry delay"
+                }
                 view(current(a), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
                 a.waitRetryAfter(rejected.retryAfterMs)
                 a.send(EarnRequest())
@@ -87,7 +87,7 @@ object Scenarios {
         }
     }
 
-    private suspend fun channel(n: Nodes) {
+    private suspend fun channel(n: ScenarioTarget) {
         val id = player()
         withClient(n.endpoints.getValue(Names.WORLD_A), id) { c ->
             withClient(n.endpoints.getValue(Names.WORLD_A), "$id-same") { same ->
@@ -103,50 +103,67 @@ object Scenarios {
                     val sameAtSelfMark = same.markChannelViews()
                     view(same.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0)
                     val expectedPair = setOf(c.playerId, same.playerId)
-                    val sameAtC = c.channelViewAfter(sameAtCMark) {
-                        it.channelId == Names.FIRST_CHANNEL && it.playerIds.toSet() == expectedPair
-                    }
-                    val sameAtSelf = same.channelViewAfter(sameAtSelfMark) {
-                        it.channelId == Names.FIRST_CHANNEL && it.playerIds.toSet() == expectedPair
-                    }
+                    val sameAtC =
+                        c.channelViewAfter(sameAtCMark) {
+                            it.channelId == Names.FIRST_CHANNEL &&
+                                it.playerIds.toSet() == expectedPair
+                        }
+                    val sameAtSelf =
+                        same.channelViewAfter(sameAtSelfMark) {
+                            it.channelId == Names.FIRST_CHANNEL &&
+                                it.playerIds.toSet() == expectedPair
+                        }
                     check(
                         sameAtC.playerIds.toSet() == expectedPair &&
-                            sameAtSelf.playerIds.toSet() == expectedPair,
-                ) { "Players in one Zone did not see the same player list" }
+                            sameAtSelf.playerIds.toSet() == expectedPair
+                    ) {
+                        "Players in one Zone did not see the same player list"
+                    }
 
                     val allAtCMark = c.markChannelViews()
                     val allAtSameMark = same.markChannelViews()
                     val allAtMovingMark = moving.markChannelViews()
                     view(moving.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0)
                     val expectedAll = setOf(c.playerId, same.playerId, moving.playerId)
-                    val allAtC = c.channelViewAfter(allAtCMark) {
-                        it.channelId == Names.FIRST_CHANNEL && it.playerIds.toSet() == expectedAll
-                    }
-                    val allAtSame = same.channelViewAfter(allAtSameMark) {
-                        it.channelId == Names.FIRST_CHANNEL && it.playerIds.toSet() == expectedAll
-                    }
+                    val allAtC =
+                        c.channelViewAfter(allAtCMark) {
+                            it.channelId == Names.FIRST_CHANNEL &&
+                                it.playerIds.toSet() == expectedAll
+                        }
+                    val allAtSame =
+                        same.channelViewAfter(allAtSameMark) {
+                            it.channelId == Names.FIRST_CHANNEL &&
+                                it.playerIds.toSet() == expectedAll
+                        }
                     moving.channelViewAfter(allAtMovingMark) {
                         it.channelId == Names.FIRST_CHANNEL && it.playerIds.toSet() == expectedAll
                     }
                     check(
                         allAtC.playerIds.toSet() == expectedAll &&
-                            allAtSame.playerIds.toSet() == expectedAll,
-                    ) { "Players in one Zone did not see each other" }
+                            allAtSame.playerIds.toSet() == expectedAll
+                    ) {
+                        "Players in one Zone did not see each other"
+                    }
 
                     c.send(ChangeChannelRequest(GameRules.MAX_INTEGER + 1))
                     val invalidChannel = c.rejection()
                     check(
                         invalidChannel.reason == Rejection.INTEGER_OUT_OF_RANGE &&
-                            invalidChannel.retryAfterMs == 0,
-                    ) { "Oversized channel request was not rejected" }
+                            invalidChannel.retryAfterMs == 0
+                    ) {
+                        "Oversized channel request was not rejected"
+                    }
                     check(c.channelView().playerIds.toSet() == expectedAll) {
                         "Oversized channel request changed membership"
                     }
                     c.send(PlayerView())
                     val internal = c.rejection()
                     check(
-                        internal.reason == Rejection.PACKET_NOT_ALLOWED && internal.retryAfterMs == 0,
-                    ) { "Session forwarded an internal packet" }
+                        internal.reason == Rejection.PACKET_NOT_ALLOWED &&
+                            internal.retryAfterMs == 0
+                    ) {
+                        "Session forwarded an internal packet"
+                    }
 
                     val identity = c.sessionInfo()
                     val oldAtCMark = c.markChannelViews()
@@ -154,26 +171,35 @@ object Scenarios {
                     val destinationMark = moving.markChannelViews()
                     moving.send(ChangeChannelRequest(CHANNEL_TWO))
                     view(moving, Names.WORLD_A, CHANNEL_TWO, CHANNEL_A2, 0)
-                    val oldAtC = c.channelViewAfter(oldAtCMark) {
-                        it.channelId == Names.FIRST_CHANNEL && it.playerIds.toSet() == expectedPair
-                    }
-                    val oldAtSame = same.channelViewAfter(oldAtSameMark) {
-                        it.channelId == Names.FIRST_CHANNEL && it.playerIds.toSet() == expectedPair
-                    }
-                    val movedView = moving.channelViewAfter(destinationMark) {
-                        it.channelId == CHANNEL_TWO && it.playerIds == listOf(moving.playerId)
-                    }
+                    val oldAtC =
+                        c.channelViewAfter(oldAtCMark) {
+                            it.channelId == Names.FIRST_CHANNEL &&
+                                it.playerIds.toSet() == expectedPair
+                        }
+                    val oldAtSame =
+                        same.channelViewAfter(oldAtSameMark) {
+                            it.channelId == Names.FIRST_CHANNEL &&
+                                it.playerIds.toSet() == expectedPair
+                        }
+                    val movedView =
+                        moving.channelViewAfter(destinationMark) {
+                            it.channelId == CHANNEL_TWO && it.playerIds == listOf(moving.playerId)
+                        }
                     check(
                         oldAtC.playerIds.toSet() == expectedPair &&
                             oldAtSame.playerIds.toSet() == expectedPair &&
-                            movedView.playerIds == listOf(moving.playerId),
-                ) { "Channel move left a player in the old list or exposed another channel" }
+                            movedView.playerIds == listOf(moving.playerId)
+                    ) {
+                        "Channel move left a player in the old list or exposed another channel"
+                    }
 
                     val disconnectedMark = c.markChannelViews()
                     same.close()
-                    val afterDisconnect = c.channelViewAfter(disconnectedMark) {
-                        it.channelId == Names.FIRST_CHANNEL && it.playerIds == listOf(c.playerId)
-                    }
+                    val afterDisconnect =
+                        c.channelViewAfter(disconnectedMark) {
+                            it.channelId == Names.FIRST_CHANNEL &&
+                                it.playerIds == listOf(c.playerId)
+                        }
                     check(afterDisconnect.playerIds == listOf(c.playerId)) {
                         "Disconnected player remained in the channel list"
                     }
@@ -182,13 +208,17 @@ object Scenarios {
                     val movedMark = c.markChannelViews()
                     c.send(ChangeChannelRequest(CHANNEL_TWO))
                     view(c, Names.WORLD_A, CHANNEL_TWO, CHANNEL_A2, EARNED_GOLD)
-                    val movedViewForPrimary = c.channelViewAfter(movedMark) {
-                        it.channelId == CHANNEL_TWO && it.playerIds.toSet() == expectedDestination
-                    }
+                    val movedViewForPrimary =
+                        c.channelViewAfter(movedMark) {
+                            it.channelId == CHANNEL_TWO &&
+                                it.playerIds.toSet() == expectedDestination
+                        }
                     check(movedViewForPrimary.playerIds.toSet() == expectedDestination) {
                         "Channel move did not update the destination list"
                     }
-                    check(identity == c.sessionInfo()) { "SessionInfo changed during channel transfer" }
+                    check(identity == c.sessionInfo()) {
+                        "SessionInfo changed during channel transfer"
+                    }
                     connected(c)
                     connected(moving)
                 }
@@ -196,7 +226,7 @@ object Scenarios {
         }
     }
 
-    private suspend fun reconnect(n: Nodes) {
+    private suspend fun reconnect(n: ScenarioTarget) {
         val id = player()
         val identity =
             withClient(n.endpoints.getValue(Names.WORLD_A), id) { c ->
@@ -223,7 +253,7 @@ object Scenarios {
         }
     }
 
-    private suspend fun update(n: Nodes) {
+    private suspend fun update(n: ScenarioTarget) {
         withClient(n.endpoints.getValue(Names.WORLD_A), player()) { a ->
             withClient(n.endpoints.getValue(Names.WORLD_B), player()) { b ->
                 val initialMark = a.markChannelViews()
@@ -236,7 +266,7 @@ object Scenarios {
                 view(a, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
                 val ai = a.sessionInfo()
                 val bi = b.sessionInfo()
-                n.drain(CHANNEL_A1)
+                requireNotNull(n.deployment).drain(CHANNEL_A1)
                 view(current(a), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, EARNED_GOLD)
                 check(a.channelView().playerIds == listOf(a.playerId)) {
                     "Zone relocation lost its player list"
@@ -247,13 +277,13 @@ object Scenarios {
                 }
                 connected(a)
                 connected(b)
-                n.replace(CHANNEL_A1)
+                requireNotNull(n.deployment).replace(CHANNEL_A1)
                 view(current(a), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, EARNED_GOLD)
                 view(current(b), Names.WORLD_B, Names.FIRST_CHANNEL, CHANNEL_B, 0)
                 check(ai == a.sessionInfo() && bi == b.sessionInfo()) {
                     "Replacement changed SessionInfo"
                 }
-                n.createUpdateZone(CHANNEL_A1)
+                requireNotNull(n.deployment).createUpdateZone(CHANNEL_A1)
                 withClient(n.endpoints.getValue(Names.WORLD_A), player()) { fresh ->
                     view(fresh.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, 0)
                     fresh.send(ChangeChannelRequest(Names.UPDATE_CHANNEL))

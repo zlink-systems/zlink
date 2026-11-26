@@ -9,9 +9,13 @@ import java.util.UUID
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
-class Nodes(private val root: Path) : AutoCloseable {
+class Nodes(
+    private val root: Path,
+    private val foreground: Boolean = false,
+    logDirectory: Path? = null,
+) : AutoCloseable {
     private val runId = UUID.randomUUID().toString()
-    val logs: Path = Files.createDirectories(root.resolve(".logs/run-$runId"))
+    val logs: Path = Files.createDirectories(logDirectory ?: root.resolve(".logs/run-$runId"))
     private val project = "my-game-$runId"
     private val nodes = linkedMapOf<String, Node>()
     private val configs = mutableMapOf<String, Path>()
@@ -19,6 +23,8 @@ class Nodes(private val root: Path) : AutoCloseable {
     private var composeStarted = false
     val endpoints = mutableMapOf<String, String>()
     lateinit var accountsEndpoint: String
+
+    fun target() = ScenarioTarget(ServerEndpoints(endpoints.toMap(), accountsEndpoint), this)
 
     private fun compose(vararg args: String): String {
         val command =
@@ -45,13 +51,17 @@ class Nodes(private val root: Path) : AutoCloseable {
 
     fun start() {
         if (!DockerRuntime.enabled) {
+            if (foreground) println("[Redis] Starting")
             composeStarted = true
             compose("up", "-d", "--wait")
+            if (foreground) println("[Redis] Ready")
         }
         val redis =
             mapOf(
-                Names.WORLD_A to if (DockerRuntime.enabled) "dbA:6379" else compose("port", "dbA", "6379"),
-                Names.WORLD_B to if (DockerRuntime.enabled) "dbB:6379" else compose("port", "dbB", "6379"),
+                Names.WORLD_A to
+                    if (DockerRuntime.enabled) "dbA:6379" else compose("port", "dbA", "6379"),
+                Names.WORLD_B to
+                    if (DockerRuntime.enabled) "dbB:6379" else compose("port", "dbB", "6379"),
             )
         val structure = Json.mapper.readTree(root.resolve("zlink.structure.json").toFile())
         val declarations =
@@ -84,7 +94,7 @@ class Nodes(private val root: Path) : AutoCloseable {
                     redisEndpoint = redis[declared.worldId],
                     keyPrefix = "my-game:$runId:${declared.worldId}:",
                     meshEndpoint = "tcp://127.0.0.1:0",
-                    streamEndpoint = if (role == Roles.SESSION) "tcp://127.0.0.1:0" else null,
+                    streamEndpoint = if (role == Roles.SESSION) "ws://127.0.0.1:0" else null,
                     worlds = worlds,
                 )
             val path = logs.resolve("$id.json")
@@ -98,8 +108,10 @@ class Nodes(private val root: Path) : AutoCloseable {
     }
 
     private fun startNode(id: String): JsonNode {
+        if (foreground) println("[$id] Starting")
         val generationLogs = Files.createDirectories(logs.resolve("$id-${UUID.randomUUID()}"))
-        val node = Node(id, modules.getValue(id), configs.getValue(id), root, generationLogs)
+        val node =
+            Node(id, modules.getValue(id), configs.getValue(id), root, generationLogs, foreground)
         nodes[id] = node
         return Json.mapper.readTree(node.waitFor(Control.READY).removePrefix(Control.READY))
     }
@@ -133,27 +145,50 @@ class Nodes(private val root: Path) : AutoCloseable {
             }
         }
         nodes.values.toList().asReversed().forEach { node -> cleanup { node.cleanup() } }
-        if (composeStarted) cleanup { compose("down", "--volumes", "--remove-orphans") }
+        if (composeStarted)
+            cleanup {
+                compose("down", "--volumes", "--remove-orphans")
+                if (foreground) println("[Redis] Stopped")
+            }
         failure?.let { throw it }
     }
 }
 
 private const val DOCKER_CLEANUP_SECONDS = 120L
 
-private class Node(private val id: String, module: String, config: Path, root: Path, logs: Path) {
+private class Node(
+    private val id: String,
+    module: String,
+    config: Path,
+    root: Path,
+    logs: Path,
+    private val foreground: Boolean,
+) {
     private val windows = isWindows()
     private val output = LinkedBlockingQueue<String>()
     private val process =
         DockerRuntime.process(
-                listOf(
-                    Path.of(System.getProperty("java.home"), "bin", if (windows) "java.exe" else "java")
-                        .toString(),
-                    "--enable-native-access=ALL-UNNAMED",
-                    "-cp",
-                    root.resolve("server/$module/build/install/$module/lib").toString() + "/*",
-                    "MyGame.$module.ProgramKt",
-                    config.toString(),
-                ),
+                foregroundJavaPrefix(foreground) +
+                    listOf(
+                        Path.of(
+                                System.getProperty("java.home"),
+                                "bin",
+                                if (windows) "java.exe" else "java",
+                            )
+                            .toString(),
+                        "--enable-native-access=ALL-UNNAMED",
+                        "-Dstdout.encoding=UTF-8",
+                        "-Dstderr.encoding=UTF-8",
+                        "-DMyGame.flowTarget=System.out",
+                        "-DMyGame.flowPrefix=FLOW ",
+                    ) +
+                    foregroundJavaFlags(foreground) +
+                    listOf(
+                        "-cp",
+                        root.resolve("server/$module/build/install/$module/lib").toString() + "/*",
+                        "MyGame.$module.ProgramKt",
+                        config.toString(),
+                    ),
                 config,
             )
             .directory(root.toFile())
@@ -161,26 +196,7 @@ private class Node(private val id: String, module: String, config: Path, root: P
             .start()
     private val input = process.outputWriter()
 
-    init {
-        Thread.ofPlatform().daemon().name("$id-output").start {
-            try {
-                Files.newBufferedWriter(logs.resolve("$id-stdout.log")).use { writer ->
-                    process.inputReader().use { reader ->
-                        while (true) {
-                            val line = reader.readLine() ?: break
-                            writer.write(line)
-                            writer.newLine()
-                            writer.flush()
-                            output.add(line)
-                        }
-                    }
-                }
-                output.add(Control.PROCESS_EXIT + process.waitFor())
-            } catch (error: Exception) {
-                output.add(Control.PROCESS_EXIT + error)
-            }
-        }
-    }
+    private val stdout = captureNodeOutput(id, process, logs, foreground, output)
 
     fun waitFor(prefix: String): String {
         val expires =
@@ -204,6 +220,7 @@ private class Node(private val id: String, module: String, config: Path, root: P
 
     fun stop() {
         check(process.isAlive) { "$id exited unexpectedly" }
+        if (foreground) println("[$id] Stopping")
         command(Control.SHUTDOWN)
         val stopped = waitFor(Control.STOPPED)
         if (DockerRuntime.enabled) {
@@ -217,7 +234,9 @@ private class Node(private val id: String, module: String, config: Path, root: P
             DockerRuntime.threadDump(process)
             error("$id failed to exit; thread dump is in $id-stdout.log")
         }
+        stdout.join()
         check(process.exitValue() == 0) { "$id shutdown exit: ${process.exitValue()}" }
+        if (foreground) println("[$id] Stopped")
     }
 
     fun cleanup() {
@@ -227,6 +246,7 @@ private class Node(private val id: String, module: String, config: Path, root: P
                     process.destroyForcibly()
                     process.waitFor()
                 }
+                stdout.join()
             }
         ) {
             stop()

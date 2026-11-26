@@ -8938,12 +8938,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
 
         if (
-            !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+            (
+                record.HasMetadata
+                && !ZLinkMeshMetadataCodec.TryValidate(received.Parts[1].AsReadOnlySpan())
+            )
+            || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
                 received.Parts[payloadOffset],
                 out var decodedPayload
             )
         )
         {
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
             if (request)
                 Reply(
                     RequestResult.ProtocolError,
@@ -9135,8 +9140,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return false;
         }
         var payloadOffset = stateful.HasMetadata ? 2 : 1;
-        if (received.Parts.Count != payloadOffset + 1)
+        if (
+            received.Parts.Count != payloadOffset + 1
+            || (
+                stateful.HasMetadata
+                && !ZLinkMeshMetadataCodec.TryValidate(received.Parts[1].AsReadOnlySpan())
+            )
+        )
         {
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
             if (request)
                 Reply(
                     RequestResult.ProtocolError,
