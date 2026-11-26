@@ -14,7 +14,8 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
     ZLinkDrainAdmissionGate drainAdmission,
     ZLinkSpotRetireTargetRuntime? targetRuntime = null,
     ZLinkStandaloneActorRelocationRuntime? standaloneActorRuntime = null,
-    Func<ZLinkRelocationEnvelope, CancellationToken, ValueTask>? awaitTargetReady = null
+    Func<ZLinkRelocationEnvelope, CancellationToken, ValueTask>? awaitTargetReady = null,
+    Func<bool>? targetOwnerAdmissionOpen = null
 ) : ICanonicalRelocationTarget
 {
     private readonly Func<ZLinkRelocationEnvelope, CancellationToken, ValueTask> _awaitTargetReady =
@@ -42,6 +43,8 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
                 "Relocation target admission is sealed for drain."
             );
         using var ownerAdmissionLease = ownerAdmission;
+        if (targetOwnerAdmissionOpen?.Invoke() == false)
+            throw Unavailable("Relocation target owner admission is closed.");
         await WaitForTargetReadinessAsync(prepare, envelope, cancellationToken)
             .ConfigureAwait(false);
 

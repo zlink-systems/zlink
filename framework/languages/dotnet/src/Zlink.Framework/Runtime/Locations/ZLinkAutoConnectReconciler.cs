@@ -145,6 +145,8 @@ internal sealed class ZLinkAutoConnectReconciler
     /// current local row has not been written.</summary>
     internal ZLinkLocationWriteStatus? LocalWriteStatus => RunState(() => _localWriteStatus);
 
+    internal ZLinkFrameworkRuntimeState? LocalDescriptorState => RunState(() => _localRow?.State);
+
     internal void SetLocalWeight(uint weight) => Volatile.Write(ref _pendingLocalWeight, weight);
 
     internal void SetLocalChannelWeight(string channelName, int weight) =>

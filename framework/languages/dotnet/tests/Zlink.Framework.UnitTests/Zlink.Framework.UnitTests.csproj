@@ -80,6 +80,7 @@
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
         <Compile Include="Runtime/MeshLivenessDisconnectContractTests.cs"/>
         <Compile Include="Runtime/RequestAdmissionStageTests.cs"/>
+        <Compile Include="Runtime/RestoreAdmissionTests.cs"/>
         <Compile Include="Runtime/RequestCompletionCancellationTests.cs"/>
         <Compile Include="Runtime/NodeRequestReceiverTests.cs"/>
         <Compile Include="Runtime/RequestReplyBoundaryTests.cs"/>
