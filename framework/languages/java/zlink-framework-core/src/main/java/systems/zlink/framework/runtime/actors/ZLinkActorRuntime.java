@@ -67,6 +67,7 @@ import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.spots.SpotHandle;
@@ -2885,11 +2886,31 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     CompletionStage<Void> closeNativeSessionBindingForDestroy(
             ZLinkActor actor, ZLinkInternalSpotNode node, Duration timeout) {
         return closeNativeSessionBinding(
-                () ->
-                        node.closeActorBoundSessionAsync(
-                                requireContext(actor).actorRef(),
-                                timeout,
-                                () -> CompletableFuture.completedFuture(null)));
+                () -> {
+                    var actorRef = requireContext(actor).actorRef();
+                    var requested =
+                            node.closeActorBoundSessionAsync(
+                                    actorRef,
+                                    timeout,
+                                    () -> CompletableFuture.completedFuture(null));
+                    var terminal =
+                            requested.exceptionallyCompose(
+                                    failure -> {
+                                        // The Session owner can finish disconnect cleanup before
+                                        // handling the close. The Actor owner's binding removal
+                                        // confirms completion of this destroy step.
+                                        if (ZLinkRequestFailureMapping.causeCode(failure)
+                                                        == ServiceWireConstants
+                                                                .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED
+                                                && node.boundSessionRoute(actorRef).isEmpty()) {
+                                            return CompletableFuture.completedFuture(null);
+                                        }
+                                        return CompletableFuture.failedFuture(failure);
+                                    });
+                    systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                            .forwardCancellation(terminal.toCompletableFuture(), requested);
+                    return terminal;
+                });
     }
 
     private CompletionStage<Void> closeNativeSessionBinding(Supplier<CompletionStage<Void>> close) {

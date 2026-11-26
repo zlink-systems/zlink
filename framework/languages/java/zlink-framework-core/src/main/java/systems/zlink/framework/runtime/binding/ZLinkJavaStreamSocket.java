@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ConnectResult;
+import systems.zlink.contracts.errors.ZlinkConnectException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.eventing.MonitorEventFlags;
 import systems.zlink.contracts.eventing.MonitorEventType;
@@ -259,7 +261,12 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                 return CompletableFuture.completedFuture(null);
                             return stateLane.runAsync(
                                     () -> {
-                                        socket.disconnectRid(routingId);
+                                        try {
+                                            socket.disconnectRid(routingId);
+                                        } catch (ZlinkConnectException failure) {
+                                            if (failure.getResult() != ConnectResult.NOT_FOUND)
+                                                throw failure;
+                                        }
                                         return null;
                                     });
                         },

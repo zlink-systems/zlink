@@ -24,10 +24,12 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.lang.reflect.Proxy;
@@ -120,13 +122,15 @@ final class ZLinkBoundSessionSendCallContractTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({
-        "false,false",
-        "false,true",
-        "true,false",
-        "true,true"
+        "false,false,false",
+        "false,true,false",
+        "true,false,false",
+        "true,true,false",
+        "true,true,true"
     })
     void destroyWaitsOnlyForACurrentBindingAndPreservesCloseFailure(
-            boolean hasCurrentBinding, boolean closeFails) throws Exception {
+            boolean hasCurrentBinding, boolean closeFails, boolean retiresDuringClose)
+            throws Exception {
         var available = new AtomicBoolean(true);
         var closeRequests = new AtomicInteger();
         var closeStarted = new CompletableFuture<Void>();
@@ -177,11 +181,26 @@ final class ZLinkBoundSessionSendCallContractTest {
             assertEquals(0, closeRequests.get());
         }
         var failure =
-                new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.UNAVAILABLE, "session owner rejected close");
+                ZLinkRequestFailureMapping.receivedFailure(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "session owner rejected close",
+                        (int) ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED,
+                        Map.of());
+        if (retiresDuringClose) {
+            actors.applyRemoteSessionBinding(
+                            node,
+                            ref,
+                            transition -> {
+                                available.set(false);
+                                transition.retire(route);
+                                return true;
+                            })
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+        }
         if (closeFails) closeTerminal.completeExceptionally(failure);
         else closeTerminal.complete(null);
-        if (hasCurrentBinding && closeFails) {
+        if (hasCurrentBinding && closeFails && !retiresDuringClose) {
             assertSame(
                     failure, assertThrows(CompletionException.class, destroyed::join).getCause());
             assertFalse(destroyStarted.isDone());
