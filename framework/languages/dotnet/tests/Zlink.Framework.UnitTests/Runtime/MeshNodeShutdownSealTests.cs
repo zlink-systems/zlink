@@ -2234,7 +2234,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
-    public async Task RejectedNewHandshake_FencesOldControlWithoutSnapshotUpdate()
+    public async Task RejectedNewHandshake_LeavesOldControlFencedAfterRouteSelection()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, MeshName);
@@ -2273,6 +2273,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             new Dictionary<byte, byte[]>(),
             []
         );
+        node.ApplySelectedRoutes([new RouterRoute(rid, 12)]);
         node.ProcessAdmissionCore(rid, 12UL, ServiceWireConstants.Command.Hello, wrongMesh, null);
 
         Assert.False(node.HasCurrentControlTarget(rid, 11UL, ServiceWireConstants.Command.Admit));

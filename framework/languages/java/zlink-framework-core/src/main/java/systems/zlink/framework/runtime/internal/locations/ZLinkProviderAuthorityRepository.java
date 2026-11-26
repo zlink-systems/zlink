@@ -3839,6 +3839,13 @@ final class ZLinkProviderAuthorityRepository {
                         result -> {
                             if (!(result instanceof ZLinkStoreWriteApplied applied)) {
                                 AuthorityRecord initial = decode(found.value().bytes());
+                                if (next != null
+                                        && next.relocation() != null
+                                        && next.relocation()
+                                                .publishesCompletionAfter(initial.relocation())) {
+                                    return read(authorityKey, cancellation)
+                                            .thenApply(ZLinkAuthorityConflict::new);
+                                }
                                 return canRebuild(
                                                 key,
                                                 found.value().version().value(),
