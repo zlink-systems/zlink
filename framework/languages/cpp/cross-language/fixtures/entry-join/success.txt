@@ -1,0 +1,1 @@
+ok - remote Entry Spot join: node source -> node target (join committed on the target Entry Spot, owner probe; target restart: joined at generation 2 (was 1))

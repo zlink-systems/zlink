@@ -767,6 +767,20 @@ struct begin_user_spot_join_req_t
     std::string marker;
 };
 
+/* User-Spot-local: Actor request that starts the deferred Entry Spot join. */
+struct begin_entry_spot_join_req_t
+{
+    static constexpr const char *packet_name = "BeginEntrySpotJoinReq";
+    std::string marker;
+};
+
+/* Crosses the wire inside the Entry Spot join's application payload. */
+struct entry_spot_join_req_t
+{
+    static constexpr const char *packet_name = "EntrySpotJoinReq";
+    std::string marker;
+};
+
 /* Crosses the wire inside canonical command 28's application payload. */
 struct user_spot_join_req_t
 {
@@ -836,6 +850,18 @@ template <> struct zlink::json::dto_traits<begin_user_spot_join_req_t>
     static constexpr auto fields =
       std::tuple{zlink::json::field ("targetSpotId", &begin_user_spot_join_req_t::target_spot_id),
                  zlink::json::field ("marker", &begin_user_spot_join_req_t::marker)};
+};
+
+template <> struct zlink::json::dto_traits<begin_entry_spot_join_req_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("marker", &begin_entry_spot_join_req_t::marker)};
+};
+
+template <> struct zlink::json::dto_traits<entry_spot_join_req_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("marker", &entry_spot_join_req_t::marker)};
 };
 
 template <> struct zlink::json::dto_traits<user_spot_join_req_t>
@@ -1080,7 +1106,15 @@ class relocation_entry_spot_t final : public fw::entry_spot_t<relocation_actor_t
         co_return fw::actor_create_response_t::accept ();
     }
 
-    fw::task_t<void> on_actor_joined (relocation_actor_t &) override { co_return; }
+    /* An existing Actor's application join to this Entry Spot commits its
+     * membership here (spec 03-spot-actor/01-spot-model 224-226). */
+    fw::task_t<void> on_actor_joined (relocation_actor_t &actor) override
+    {
+        user_spot_event ("entry-spot-joined|actor=" + actor.actor_id
+                         + "|nodeRid=" + std::string (_context.node_rid ().value ()));
+        g_user_spot_join_observer.complete ();
+        co_return;
+    }
     fw::task_t<void> on_leave_actor (relocation_actor_t &) override { co_return; }
 
     /* The runtime alone selects the canonical actorJoin (command 28)
@@ -1132,6 +1166,8 @@ class relocation_user_spot_t final : public fw::spot_t<relocation_actor_t>
     {
         _context.handlers ().add_actor_request<&relocation_user_spot_t::probe> (
           user_spot_probe_req_t::packet_name);
+        _context.handlers ().add_actor_request<&relocation_user_spot_t::begin_entry_join> (
+          begin_entry_spot_join_req_t::packet_name);
     }
 
     fw::task_t<fw::spot_create_response_t> on_create (const fw::message_t &request) override
@@ -1176,6 +1212,20 @@ class relocation_user_spot_t final : public fw::spot_t<relocation_actor_t>
     }
 
     fw::task_t<void> on_leave_actor (relocation_actor_t &) override { co_return; }
+
+    /* The runtime alone selects the target Entry Spot and the request
+     * generation. */
+    user_spot_join_res_t begin_entry_join (relocation_actor_t &actor,
+                                           fw::message_context_t &,
+                                           const begin_entry_spot_join_req_t &request)
+    {
+        actor.context ()
+          .join_entry_spot (entry_spot_join_req_t{request.marker})
+          .timeout (std::chrono::seconds (30))
+          .defer ();
+        return user_spot_join_res_t{true, actor.actor_id, _context.spot_id (),
+                                    std::string (_context.node_rid ().value ()), request.marker};
+    }
 
     user_spot_probe_res_t probe (const relocation_actor_t &actor,
                                  fw::message_context_t &,
@@ -1537,12 +1587,16 @@ class user_spot_target_service_t final : public fw::hosted_service_t
                                 std::string spot_id,
                                 std::string actor_id,
                                 std::string source_node_rid,
-                                int placement_weight) :
+                                int placement_weight,
+                                bool entry_join,
+                                std::string restart_file) :
         _mesh_name (std::move (mesh_name)),
         _spot_id (std::move (spot_id)),
         _actor_id (std::move (actor_id)),
         _source_node_rid (std::move (source_node_rid)),
-        _placement_weight (placement_weight)
+        _placement_weight (placement_weight),
+        _entry_join (entry_join),
+        _restart_file (std::move (restart_file))
     {
     }
 
@@ -1663,6 +1717,72 @@ class user_spot_target_service_t final : public fw::hosted_service_t
         }
     }
 
+    /* Remote Entry Spot join: the Actor in this node's User Spot defers
+     * joinEntrySpot(); this node is no placement candidate, so the Framework
+     * must move it to the Entry Spot of the other node. The second Actor does
+     * the same after the other node restarted. */
+    void entry_join_back (event_sink_t &sink,
+                          fw::actor_client_t &actors,
+                          const std::string &own_node_rid)
+    {
+        const auto restart_actor_id = _actor_id + "-restart";
+        const auto begin = [&] (const std::string &id, const std::string &phase) {
+            auto reply = actors.request (fw::actor_id_t (id), begin_entry_spot_join_req_t{phase})
+                           .timeout (std::chrono::seconds (45))
+                           .async<user_spot_join_res_t> ()
+                           .result ();
+            if (!reply) {
+                sink.append (std::string ("entry-join-error|kind=")
+                             + error_kind_wire_name (reply.error_kind ()));
+                return;
+            }
+            sink.append ("entry-join-request-reply|phase=" + phase
+                         + "|accepted=" + (reply.value ().accepted ? "true" : "false")
+                         + "|actor=" + reply.value ().actor_id);
+        };
+        /* want_own: wait until the Actor answers from this node; otherwise
+         * until it answers from another. */
+        const auto wait_owner = [&] (const std::string &id, bool want_own) {
+            const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (90);
+            std::string last = "none";
+            while (!_stopping.load () && std::chrono::steady_clock::now () < deadline) {
+                auto reply =
+                  actors.request (fw::actor_id_t (id), user_spot_probe_req_t{"entry-join-probe"})
+                    .timeout (std::chrono::seconds (5))
+                    .async<user_spot_probe_res_t> ()
+                    .result ();
+                if (reply) {
+                    last = reply.value ().node_rid;
+                    if ((reply.value ().node_rid == own_node_rid) == want_own) {
+                        if (!want_own) {
+                            sink.append ("entry-join-probe|actor=" + id + "|nodeRid="
+                                         + reply.value ().node_rid + "|originRid=" + own_node_rid);
+                        }
+                        return;
+                    }
+                } else {
+                    last = error_kind_wire_name (reply.error_kind ());
+                }
+                std::this_thread::sleep_for (std::chrono::milliseconds (500));
+            }
+            if (!_stopping.load ()) {
+                sink.append ("entry-join-probe-timeout|actor=" + id + "|last=" + last);
+            }
+        };
+        begin (_actor_id, "join");
+        wait_owner (_actor_id, false);
+        wait_owner (restart_actor_id, true);
+        const auto restart_deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (180);
+        while (!std::ifstream (_restart_file).good ()) {
+            if (_stopping.load () || std::chrono::steady_clock::now () >= restart_deadline) {
+                return;
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (25));
+        }
+        begin (restart_actor_id, "restart");
+    }
+
     void probe_joined_actor (event_sink_t &sink,
                              fw::actor_client_t &actors,
                              const std::string &target_node_rid)
@@ -1687,6 +1807,9 @@ class user_spot_target_service_t final : public fw::hosted_service_t
                 sink.append ("user-spot-probe|nodeRid=" + reply.value ().node_rid
                              + "|targetRid=" + target_node_rid + "|actor=" + reply.value ().actor_id
                              + "|stateVersion=" + std::to_string (reply.value ().state_version));
+                if (_entry_join) {
+                    entry_join_back (sink, actors, target_node_rid);
+                }
                 return;
             }
             last_failure = reply ? "unexpected-owner:" + reply.value ().node_rid
@@ -1704,6 +1827,8 @@ class user_spot_target_service_t final : public fw::hosted_service_t
     std::string _actor_id;
     std::string _source_node_rid;
     int _placement_weight = 0;
+    bool _entry_join = false;
+    std::string _restart_file;
     std::atomic<bool> _stopping{false};
     std::thread _discovery;
     std::thread _probe;
@@ -1720,12 +1845,14 @@ class user_spot_source_service_t final : public fw::hosted_service_t
                                 std::string spot_id,
                                 std::string actor_id,
                                 std::string start_file,
-                                int placement_weight) :
+                                int placement_weight,
+                                bool entry_join) :
         _mesh_name (std::move (mesh_name)),
         _spot_id (std::move (spot_id)),
         _actor_id (std::move (actor_id)),
         _start_file (std::move (start_file)),
-        _placement_weight (placement_weight)
+        _placement_weight (placement_weight),
+        _entry_join (entry_join)
     {
     }
 
@@ -1872,6 +1999,40 @@ class user_spot_source_service_t final : public fw::hosted_service_t
                      + "|actor=" + reply.value ().actor_id + "|spot=" + reply.value ().spot_id);
         if (outage)
             outage->run (false);
+
+        if (_entry_join) {
+            /* Remote Entry Spot join: the second Actor joins the User Spot too,
+             * so the User Spot node can move it back to this node after a
+             * restart. */
+            const auto restart_actor_id = _actor_id + "-restart";
+            auto second =
+              actor_manager.get_or_create (fw::actor_id_t (restart_actor_id), cross_lang_actor_type)
+                .in_mesh (_mesh_name)
+                .creation_request (cross_lang_actor_create_req_t{7, 4})
+                .timeout (std::chrono::seconds (15))
+                .async ()
+                .result ();
+            sink.append (
+              std::string ("entry-join-restart-actor-created|status=")
+              + (second && std::holds_alternative<fw::actor_create_created_t> (second.value ())
+                   ? "created"
+                   : "other"));
+            auto second_reply = actors
+                                  .request (fw::actor_id_t (restart_actor_id),
+                                            begin_user_spot_join_req_t{_spot_id, "canonical-28"})
+                                  .timeout (std::chrono::seconds (45))
+                                  .async<user_spot_join_res_t> ()
+                                  .result ();
+            if (!second_reply) {
+                sink.append (std::string ("user-spot-source-error|kind=")
+                             + error_kind_wire_name (second_reply.error_kind ()));
+                return;
+            }
+            sink.append (std::string ("user-spot-join-request-reply|accepted=")
+                         + (second_reply.value ().accepted ? "true" : "false")
+                         + "|actor=" + second_reply.value ().actor_id
+                         + "|spot=" + second_reply.value ().spot_id);
+        }
     }
 
     std::string _mesh_name;
@@ -1879,6 +2040,7 @@ class user_spot_source_service_t final : public fw::hosted_service_t
     std::string _actor_id;
     std::string _start_file;
     int _placement_weight = 100;
+    bool _entry_join = false;
     std::atomic<bool> _stopping{false};
     std::thread _worker;
 };
@@ -2182,13 +2344,14 @@ int main (int argc, char **argv)
             app.add_hosted_service (std::make_unique<user_spot_target_service_t> (
               require ("mesh-name"), require ("spot-id"),
               option ("actor-id", "cross-lang-user-spot-actor"), option ("peer-rid"),
-              std::stoi (option ("placement-weight", "0"))));
+              std::stoi (option ("placement-weight", "0")), option ("entry-join", "0") == "1",
+              option ("restart-file")));
         }
         if (mode == "user-spot-source") {
             app.add_hosted_service (std::make_unique<user_spot_source_service_t> (
               require ("mesh-name"), require ("spot-id"),
               option ("actor-id", "cross-lang-user-spot-actor"), option ("start-file"),
-              std::stoi (option ("placement-weight", "100"))));
+              std::stoi (option ("placement-weight", "100")), option ("entry-join", "0") == "1"));
         }
         if (mode == "channel-server" || mode == "channel-subscriber" || mode == "stream-server"
             || mode == "spot-route-server" || mode == "login-admission-server") {

@@ -415,7 +415,8 @@ def docs(temp):
 
 def format_check(temp):
     job = Job(ROOT, temp, "framework-format", "framework-format")
-    return job.run("Check generated service-wire codecs", "Check Framework SPDX licenses",
+    return job.run("Check generated service-wire codecs", "Test entry join smoke harness",
+                   "Check Framework SPDX licenses",
                    "Check source format")
 
 

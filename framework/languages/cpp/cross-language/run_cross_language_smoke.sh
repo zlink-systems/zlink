@@ -182,6 +182,8 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-java" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-dotnet-java" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-java-node" ]] \
+  && ! { [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" == entry-spot-join-* \
+    && "${ZLINK_CPP_CROSS_LANGUAGE_STAGE}" != *cpp* ]]; } \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "login-admission" ]] \
   && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
@@ -289,10 +291,23 @@ start_java() {
 wait_for_ready() {
   local file="$1"
   local timeout_seconds="${2:-60}"
+  local pid="${3:-}"
   local deadline=$((SECONDS + timeout_seconds))
+  local role="${file##*/}" log="${file%.ready}.log" status=0
   while ((SECONDS < deadline)); do
     if [[ -f "${file}" ]]; then
       return 0
+    fi
+    if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
+      wait "${pid}" || status=$?
+      if [[ -f "${file}" ]]; then
+        return 0
+      fi
+      echo "${role%.ready} exited before ready (status ${status}), see ${log}" >&2
+      if [[ -f "${log}" ]]; then
+        tail -40 "${log}" >&2
+      fi
+      return 1
     fi
     sleep 0.2
   done
@@ -2155,6 +2170,237 @@ stage_dotnet_source_java_target_relocation() {
   RESULTS+=("relocation: .NET source -> Java target (JoinEntrySpot create, multi-chunk relocate, owner transition + liveness probe)")
 }
 
+# --- remote Entry Spot join: every source language -> every target language ---
+# Spec 03-spot-actor/01-spot-model.ko.md:224-226 (an existing Actor moves to
+# another Entry Spot by application join), 05-spot-actor-membership.ko.md:329
+# (no Entry Spot or compatible target node -> Unavailable) and
+# 01-execution/01-submit-and-completion.ko.md section 5 (the request's G is
+# the target descriptor's lifecycle generation).
+#
+# A cell is "<source>-<target>": an Actor that lives on the source node joins
+# the Entry Spot of the target node. An Actor in an Entry Spot cannot move to a
+# remote Entry Spot (a repeated JoinEntrySpot is a same-node no-op, spec
+# 05-spot-actor-membership.ko.md:354), so the source node hosts a fixed User
+# Spot and the Actor first joins it from the target node, as in the User-Spot
+# Join cells. The source node (placement weight 0) then lets the Actor defer
+# JoinEntrySpot(); the only candidate is the target node. The target node is
+# then restarted (new lifecycle; same routing id except .NET, whose Object-role
+# routing id is framework assigned) and a second Actor does the same. Its
+# restart check requires the Actor's committed allocation on the new
+# lifecycle. An Unavailable terminal alone cannot prove that the request
+# never reached the binding submission boundary.
+entry_join_rid_args() {
+  local language="$1" rid="$2"
+  # .NET Object-role MeshNodes cannot use a fixed routing id.
+  if [[ "${language}" != dotnet ]]; then
+    printf '%s\n' "--node-rid" "${rid}"
+  fi
+}
+
+entry_join_store_fence() {
+  local port="$1" prefix="$2" kind="$3" identity="$4" old_generation="${5:-}"
+  local client=(redis-cli -p "${port}" --raw)
+  if ((${#REDIS_CONTAINERS[@]} > 0)); then
+    client=(docker exec "${REDIS_CONTAINERS[-1]}" redis-cli --raw)
+  fi
+  "${client[@]}" EVAL '
+    local function read(logical)
+      local key = redis.call("HGET", KEYS[1], logical)
+      if not key then return nil end
+      local member = redis.call("ZREVRANGE", key, 0, 0)[1]
+      if not member or string.byte(member, 1) ~= 1 then return nil end
+      local record = cmsgpack.unpack(string.sub(member, 2))
+      if record[5] then return nil end
+      return cjson.decode(record[2])
+    end
+
+    if ARGV[1] == "actor" then
+      local row = read("authority" .. string.char(0) .. "actor" .. string.char(0) .. ARGV[2])
+      local allocation = row and row.allocation
+      if allocation and allocation.state == "active" then
+        return allocation.descriptor.routingIdHex .. " " .. allocation.descriptorLifecycleGeneration
+      end
+      return nil
+    end
+
+    local mesh = "mesh-node" .. string.char(0) .. "cross.entry-join" .. string.char(0)
+    local found = nil
+    for _, key in ipairs(redis.call("HKEYS", KEYS[1])) do
+      if string.sub(key, 1, #mesh) == mesh then
+        local row = read(key)
+        local descriptor = row and row.descriptor
+        if descriptor and descriptor.endpoint == ARGV[2]
+          and descriptor.lifecycleGeneration ~= ARGV[3] then
+          if found then return redis.error_reply("ambiguous restarted Entry Spot descriptor") end
+          found = descriptor.routingIdHex .. " " .. descriptor.lifecycleGeneration
+        end
+      end
+    end
+    return found
+  ' 1 "${prefix}:location:{zlink-location-v3}:opaque:map" "${kind}" "${identity}" "${old_generation}"
+}
+
+wait_for_entry_join_line() {
+  local file="$1" needle="$2" source_events="$3" actor="$4" phase="$5" cell="$6"
+  local deadline=$((SECONDS + 90)) failure kind
+  while ((SECONDS < deadline)); do
+    if [[ -f "${file}" ]] && grep -qF -- "${needle}" "${file}"; then
+      return 0
+    fi
+    failure="$(awk -F '|' -v actor="${actor}" '
+      $1 == "user-spot-join-failed" && $2 ~ /^kind=/ && $3 == "actor=" actor {
+        print
+        exit
+      }
+    ' "${source_events}")"
+    if [[ -n "${failure}" ]]; then
+      kind="${failure#*|kind=}"
+      kind="${kind%%|*}"
+      if [[ "${kind,,}" == unavailable ]]; then
+        kind=Unavailable
+        if [[ "${phase}" == "restart join" ]]; then
+          kind+=" without evidence of zero binding submissions"
+        fi
+      fi
+      printf 'remote Entry Spot join %s: %s: %s\n%s\n' "${cell}" \
+        "${phase}" "${kind}" "${failure}" >&2
+      return 1
+    fi
+    sleep 0.2
+  done
+  echo "remote Entry Spot join ${cell}: ${phase}: timed out waiting for '${needle}' in ${file}" >&2
+  [[ -f "${file}" ]] && tail -40 "${file}" >&2 || true
+  return 1
+}
+
+stage_entry_join_cell() {
+  local source="$1" target="$2"
+  local redis_port source_port target_port run_id start_file restart_file
+  local source_events home_events restart_events source_rid home_rid home_pid actor second
+  local redis_prefix old_fence old_generation restarted_fence actor_fence
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
+  run_id="entry-join-${source}-${target}"
+  start_file="${RUN_DIR}/${run_id}.start"
+  restart_file="${RUN_DIR}/${run_id}.restart"
+  source_events="${RUN_DIR}/${run_id}.source.events"
+  home_events="${RUN_DIR}/${run_id}.target.events"
+  restart_events="${RUN_DIR}/${run_id}.target-restarted.events"
+  source_rid="${source}-entry-join-source"
+  home_rid="${target}-entry-join-target"
+  actor="cross-lang-entry-join-actor"
+  second="${actor}-restart"
+  redis_prefix="zlink-cross-${run_id}-${redis_port}"
+  local common=(--mesh-name cross.entry-join --redis-endpoint "127.0.0.1:${redis_port}"
+    --redis-key-prefix "${redis_prefix}")
+  local source_peer=() target_peer=()
+  if [[ "${target}" != dotnet ]]; then source_peer=(--peer-rid "${home_rid}"); fi
+  if [[ "${source}" != dotnet ]]; then target_peer=(--peer-rid "${source_rid}"); fi
+
+  start_redis "${run_id}-redis" "${redis_port}"
+  # The source node: fixed User Spot, no placement candidate.
+  start_outage_host "${source}" "${run_id}-source" target "${common[@]}" \
+    --spot-id cross-lang-entry-join-spot --actor-id "${actor}" \
+    $(entry_join_rid_args "${source}" "${source_rid}") "${source_peer[@]}" --placement-weight 0 \
+    --bind-endpoint "tcp://127.0.0.1:${source_port}" --event-file "${source_events}" \
+    --entry-join 1 --restart-file "${restart_file}"
+  wait_for_ready "${RUN_DIR}/${run_id}-source.ready" 180 "${PIDS[-1]}"
+  wait_for_line "${source_events}" "user-spot-created|spot=cross-lang-entry-join-spot" 60
+
+  # The target node: creates both Actors on itself and moves them into the User Spot.
+  start_outage_host "${target}" "${run_id}-target" source "${common[@]}" \
+    --spot-id cross-lang-entry-join-spot --actor-id "${actor}" \
+    $(entry_join_rid_args "${target}" "${home_rid}") "${target_peer[@]}" \
+    --bind-endpoint "tcp://127.0.0.1:${target_port}" --event-file "${home_events}" \
+    --start-file "${start_file}" --entry-join 1
+  home_pid="${PIDS[-1]}"
+  wait_for_ready "${RUN_DIR}/${run_id}-target.ready" 180 "${home_pid}"
+  wait_for_line "${home_events}" "user-spot-source-peer-ready|ready=true" 90
+  # Only the .NET, Java and C++ User Spot nodes report that they reached the
+  # target node; a .NET target has no routing id to probe.
+  if [[ "${target}" != dotnet && "${source}" != node ]]; then
+    wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
+  fi
+  touch "${start_file}"
+  assert_source_actor_create "${home_events}" "$([[ ${target} == dotnet ]] || echo "${home_rid}")" "${source_rid}"
+  wait_for_line "${home_events}" "user-spot-join-request-reply|accepted=true|actor=${actor}|" 90
+  wait_for_line "${source_events}" "user-spot-joined|actor=${actor}|" 90
+  wait_for_line "${source_events}" "user-spot-probe|nodeRid=" 90
+
+  # First Actor: User Spot of the source node -> Entry Spot of the target node.
+  wait_for_entry_join_line "${source_events}" "entry-join-request-reply|phase=join|accepted=true|actor=${actor}" \
+    "${source_events}" "${actor}" "first join" "${source}->${target}"
+  wait_for_entry_join_line "${home_events}" "entry-spot-joined|actor=${actor}|nodeRid=" \
+    "${source_events}" "${actor}" "first join" "${source}->${target}"
+  wait_for_entry_join_line "${source_events}" "entry-join-probe|actor=${actor}|nodeRid=" \
+    "${source_events}" "${actor}" "first join" "${source}->${target}"
+  local joined_rid probe_rid
+  joined_rid="$(sed -n "s/^entry-spot-joined|actor=${actor}|nodeRid=\\(.*\\)\$/\\1/p" "${home_events}" | head -n 1)"
+  probe_rid="$(sed -n "s/^entry-join-probe|actor=${actor}|nodeRid=\\([^|]*\\)|.*\$/\\1/p" "${source_events}" | head -n 1)"
+  if [[ -z "${joined_rid}" || "${joined_rid}" != "${probe_rid}" ]] \
+    || grep -qF "entry-join-probe|actor=${actor}|nodeRid=${probe_rid}|originRid=${probe_rid}" "${source_events}"; then
+    echo "remote Entry Spot join ${source}->${target}: joined on '${joined_rid}', owner probe answered by '${probe_rid}'" >&2
+    exit 1
+  fi
+  if grep -qF "user-spot-join-failed|kind=" "${source_events}" "${home_events}"; then
+    echo "remote Entry Spot join ${source}->${target}: a join completed as Failed" >&2
+    grep -F "user-spot-join-failed" "${source_events}" "${home_events}" >&2
+    exit 1
+  fi
+
+  # The second Actor must be in the User Spot before the target node restarts.
+  wait_for_line "${source_events}" "user-spot-joined|actor=${second}|" 90
+
+  old_fence="$(entry_join_store_fence "${redis_port}" "${redis_prefix}" actor "${actor}")"
+  if [[ ! "${old_fence}" =~ ^[[:xdigit:]]+\ ([1-9][0-9]*)$ ]]; then
+    echo "remote Entry Spot join ${source}->${target}: old allocation fence is missing" >&2
+    exit 1
+  fi
+  old_generation="${BASH_REMATCH[1]}"
+
+  # Restart the target node: a new lifecycle generation for its descriptor.
+  kill "${home_pid}" >/dev/null 2>&1 || true
+  wait "${home_pid}" >/dev/null 2>&1 || true
+  start_outage_host "${target}" "${run_id}-target-restarted" target "${common[@]}" \
+    --spot-id cross-lang-entry-join-spot-restarted --actor-id "${second}" \
+    $(entry_join_rid_args "${target}" "${home_rid}") --placement-weight 100 \
+    --bind-endpoint "tcp://127.0.0.1:${target_port}" --event-file "${restart_events}"
+  wait_for_ready "${RUN_DIR}/${run_id}-target-restarted.ready" 180 "${PIDS[-1]}"
+  wait_for_line "${restart_events}" "user-spot-created|spot=cross-lang-entry-join-spot-restarted" 60
+  restarted_fence="$(entry_join_store_fence "${redis_port}" "${redis_prefix}" descriptor \
+    "tcp://127.0.0.1:${target_port}" "${old_generation}")"
+  if [[ ! "${restarted_fence}" =~ ^[[:xdigit:]]+\ [1-9][0-9]*$ ]]; then
+    echo "remote Entry Spot join ${source}->${target}: new descriptor fence is missing" >&2
+    exit 1
+  fi
+  touch "${restart_file}"
+  wait_for_entry_join_line "${source_events}" "entry-join-request-reply|phase=restart|accepted=true|actor=${second}" \
+    "${source_events}" "${second}" "restart join" "${source}->${target}"
+
+  wait_for_entry_join_line "${restart_events}" "entry-spot-joined|actor=${second}|nodeRid=" \
+    "${source_events}" "${second}" "restart join" "${source}->${target}"
+  wait_for_line "${restart_events}" "user-spot-probe|nodeRid=" 90
+  actor_fence="$(entry_join_store_fence "${redis_port}" "${redis_prefix}" actor "${second}")"
+  if [[ "${actor_fence}" != "${restarted_fence}" ]] \
+    || grep -qF "entry-spot-joined|actor=${second}|nodeRid=" "${home_events}"; then
+    echo "remote Entry Spot join ${source}->${target}: expected restarted fence '${restarted_fence}', got '${actor_fence}'" >&2
+    exit 1
+  fi
+  local outcome="joined at generation ${restarted_fence##* } (was ${old_generation})"
+  stop_all
+  RESULTS+=("remote Entry Spot join: ${source} source -> ${target} target (join committed on the target Entry Spot, owner probe; target restart: ${outcome})")
+}
+
+ENTRY_JOIN_LANGUAGES=(dotnet node java cpp)
+
+run_entry_join_stages() {
+  local source target
+  for source in "${ENTRY_JOIN_LANGUAGES[@]}"; do
+    for target in "${ENTRY_JOIN_LANGUAGES[@]}"; do
+      stage_entry_join_cell "${source}" "${target}"
+    done
+  done
+}
+
 run_relocation_stages() {
   stage_node_source_dotnet_target_relocation
   stage_java_source_dotnet_target_relocation
@@ -2182,6 +2428,19 @@ run_java_cross_stages() {
   stage_java_spot_route_client_dotnet_host
   stage_dotnet_spot_route_client_java_host
 }
+
+# Remote Entry Spot join: `entry-spot-join` runs the 16 cells, and
+# `entry-spot-join-<source>-<target>` one of them (dotnet, node, java, cpp).
+if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" == entry-spot-join ]]; then
+  run_entry_join_stages
+elif [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" =~ ^entry-spot-join-(dotnet|node|java|cpp)-(dotnet|node|java|cpp)$ ]]; then
+  stage_entry_join_cell "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+fi
+if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" == entry-spot-join* ]]; then
+  for result in "${RESULTS[@]}"; do echo "ok - ${result}"; done
+  echo "cross-language smoke stage=${ZLINK_CPP_CROSS_LANGUAGE_STAGE} result=passed"
+  exit 0
+fi
 
 case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
   login-admission)
@@ -2470,6 +2729,7 @@ stage_cpp_source_dotnet_target_remote_actor_create
 stage_cpp_source_node_target_remote_actor_create
 stage_cpp_source_java_target_remote_actor_create
 stage_dotnet_source_java_target_remote_actor_create
+run_entry_join_stages
 # Login admission (#4546): every server language against the raw wire probe and
 # every connector language. The stage fails the run when any cell fails.
 source "${SCRIPT_DIR}/login_admission.sh"
