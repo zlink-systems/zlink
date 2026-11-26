@@ -14,7 +14,8 @@ object ScenarioList {
     val order = listOf("lobby", "hit", "wall", "input", "reconnect", "update")
 }
 
-private fun player(view: RoomView, client: Client) = view.players.single { it.playerId == client.playerId }
+private fun player(view: RoomView, client: Client) =
+    view.players.single { it.playerId == client.playerId }
 
 private fun nextSequence(view: RoomView, client: Client) = player(view, client).lastSequence + 1
 
@@ -24,18 +25,18 @@ private fun sameState(before: RoomView, after: RoomView) {
 
 private suspend fun view(client: Client) = client.view { true }
 
-suspend fun scenario(id: String, nodes: Nodes) {
+suspend fun scenario(id: String, target: ScenarioTarget) {
     if (id == "lobby") {
-        lobbyScenario(nodes)
+        lobbyScenario(target)
         return
     }
     val suffix = UUID.randomUUID().toString().replace("-", "")
     val playerA = "p1-$suffix"
     val playerB = "p2-$suffix"
-    val assignment = matchPair(nodes, playerA, playerB)
-    if (id == "update") rejectOutsider(nodes.endpoint, assignment.roomId)
-    val p1 = Client(nodes.endpoint, playerA, assignment.roomId)
-    val p2 = Client(nodes.endpoint, playerB, assignment.roomId)
+    val assignment = matchPair(target, playerA, playerB)
+    if (id == "update") rejectOutsider(target.endpoint, assignment.roomId)
+    val p1 = Client(target.endpoint, playerA, assignment.roomId)
+    val p2 = Client(target.endpoint, playerB, assignment.roomId)
     withCleanup(cleanup = { p1.close() }) {
         withCleanup(cleanup = { p2.close() }) {
             p1.connect()
@@ -50,9 +51,12 @@ suspend fun scenario(id: String, nodes: Nodes) {
             val full: (RoomView) -> Boolean = { it.players.size == Game.PLAYERS_PER_ROOM }
             val ready1 = p1.next<RoomView>(full)
             val ready2 = p2.next<RoomView>(full)
-            check(ready1 == ready2 && ready1.roomId == assignment.roomId &&
-                ready1.phase == MatchPhase.Playing &&
-                ready1.players.all { it.hp == Game.INITIAL_HP && it.lastSequence == 0L }) {
+            check(
+                ready1 == ready2 &&
+                    ready1.roomId == assignment.roomId &&
+                    ready1.phase == MatchPhase.Playing &&
+                    ready1.players.all { it.hp == Game.INITIAL_HP && it.lastSequence == 0L }
+            ) {
                 "Initial room state or HTTP assignment differs."
             }
             val session1 = p1.sessionInfo()
@@ -61,39 +65,46 @@ suspend fun scenario(id: String, nodes: Nodes) {
                 "hit" -> hitScenario(p1, p2)
                 "wall" -> wallScenario(p1, p2)
                 "input" -> inputScenario(p1, p2)
-                "reconnect" -> reconnectScenario(nodes.endpoint, assignment.roomId, p1, p2, session2)
-                "update" -> updateScenario(nodes, p1, p2, session1, session2)
+                "reconnect" ->
+                    reconnectScenario(target.endpoint, assignment.roomId, p1, p2, session2)
+                "update" -> updateScenario(target, p1, p2, session1, session2)
                 else -> error("Unknown scenario: $id")
             }
-            check(p1.disconnects.get() == 0 && p1.connector.isConnected) { "First player disconnected." }
+            check(p1.disconnects.get() == 0 && p1.connector.isConnected) {
+                "First player disconnected."
+            }
             if (id != "reconnect") check(p2.connector.isConnected) { "Second player disconnected." }
         }
     }
 }
 
-private suspend fun lobbyScenario(nodes: Nodes) {
+private suspend fun lobbyScenario(target: ScenarioTarget) {
     val suffix = UUID.randomUUID().toString().replace("-", "")
     val defaultAId = "duel-a-$suffix"
     val defaultBId = "duel-b-$suffix"
     val rankedAId = "ranked-a-$suffix"
     val rankedBId = "ranked-b-$suffix"
-    val defaultARequest = requestMatch(nodes.lobbyEndpoint, defaultAId, null)
-    val rankedARequest = requestMatch(nodes.lobbyEndpoint, rankedAId, "ranked")
-    val defaultBRequest = requestMatch(nodes.lobbyEndpoint, defaultBId, Names.DEFAULT_MODE)
-    val rankedBRequest = requestMatch(nodes.lobbyEndpoint, rankedBId, "ranked")
+    val defaultARequest = requestMatch(target.httpEndpoint, defaultAId, null)
+    val rankedARequest = requestMatch(target.httpEndpoint, rankedAId, "ranked")
+    val defaultBRequest = requestMatch(target.httpEndpoint, defaultBId, Names.DEFAULT_MODE)
+    val rankedBRequest = requestMatch(target.httpEndpoint, rankedBId, "ranked")
     val duel = defaultARequest.join()
     val ranked = rankedARequest.join()
     check(
-        duel == defaultBRequest.join() && ranked == rankedBRequest.join() &&
-            duel.roomId != ranked.roomId && duel.sessionEndpoint == nodes.endpoint &&
-            ranked.sessionEndpoint == nodes.endpoint,
-    ) { "HTTP mode pairing or endpoint differs." }
+        duel == defaultBRequest.join() &&
+            ranked == rankedBRequest.join() &&
+            duel.roomId != ranked.roomId &&
+            duel.sessionEndpoint == target.endpoint &&
+            ranked.sessionEndpoint == target.endpoint
+    ) {
+        "HTTP mode pairing or endpoint differs."
+    }
 
-    rejectOutsider(nodes.endpoint, duel.roomId)
-    val a = Client(nodes.endpoint, defaultAId, duel.roomId)
-    val b = Client(nodes.endpoint, defaultBId, duel.roomId)
-    val c = Client(nodes.endpoint, rankedAId, ranked.roomId)
-    val d = Client(nodes.endpoint, rankedBId, ranked.roomId)
+    rejectOutsider(target.endpoint, duel.roomId)
+    val a = Client(target.endpoint, defaultAId, duel.roomId)
+    val b = Client(target.endpoint, defaultBId, duel.roomId)
+    val c = Client(target.endpoint, rankedAId, ranked.roomId)
+    val d = Client(target.endpoint, rankedBId, ranked.roomId)
     withCleanup(cleanup = { a.close() }) {
         withCleanup(cleanup = { b.close() }) {
             withCleanup(cleanup = { c.close() }) {
@@ -104,7 +115,10 @@ private suspend fun lobbyScenario(nodes: Nodes) {
                     d.connect()
                     val forged = PrepareRoom(duel.roomId, listOf("forged-a", "forged-b"))
                     val beforeJoin = a.action(forged)
-                    check(beforeJoin is ActionRejected && beforeJoin.reason == Rejection.PACKET_NOT_ALLOWED) {
+                    check(
+                        beforeJoin is ActionRejected &&
+                            beforeJoin.reason == Rejection.PACKET_NOT_ALLOWED
+                    ) {
                         "Session accepted a client PrepareRoom before admission."
                     }
                     a.join()
@@ -115,11 +129,18 @@ private suspend fun lobbyScenario(nodes: Nodes) {
                     val duelView = a.next<RoomView>(full)
                     val rankedView = c.next<RoomView>(full)
                     check(
-                        duelView.players.map { it.playerId }.toSet() == setOf(a.playerId, b.playerId) &&
-                            rankedView.players.map { it.playerId }.toSet() == setOf(c.playerId, d.playerId),
-                    ) { "Prepared Room roster differs from HTTP members." }
+                        duelView.players.map { it.playerId }.toSet() ==
+                            setOf(a.playerId, b.playerId) &&
+                            rankedView.players.map { it.playerId }.toSet() ==
+                                setOf(c.playerId, d.playerId)
+                    ) {
+                        "Prepared Room roster differs from HTTP members."
+                    }
                     val duringMatch = a.action(forged)
-                    check(duringMatch is ActionRejected && duringMatch.reason == Rejection.PACKET_NOT_ALLOWED) {
+                    check(
+                        duringMatch is ActionRejected &&
+                            duringMatch.reason == Rejection.PACKET_NOT_ALLOWED
+                    ) {
                         "Session accepted a client PrepareRoom during the match."
                     }
                     sameState(duelView, view(a))
@@ -127,19 +148,24 @@ private suspend fun lobbyScenario(nodes: Nodes) {
                     hit(a, b, Game.INITIAL_HP - Game.SHOT_DAMAGE)
                     val beforeRestart = view(a)
                     val session = a.sessionInfo()
-                    nodes.restartLobby()
+                    val replacement = requireNotNull(target.deployment).restartLobby()
                     sameState(beforeRestart, view(a))
-                    check(a.sessionInfo() == session) { "Lobby restart changed an existing Session." }
+                    check(a.sessionInfo() == session) {
+                        "Lobby restart changed an existing Session."
+                    }
 
                     val freshA = "restart-a-$suffix"
                     val freshB = "restart-b-$suffix"
-                    val fresh = matchPair(nodes, freshA, freshB)
+                    val fresh = matchPair(replacement, freshA, freshB)
                     check(
-                        fresh.roomId != duel.roomId && fresh.roomId != ranked.roomId &&
-                            fresh.sessionEndpoint == nodes.endpoint,
-                    ) { "Lobby restart reused an existing Room." }
-                    val x = Client(nodes.endpoint, freshA, fresh.roomId)
-                    val y = Client(nodes.endpoint, freshB, fresh.roomId)
+                        fresh.roomId != duel.roomId &&
+                            fresh.roomId != ranked.roomId &&
+                            fresh.sessionEndpoint == target.endpoint
+                    ) {
+                        "Lobby restart reused an existing Room."
+                    }
+                    val x = Client(target.endpoint, freshA, fresh.roomId)
+                    val y = Client(target.endpoint, freshB, fresh.roomId)
                     withCleanup(cleanup = { x.close() }) {
                         withCleanup(cleanup = { y.close() }) {
                             x.connect()
@@ -150,10 +176,16 @@ private suspend fun lobbyScenario(nodes: Nodes) {
                             y.next<RoomView>(full)
                             check(
                                 freshView.roomId == fresh.roomId &&
-                                    freshView.players.all { it.hp == Game.INITIAL_HP },
-                            ) { "Restarted Lobby did not provision a new Room." }
+                                    freshView.players.all { it.hp == Game.INITIAL_HP }
+                            ) {
+                                "Restarted Lobby did not provision a new Room."
+                            }
                             sameState(beforeRestart, view(a))
-                            check(listOf(a, b, c, d, x, y).all { it.connector.isConnected && it.disconnects.get() == 0 }) {
+                            check(
+                                listOf(a, b, c, d, x, y).all {
+                                    it.connector.isConnected && it.disconnects.get() == 0
+                                }
+                            ) {
                                 "Lobby flow disconnected a client."
                             }
                         }
@@ -162,11 +194,14 @@ private suspend fun lobbyScenario(nodes: Nodes) {
             }
         }
     }
-    println("lobby: default duel, mode separation, roster, PrepareRoom rejection and restart verified")
+    println(
+        "lobby: default duel, mode separation, roster, PrepareRoom rejection and restart verified"
+    )
 }
 
 private suspend fun rejectOutsider(endpoint: String, roomId: String) {
-    val outsider = Client(endpoint, "outsider-${UUID.randomUUID().toString().replace("-", "")}", roomId)
+    val outsider =
+        Client(endpoint, "outsider-${UUID.randomUUID().toString().replace("-", "")}", roomId)
     withCleanup(cleanup = { outsider.close() }) {
         outsider.connect()
         outsider.join()
@@ -177,17 +212,21 @@ private suspend fun rejectOutsider(endpoint: String, roomId: String) {
     }
 }
 
-private fun matchPair(nodes: Nodes, firstId: String, secondId: String): MatchResponse {
-    val first = requestMatch(nodes.lobbyEndpoint, firstId, null)
-    val second = requestMatch(nodes.lobbyEndpoint, secondId, Names.DEFAULT_MODE)
+private fun matchPair(target: ScenarioTarget, firstId: String, secondId: String): MatchResponse {
+    val first = requestMatch(target.httpEndpoint, firstId, null)
+    val second = requestMatch(target.httpEndpoint, secondId, Names.DEFAULT_MODE)
     val assignment = first.join()
-    check(assignment == second.join() && assignment.sessionEndpoint == nodes.endpoint) {
+    check(assignment == second.join() && assignment.sessionEndpoint == target.endpoint) {
         "HTTP players received different Room or SessionEndpoint."
     }
     return assignment
 }
 
-private fun requestMatch(endpoint: String, playerId: String, mode: String?): CompletableFuture<MatchResponse> {
+private fun requestMatch(
+    endpoint: String,
+    playerId: String,
+    mode: String?,
+): CompletableFuture<MatchResponse> {
     val body =
         if (mode == null) Json.mapper.writeValueAsBytes(mapOf("playerId" to playerId))
         else Json.mapper.writeValueAsBytes(MatchRequest(playerId, mode))
@@ -200,7 +239,9 @@ private fun requestMatch(endpoint: String, playerId: String, mode: String?): Com
     return HttpClient.newHttpClient()
         .sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
         .thenApply { response ->
-            check(response.statusCode() == HttpProtocol.OK) { "HTTP status ${response.statusCode()}" }
+            check(response.statusCode() == HttpProtocol.OK) {
+                "HTTP status ${response.statusCode()}"
+            }
             Json.mapper.readValue(response.body(), MatchResponse::class.java)
         }
 }
@@ -218,12 +259,19 @@ private suspend fun move(client: Client, delta: Vec3) {
                 delay(result.retryAfterMs.toLong())
             }
             is MoveResult -> {
-                check(result.sequence == request.sequence && result.position == player(before, client).position + delta) {
+                check(
+                    result.sequence == request.sequence &&
+                        result.position == player(before, client).position + delta
+                ) {
                     "Movement result differs: $result; delta=$delta; before=${player(before, client)}"
                 }
                 val after = view(client)
-                check(player(after, client).lastSequence == request.sequence) { "Movement lost sequence." }
-                check(after.players.all { it.position.y == 0.0 }) { "Movement changed feet height." }
+                check(player(after, client).lastSequence == request.sequence) {
+                    "Movement lost sequence."
+                }
+                check(after.players.all { it.position.y == 0.0 }) {
+                    "Movement changed feet height."
+                }
                 return
             }
             else -> error("Unexpected movement response: $result")
@@ -235,11 +283,14 @@ private suspend fun walk(client: Client, destination: Vec3) {
     var position = player(view(client), client).position
     while (position != destination) {
         val remaining = destination - position
-        val delta = when {
-            remaining.x != 0.0 -> Vec3(remaining.x.coerceIn(-Game.MAX_STEP, Game.MAX_STEP), 0.0, 0.0)
-            remaining.y != 0.0 -> Vec3(0.0, remaining.y.coerceIn(-Game.MAX_STEP, Game.MAX_STEP), 0.0)
-            else -> Vec3(0.0, 0.0, remaining.z.coerceIn(-Game.MAX_STEP, Game.MAX_STEP))
-        }
+        val delta =
+            when {
+                remaining.x != 0.0 ->
+                    Vec3(remaining.x.coerceIn(-Game.MAX_STEP, Game.MAX_STEP), 0.0, 0.0)
+                remaining.y != 0.0 ->
+                    Vec3(0.0, remaining.y.coerceIn(-Game.MAX_STEP, Game.MAX_STEP), 0.0)
+                else -> Vec3(0.0, 0.0, remaining.z.coerceIn(-Game.MAX_STEP, Game.MAX_STEP))
+            }
         move(client, delta)
         position = player(view(client), client).position
     }
@@ -250,7 +301,7 @@ private suspend fun aim(shooter: Client, target: Client): Vec3 {
     return player(room, target).position - player(room, shooter).position
 }
 
-private suspend fun shoot(shooter: Client, aim: Vec3, expectedOutcome: String) {
+private suspend fun shoot(shooter: Client, aim: Vec3, expectedOutcome: String): Long {
     val before = view(shooter)
     val request = ShootRequest(aim, nextSequence(before, shooter))
     while (true) {
@@ -266,7 +317,7 @@ private suspend fun shoot(shooter: Client, aim: Vec3, expectedOutcome: String) {
                 check(result.outcome == expectedOutcome && result.sequence == request.sequence) {
                     "Expected $expectedOutcome, received $result."
                 }
-                return
+                return result.sequence
             }
             else -> error("Unexpected shot response: $result")
         }
@@ -274,27 +325,37 @@ private suspend fun shoot(shooter: Client, aim: Vec3, expectedOutcome: String) {
 }
 
 private suspend fun hit(shooter: Client, target: Client, hp: Int) {
-    shoot(shooter, aim(shooter, target), ShotOutcome.HIT)
-    val a = view(shooter)
-    val b = view(target)
+    val sequence = shoot(shooter, aim(shooter, target), ShotOutcome.HIT)
+    val afterShot: (RoomView) -> Boolean = { room ->
+        room.players.any { it.playerId == shooter.playerId && it.lastSequence == sequence }
+    }
+    val a = shooter.view(afterShot)
+    val b = target.view(afterShot)
     check(a == b && player(a, target).hp == hp) { "Hit views or damage differ." }
 }
 
 private suspend fun ended(winner: Client, other: Client) {
-    check(winner.next<MatchEnded>().winner == winner.playerId &&
-        other.next<MatchEnded>().winner == winner.playerId) { "Wrong match winner." }
+    check(
+        winner.next<MatchEnded>().winner == winner.playerId &&
+            other.next<MatchEnded>().winner == winner.playerId
+    ) {
+        "Wrong match winner."
+    }
     val room = view(winner)
-    check(room.phase == MatchPhase.Finished && room.winner == winner.playerId) { "Finished state differs." }
+    check(room.phase == MatchPhase.Finished && room.winner == winner.playerId) {
+        "Finished state differs."
+    }
 }
 
 private suspend fun rejected(client: Client, request: Any, reason: String) {
     val before = view(client)
     val result = client.action(request)
-    val valid = when (result) {
-        is ActionRejected -> result.retryAfterMs == 0 && result.reason == reason
-        is ShotRejected -> result.retryAfterMs == 0 && result.reason == reason
-        else -> false
-    }
+    val valid =
+        when (result) {
+            is ActionRejected -> result.retryAfterMs == 0 && result.reason == reason
+            is ShotRejected -> result.retryAfterMs == 0 && result.reason == reason
+            else -> false
+        }
     check(valid) { "Expected rejection $reason, received $result." }
     sameState(before, view(client))
     println("input rejected: $reason; state unchanged")
@@ -315,7 +376,11 @@ private suspend fun hitScenario(a: Client, b: Client) {
     ended(a, b)
     val room = view(a)
     rejected(a, MoveRequest(Vec3(0.0, 0.0, 1.0), nextSequence(room, a)), Rejection.MATCH_FINISHED)
-    rejected(a, ShootRequest(Vec3(1.0, 0.0, 0.0), nextSequence(view(a), a)), Rejection.MATCH_FINISHED)
+    rejected(
+        a,
+        ShootRequest(Vec3(1.0, 0.0, 0.0), nextSequence(view(a), a)),
+        Rejection.MATCH_FINISHED,
+    )
 }
 
 private suspend fun wallScenario(a: Client, b: Client) {
@@ -335,14 +400,20 @@ private suspend fun inputScenario(a: Client, b: Client) {
     val moveSequence = nextSequence(beforeBudget, a)
     move(a, Vec3(0.0, 0.0, -2.0))
     move(a, Vec3(0.0, 0.0, -2.0))
-    check(player(view(a), a).lastSequence == moveSequence + 1) { "Movement did not preserve sequence." }
+    check(player(view(a), a).lastSequence == moveSequence + 1) {
+        "Movement did not preserve sequence."
+    }
     rejected(a, MoveRequest(Vec3(0.0, 0.0, -2.0), moveSequence + 1), Rejection.STALE_SEQUENCE)
 
     val room = view(a)
     var sequence = player(room, a).lastSequence
     rejected(a, MoveRequest(Vec3(0.0, 0.0, 1.0), sequence), Rejection.STALE_SEQUENCE)
     rejected(a, ShootRequest(Vec3(1.0, 0.0, 0.0), sequence - 1), Rejection.STALE_SEQUENCE)
-    rejected(a, MoveRequest(Vec3(Game.MAX_STEP + 1.0, 0.0, 0.0), sequence + 1), Rejection.STEP_TOO_LARGE)
+    rejected(
+        a,
+        MoveRequest(Vec3(Game.MAX_STEP + 1.0, 0.0, 0.0), sequence + 1),
+        Rejection.STEP_TOO_LARGE,
+    )
     rejected(a, MoveRequest(Vec3(0.0, 1.0, 0.0), sequence + 1), Rejection.VERTICAL_MOVE)
     rejected(a, MoveRequest(Vec3(0.0, -1.0, 0.0), sequence + 1), Rejection.VERTICAL_MOVE)
     walk(a, Vec3(player(room, a).position.x, 0.0, 0.0))
@@ -356,8 +427,12 @@ private suspend fun inputScenario(a: Client, b: Client) {
     val shotSequence = nextSequence(beforeFire, a)
     shoot(a, Vec3(0.0, 1.0, 0.0), ShotOutcome.MISS)
     val afterFire = view(a)
-    check(player(afterFire, a).position == player(beforeFire, a).position &&
-        player(afterFire, a).lastSequence == shotSequence) { "Shots changed position or lost sequence." }
+    check(
+        player(afterFire, a).position == player(beforeFire, a).position &&
+            player(afterFire, a).lastSequence == shotSequence
+    ) {
+        "Shots changed position or lost sequence."
+    }
     rejected(a, ShootRequest(Vec3(0.0, 1.0, 0.0), shotSequence), Rejection.STALE_SEQUENCE)
     check(player(view(b), b).hp == Game.INITIAL_HP) { "Input checks damaged target." }
     println("input: movement and shot sequences preserve requests")
@@ -380,8 +455,13 @@ private suspend fun reconnectScenario(
         again.join()
         sameState(beforeReconnect, again.next<RoomView>())
         val identity = again.sessionInfo()
-        check(identity.sessionId != originalSession.sessionId && identity.actorId == originalSession.actorId &&
-            identity.objectGeneration == originalSession.objectGeneration) { "Reconnect changed Actor identity." }
+        check(
+            identity.sessionId != originalSession.sessionId &&
+                identity.actorId == originalSession.actorId &&
+                identity.objectGeneration == originalSession.objectGeneration
+        ) {
+            "Reconnect changed Actor identity."
+        }
         move(again, Vec3(0.0, 0.0, 1.0))
         for (hp in listOf(50, 25, 0)) hit(p1, again, hp)
         ended(p1, again)
@@ -392,18 +472,23 @@ private suspend fun reconnectScenario(
         finished.connect()
         finished.join()
         val restored = finished.next<RoomView>()
-        check(restored.phase == MatchPhase.Finished && restored.winner == p1.playerId &&
-            player(restored, finished).hp == 0) { "Finished reconnect lost winner or HP." }
+        check(
+            restored.phase == MatchPhase.Finished &&
+                restored.winner == p1.playerId &&
+                player(restored, finished).hp == 0
+        ) {
+            "Finished reconnect lost winner or HP."
+        }
     }
 }
 
-private suspend fun newMatch(nodes: Nodes, replacementId: String) {
+private suspend fun newMatch(target: ScenarioTarget, replacementId: String) {
     val suffix = UUID.randomUUID().toString().replace("-", "")
     val firstId = "new-a-$suffix"
     val secondId = "new-b-$suffix"
-    val assignment = matchPair(nodes, firstId, secondId)
-    val a = Client(nodes.endpoint, firstId, assignment.roomId)
-    val b = Client(nodes.endpoint, secondId, assignment.roomId)
+    val assignment = matchPair(target, firstId, secondId)
+    val a = Client(target.endpoint, firstId, assignment.roomId)
+    val b = Client(target.endpoint, secondId, assignment.roomId)
     withCleanup(cleanup = { a.close() }) {
         withCleanup(cleanup = { b.close() }) {
             a.connect()
@@ -420,7 +505,7 @@ private suspend fun newMatch(nodes: Nodes, replacementId: String) {
 }
 
 private suspend fun updateScenario(
-    nodes: Nodes,
+    target: ScenarioTarget,
     p1: Client,
     p2: Client,
     session1: SessionInfo,
@@ -429,12 +514,16 @@ private suspend fun updateScenario(
     move(p1, Vec3(0.0, 0.0, -1.0))
     hit(p1, p2, 75)
     val before = view(p1)
-    nodes.drain(before.nodeId)
-    check(p1.sessionInfo() == session1 && p2.sessionInfo() == session2) { "Update changed session binding." }
+    requireNotNull(target.deployment).drain(before.nodeId)
+    check(p1.sessionInfo() == session1 && p2.sessionInfo() == session2) {
+        "Update changed session binding."
+    }
     sameState(before, p1.view { it.nodeId != before.nodeId })
     sameState(before, p2.view { it.nodeId != before.nodeId })
-    nodes.replace(before.nodeId)
-    newMatch(nodes, before.nodeId)
+    requireNotNull(target.deployment).replace(before.nodeId)
+    newMatch(target, before.nodeId)
     hit(p1, p2, 50)
-    check(p1.sessionInfo() == session1 && p2.sessionInfo() == session2) { "Replacement changed session binding." }
+    check(p1.sessionInfo() == session1 && p2.sessionInfo() == session2) {
+        "Replacement changed session binding."
+    }
 }

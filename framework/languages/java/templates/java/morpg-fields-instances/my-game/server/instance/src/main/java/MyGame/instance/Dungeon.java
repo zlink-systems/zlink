@@ -26,9 +26,10 @@ public final class Dungeon implements ZLinkSpot<Player> {
     }
 
     public DungeonPrepared prepare(PrepareDungeon request) {
-        var rejection = Rules.dungeonId(request.runId()).equals(context.spotId())
-                ? state.prepare(request)
-                : new ActionRejected(Rejection.RUN_MISMATCH);
+        var rejection =
+                Rules.dungeonId(request.runId()).equals(context.spotId())
+                        ? state.prepare(request)
+                        : new ActionRejected(Rejection.RUN_MISMATCH);
         return new DungeonPrepared(context.spotId(), request.runId(), rejection);
     }
 
@@ -42,6 +43,7 @@ public final class Dungeon implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
+        System.out.println("Player entered Dungeon " + context.spotId());
         state.arrived(actor.context().actorId());
         return context.outbound()
                 .requestToSpot(
@@ -62,13 +64,26 @@ public final class Dungeon implements ZLinkSpot<Player> {
                                             started -> {
                                                 if (started.rejection() != null)
                                                     return CompletableFuture.failedFuture(
-                                                            new IllegalStateException(started.rejection().reason()));
+                                                            new IllegalStateException(
+                                                                    started.rejection().reason()));
                                                 return sendToMembers(view());
                                             });
                         });
     }
 
+    public CompletionStage<DungeonLeft> leave(Player actor) {
+        return context.leaveActor(actor)
+                .thenApply(
+                        ignored ->
+                                new DungeonLeft(
+                                        context.spotId(),
+                                        context.objectGeneration(),
+                                        state.entered.size()));
+    }
+
     public CompletionStage<Void> onLeaveActor(Player actor) {
+        state.entered.remove(actor.context().actorId());
+        System.out.println("Player left " + context.spotId());
         return CompletableFuture.completedFuture(null);
     }
 
@@ -78,8 +93,13 @@ public final class Dungeon implements ZLinkSpot<Player> {
 
     private DungeonView view() {
         return new DungeonView(
-                context.spotId(), config.id(), state.partyId, state.members,
-                state.stage, state.runId, state.phase);
+                context.spotId(),
+                config.id(),
+                state.partyId,
+                state.members,
+                state.stage,
+                state.runId,
+                state.phase);
     }
 
     public CompletionStage<Void> show(Player actor) {
@@ -88,22 +108,28 @@ public final class Dungeon implements ZLinkSpot<Player> {
 
     public CompletionStage<Void> advance(Player requester) {
         var rejection = state.advance();
-        if (rejection != null)
-            return requester.context().boundSession().send(rejection).submit();
+        if (rejection != null) return requester.context().boundSession().send(rejection).submit();
+        System.out.println("Dungeon " + context.spotId() + " advanced to stage " + state.stage);
         CompletionStage<Void> reported = CompletableFuture.completedFuture(null);
         if (state.phase == RunPhase.Completed)
-            reported = context.outbound()
-                    .requestToSpot(state.partyId, new RunCompleted(state.runId))
-                    .submit(PartyCommandResult.class)
-                    .thenCompose(
-                            completed -> completed.rejection() == null
-                                    ? CompletableFuture.completedFuture(null)
-                                    : CompletableFuture.failedFuture(
-                                            new IllegalStateException(completed.rejection().reason())));
+            reported =
+                    context.outbound()
+                            .requestToSpot(state.partyId, new RunCompleted(state.runId))
+                            .submit(PartyCommandResult.class)
+                            .thenCompose(
+                                    completed ->
+                                            completed.rejection() == null
+                                                    ? CompletableFuture.completedFuture(null)
+                                                    : CompletableFuture.failedFuture(
+                                                            new IllegalStateException(
+                                                                    completed
+                                                                            .rejection()
+                                                                            .reason())));
         var current = view();
         return reported.thenCompose(
-                ignored -> requester.context().boundSession().send(current).submit())
-                .thenCompose(ignored -> sendToMembersExcept(current, requester.context().actorId()));
+                        ignored -> requester.context().boundSession().send(current).submit())
+                .thenCompose(
+                        ignored -> sendToMembersExcept(current, requester.context().actorId()));
     }
 
     public CompletionStage<Void> enter(Player actor) {
@@ -111,21 +137,22 @@ public final class Dungeon implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> rejectTownRequest(Player actor) {
-        return actor.context().boundSession()
+        return actor.context()
+                .boundSession()
                 .send(new ActionRejected(Rejection.RUN_IN_PROGRESS))
                 .submit();
     }
 
     private CompletionStage<Void> sendToMembers(DungeonView current) {
         CompletionStage<Void> sent = CompletableFuture.completedFuture(null);
-        for (var id : state.members)
+        for (var id : state.entered)
             sent = sent.thenCompose(ignored -> actors.sendToActor(id, current).submit());
         return sent;
     }
 
     private CompletionStage<Void> sendToMembersExcept(DungeonView current, String excluded) {
         CompletionStage<Void> sent = CompletableFuture.completedFuture(null);
-        for (var id : state.members)
+        for (var id : state.entered)
             if (!id.equals(excluded))
                 sent = sent.thenCompose(ignored -> actors.sendToActor(id, current).submit());
         return sent;
