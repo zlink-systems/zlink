@@ -665,7 +665,7 @@ internal sealed class ZLinkProcessExecutionPool
                 continue;
             }
             var mask =
-                source.Waiting && source.Continuation is not null
+                source.Waiting && source.Continuation is not null && source.Destination!.Length != 0
                     ? registration.Events
                     : registration.Events & PollEventFlags.PollCompletion;
             if (!registration.Registered)
@@ -882,6 +882,13 @@ internal sealed class ZLinkProcessExecutionPool
                 if (!ReferenceEquals(_receiving, pool))
                     pool.WakeUnderLock();
             }
+        }
+
+        internal ValueTask WaitForWakeAsync(CancellationToken cancellationToken)
+        {
+            SetCancellationToken(cancellationToken);
+            _ = WaitAsync([], Timeout.InfiniteTimeSpan);
+            return new ValueTask(this, 0);
         }
 
         internal ValueTask ResumeAsync()

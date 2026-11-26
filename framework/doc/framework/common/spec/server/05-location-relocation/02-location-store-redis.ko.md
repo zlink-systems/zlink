@@ -329,8 +329,10 @@ Location Store를 공유하는 모든 node는 같은 형식을 쓴다 — v11 no
    값(둘 다 없으면 `1`)을 `Missing` 조건으로 Put한다.
 2. 남은 v11 MeshNode 수용 공간 record마다 batch 하나로 그 record의 active·pending 값을 §4.1 counter key에 Put하고
    옛 record를 Delete한다. 조건은 옛 record의 `Value`(읽은 bytes)와 대상 counter key 전부의 `Missing`이다.
-   `Conflict`나 응답 유실이면 그 record와 counter key를 다시 읽어, 옛 record가 없고 counter key가 있으면 끝난
-   것으로 보고 아니면 다시 시도한다. 값이 `0`인 counter key는 Put하지 않는다(없는 key는 `0`). 옛 record key의 RID
+   `Conflict`나 응답 유실이면 그 record와 counter key를 다시 읽고 다음 중 하나로 정한다. 옛 record가 없으면 이
+   batch나 다른 node의 batch가 옮긴 것이므로 끝난 것으로 본다. 옛 record의 bytes가 바뀌었으면 새 bytes로 다시
+   시도한다. 옛 record의 bytes가 그대로인데 대상 counter key가 하나라도 있으면, 정상 batch는 두 상태를 함께
+   바꾸므로 이 상태를 고칠 writer가 없다. 다시 시도하지 않고 startup configuration error로 멈춘다. 값이 `0`인 counter key는 Put하지 않는다(없는 key는 `0`). 옛 record key의 RID
    부분은 decode한 bytes를 현재 descriptor의 raw RID bytes와 표시 문자열 양쪽에 비교해, 일치하는 descriptor가
    정확히 하나면 그 RID의 `routingIdHex`로, 하나도 없으면 그 bytes를 그대로(literal) RoutingId로 해석한
    `routingIdHex`로 옮긴다. 옛 record 값은 nested 형식과 flat 형식(`actorsActive` 등 차원·상태를 이름에 붙인
@@ -445,6 +447,8 @@ golden fixture로 검증하는 key·value byte — 만으로 다음을 확인한
   검증한다. Creation terminal의 value byte 형식은 service-wire schema가 소유한다.
 - 인식하지 못하는 format tag나 `recordVersion`은 명시적으로 실패하며, 옛 key·value 형식을
   읽어 새 opaque record로 변환하는 하위 호환 경로가 없다.
+- v11 MeshNode 수용 공간 record가 그대로 남아 있고 그 record의 대상 counter key 하나가 이미 있는 Store로 v12
+  node를 시작하면, startup이 configuration error로 끝나고 옛 record와 counter key는 바뀌지 않는다.
 
 ---
 
