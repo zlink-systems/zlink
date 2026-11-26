@@ -3,16 +3,17 @@ using MyGame.Shared;
 
 namespace MyGame.E2E;
 
-internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposable
+internal sealed class TableRun(
+    string root,
+    int tableCapacity,
+    RunOutcome outcome,
+    string runDirectory,
+    bool foreground = false
+) : IAsyncDisposable
 {
-    public RunOutcome Outcome { get; } = new();
+    public static readonly TimeSpan RunDeadline = TimeSpan.FromMinutes(3);
     private readonly List<ManagedProcess> nodes = [];
     private readonly string project = "my-game-e2e-" + Guid.NewGuid().ToString("N");
-    private readonly string runDirectory = Path.Combine(
-        root,
-        ".logs",
-        "run-" + Guid.NewGuid().ToString("N")
-    );
     private readonly string? dockerProject = Environment.GetEnvironmentVariable(
         "MY_GAME_DOCKER_PROJECT"
     );
@@ -28,7 +29,6 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
     public async Task StartAsync(CancellationToken ct)
     {
         Directory.CreateDirectory(runDirectory);
-        Console.WriteLine($"Run logs: {runDirectory}");
         if (dockerProject is null)
         {
             composeStarted = true;
@@ -76,7 +76,7 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
         {
             TableCapacity = tableCapacity,
             RedisEndpoint = redisEndpoint,
-            KeyPrefix = (dockerProject ?? project) + ":",
+            KeyPrefix = project + ":",
             MeshEndpoint = "tcp://127.0.0.1:0",
             StreamEndpoint = settings.StreamEndpoint is null ? null : "ws://127.0.0.1:0",
         };
@@ -86,7 +86,7 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
         ManagedProcess node;
         if (dockerProject is not null)
         {
-            var name = dockerProject + "-" + suffix;
+            var name = project + "-" + suffix;
             var image =
                 Environment.GetEnvironmentVariable("MY_GAME_NODE_IMAGE")
                 ?? throw new InvalidOperationException("Missing node image.");
@@ -124,11 +124,12 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
                 ct
             );
             node = new ManagedProcess(
-                Outcome,
+                outcome,
                 "docker",
                 ["start", "-a", "-i", name],
                 runDirectory,
-                suffix
+                suffix,
+                foreground
             );
         }
         else
@@ -143,11 +144,12 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
                 assembly + ".dll"
             );
             node = new ManagedProcess(
-                Outcome,
+                outcome,
                 "dotnet",
                 [dll, "--config", config],
                 runDirectory,
-                suffix
+                suffix,
+                foreground
             );
         }
         nodes.Add(node);
@@ -157,7 +159,29 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
             ) ?? throw new InvalidOperationException($"Invalid readiness for {configName}.");
         if (ready.Id != settings.Id || ready.MeshEndpoint.EndsWith(":0", StringComparison.Ordinal))
             throw new InvalidOperationException($"Incorrect listener readiness for {configName}.");
+        node.Ready();
         return (node, ready);
+    }
+
+    public async Task ProbeFreshWorldAsync(
+        Func<string, CancellationToken, Task> probe,
+        CancellationToken ct
+    )
+    {
+        await using var fresh = new TableRun(
+            root,
+            1,
+            outcome,
+            Path.Combine(runDirectory, "fresh-world")
+        );
+        await fresh.StartAsync(ct);
+        await probe(fresh.Endpoint, ct);
+    }
+
+    public async Task WaitForExitAsync(CancellationToken ct)
+    {
+        var exited = await Task.WhenAny(nodes.Select(node => node.WaitForExitAsync(ct)));
+        throw new InvalidOperationException($"Server node {await exited} exited.");
     }
 
     public async Task DrainAsync(string nodeId, CancellationToken ct)
@@ -195,7 +219,7 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
             }
             catch (Exception error)
             {
-                Outcome.Record(error);
+                outcome.Record(error);
             }
         }
         if (composeStarted)
@@ -211,7 +235,7 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
             }
             catch (Exception error)
             {
-                Outcome.Record(error);
+                outcome.Record(error);
             }
             try
             {
@@ -224,7 +248,7 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
             }
             catch (Exception error)
             {
-                Outcome.Record(error);
+                outcome.Record(error);
             }
         }
     }

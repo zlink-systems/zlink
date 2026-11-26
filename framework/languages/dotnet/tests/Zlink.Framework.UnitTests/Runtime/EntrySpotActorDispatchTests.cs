@@ -15836,7 +15836,10 @@ public sealed partial class EntrySpotActorDispatchTests
         )
         {
             _dispatchHandler = handler;
+            DispatchAttached?.Invoke();
         }
+
+        public Action? DispatchAttached { get; init; }
 
         public bool DispatchHandlerAttached => _dispatchHandler is not null;
 

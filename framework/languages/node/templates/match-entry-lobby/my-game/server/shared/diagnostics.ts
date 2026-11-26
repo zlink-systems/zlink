@@ -7,14 +7,22 @@ import {
 } from '@opentelemetry/sdk-logs';
 const exporter: LogRecordExporter = {
   export(records: ReadableLogRecord[], callback) {
-    for (const record of records)
+    for (const record of records) {
+      const eventId = record.attributes.event_id;
+      const prefix =
+        eventId === 'zlink.message_flow' || eventId === 'zlink.dispatch_error'
+          ? 'ZLINK_MESSAGE_FLOW '
+          : '';
       process.stderr.write(
-        JSON.stringify({
-          time: new Date().toISOString(),
-          body: record.body,
-          ...record.attributes
-        }) + '\n'
+        prefix +
+          JSON.stringify({
+            time: new Date().toISOString(),
+            body: record.body,
+            ...record.attributes
+          }) +
+          '\n'
       );
+    }
     callback({ code: 0 });
   },
   async forceFlush() {},
