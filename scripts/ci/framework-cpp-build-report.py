@@ -8,7 +8,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_LINE_LIMIT = 3000
-TU_RSS_LIMIT_KIB = 3 * 1024 * 1024
+# Starts just above the current largest TU (7 GiB) so only growth warns.
+# Lower it step by step to the #5133 target of 2 GiB once the header diet lands.
+TU_RSS_LIMIT_KIB = 7 * 1024 * 1024
 
 
 def warning(path, message):
