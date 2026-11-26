@@ -33,7 +33,7 @@ runHost((_builder, config, mesh) => {
     f.executionMode(ZLinkUserSpotExecutionMode.SpotWide);
     f.preserveStateWith(FieldRelocation);
   });
-  objects.addSpotFactory(Names.party, Party, f => {
+  objects.addSpotFactory(Names.party, Party, (f) => {
     f.executionMode(ZLinkUserSpotExecutionMode.SpotWide);
     f.preserveStateWith(PartyRelocation);
   });
@@ -41,7 +41,14 @@ runHost((_builder, config, mesh) => {
   return {
     providers: [
       EntryNotifications,
-      FieldNotifications, Party, PartyRelocation, Command, MemberEntered, Started, Completed, FieldQuery,
+      FieldNotifications,
+      Party,
+      PartyRelocation,
+      Command,
+      MemberEntered,
+      Started,
+      Completed,
+      FieldQuery,
       Entry,
       EnterWorld,
       Field,

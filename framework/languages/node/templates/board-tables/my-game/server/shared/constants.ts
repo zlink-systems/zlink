@@ -1,8 +1,14 @@
 export const Names = {
   mesh: 'my-game-tables',
+  playerRecords: 'my-game-player-records',
   stream: 'players',
   actor: 'Player',
-  table: 'Table'
+  table: 'Table',
+  roomProvisioner: 'RoomProvisioner',
+  roomProvisionerKey: 'room-provisioner-board',
+  pool: 'Pool',
+  poolKey: 'pool-board',
+  matchRoomPrefix: 'room-'
 } as const;
 export const Game = {
   seats: 4,
@@ -16,10 +22,13 @@ export const Game = {
 } as const;
 const messageFollowMs = 30_000;
 const relocationMs = 25_000;
+const startupMs = 30_000;
 export const Limits = {
   observationCapacity: 64,
   messageMs: 10_000,
-  startupMs: 30_000,
+  startupMs,
+  // The server waits for runtime serving and mesh readiness in sequence.
+  startupBudgetMs: 2 * startupMs,
   messageFollowMs,
   relocationMs,
   safeMs: messageFollowMs + relocationMs,
@@ -34,9 +43,30 @@ export const Reasons = {
   amount: 'invalid-amount',
   seated: 'not-seated',
   integerOutOfRange: 'integer-out-of-range',
-  packetNotAllowed: 'packet-not-allowed'
+  packetNotAllowed: 'packet-not-allowed',
+  matchPending: 'match-pending',
+  matchNotWaiting: 'match-not-waiting',
+  matchRoomActive: 'match-room-active'
 } as const;
-export const Scenarios = ['table', 'reconnect', 'update'] as const;
+export const MatchCancellation = {
+  cancelled: 'cancelled',
+  disconnected: 'disconnected',
+  expired: 'expired'
+} as const;
+export const Matchmaking = {
+  tickMs: 500,
+  entryMs: 10_000,
+  disconnectGraceMs: 15_000,
+  waitMs: 120_000
+} as const;
+export const Scenarios = [
+  'table',
+  'reconnect',
+  'match',
+  'match-cancel',
+  'update',
+  'persist'
+] as const;
 export const PacketNames = {
   sessionInfoRequest: 'SessionInfoRequest',
   sessionInfo: 'SessionInfo',
@@ -47,7 +77,30 @@ export const PacketNames = {
   tableView: 'TableView',
   handDealt: 'HandDealt',
   handResult: 'HandResult',
-  actionRejected: 'ActionRejected'
+  actionRejected: 'ActionRejected',
+  findMatch: 'FindMatch',
+  matchQueued: 'MatchQueued',
+  cancelMatch: 'CancelMatch',
+  matchCancelled: 'MatchCancelled',
+  matchFound: 'MatchFound',
+  matchCommitted: 'MatchCommitted',
+  matchRequest: 'MatchRequest',
+  cancelTicket: 'CancelTicket',
+  matchPresence: 'MatchPresence',
+  matchAssigned: 'MatchAssigned',
+  enterReport: 'EnterReport',
+  prepareRoom: 'PrepareRoom',
+  roomPrepared: 'RoomPrepared',
+  roomClosed: 'RoomClosed',
+  roomAdmission: 'RoomAdmission',
+  tableAdmission: 'TableAdmission',
+  commitRoom: 'CommitRoom',
+  withdrawRoom: 'WithdrawRoom',
+  matchReleased: 'MatchReleased',
+  returnReport: 'ReturnReport',
+  roomWithdrawn: 'RoomWithdrawn',
+  loadPlayer: 'LoadPlayer',
+  commitRound: 'CommitRound'
 } as const;
 
 export const Control = {
@@ -62,6 +115,8 @@ export const Control = {
 
 export const NodeEntrypoints = {
   session: 'server/session/main.ts',
-  table: 'server/table/main.ts'
+  table: 'server/table/main.ts',
+  matchmaker: 'server/matchmaker/main.ts',
+  api: 'server/api/main.ts'
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;

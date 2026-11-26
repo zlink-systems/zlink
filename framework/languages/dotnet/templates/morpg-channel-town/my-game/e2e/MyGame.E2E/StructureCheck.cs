@@ -144,6 +144,14 @@ internal static class StructureCheck
             if (role == "location-store")
                 continue;
             var loaded = NodeSettings.Load(new[] { "--config", config });
+            Require(
+                role != "session"
+                    || (
+                        Uri.TryCreate(loaded.StreamEndpoint, UriKind.Absolute, out var stream)
+                        && stream.Scheme == "ws"
+                    ),
+                "Session requires a ws:// StreamEndpoint."
+            );
             Require(loaded.Id == id, "Configuration ID differs from structure ID.");
             settings.Add(id, loaded);
             roles.Add(id, role);

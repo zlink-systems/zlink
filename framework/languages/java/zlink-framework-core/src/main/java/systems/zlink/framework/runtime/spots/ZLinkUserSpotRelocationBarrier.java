@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkCompositeRelocationBarrier;
@@ -40,6 +41,14 @@ final class ZLinkUserSpotRelocationBarrier {
         return stateLane.runNowOrQueue(work);
     }
 
+    List<String> participantActorIds() {
+        return relocatesActorMembers() ? actors.actorIdsInSpot(context.spotId()) : List.of();
+    }
+
+    boolean relocatesActorMembers() {
+        return context.executionMode() == ZLinkUserSpotExecutionMode.SPOT_WIDE;
+    }
+
     CompletionStage<Optional<Seal>> trySeal() {
         return trySeal(ignored -> true);
     }
@@ -68,7 +77,7 @@ final class ZLinkUserSpotRelocationBarrier {
                             List<String> participantActorIds;
                             try {
                                 timerEnvelope = context.freezeTimerRelocationEnvelope();
-                                participantActorIds = actors.actorIdsInSpot(context.spotId());
+                                participantActorIds = participantActorIds();
                             } catch (RuntimeException failure) {
                                 return clearSealing()
                                         .thenCompose(
@@ -105,7 +114,7 @@ final class ZLinkUserSpotRelocationBarrier {
                                                 ZLinkCompositeRelocationBarrier.Seal composite =
                                                         localSeal.orElseThrow();
                                                 if (!participantActorIds.equals(
-                                                        actors.actorIdsInSpot(context.spotId()))) {
+                                                        participantActorIds())) {
                                                     return rejectSeal(composite, true, null);
                                                 }
                                                 return captureRecords(composite)
@@ -170,8 +179,7 @@ final class ZLinkUserSpotRelocationBarrier {
                             if (!available) {
                                 return CompletableFuture.completedFuture(Optional.empty());
                             }
-                            List<String> participantActorIds =
-                                    actors.actorIdsInSpot(context.spotId());
+                            List<String> participantActorIds = participantActorIds();
                             return context.relocationLanesAsync(participantActorIds)
                                     .thenCompose(
                                             lanes -> barrier.sealAtTurnBoundary(lanes, cancelled))
@@ -231,8 +239,7 @@ final class ZLinkUserSpotRelocationBarrier {
                                 return rollback(composite).thenApply(ignored -> Optional.empty());
                             }
                             if (cancelled.getAsBoolean()
-                                    || !participantActorIds.equals(
-                                            actors.actorIdsInSpot(context.spotId()))) {
+                                    || !participantActorIds.equals(participantActorIds())) {
                                 return rejectSeal(composite, false, null);
                             }
                             byte[] timerEnvelope;

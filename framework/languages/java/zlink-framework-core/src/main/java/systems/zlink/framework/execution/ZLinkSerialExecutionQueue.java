@@ -4,6 +4,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.execution.ZLinkConfirmedReplay;
 import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext.ApplicationTurn;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
@@ -1591,8 +1592,7 @@ public final class ZLinkSerialExecutionQueue {
                     }
                     for (Entry entry : acceptedEntries) {
                         watchDurableCancellation(entry);
-                        settleOwnership(entry);
-                        completeAdmission(entry);
+                        settleAdmission(entry);
                     }
                     scheduleDrainIfNeeded(schedule, null);
                     return List.copyOf(terminals);
@@ -1980,7 +1980,10 @@ public final class ZLinkSerialExecutionQueue {
                 && suspendedContinuations() != 0
                 && continuationPending.isEmpty()) return null;
         Entry application = applicationPending.peekFirst();
-        boolean applicationBlocked = !applicationStartAllowed(application);
+        boolean applicationBlocked =
+                !applicationStartAllowed(application)
+                        || (application != null
+                                && !ZLinkConfirmedReplay.ready(application.operation));
         if (timerOwner != null && applicationBlocked) return null;
         if (applicationBlocked) application = null;
         if (suspendedLifecycle != null) {
@@ -2107,9 +2110,19 @@ public final class ZLinkSerialExecutionQueue {
         scheduleDrainIfNeeded(result.scheduleDrain(), result.entry());
     }
 
-    private void scheduleDrainIfNeeded(boolean scheduleDrain, Entry entry) {
+    private void settleAdmission(Entry entry) {
         settleOwnership(entry);
         completeAdmission(entry);
+        if (entry != null) {
+            var confirmation = ZLinkConfirmedReplay.confirmation(entry.operation);
+            if (confirmation != null) {
+                confirmation.whenComplete((accepted, failure) -> wakeHead(entry));
+            }
+        }
+    }
+
+    private void scheduleDrainIfNeeded(boolean scheduleDrain, Entry entry) {
+        settleAdmission(entry);
         if (!scheduleDrain) {
             return;
         }
@@ -2538,7 +2551,8 @@ public final class ZLinkSerialExecutionQueue {
                 || (suspendedLifecycleContinuations != 0
                         && (owner == null || owner.lane != Lane.LIFECYCLE))
                 || continuationPending.stream().anyMatch(entry -> entry.turnOrigin() != owner)
-                || applicationPending.stream().anyMatch(entry -> !entry.hasRelocationRecord())) {
+                || applicationPending.stream()
+                        .anyMatch(entry -> !entry.canCaptureRelocationRecord())) {
             return Optional.empty();
         }
         if (nextRelocationSerial == Long.MAX_VALUE) {
@@ -2605,7 +2619,7 @@ public final class ZLinkSerialExecutionQueue {
         relocation.frozen = true;
         return Optional.of(
                 relocation.held.stream()
-                        .filter(Entry::hasRelocationRecord)
+                        .filter(Entry::canCaptureRelocationRecord)
                         .map(Entry::queuedRecord)
                         .toList());
     }
@@ -2646,7 +2660,7 @@ public final class ZLinkSerialExecutionQueue {
         }
         List<QueuedRecord> held =
                 relocation.held.stream()
-                        .filter(Entry::hasRelocationRecord)
+                        .filter(Entry::canCaptureRelocationRecord)
                         .map(Entry::queuedRecord)
                         .toList();
         RetainedCommit retained = new RetainedCommit(this, held);
@@ -3291,7 +3305,7 @@ public final class ZLinkSerialExecutionQueue {
                 }
                 List<QueuedRecord> current =
                         owner.relocation.held.stream()
-                                .filter(Entry::hasRelocationRecord)
+                                .filter(Entry::canCaptureRelocationRecord)
                                 .map(Entry::queuedRecord)
                                 .toList();
                 return ZLinkRetainedSerialQueueCommit.cut(
@@ -3579,6 +3593,10 @@ public final class ZLinkSerialExecutionQueue {
 
         private boolean hasRelocationRecord() {
             return record != null || lazyRecord != null;
+        }
+
+        private boolean canCaptureRelocationRecord() {
+            return hasRelocationRecord() && ZLinkConfirmedReplay.capturable(operation);
         }
 
         private synchronized QueuedRecord queuedRecord() {

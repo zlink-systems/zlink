@@ -201,10 +201,11 @@ final class ZLinkActorSessionCoordinator {
     void publishRelocatedActor(
             ZLinkActorRuntime.PreparedTransferredActor actor,
             String targetSpotId,
-            long authorityOwnerGeneration) {
+            long authorityOwnerGeneration,
+            ZLinkSpot<?> membershipSpot) {
         requireActors()
                 .publishPreparedTransferredActor(
-                        actor, targetSpotId, authorityOwnerGeneration, null);
+                        actor, targetSpotId, authorityOwnerGeneration, membershipSpot);
     }
 
     CompletionStage<java.util.List<CompletableFuture<Void>>> admitRelocationPrefix(

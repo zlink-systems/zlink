@@ -8,6 +8,8 @@ internal sealed class ManagedProcess : IAsyncDisposable
 {
     private readonly RunOutcome outcome;
     private readonly Process process;
+    private readonly string name;
+    private readonly bool foreground;
     private readonly Task stdout;
     private readonly Task stderr;
     private readonly Channel<string> lines = Channel.CreateUnbounded<string>();
@@ -18,10 +20,14 @@ internal sealed class ManagedProcess : IAsyncDisposable
         string file,
         IEnumerable<string> arguments,
         string logDirectory,
-        string name
+        string name,
+        bool foreground = false
     )
     {
         this.outcome = outcome;
+        this.name = name;
+        this.foreground = foreground;
+        Console.WriteLine($"[{name}] Starting");
         var start = new ProcessStartInfo(file)
         {
             WorkingDirectory = logDirectory,
@@ -41,12 +47,14 @@ internal sealed class ManagedProcess : IAsyncDisposable
             stdout = ReadAsync(
                 process.StandardOutput,
                 Path.Combine(logDirectory, name + ".out.log"),
-                true
+                true,
+                Path.Combine(logDirectory, name + ".flow.log")
             );
             stderr = ReadAsync(
                 process.StandardError,
                 Path.Combine(logDirectory, name + ".err.log"),
-                false
+                false,
+                Path.Combine(logDirectory, name + ".flow.log")
             );
         }
         catch
@@ -62,15 +70,36 @@ internal sealed class ManagedProcess : IAsyncDisposable
         }
     }
 
-    private async Task ReadAsync(StreamReader reader, string path, bool publish)
+    private async Task ReadAsync(StreamReader reader, string path, bool publish, string flowPath)
     {
-        await using var log = new StreamWriter(path);
+        await using var log = new StreamWriter(path) { AutoFlush = true };
+        await using var flow = publish ? null : new StreamWriter(flowPath) { AutoFlush = true };
         try
         {
             while (await reader.ReadLineAsync() is { } line)
             {
                 await log.WriteLineAsync(line);
-                await log.FlushAsync();
+                if (
+                    flow is not null
+                    && (
+                        line.Contains("event=zlink.message_flow", StringComparison.Ordinal)
+                        || line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
+                    )
+                )
+                {
+                    await flow.WriteLineAsync(line);
+                    if (foreground && line.Contains("phase=dispatched", StringComparison.Ordinal))
+                    {
+                        const string packetField = " packet=";
+                        var field = line.IndexOf(packetField, StringComparison.Ordinal);
+                        if (field >= 0)
+                        {
+                            var packet = line[(field + packetField.Length)..].Split(' ', 2)[0];
+                            if (!packet.StartsWith('$'))
+                                Console.WriteLine($"[{name}] Handled {packet}");
+                        }
+                    }
+                }
                 if (publish && NodeProtocol.IsMarker(line))
                     await lines.Writer.WriteAsync(line);
             }
@@ -104,6 +133,14 @@ internal sealed class ManagedProcess : IAsyncDisposable
             );
         }
         throw new InvalidOperationException($"Process {process.Id} exited before '{prefix}'.");
+    }
+
+    public void Ready() => Console.WriteLine($"[{name}] Ready");
+
+    public async Task<string> WaitForExitAsync(CancellationToken ct)
+    {
+        await process.WaitForExitAsync(ct);
+        return name;
     }
 
     public Task CommandAsync(string command) => process.StandardInput.WriteLineAsync(command);
@@ -143,6 +180,7 @@ internal sealed class ManagedProcess : IAsyncDisposable
         await outcome.CleanupAsync(async () => await stdout);
         await outcome.CleanupAsync(async () => await stderr);
         stopped = true;
+        Console.WriteLine($"[{name}] Stopped (exit {process.ExitCode})");
         if (process.ExitCode != 0)
             outcome.Record(
                 new InvalidOperationException($"Node PID {process.Id} exited {process.ExitCode}.")

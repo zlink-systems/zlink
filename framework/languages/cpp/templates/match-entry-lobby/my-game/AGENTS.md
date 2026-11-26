@@ -25,6 +25,16 @@ Every server process in this project is a stateful ZLink node. Before writing co
 
 Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
+## New game projects
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference. Keep this template intact as you build the new project.
+
+## Server and e2e commands
+
+Run one scenario with `./run-e2e.sh --scenario hit`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
+Use `./run-server.sh` in Bash or `.\run-server.cmd` on Windows to build and start Redis and the nodes. The foreground process prints the client address and stops its children on Ctrl+C. In another terminal, use `./run-e2e.sh` or `.\run-e2e.cmd` to attach through `.logs/server.json` or start an isolated Docker run. The runner reports which scenarios require isolation. Each run writes node stdout, stderr, Framework message-flow and failure details under `.logs/run-<id>/`. See [README](README.md) for prerequisites and options.
+
 ## Project overview
 
 This C++20 project is an action/FPS entry lobby example with mode-based matchmaking and authoritative two-player Rooms. It runs a Session node for connections, play nodes A and B (match) that host the Entry, a Matchmaking Spot, Room Spots and Player Actors, and Redis for location and relocation state. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
@@ -56,6 +66,10 @@ Bash provides the same workflow:
 For host process debugging, install a C++20 compiler (GCC 13 or later, or Visual Studio 2022 17.4 or later in a Visual Studio developer shell on Windows), CMake 3.24 or later, and Ninja, then add `--local` or `-Local`. Local mode runs `cmake -P bootstrap.cmake`, `cmake --preset default` and `cmake --build --preset default`, then starts `build/bin/my-game-e2e`. Add `--no-build` or `-NoBuild` only with an existing local build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README. Matchmaking and Room rule tests (`my-game-domain-test` from `e2e/domain_test.cpp`) are built with the project; after a local build, run `ctest --test-dir build --output-on-failure`.
 
 ## Project layout and extension points
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use `std::optional<T>` in the DTO for nullable fields. To allow omission, separately mark the field `zlink::json::defaulted` in `dto_traits`.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/cpp/guide/server/20-channel-messaging/#12-message-value-rules)
 
 ### Session node
 

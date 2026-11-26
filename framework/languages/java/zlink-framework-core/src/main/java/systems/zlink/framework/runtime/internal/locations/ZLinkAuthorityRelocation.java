@@ -106,6 +106,10 @@ public final class ZLinkAuthorityRelocation {
         return value.get("coordinator").deepCopy();
     }
 
+    String sourceInventorySha256() {
+        return value.get("sourceInventorySha256").textValue();
+    }
+
     public long applicationVersion() {
         return integer(value.get("applicationVersion"));
     }

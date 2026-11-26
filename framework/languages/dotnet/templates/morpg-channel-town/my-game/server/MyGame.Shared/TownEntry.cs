@@ -11,9 +11,15 @@ public sealed class TownEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<
     public void Configure()
     {
         Context.Handlers.AddActorPacket<EnterTownHandler, PlayerActor>(nameof(JoinTownRequest));
-        Context.Handlers.AddActorPacket<TownEntryTownViewNotification, PlayerActor>(nameof(TownView));
-        Context.Handlers.AddActorPacket<TownEntryDungeonViewNotification, PlayerActor>(nameof(DungeonView));
-        Context.Handlers.AddActorPacket<TownEntryActionRejectedNotification, PlayerActor>(nameof(ActionRejected));
+        Context.Handlers.AddActorPacket<TownEntryTownViewNotification, PlayerActor>(
+            nameof(TownView)
+        );
+        Context.Handlers.AddActorPacket<TownEntryDungeonViewNotification, PlayerActor>(
+            nameof(DungeonView)
+        );
+        Context.Handlers.AddActorPacket<TownEntryActionRejectedNotification, PlayerActor>(
+            nameof(ActionRejected)
+        );
     }
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct) =>
@@ -38,29 +44,48 @@ public sealed class EnterTownHandler
         if (request.PlayerId != actor.Context.ActorId)
             throw new InvalidDataException("Player identity does not match the bound Actor.");
         var reason = ChannelRules.Validate(request.Channel);
-        if (reason is not null) return actor.Context.BoundSession.Send(new ActionRejected(reason)).Async();
+        if (reason is not null)
+            return actor.Context.BoundSession.Send(new ActionRejected(reason)).Async();
         actor.Context.JoinSpot(GameNames.TownId(request.Channel), request).Defer();
         return ValueTask.CompletedTask;
     }
 }
 
 [ZLinkSpotActorSendHandler(nameof(TownView))]
-public sealed class TownEntryTownViewNotification : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, TownView>
+public sealed class TownEntryTownViewNotification
+    : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, TownView>
 {
-    public ValueTask HandleAsync(TownEntry spot, PlayerActor actor, IZLinkMessageContext context,
-        TownView message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        TownEntry spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        TownView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }
 
 [ZLinkSpotActorSendHandler(nameof(DungeonView))]
-public sealed class TownEntryDungeonViewNotification : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, DungeonView>
+public sealed class TownEntryDungeonViewNotification
+    : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, DungeonView>
 {
-    public ValueTask HandleAsync(TownEntry spot, PlayerActor actor, IZLinkMessageContext context,
-        DungeonView message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        TownEntry spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        DungeonView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }
 
 [ZLinkSpotActorSendHandler(nameof(ActionRejected))]
-public sealed class TownEntryActionRejectedNotification : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, ActionRejected>
+public sealed class TownEntryActionRejectedNotification
+    : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, ActionRejected>
 {
-    public ValueTask HandleAsync(TownEntry spot, PlayerActor actor, IZLinkMessageContext context,
-        ActionRejected message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        TownEntry spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        ActionRejected message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }
