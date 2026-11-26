@@ -1487,7 +1487,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         snapshot.allocation.objectKind === 'actor'
           ? undefined
           : decodeServiceReadySpotAuthority(snapshot.payload);
-      const readyActor =
+      const actor =
         snapshot.allocation.objectKind === 'actor'
           ? decodeActorAuthorityPayload(
               serviceRelocationAuthorityApplicationPayload(snapshot.payload)
@@ -1503,7 +1503,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           (creation !== undefined &&
             creation.key.kind === snapshot.allocation.objectKind &&
             creation.intent.stableType === snapshot.allocation.stableType &&
-            (readySpot !== undefined || readyActor?.state === 'ready') &&
+            (readySpot !== undefined || actor?.state === 'ready' || actor?.state === 'closing') &&
             (readySpot === undefined ||
               (readySpot.kind === creation.key.kind &&
                 readySpot.stableType === creation.intent.stableType &&
@@ -1521,7 +1521,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const leaseRead = this.provider.read(leaseKey, signal).then(async (read) => {
         const ownerLive = sameLiveOwner(read, snapshot);
         let targetCondition: ZLinkStoreCondition | undefined;
-        if (releaseCandidate && !ownerLive && creation !== undefined) {
+        if (
+          releaseCandidate &&
+          !ownerLive &&
+          creation !== undefined &&
+          actor?.state !== 'closing'
+        ) {
           const targetKey = meshKey(creation.target.meshName, creation.target.nodeRid);
           const sameDescriptor = targetKey.value === descriptorKey.value;
           const targetRead = await (sameDescriptor
