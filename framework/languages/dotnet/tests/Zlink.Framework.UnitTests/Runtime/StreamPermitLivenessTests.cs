@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -8,7 +7,6 @@ using Systems.Zlink.Stream.Connector.Runtime;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol.Framing;
 using Systems.Zlink.Stream.Connector.Runtime.Transport;
-using Xunit.Abstractions;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -17,7 +15,7 @@ using Zlink.Framework.Tests.Common;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class StreamPermitLivenessTests(ITestOutputHelper output)
+public sealed class StreamPermitLivenessTests
 {
     private static readonly TimeSpan Interval = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(1);
@@ -63,6 +61,8 @@ public sealed class StreamPermitLivenessTests(ITestOutputHelper output)
             _ => $"{transport}://127.0.0.1:0",
         };
         var inproc = transport == "inproc" ? new InprocBackend() : null;
+        var time = new ControllableTimeProvider();
+        var start = time.GetTimestamp();
         var builder = Host.CreateApplicationBuilder();
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
         var connected = new TaskCompletionSource(
@@ -79,6 +79,7 @@ public sealed class StreamPermitLivenessTests(ITestOutputHelper output)
             );
         builder.Services.AddZLinkFramework(options =>
         {
+            options.UseTestTimeProvider(time);
             options.DisableImplicitHandlerAutoRegistration();
             options.ConfigureInboundDispatch().MaxQueuedApplicationJobs = 1;
             if (flow is not null)
@@ -118,27 +119,28 @@ public sealed class StreamPermitLivenessTests(ITestOutputHelper output)
             await connected.Task.WaitAsync(token);
             await peer.PingAsync();
             await peer.ExpectPongAsync();
+            while (!time.HasTimerDueIn(Interval))
+                await Task.Delay(2, token);
+
             if (holdMilliseconds == 0)
             {
-                var observation = Stopwatch.StartNew();
-                var pongs = 0;
-                while (observation.Elapsed < Heartbeat)
+                var step = TimeSpan.FromMilliseconds(40);
+                for (var elapsed = TimeSpan.Zero; elapsed < Heartbeat; elapsed += step)
                 {
+                    time.Advance(step);
                     await peer.PingAsync();
                     await peer.ExpectPongAsync();
-                    pongs++;
-                    await Task.Delay(40, token);
                 }
-                Assert.True(pongs > 1);
-                output.WriteLine($"{transport} {scenario} pongs={pongs}");
                 return;
             }
 
             // Keep the original receive deadline distinct from the exact-duration hold.
-            await Task.Delay(100, token);
+            time.Advance(TimeSpan.FromMilliseconds(100));
             await using var other = silent ? await ConnectAsync(endpoint, inproc, token) : null;
             var probe = other ?? peer;
-            long released;
+            var nextPing = Interval;
+            var releaseAt =
+                time.GetElapsedTime(start) + TimeSpan.FromMilliseconds(holdMilliseconds);
             var jobs = state.ApplicationJobQueue;
             var lease = await jobs.AcquireAsync(token, ZLinkApplicationJobOrigin.Remote);
             try
@@ -147,31 +149,10 @@ public sealed class StreamPermitLivenessTests(ITestOutputHelper output)
                 while (jobs.GetStatus().CapacityWaiters == 0)
                     await Task.Delay(2, token);
 
-                var held = Stopwatch.StartNew();
-                var hold = TimeSpan.FromMilliseconds(holdMilliseconds);
-                var pings = 0;
-                while (hold - held.Elapsed is var remaining && remaining > TimeSpan.Zero)
-                {
-                    var frame = await peer.ReadAsync(remaining);
-                    if (frame is null)
-                        continue;
-                    Assert.True(
-                        frame.Value.Name == ZlinkStreamControlProtocol.HeartbeatPingName,
-                        $"{transport} {scenario} received {frame.Value.Name} ({frame.Value.Reason}) during permit wait after {held.Elapsed.TotalMilliseconds:F0} ms."
-                    );
-                    pings++;
-                }
-
-                output.WriteLine(
-                    $"{transport} {scenario} hold_ms={held.Elapsed.TotalMilliseconds:F0} pings={pings}"
-                );
-                Assert.True(
-                    pings >= Math.Max(1, holdMilliseconds / (int)Interval.TotalMilliseconds - 1)
-                );
+                await AdvanceAndExpectPingsAsync(releaseAt);
             }
             finally
             {
-                released = Stopwatch.GetTimestamp();
                 lease.Dispose();
             }
 
@@ -183,32 +164,34 @@ public sealed class StreamPermitLivenessTests(ITestOutputHelper output)
 
             if (idle)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(350), token);
+                await AdvanceAndExpectPingsAsync(releaseAt + TimeSpan.FromMilliseconds(350));
                 await peer.PingAsync();
                 await peer.ExpectPongAsync();
             }
 
             var timeout = idle ? Idle : Heartbeat;
-            var observationLimit = timeout + Interval + TimeSpan.FromMilliseconds(100);
-            ZlinkStreamCloseReason? reason = null;
-            while (
-                observationLimit - Stopwatch.GetElapsedTime(released) is var remaining
-                && remaining > TimeSpan.Zero
-            )
-            {
-                reason = (await peer.ReadAsync(remaining))?.Reason;
-                if (reason is not null)
-                    break;
-            }
-            var elapsed = Stopwatch.GetElapsedTime(released);
-            output.WriteLine(
-                $"{transport} {scenario} release_to_close_ms={elapsed.TotalMilliseconds:F0} reason={reason}"
-            );
+            var tick = TimeSpan.FromMilliseconds(1);
+            await AdvanceAndExpectPingsAsync(releaseAt + timeout - tick);
+            Assert.True(time.HasTimerDueIn(tick));
+            time.Advance(tick);
+            var closing = await peer.ReadAsync();
             Assert.Equal(
                 idle ? ZlinkStreamCloseReason.IdleTimeout : ZlinkStreamCloseReason.HeartbeatTimeout,
-                reason
+                closing.Reason
             );
-            Assert.True(elapsed >= timeout, $"Session closed after {elapsed}, before {timeout}.");
+
+            async Task AdvanceAndExpectPingsAsync(TimeSpan until)
+            {
+                // Each ping acknowledges its phase before the clock crosses the next phase.
+                while (nextPing <= until)
+                {
+                    time.Advance(nextPing - time.GetElapsedTime(start));
+                    var frame = await peer.ReadAsync();
+                    Assert.Equal(ZlinkStreamControlProtocol.HeartbeatPingName, frame.Name);
+                    nextPing += Interval;
+                }
+                time.Advance(until - time.GetElapsedTime(start));
+            }
         }
         finally
         {
@@ -292,10 +275,6 @@ public sealed class StreamPermitLivenessTests(ITestOutputHelper output)
             []
         );
 
-        private readonly CancellationTokenSource _reading =
-            CancellationTokenSource.CreateLinkedTokenSource(token);
-        private Task<ZlinkStreamFrame>? _pending;
-
         public ValueTask PingAsync() => connection.WriteAsync(Ping, token);
 
         public async Task ExpectPongAsync()
@@ -303,32 +282,14 @@ public sealed class StreamPermitLivenessTests(ITestOutputHelper output)
             (string Name, ZlinkStreamCloseReason? Reason) frame;
             do
             {
-                frame =
-                    await ReadAsync(TimeSpan.FromSeconds(2))
-                    ?? throw new TimeoutException(
-                        "No STREAM control frame while waiting for pong."
-                    );
+                frame = await ReadAsync();
             } while (frame.Name == ZlinkStreamControlProtocol.HeartbeatPingName);
             Assert.Equal(ZlinkStreamControlProtocol.HeartbeatPongName, frame.Name);
         }
 
-        public async Task<(string Name, ZlinkStreamCloseReason? Reason)?> ReadAsync(
-            TimeSpan duration
-        )
+        public async ValueTask<(string Name, ZlinkStreamCloseReason? Reason)> ReadAsync()
         {
-            _pending ??= ZlinkStreamFrameCodec.ReadAsync(connection, 4096, _reading.Token).AsTask();
-            ZlinkStreamFrame frame;
-            try
-            {
-                frame = await _pending.WaitAsync(duration);
-            }
-            catch (TimeoutException)
-            {
-                // Keep the pending read across observation windows even if a frame is partial.
-                return null;
-            }
-
-            _pending = null;
+            var frame = await ZlinkStreamFrameCodec.ReadAsync(connection, 4096, token);
             var header = ZLinkStreamProtocolDefaults.DecodeHeader(frame.Header);
             return (
                 header.Name,
@@ -338,21 +299,7 @@ public sealed class StreamPermitLivenessTests(ITestOutputHelper output)
             );
         }
 
-        public async ValueTask DisposeAsync()
-        {
-            await _reading.CancelAsync();
-            try
-            {
-                if (_pending is not null)
-                    await _pending;
-            }
-            catch (OperationCanceledException) when (_reading.IsCancellationRequested) { }
-            finally
-            {
-                _reading.Dispose();
-                await connection.CloseAsync(CancellationToken.None);
-            }
-        }
+        public ValueTask DisposeAsync() => connection.CloseAsync(CancellationToken.None);
     }
 
     private sealed class UnixConnection(NetworkStream stream) : IZlinkStreamConnection
