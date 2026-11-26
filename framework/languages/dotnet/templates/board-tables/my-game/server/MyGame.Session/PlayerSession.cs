@@ -13,6 +13,8 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
     private static bool IsClientPacket(string packetName) =>
         packetName
             is nameof(JoinTableRequest)
+                or nameof(FindMatch)
+                or nameof(CancelMatch)
                 or nameof(TableViewRequest)
                 or nameof(StartHandRequest)
                 or nameof(BetRequest)
@@ -38,22 +40,22 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
     {
         if (!IsClientPacket(dispatch.PacketName))
         {
-            await Context
-                .Client.Send(new ActionRejected(Rejection.PacketNotAllowed, 0))
-                .Async();
+            await Context.Client.Send(new ActionRejected(Rejection.PacketNotAllowed, 0)).Async();
             return;
         }
 
         if (Context.Actors.Bound.Count == 0)
         {
-            if (dispatch.PacketName != nameof(JoinTableRequest))
-                throw new InvalidOperationException(
-                    "JoinTableRequest must be the first player packet."
-                );
-
-            var join = payload.Decode<JoinTableRequest>();
+            var playerId = dispatch.PacketName switch
+            {
+                nameof(JoinTableRequest) => payload.Decode<JoinTableRequest>().PlayerId,
+                nameof(FindMatch) => $"player-{Guid.NewGuid():N}",
+                _ => throw new InvalidOperationException(
+                    "JoinTableRequest or FindMatch must be the first player packet."
+                ),
+            };
             var result = await actors
-                .GetOrCreate(join.PlayerId, GameNames.PlayerType)
+                .GetOrCreate(playerId, GameNames.PlayerType)
                 .InMesh(GameNames.WorldMesh)
                 .Request(ZLinkMessage.Empty)
                 .Async(cancellationToken);
