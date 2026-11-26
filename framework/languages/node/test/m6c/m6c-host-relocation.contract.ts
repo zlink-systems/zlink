@@ -5,6 +5,8 @@ import {
 import { LegacyRelocationAuthorityFixture } from './legacy-relocation-authority-fixture';
 import { MessageChannel } from 'node:worker_threads';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
+import { ZLinkSpotTimerRegistry } from '../../packages/framework/src/runtime/spots/spot-timer';
+import { ServiceRelocationObjectCaptureOwner } from '../../packages/framework/src/runtime/foundation/service-relocation-object-owner';
 import { ZLinkSpotActorMembership } from '../../packages/framework/src/runtime/spots/spot-actor-membership';
 import { resolveActorIngress } from '../../packages/framework/src/runtime/spots/spot-actor-ingress-admission';
 import { ZLinkActorRuntimeState } from '../../packages/framework/src/runtime/actors/actor-runtime-state';
@@ -1490,8 +1492,62 @@ function createHostRelocationBatchHarness() {
       events.push(`${actorId}:terminal`);
     }
   };
-  return { runtime, actorBarriers, events, prepares };
+  return { runtime, actorBarriers, events, prepares, activation };
 }
+
+test('PerActor Spot shell excludes Spot timers from relocation payload', async (t) => {
+  const { runtime, activation: fixture } = createHostRelocationBatchHarness();
+  const serial = new ZLinkSpotSerialTurnExecutor(true, fixture.spotId as never);
+  const timers = new ZLinkSpotTimerRegistry();
+  const activation = new ZLinkSpotActivation({
+    meshName: 'mesh-a',
+    spotId: fixture.spotId,
+    domain: {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.PerActor,
+      relocationCoordinationMode: 'framework_managed'
+    },
+    spotType: fixture.spotType,
+    spot: fixture.spot,
+    serial,
+    timers,
+    actorHandlers: {},
+    handlers: {}
+  } as never);
+  class TimerHandler {
+    async handle(): Promise<void> {}
+  }
+  await timers.add(
+    'spot-timer',
+    60_000,
+    undefined,
+    TimerHandler as never,
+    serial,
+    fixture.spot as never
+  );
+  let captured: Awaited<ReturnType<ServiceRelocationObjectCaptureOwner['captureUserSpotAggregate']>> | undefined;
+  const originalCapture = ServiceRelocationObjectCaptureOwner.prototype.captureUserSpotAggregate;
+  const stopped = new Error('Capture observed.');
+  t.mock.method(
+    ServiceRelocationObjectCaptureOwner.prototype,
+    'captureUserSpotAggregate',
+    async (...args: Parameters<ServiceRelocationObjectCaptureOwner['captureUserSpotAggregate']>) => {
+      captured = await originalCapture.call(new ServiceRelocationObjectCaptureOwner(), ...args);
+      await captured.abortSource();
+      throw stopped;
+    }
+  );
+  try {
+    await assert.rejects(
+      runtime.relocatePerActorSpotShell('mesh-a', activation, target as never, undefined),
+      stopped
+    );
+    assert.notEqual(captured, undefined);
+    assert.deepEqual(captured!.envelope.participants[0]!.timers, []);
+  } finally {
+    await timers.dispose();
+  }
+});
 
 for (const scenario of ['held', 'rejected', 'successful'] as const) {
   test(`host relocation batch 2 ${scenario} before SpotWide PREPARE`, async () => {
