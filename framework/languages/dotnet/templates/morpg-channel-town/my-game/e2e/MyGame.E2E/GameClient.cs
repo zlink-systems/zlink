@@ -67,11 +67,13 @@ internal sealed class GameClient(
     {
         var inbox = Channel.CreateUnbounded<object>();
         inboxes.Add(typeof(T), inbox);
-        Connector.On<T>((message, _) =>
-        {
-            inbox.Writer.TryWrite(message.Payload!);
-            return ValueTask.CompletedTask;
-        });
+        Connector.On<T>(
+            (message, _) =>
+            {
+                inbox.Writer.TryWrite(message.Payload!);
+                return ValueTask.CompletedTask;
+            }
+        );
     }
 
     public async Task<T> ReceiveAsync<T>(Func<T, bool> predicate, CancellationToken ct)
@@ -81,10 +83,13 @@ internal sealed class GameClient(
         try
         {
             await foreach (var message in inboxes[typeof(T)].Reader.ReadAllAsync(deadline.Token))
-                if (predicate((T)message)) return (T)message;
+                if (predicate((T)message))
+                    return (T)message;
         }
         catch (OperationCanceledException error) when (!ct.IsCancellationRequested)
-        { throw new TimeoutException($"Player {PlayerId}: waiting for {typeof(T).Name}.", error); }
+        {
+            throw new TimeoutException($"Player {PlayerId}: waiting for {typeof(T).Name}.", error);
+        }
         throw new InvalidOperationException("Client inbox closed.");
     }
 

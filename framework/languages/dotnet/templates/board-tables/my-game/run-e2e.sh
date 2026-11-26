@@ -2,7 +2,9 @@
 set -euo pipefail
 umask 077
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$ROOT/scripts/run-helpers.sh"
 local_mode=false
+scenario_run=true
 no_build=false
 build_only=false
 arguments=()
@@ -11,19 +13,25 @@ for argument in "$@"; do
     --local) local_mode=true ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
+    --check-structure|--check-domain|--mode) scenario_run=false; arguments+=("$argument") ;;
     *) arguments+=("$argument") ;;
   esac
 done
 mkdir -p "$ROOT/.logs"
+if ! $local_mode && ! $build_only && $scenario_run && server_running; then
+  if $no_build; then
+    echo '--no-build requires --local.' >&2
+    exit 1
+  fi
+  echo 'Using the running server (.logs/server.json)'
+  exec dotnet "$runner" --root "$ROOT" --attach "${arguments[@]}"
+fi
 if $local_mode; then
   if ! $no_build; then
-    if ! dotnet build "$ROOT/server/MyGame.sln" --nologo --verbosity minimal >"$ROOT/.logs/build.log" 2>&1; then
-      tail -n 20 "$ROOT/.logs/build.log" >&2
-      exit 1
-    fi
+    build_local
   fi
   $build_only && exit 0
-  exec dotnet "$ROOT/e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll" --root "$ROOT" "${arguments[@]}"
+  exec dotnet "$runner" --root "$ROOT" "${arguments[@]}"
 fi
 if $no_build; then
   echo '--no-build requires --local; Docker builds reuse the layer cache automatically.' >&2
