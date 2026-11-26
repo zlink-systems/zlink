@@ -90,6 +90,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
     private Runnable sourceQuiescenceChanged = () -> {};
     private final java.util.function.BooleanSupplier targetAdmissionSealed;
+    private final java.util.function.BooleanSupplier targetOwnerAdmissionOpen;
 
     record AttemptCounts(int sources, int targets, int terminalTargets) {}
 
@@ -273,6 +274,7 @@ final class ZLinkCanonicalRelocationStateMachine
             RetentionScheduler retentionScheduler,
             ZLinkRelocationPayloadTransfer.Options transferOptions,
             java.util.function.BooleanSupplier targetAdmissionSealed,
+            java.util.function.BooleanSupplier targetOwnerAdmissionOpen,
             ZLinkDispatchErrorReporter dispatchErrors) {
         this(
                 node,
@@ -286,6 +288,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 System::nanoTime,
                 ZLinkCanonicalRelocationStateMachine::scheduleAfter,
                 targetAdmissionSealed,
+                targetOwnerAdmissionOpen,
                 dispatchErrors);
     }
 
@@ -313,6 +316,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 monotonicNanos,
                 delayScheduler,
                 () -> false,
+                () -> true,
                 dispatchErrors);
     }
 
@@ -340,6 +344,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 monotonicNanos,
                 delayScheduler,
                 targetAdmissionSealed,
+                () -> true,
                 null);
     }
 
@@ -355,9 +360,12 @@ final class ZLinkCanonicalRelocationStateMachine
             LongSupplier monotonicNanos,
             DelayScheduler delayScheduler,
             java.util.function.BooleanSupplier targetAdmissionSealed,
+            java.util.function.BooleanSupplier targetOwnerAdmissionOpen,
             ZLinkDispatchErrorReporter dispatchErrors) {
         this.targetAdmissionSealed =
                 Objects.requireNonNull(targetAdmissionSealed, "targetAdmissionSealed");
+        this.targetOwnerAdmissionOpen =
+                Objects.requireNonNull(targetOwnerAdmissionOpen, "targetOwnerAdmissionOpen");
         this.node = Objects.requireNonNull(node, "node");
         this.meshName = requireText(meshName, "meshName");
         this.entrySpotId = entrySpotId;
@@ -844,7 +852,16 @@ final class ZLinkCanonicalRelocationStateMachine
                                     || state == MeshNodeState.STOPPED
                                     || state == MeshNodeState.ERROR)
                                 return new java.util.AbstractMap.SimpleImmutableEntry<>(
-                                        created, created);
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                                                "canonical relocation target admission is sealed"),
+                                        created);
+                            if (!targetOwnerAdmissionOpen.getAsBoolean())
+                                return new java.util.AbstractMap.SimpleImmutableEntry<>(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                "canonical relocation target owner admission is closed"),
+                                        created);
                             targets.put(fence, created);
                             return new java.util.AbstractMap.SimpleImmutableEntry<>(null, created);
                         });
@@ -866,11 +883,7 @@ final class ZLinkCanonicalRelocationStateMachine
                                     terminal.encodedPrepare()),
                             prepare));
         }
-        if (current == created) {
-            ZLinkFrameworkException rejected =
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.SHUTTING_DOWN,
-                            "canonical relocation target is shutting down");
+        if (current instanceof ZLinkFrameworkException rejected) {
             created.ready().completeExceptionally(rejected);
             created.request().completeExceptionally(rejected);
             created.prepared().completeExceptionally(rejected);

@@ -5714,6 +5714,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             snapshot.storeVersion()));
     }
 
+    boolean isRestoreOwnerAdmissionOpen() {
+        return userSpotLocationRuntime != null && userSpotLocationRuntime.isOwnerAdmissionOpen();
+    }
+
     @Override
     void ensureOwnerAdmissionOpen() {
         if (userSpotLocationRuntime != null) {

@@ -1577,6 +1577,17 @@ final class ZLinkCanonicalRelocationStateMachineTest {
      * Builds one wired source/target pair with a committed source Actor authority ready for PREPARE
      * — the shared setup underlying the tests above.
      */
+    Fixture restoreAdmissionFixture(java.util.function.BooleanSupplier ownerAdmissionOpen) {
+        return fixture(
+                new CountingEndpoint(),
+                false,
+                null,
+                null,
+                () -> false,
+                java.util.function.UnaryOperator.identity(),
+                ownerAdmissionOpen);
+    }
+
     private Fixture fixture(CountingEndpoint endpoint) {
         return fixture(endpoint, false);
     }
@@ -1615,6 +1626,24 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             List<Runnable> routeDeadlines,
             java.util.function.BooleanSupplier targetAdmissionSealed,
             java.util.function.UnaryOperator<ZLinkInternalMeshNode> decorateSource) {
+        return fixture(
+                endpoint,
+                disconnectFirstPrepare,
+                sessionRoute,
+                routeDeadlines,
+                targetAdmissionSealed,
+                decorateSource,
+                () -> true);
+    }
+
+    private Fixture fixture(
+            CountingEndpoint endpoint,
+            boolean disconnectFirstPrepare,
+            CompletableFuture<Void> sessionRoute,
+            List<Runnable> routeDeadlines,
+            java.util.function.BooleanSupplier targetAdmissionSealed,
+            java.util.function.UnaryOperator<ZLinkInternalMeshNode> decorateSource,
+            java.util.function.BooleanSupplier ownerAdmissionOpen) {
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
         String actorId = "actor-a";
@@ -1799,7 +1828,9 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                                 endpoint,
                                 retention,
                                 ZLinkRelocationPayloadTransfer.Options.defaults(),
-                                targetAdmissionSealed));
+                                targetAdmissionSealed,
+                                ownerAdmissionOpen,
+                                null));
         return new Fixture(
                 sourceRid,
                 targetRid,
@@ -1823,7 +1854,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 locations);
     }
 
-    private record Fixture(
+    record Fixture(
             RoutingId sourceRid,
             RoutingId targetRid,
             String actorId,

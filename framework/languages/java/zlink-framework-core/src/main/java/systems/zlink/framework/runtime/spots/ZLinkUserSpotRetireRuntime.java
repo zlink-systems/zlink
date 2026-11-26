@@ -262,6 +262,7 @@ public final class ZLinkUserSpotRetireRuntime {
                             spots::scheduleRelocationCleanup,
                             transferOptions,
                             () -> targetAdmissionSealed.test(registration.meshName()),
+                            spots::isRestoreOwnerAdmissionOpen,
                             spots.dispatchErrors);
             machines.add(relocationClient);
             new ZLinkCanonicalRelocationTransitionOwner(relocationClient).install(node);

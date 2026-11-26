@@ -626,7 +626,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                     .locations()
                                                     .options()
                                                     .sessionRelocationSealTimeout(),
-                                            this.meshDrains::isSealed,
+                                            meshName ->
+                                                    this.meshDrains.isSealed(meshName)
+                                                            || runtimeState.get()
+                                                                    != ZLinkFrameworkRuntimeState
+                                                                            .SERVING,
                                             construction.relocationStateMachines(),
                                             construction
                                                     .aggregateRelocationAuthorityStoreDecorator(),
