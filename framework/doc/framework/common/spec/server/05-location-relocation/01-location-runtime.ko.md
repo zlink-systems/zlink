@@ -1327,7 +1327,8 @@ target 제한이 아니라 같은 incarnation의 이동인지 확인한다. 실�
 Spot 전달 command 21·22는 0이 아닌 operation ID와 source Spot ID를 요구하므로, 이 message를 그
 command로 바꾸면 operation ID가 바뀌거나 원래 발신자 정보가 사라진다. Command 55는 operation ID를 0으로
 두고, 원래 source node RID·실행 세대, 있으면 source Spot ID, metadata와 payload를 그대로 싣는다. Reply
-route는 없다. 이전 owner는 위의 route·hop·fence 검증을 그대로 적용한다.
+route는 없다. 이전 owner는 위의 route·hop·fence 검증을 그대로 적용한다. Command 55는 전달된 message에만
+쓰므로 hop은 `1..8`이다. 수신 측은 hop 0인 command 55를 protocol error로 거부한다.
 
 - **Operation ID가 0인 전달은 중복 제거 key를 만들지 않는다.** 같은 발신자의 서로 다른 send가 같은 key로
   합쳐지지 않게 하기 위해서다. 전달 중에 새 operation ID를 발급하지 않는다.
