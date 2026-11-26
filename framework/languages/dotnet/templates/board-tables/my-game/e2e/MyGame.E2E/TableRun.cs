@@ -8,7 +8,8 @@ internal sealed class TableRun(
     int tableCapacity,
     RunOutcome outcome,
     string runDirectory,
-    bool foreground = false
+    bool foreground = false,
+    ServerEndpoints? persistenceSource = null
 ) : IAsyncDisposable
 {
     public static readonly TimeSpan RunDeadline = TimeSpan.FromMinutes(3);
@@ -22,6 +23,11 @@ internal sealed class TableRun(
     private string redisEndpoint = "";
     private readonly Dictionary<string, (string Config, ManagedProcess Process)> tables = [];
     public string Endpoint { get; private set; } = "";
+    private string? apiEndpoint;
+    private string WorldPrefix => project + ":";
+    private string PlayerRecordsPrefix => persistenceSource?.PlayerRecordsKeyPrefix ?? WorldPrefix;
+    public ServerEndpoints Endpoints =>
+        new([Endpoint], apiEndpoint, redisEndpoint, PlayerRecordsPrefix);
 
     private string[] Compose(params string[] arguments) =>
         ["compose", "-f", Path.Combine(root, "docker-compose.yml"), "-p", project, .. arguments];
@@ -29,7 +35,11 @@ internal sealed class TableRun(
     public async Task StartAsync(CancellationToken ct)
     {
         Directory.CreateDirectory(runDirectory);
-        if (dockerProject is null)
+        if (persistenceSource is not null)
+        {
+            redisEndpoint = persistenceSource.Redis;
+        }
+        else if (dockerProject is null)
         {
             composeStarted = true;
             await Commands.RunAsync(
@@ -47,7 +57,14 @@ internal sealed class TableRun(
         }
         else
             redisEndpoint = "location:6379";
-        foreach (var configName in new[] { "table-a", "table-b" })
+        var api = await StartNodeAsync("api", "MyGame.Api", false, ct);
+        apiEndpoint =
+            api.Ready.ApiEndpoint
+            ?? throw new InvalidOperationException("API endpoint was not published.");
+        if (persistenceSource is null)
+            await StartNodeAsync("matchmaker", "MyGame.Matchmaker", false, ct);
+        var tableConfigs = persistenceSource is null ? new[] { "table-a", "table-b" } : ["table-a"];
+        foreach (var configName in tableConfigs)
         {
             var table = await StartNodeAsync(configName, "MyGame.Table", false, ct);
             tables.Add(table.Ready.Id, (configName, table.Process));
@@ -65,19 +82,16 @@ internal sealed class TableRun(
         CancellationToken ct
     )
     {
-        var settings =
-            JsonSerializer.Deserialize<NodeSettings>(
-                await File.ReadAllTextAsync(
-                    Path.Combine(root, "server", "config", configName + ".json"),
-                    ct
-                )
-            ) ?? throw new InvalidOperationException($"Invalid {configName} configuration.");
+        var sourceConfig = Path.Combine(root, "server", "config", configName + ".json");
+        var settings = NodeSettings.Load(["--config", sourceConfig]);
         settings = settings with
         {
             TableCapacity = tableCapacity,
             RedisEndpoint = redisEndpoint,
-            KeyPrefix = project + ":",
-            MeshEndpoint = "tcp://127.0.0.1:0",
+            KeyPrefix = WorldPrefix,
+            PlayerRecordsKeyPrefix = configName == "api" ? PlayerRecordsPrefix : null,
+            MeshEndpoint = settings.MeshEndpoint is null ? null : "tcp://127.0.0.1:0",
+            ApiEndpoint = configName == "api" ? "tcp://127.0.0.1:0" : null,
             StreamEndpoint = settings.StreamEndpoint is null ? null : "ws://127.0.0.1:0",
         };
         var suffix = configName + (replacement ? "-replacement" : "");
@@ -157,7 +171,12 @@ internal sealed class TableRun(
             JsonSerializer.Deserialize<NodeReady>(
                 await node.WaitLineAsync(NodeProtocol.ReadyPrefix, ct)
             ) ?? throw new InvalidOperationException($"Invalid readiness for {configName}.");
-        if (ready.Id != settings.Id || ready.MeshEndpoint.EndsWith(":0", StringComparison.Ordinal))
+        var listener = ready.MeshEndpoint ?? ready.ApiEndpoint;
+        if (
+            ready.Id != settings.Id
+            || listener is null
+            || listener.EndsWith(":0", StringComparison.Ordinal)
+        )
             throw new InvalidOperationException($"Incorrect listener readiness for {configName}.");
         node.Ready();
         return (node, ready);
