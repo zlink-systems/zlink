@@ -19,7 +19,7 @@ function deferred() {
 
 async function startActorHost(t, fault) {
   const base = new ZLinkInMemoryProviderLocationStore();
-  const storeError = new Error('Controlled Location Store delete failure');
+  const storeError = new Error('Controlled Actor authority write failure');
   const deleteObserved = deferred();
   const allowDelete = deferred();
   let remainingFaults = 0;
@@ -32,6 +32,20 @@ async function startActorHost(t, fault) {
     read: (key, signal) => base.read(key, signal),
     scan: (request, signal) => base.scan(request, signal),
     async write(request, signal) {
+      if (
+        fault === 'closing' &&
+        remainingFaults > 0 &&
+        request.mutations.some(
+          (mutation) =>
+            mutation.kind === 'put' &&
+            mutation.key.value === 'authority\0actor\0destroy-player' &&
+            actorAuthorityState(JSON.parse(Buffer.from(mutation.bytes).toString('utf8'))) ===
+              'closing'
+        )
+      ) {
+        remainingFaults--;
+        throw storeError;
+      }
       const deletion = request.mutations.find(
         (mutation) =>
           mutation.kind === 'delete' && mutation.key.value === 'authority\0actor\0destroy-player'
@@ -93,7 +107,12 @@ async function startActorHost(t, fault) {
     async handle() {
       assert.equal(await actors.destroy(actorRef), true);
       const authority = await readAuthority();
-      return { state: decodeActorAuthorityPayload(Buffer.from(authority.payload, 'base64')).state };
+      return { state: actorAuthorityState(authority) };
+    }
+  }
+  class ReadGeneration {
+    async handle() {
+      return { generation: String(actorContext.objectGeneration) };
     }
   }
   nestjs.zlinkEntrySpotActorRequestHandler({
@@ -101,6 +120,11 @@ async function startActorHost(t, fault) {
     actor: () => Player,
     packetName: 'SelfDestroy'
   })(SelfDestroy);
+  nestjs.zlinkEntrySpotActorRequestHandler({
+    entrySpot: () => Entry,
+    actor: () => Player,
+    packetName: 'ReadGeneration'
+  })(ReadGeneration);
   const builder = nestjs.zlinkFramework().addLocationStore(store);
   builder
     .addRouteMesh('destroy')
@@ -112,7 +136,7 @@ async function startActorHost(t, fault) {
   class AppModule {}
   Module({
     imports: [nestjs.ZLinkModule.forRoot(builder.build())],
-    providers: [Factory, SelfDestroy]
+    providers: [Factory, SelfDestroy, ReadGeneration]
   })(AppModule);
   const app = await NestFactory.createApplicationContext(AppModule, {
     logger: false,
@@ -152,16 +176,43 @@ async function startActorHost(t, fault) {
     arm() {
       remainingFaults = fault === 'conflict' ? 2 : 1;
     },
-    async selfDestroy() {
-      return await app
-        .get(nestjs.ZLINK_ACTOR_CLIENT)
-        .requestToActor(actorRef.actorId, {})
-        .packetName('SelfDestroy')
-        .submit();
-    },
+    selfDestroy: () => request('SelfDestroy'),
+    readGeneration: () => request('ReadGeneration'),
     authority: readAuthority
   };
+
+  async function request(packetName) {
+    return await app
+      .get(nestjs.ZLINK_ACTOR_CLIENT)
+      .requestToActor(actorRef.actorId, {})
+      .packetName(packetName)
+      .submit();
+  }
 }
+
+function actorAuthorityState(authority) {
+  return decodeActorAuthorityPayload(Buffer.from(authority.payload, 'base64')).state;
+}
+
+test(
+  'destroy rolls back admission and teardown when the Closing CAS fails',
+  { timeout: 20000 },
+  async (t) => {
+    const host = await startActorHost(t, 'closing');
+    host.arm();
+    await assert.rejects(
+      () => host.actors.destroy(host.actorRef),
+      (error) =>
+        error.kind === ZLinkFrameworkErrorKind.Unavailable && error.cause === host.storeError
+    );
+    assert.equal(actorAuthorityState(await host.authority()), 'ready');
+    assert.equal(host.deleteCalls, 0);
+    assert.deepEqual(await host.readGeneration(), {
+      generation: String(host.actorRef.objectGeneration)
+    });
+    assert.equal(await host.actors.destroy(host.actorRef), true);
+  }
+);
 
 for (const self of [true, false]) {
   test(
@@ -186,10 +237,7 @@ for (const self of [true, false]) {
       assert.equal(host.deleteCalls, 1);
       const authority = await host.authority();
       assert.equal(authority.objectGeneration, String(host.actorRef.objectGeneration));
-      assert.equal(
-        decodeActorAuthorityPayload(Buffer.from(authority.payload, 'base64')).state,
-        'closing'
-      );
+      assert.equal(actorAuthorityState(authority), 'closing');
     }
   );
 }
@@ -213,10 +261,7 @@ test(
     assert.equal(await host.actors.find(host.actorRef.actorId), undefined);
     const authority = await host.authority();
     assert.equal(authority.objectGeneration, String(host.actorRef.objectGeneration));
-    assert.equal(
-      decodeActorAuthorityPayload(Buffer.from(authority.payload, 'base64')).state,
-      'closing'
-    );
+    assert.equal(actorAuthorityState(authority), 'closing');
   }
 );
 

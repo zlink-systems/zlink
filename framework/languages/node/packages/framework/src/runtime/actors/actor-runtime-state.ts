@@ -408,8 +408,12 @@ export class ZLinkActorRuntimeState {
       );
     }
 
-    this.destroyTask = start(this.nativeActorDestroyed ? undefined : actorRef);
-    return this.destroyTask;
+    const operation = start(this.nativeActorDestroyed ? undefined : actorRef);
+    this.destroyTask = operation;
+    void operation.accepted.catch(() => {
+      if (this.destroyTask === operation) this.destroyTask = undefined;
+    });
+    return operation;
   }
 
   markNativeActorDestroyed(actorRef: ZLinkBackendActorRef): void {

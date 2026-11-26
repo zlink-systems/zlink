@@ -268,13 +268,13 @@ export class ZLinkSpotSerialExecutor {
   ) {
     const executor = this.actorExecutor(actorId);
     return startActorTeardown(
-      publishClosing,
+      () => executor.scheduler.closeAdmissionOnSuccess(publishClosing),
       async () => {
         await teardown();
         if (this.actorExecutors.get(actorId) === executor) this.actorExecutors.delete(actorId);
         this.actorSerials.delete(actorId);
       },
-      executor.close()
+      executor.scheduler.whenIdle()
     );
   }
 
