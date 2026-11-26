@@ -313,17 +313,30 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Duration timeout,
             Supplier<? extends CompletionStage<T>> submission,
             Consumer<? super T> discardValue) {
+        return submitUntil(
+                id, nanoTime.getAsLong() + timeoutNanos(timeout), submission, discardValue);
+    }
+
+    /** Uses the absolute deadline already established before asynchronous preparation. */
+    public <T> CompletableFuture<T> submitUntil(
+            UUID id,
+            long deadline,
+            Supplier<? extends CompletionStage<T>> submission,
+            Consumer<? super T> discardValue) {
         Objects.requireNonNull(submission, "submission");
-        return submitTerminal(
+        Operation<T> completion = prepareOperation(id);
+        submitTerminal(
                 id,
-                timeout,
+                deadline,
                 terminal -> {
                     CompletionStage<T> submitted =
                             Objects.requireNonNull(submission.get(), "submission result");
                     submitted.whenComplete(terminal);
                     return submitted;
                 },
-                discardValue);
+                discardValue,
+                completion);
+        return completion;
     }
 
     /**
@@ -353,14 +366,26 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
             Consumer<? super T> discardValue,
             Operation<?> completion) {
+        return submitTerminal(
+                id,
+                nanoTime.getAsLong() + timeoutNanos(timeout),
+                submission,
+                discardValue,
+                completion);
+    }
+
+    private <T> CompletionStage<Boolean> submitTerminal(
+            UUID id,
+            long deadline,
+            Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
+            Consumer<? super T> discardValue,
+            Operation<?> completion) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(submission, "submission");
         Objects.requireNonNull(discardValue, "discardValue");
         Objects.requireNonNull(completion, "completion");
         if (!completion.id().equals(id))
             throw new IllegalArgumentException("receiver and operation identities differ");
-        long nanos = timeoutNanos(timeout);
-        long deadline = nanoTime.getAsLong() + nanos;
         var registration =
                 submitOwnerTurn(
                         () -> {
