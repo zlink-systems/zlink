@@ -119,8 +119,7 @@ public sealed class StreamPermitLivenessTests
             await connected.Task.WaitAsync(token);
             await peer.PingAsync();
             await peer.ExpectPongAsync();
-            while (!time.HasTimerDueIn(Interval))
-                await Task.Delay(2, token);
+            await WaitForTimerDueInAsync(Interval);
 
             if (holdMilliseconds == 0)
             {
@@ -137,12 +136,16 @@ public sealed class StreamPermitLivenessTests
             // Keep the original receive deadline distinct from the exact-duration hold.
             time.Advance(TimeSpan.FromMilliseconds(100));
             await using var other = silent ? await ConnectAsync(endpoint, inproc, token) : null;
+            // The probe's heartbeat phase must be distinct from the original peer's phase.
+            if (other is not null)
+                await WaitForTimerDueInAsync(Interval);
             var probe = other ?? peer;
             var nextPing = Interval;
             var releaseAt =
                 time.GetElapsedTime(start) + TimeSpan.FromMilliseconds(holdMilliseconds);
             var jobs = state.ApplicationJobQueue;
             var lease = await jobs.AcquireAsync(token, ZLinkApplicationJobOrigin.Remote);
+            ITimer? timerBeforeRelease;
             try
             {
                 await probe.PingAsync();
@@ -150,6 +153,7 @@ public sealed class StreamPermitLivenessTests
                     await Task.Delay(2, token);
 
                 await AdvanceAndExpectPingsAsync(releaseAt);
+                timerBeforeRelease = time.FindTimerDueIn(nextPing - releaseAt);
             }
             finally
             {
@@ -161,6 +165,10 @@ public sealed class StreamPermitLivenessTests
             await probe.ExpectPongAsync();
             if (!silent && !idle)
                 return;
+
+            // The pong can arrive before the reader replaces the timer it used during the wait.
+            Assert.NotNull(timerBeforeRelease);
+            await WaitForTimerDueInAsync(nextPing - releaseAt, timerBeforeRelease);
 
             if (idle)
             {
@@ -179,6 +187,12 @@ public sealed class StreamPermitLivenessTests
                 idle ? ZlinkStreamCloseReason.IdleTimeout : ZlinkStreamCloseReason.HeartbeatTimeout,
                 closing.Reason
             );
+
+            async Task WaitForTimerDueInAsync(TimeSpan delay, ITimer? excludedTimer = null)
+            {
+                while (time.FindTimerDueIn(delay, excludedTimer) is null)
+                    await Task.Delay(2, token);
+            }
 
             async Task AdvanceAndExpectPingsAsync(TimeSpan until)
             {
