@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.messaging;
 
+import com.google.protobuf.CodedOutputStream;
+
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
@@ -79,7 +81,9 @@ public final class ZLinkApplicationMetadata {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         output.write(VERSION);
         output.write(values.size());
+        int metadataSize = 0;
         for (Map.Entry<String, String> entry : values.entrySet()) {
+            metadataSize += entrySize(entry.getKey(), entry.getValue());
             byte[] key = utf8(entry.getKey(), "key");
             byte[] value = utf8(entry.getValue(), "value");
             if (key.length == 0 || key.length > MAX_METADATA_KEY_BYTES) {
@@ -99,11 +103,8 @@ public final class ZLinkApplicationMetadata {
             output.write(value.length >>> 8);
             output.write(value.length);
             output.writeBytes(value);
-            if (output.size() > MAX_ENCODED_SIZE) {
-                throw invalid(
-                        "encoded application metadata exceeds " + MAX_ENCODED_SIZE + " bytes");
-            }
         }
+        validateSize(metadataSize);
         return output.toByteArray();
     }
 
@@ -124,6 +125,7 @@ public final class ZLinkApplicationMetadata {
         }
         int count = encoded[offset++] & 0xff;
         LinkedHashMap<String, String> decoded = new LinkedHashMap<>();
+        int metadataSize = 0;
         for (int index = 0; index < count; index++) {
             if (offset >= encoded.length) {
                 throw invalid("application metadata key length is truncated");
@@ -144,6 +146,7 @@ public final class ZLinkApplicationMetadata {
             }
             String value = decodeUtf8(encoded, offset, valueLength, "value");
             offset += valueLength;
+            metadataSize += entrySize(key, value);
             if (decoded.putIfAbsent(key, value) != null) {
                 throw invalid("application metadata contains duplicate key: " + key);
             }
@@ -151,7 +154,23 @@ public final class ZLinkApplicationMetadata {
         if (offset != encoded.length) {
             throw invalid("application metadata contains trailing bytes");
         }
+        validateSize(metadataSize);
         return Collections.unmodifiableMap(decoded);
+    }
+
+    static int entrySize(String key, String value) {
+        int entry =
+                (key.isEmpty() ? 0 : CodedOutputStream.computeStringSize(1, key))
+                        + (value.isEmpty() ? 0 : CodedOutputStream.computeStringSize(2, value));
+        return CodedOutputStream.computeTagSize(13)
+                + CodedOutputStream.computeUInt32SizeNoTag(entry)
+                + entry;
+    }
+
+    static void validateSize(int size) {
+        if (size > MAX_ENCODED_SIZE) {
+            throw invalid("application metadata exceeds " + MAX_ENCODED_SIZE + " field 13 bytes");
+        }
     }
 
     private static String requireKey(String key) {
