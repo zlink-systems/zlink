@@ -357,20 +357,12 @@ final class ZLinkActorClientRuntimeTest {
         }
     }
 
-    @jdk.jfr.Name("zlink.ActorBackendSubmit")
-    static final class ActorBackendSubmit extends jdk.jfr.Event {}
+    private record ActorTypedReceiverSubmission(
+            boolean pendingRegistered, Object pendingReceiver, Object backendReceiver) {}
 
     @Test
     void actorTypedReceiverExistsBeforeBackendSubmit() throws Exception {
-        systems.zlink.framework.runtime.binding.ZLinkJavaRequestCompletionCostTest
-                .launchAllocationProbe(getClass(), "actor");
-    }
-
-    public static void main(String[] args) throws Exception {
-        new ZLinkActorClientRuntimeTest().verifyActorTypedReceiver();
-    }
-
-    private void verifyActorTypedReceiver() throws Exception {
+        var backendSubmission = new CompletableFuture<ActorTypedReceiverSubmission>();
         var bindingReply = new CompletableFuture<List<Message>>();
         var client =
                 new ZLinkActorClientRuntime(
@@ -383,9 +375,48 @@ final class ZLinkActorClientRuntimeTest {
                                             SendFlags flags,
                                             Duration timeout,
                                             CompletableFuture<Void> admission) {
-                                        new ActorBackendSubmit().commit();
                                         admission.complete(null);
                                         return bindingReply;
+                                    }
+
+                                    @Override
+                                    public <T> void requestToActor(
+                                            ZLinkServiceM6BWireCodec.ActorRouteFence actor,
+                                            List<Message> parts,
+                                            SendFlags flags,
+                                            Duration timeout,
+                                            CompletableFuture<Void> admission,
+                                            java.util.function.Function<List<Message>, T>
+                                                    decodeReply,
+                                            Consumer<T> discardReply,
+                                            java.util.function.Function<Throwable, Throwable>
+                                                    mapFailure,
+                                            systems.zlink.framework.runtime.internal.service
+                                                                    .ZLinkServiceOperationRegistry
+                                                                    .Operation<
+                                                            T>
+                                                    completion) {
+                                        backendSubmission.complete(
+                                                new ActorTypedReceiverSubmission(
+                                                        systems.zlink.framework.runtime.internal
+                                                                .service
+                                                                .ZLinkServiceOperationRegistryTesting
+                                                                .pendingRegistered(OPERATIONS),
+                                                        systems.zlink.framework.runtime.internal
+                                                                .service
+                                                                .ZLinkServiceOperationRegistryTesting
+                                                                .pendingReceiver(OPERATIONS),
+                                                        completion));
+                                        super.requestToActor(
+                                                actor,
+                                                parts,
+                                                flags,
+                                                timeout,
+                                                admission,
+                                                decodeReply,
+                                                discardReply,
+                                                mapFailure,
+                                                completion);
                                     }
                                 },
                         new ZLinkStoreLocationResolvers(
@@ -394,65 +425,25 @@ final class ZLinkActorClientRuntimeTest {
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
                         Duration.ofSeconds(5));
-        var file = java.nio.file.Files.createTempFile("actor-receiver-", ".jfr");
         try {
-            try (var recording = new jdk.jfr.Recording()) {
-                recording.enable("jdk.ObjectAllocationOutsideTLAB").withStackTrace();
-                recording.enable("jdk.DataLoss");
-                recording.enable("zlink.ActorBackendSubmit");
-                recording.start();
-                client.requestToActor("actor-1", new Ping("hello")).submit(Pong.class);
-                recording.stop();
-                recording.dump(file);
-            }
-            var events = jdk.jfr.consumer.RecordingFile.readAllEvents(file);
-            assertFalse(
-                    events.stream()
-                            .anyMatch(e -> e.getEventType().getName().equals("jdk.DataLoss")));
-            var submit =
-                    events.stream()
-                            .filter(
-                                    e ->
-                                            e.getEventType()
-                                                    .getName()
-                                                    .equals("zlink.ActorBackendSubmit"))
-                            .findFirst()
-                            .orElseThrow();
-            long prepared =
-                    events.stream()
-                            .filter(
-                                    e -> {
-                                        if (!e.getEventType()
-                                                        .getName()
-                                                        .equals("jdk.ObjectAllocationOutsideTLAB")
-                                                || !e.getClass("objectClass")
-                                                        .getName()
-                                                        .equals(
-                                                                systems.zlink.framework.runtime
-                                                                        .internal.service
-                                                                        .ZLinkServiceOperationRegistry
-                                                                        .Operation.class
-                                                                        .getName())) return false;
-                                        var stack = e.getStackTrace();
-                                        assertFalse(stack.isTruncated());
-                                        var top = stack.getFrames().getFirst().getMethod();
-                                        return top.getType()
-                                                        .getName()
-                                                        .equals(
-                                                                systems.zlink.framework.runtime
-                                                                        .internal.service
-                                                                        .ZLinkServiceOperationRegistry
-                                                                        .class
-                                                                        .getName())
-                                                && top.getName().equals("prepareOperation")
-                                                && e.getStartTime().isBefore(submit.getStartTime());
-                                    })
-                            .count();
-            assertEquals(
-                    1, prepared, "one final typed receiver must exist before backend submission");
+            var result =
+                    client.requestToActor("actor-1", new Ping("hello"))
+                            .submit(Pong.class)
+                            .toCompletableFuture();
+            var submission = backendSubmission.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(
+                    submission.pendingRegistered(),
+                    "the final receiver must be registered before backend submission");
+            assertSame(
+                    result,
+                    submission.pendingReceiver(),
+                    "the registered receiver must be the public stage result");
+            assertSame(
+                    result,
+                    submission.backendReceiver(),
+                    "the backend must receive the registered final receiver");
         } finally {
             bindingReply.completeExceptionally(new IllegalStateException("test cleanup"));
-            java.nio.file.Files.deleteIfExists(file);
         }
     }
 
