@@ -1056,6 +1056,7 @@ struct spot_execution_snapshot_t
 {
     std::vector<std::shared_ptr<spot_context_state_t>> contexts;
     std::vector<task_t<void>> creations;
+    std::vector<task_t<void>> join_deliveries;
 };
 
 spot_execution_snapshot_t snapshot_spot_execution_owned (spot_node_builder_state_t &node)
@@ -1076,6 +1077,9 @@ spot_execution_snapshot_t snapshot_spot_execution_owned (spot_node_builder_state
         if (creation.completion)
             result.creations.push_back (creation.completion->task ());
     }
+    result.join_deliveries.reserve (node.pending_join_delivery_work.size ());
+    for (const auto &delivery : node.pending_join_delivery_work)
+        result.join_deliveries.push_back (delivery->task ());
     return result;
 }
 } // namespace
@@ -1094,6 +1098,7 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
         };
         std::vector<context_t> contexts;
         std::vector<task_t<void>> creations;
+        std::vector<task_t<void>> join_deliveries;
         std::shared_ptr<runtime::offload_executor_t> deadline_executor;
         std::shared_ptr<runtime::offload_executor_t> worker_executor;
         std::stop_source cancellation;
@@ -1103,6 +1108,7 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
         node.stopping.store (true, std::memory_order_release);
         auto execution = snapshot_spot_execution_owned (node);
         result.creations = std::move (execution.creations);
+        result.join_deliveries = std::move (execution.join_deliveries);
         result.contexts.reserve (execution.contexts.size ());
         for (const auto &state : execution.contexts) {
             result.contexts.push_back (drain_plan_t::context_t{
@@ -1122,19 +1128,27 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
         return result;
     });
 
-    // Host relocation §14: accepted callbacks retain their execution resources
-    // until the host deadline. Only deadline expiry cancels their owned waits.
-    bool expired = false;
-    for (const auto &context : plan.contexts) {
+    // Host relocation §14: accepted work retains its execution resources
+    // until it settles, including cancellation after the host deadline.
+    const auto wait_until_deadline = [deadline] (const task_t<void> &terminal) {
         const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
           deadline - std::chrono::steady_clock::now ());
-        if (!context.admitted_callbacks.result_for (
-              std::max (remaining, std::chrono::milliseconds::zero ()))) {
-            expired = true;
-            break;
-        }
-    }
-    if (expired || std::chrono::steady_clock::now () >= deadline) {
+        return terminal.result_for (std::max (remaining, std::chrono::milliseconds::zero ()))
+          .has_value ();
+    };
+    const bool deliveries_settled =
+      std::ranges::all_of (plan.join_deliveries, [&] (const auto &terminal) {
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+          if (!terminal.await_ready () && node.join_delivery_drain_wait_probe)
+              node.join_delivery_drain_wait_probe ();
+#endif
+          return wait_until_deadline (terminal);
+      });
+    const bool callbacks_settled =
+      deliveries_settled
+      && std::ranges::all_of (plan.contexts, wait_until_deadline,
+                              &drain_plan_t::context_t::admitted_callbacks);
+    if (!callbacks_settled || std::chrono::steady_clock::now () >= deadline) {
         plan.cancellation.request_stop ();
         if (plan.worker_executor)
             plan.worker_executor->request_stop ();
@@ -1148,6 +1162,9 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
                 context.serial_queue->cancel_pending ();
         }
     }
+    // Join ready can still publish controls until its claim or cancellation settles.
+    for (const auto &delivery : plan.join_deliveries)
+        (void) detail::task_result_access_t::read (delivery);
     for (const auto &context : plan.contexts) {
         for (const auto &queue : context.retained_queues)
             if (queue)
@@ -9804,32 +9821,41 @@ spot_node_runtime_t::actor_application_queue (std::string_view actor_id) const
 task_t<bool> spot_node_runtime_t::notify_actor_application_ready (
   std::string actor_id, std::function<std::optional<runtime::serial_prefix_work_t> ()> take)
 {
-    auto owner = std::make_shared<spot_node_runtime_t> (_state);
-    auto queue = co_await owner->actor_application_queue (actor_id);
+    spot_node_runtime_t owner (_state);
+    auto queue = co_await owner.actor_application_queue (actor_id);
     if (!queue)
         co_return false;
-    queue->notify_control (
-      "actor-ready", [owner, actor_id = std::move (actor_id), queue, take = std::move (take)] {
-          auto accepted = owner->accept_actor_application_ready (actor_id, queue, take);
-          detail::observe_task_completion (
-            accepted,
-            [owner, failures = owner->_state->runtime_failures ()] (const result_t<void> &result) {
-                if (!result)
-                    failures->report (result.exception ());
-            });
-      });
+    try {
+        auto ready = queue->dispatch_application_ready (
+          [owner, actor_id = std::move (actor_id), queue, take = std::move (take)] () mutable {
+              return accept_actor_application_ready (std::move (owner), std::move (actor_id),
+                                                     std::move (queue), std::move (take));
+          });
+        co_await ready;
+    }
+    catch (const framework_exception_t &error) {
+        if (error.kind () != framework_error_kind_t::shutting_down)
+            owner._state->runtime_failures ()->report (std::current_exception ());
+    }
+    catch (...) {
+        owner._state->runtime_failures ()->report (std::current_exception ());
+    }
+    // Once routed, the gate owns rejection too. The native caller may claim
+    // directly only when no Actor queue was found.
     co_return true;
 }
 
 task_t<void> spot_node_runtime_t::accept_actor_application_ready (
+  spot_node_runtime_t owner,
   std::string actor_id,
   std::shared_ptr<runtime::serial_execution_queue_t> queue,
   std::function<std::optional<runtime::serial_prefix_work_t> ()> take)
 {
     // Resolve membership again before obtaining the native claim: a move may
     // have replaced the private mailbox after notification publication.
-    if (co_await actor_application_queue (actor_id) != queue) {
-        (void) co_await notify_actor_application_ready (std::move (actor_id), std::move (take));
+    if (co_await owner.actor_application_queue (actor_id) != queue) {
+        (void) co_await owner.notify_actor_application_ready (std::move (actor_id),
+                                                              std::move (take));
         co_return;
     }
     (void) co_await queue->accept_application_ready (std::move (take));
@@ -10022,12 +10048,17 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
     actor_join_completion_callback_t callback;
     std::shared_ptr<spot_context_state_t> callback_context;
     std::shared_ptr<void> actor;
+    std::shared_ptr<task_completion_source_t<void>> work_terminal;
+    std::stop_token callback_cancellation;
     std::optional<result_t<void>> immediate;
     _state->lane
       .run ([&] {
           if (_state->delivered_join_completions.contains (operation)
               || _state->delivering_join_completions.contains (operation)) {
               immediate.emplace (result_t<void>::success ());
+          } else if (_state->stopping.load (std::memory_order_acquire)) {
+              immediate.emplace (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                          "Spot node is stopping"));
           } else {
               const auto key = actor_key (actor_ref);
               const auto factory = _state->actor_factories.find (std::string (
@@ -10048,6 +10079,9 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
                       if (context != _state->spot_contexts_by_id.end ())
                           callback_context = context->second._state;
                   }
+                  work_terminal = detail::make_task_completion_source<void> ();
+                  callback_cancellation = _state->worker_cancellation.get_token ();
+                  _state->pending_join_delivery_work.insert (work_terminal);
                   _state->delivering_join_completions.insert (operation);
               }
           }
@@ -10058,40 +10092,65 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
         return;
     }
 
-    const auto settle_state = [] (std::shared_ptr<spot_node_builder_state_t> node,
-                                  actor_ref_t actor,
-                                  std::pair<std::uint64_t, std::uint64_t> operation,
-                                  result_t<void> result) -> task_t<result_t<void>> {
-        const auto native = co_await node->lane.run_task ([node, operation, result] {
-            node->delivering_join_completions.erase (operation);
-            if (result)
-                node->delivered_join_completions.insert (operation);
-            return node->native_node.lock ();
-        });
-        if (native) {
-            const auto owner = co_await native->resolve_actor_async (actor);
-            if (owner) {
-                auto notified = native->notify_stateful_owner (*owner);
-                detail::observe_task_completion (
-                  notified,
-                  [native, failures = node->runtime_failures ()] (const result_t<bool> &terminal) {
-                      if (!terminal)
-                          failures->report (terminal.exception ());
-                  });
+    const auto settle_state =
+      [] (std::shared_ptr<spot_node_builder_state_t> node, actor_ref_t actor,
+          std::pair<std::uint64_t, std::uint64_t> operation, result_t<void> result,
+          std::function<void (result_t<void>)> completed) -> task_t<void> {
+        const auto failures = node->runtime_failures ();
+        std::shared_ptr<service::mesh_node_t> native;
+        std::optional<runtime::stateful::object_ref_t> owner;
+        try {
+            auto settlement = node->lane.run_task ([node, operation, result] {
+                node->delivering_join_completions.erase (operation);
+                if (result)
+                    node->delivered_join_completions.insert (operation);
+                return node->native_node.lock ();
+            });
+            native = co_await settlement;
+            if (native && result)
+                owner = co_await native->resolve_actor_async (actor);
+        }
+        catch (...) {
+            result = detail::current_exception_result<void> ();
+        }
+
+        std::optional<task_t<bool>> notification;
+        if (owner)
+            failures->capture (
+              [&] { notification.emplace (native->notify_stateful_owner (*owner)); });
+        failures->capture ([&] { completed (std::move (result)); });
+        completed = {};
+        if (notification) {
+            try {
+                (void) co_await *notification;
+            }
+            catch (...) {
+                failures->report (std::current_exception ());
             }
         }
-        co_return result;
     };
-    auto settle = [node = _state, actor_ref, operation, settle_state,
+    auto settle = [node = _state, actor_ref, operation, settle_state, work_terminal,
                    completed = std::move (completed)] (result_t<void> result) mutable {
-        auto settled = settle_state (node, actor_ref, operation, std::move (result));
-        detail::observe_task_completion (
-          settled, [node, completed = std::move (completed)] (
-                     const result_t<result_t<void>> &settled) mutable {
-              auto result = settled ? settled.value ()
-                                    : detail::propagate_failure<void> (
-                                        settled, "Actor Join completion state settlement failed");
-              node->runtime_failures ()->capture ([&] { completed (std::move (result)); });
+        auto settled = [&] {
+            // The drain owns infrastructure settlement even after the
+            // application turn and its cancellable waits have ended.
+            auto context = detail::capture_ambient_context ();
+            context.wait_owner = {};
+            detail::serial_turn_scope_t turn (nullptr);
+            const auto ambient = detail::enter_ambient_context (context, false);
+            return settle_state (node, actor_ref, operation, std::move (result),
+                                 std::move (completed));
+        }();
+        detail::observe_task_terminal (
+          settled, [node, work_terminal] (const result_t<void> &result) {
+              if (!result)
+                  node->runtime_failures ()->report (result.exception ());
+              auto retired = node->lane.run_task (
+                [node, work_terminal] { node->pending_join_delivery_work.erase (work_terminal); });
+              detail::observe_task_terminal (retired,
+                                             [work_terminal] (const result_t<void> &terminal) {
+                                                 work_terminal->complete (terminal);
+                                             });
           });
     };
     auto settle_after_delivery = [settle_result = std::move (settle_result),
@@ -10174,15 +10233,19 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
               {}, {}, {}, 0, turn);
             return;
         }
-        auto observed = std::make_shared<task_t<void>> (invoke_callback ());
-        detail::observe_task_completion (
-          *observed,
-          [completion_owner, actor = std::move (actor), observed,
-           finish_callback = std::move (finish_callback)] (const result_t<void> &result) mutable {
-              (void) completion_owner;
-              (void) actor;
-              finish_callback (result);
-          });
+        auto observed = [&] {
+            auto context = detail::capture_ambient_context ();
+            context.wait_owner = callback_cancellation;
+            const auto ambient = detail::enter_ambient_context (context);
+            return invoke_callback ();
+        }();
+        detail::observe_task_terminal (observed, [completion_owner, actor = std::move (actor),
+                                                  finish_callback = std::move (finish_callback)] (
+                                                   const result_t<void> &result) mutable {
+            (void) completion_owner;
+            (void) actor;
+            finish_callback (result);
+        });
     }
     catch (const framework_exception_t &error) {
         settle_after_delivery (detail::result_access_t::failure<void> (error));
@@ -14673,6 +14736,7 @@ void spot_node_runtime_t::cancel_pending_work (
         detail::drain_spot_node_executors (*_state, deadline);
     }
     catch (...) {
+        _state->runtime_failures ()->report (std::current_exception ());
     }
 }
 
