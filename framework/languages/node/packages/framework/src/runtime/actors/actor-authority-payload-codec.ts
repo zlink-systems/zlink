@@ -26,7 +26,16 @@ const ENTRY_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.Entry);
 const USER_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.User);
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 
-export type ZLinkActorAuthorityState = 'creating' | 'ready';
+const ACTOR_AUTHORITY_STATE_WIRE = {
+  creating: { state: 0, operation: 1 },
+  ready: { state: 1, operation: 0 },
+  closing: { state: 2, operation: 3 }
+} as const;
+
+export type ZLinkActorAuthorityState = keyof typeof ACTOR_AUTHORITY_STATE_WIRE;
+const ACTOR_AUTHORITY_STATES = Object.keys(
+  ACTOR_AUTHORITY_STATE_WIRE
+) as ZLinkActorAuthorityState[];
 
 export interface ZLinkActorAuthorityPayload {
   readonly state: ZLinkActorAuthorityState;
@@ -104,16 +113,17 @@ export function encodeActorAuthorityPayload(value: ZLinkActorAuthorityPayload): 
   if (spotKind !== ENTRY_SPOT_WIRE_KIND && spotKind !== USER_SPOT_WIRE_KIND) {
     throw new RangeError('Actor currentSpotKind must be Entry or User.');
   }
+  const wire = ACTOR_AUTHORITY_STATE_WIRE[value.state];
   const actor = concat(
     text8(value.stableType, 'stableType'),
     text8(value.actorId, 'actorId'),
-    Buffer.of(value.state === 'creating' ? 0 : 1),
+    Buffer.of(wire.state),
     text8(value.currentSpotId, 'currentSpotId'),
     nonzeroU64be(value.currentSpotGeneration, 'currentSpotGeneration'),
     Buffer.of(spotKind)
   );
   const body = concat(
-    Buffer.of(value.state === 'creating' ? 1 : 0),
+    Buffer.of(wire.operation),
     Buffer.of(1),
     u16be(actor.byteLength),
     actor,
@@ -147,12 +157,10 @@ export function decodeActorAuthorityPayload(
     const currentSpotId = actor.text8();
     const currentSpotGeneration = actor.nonzeroU64();
     const currentSpotKind = zlinkSpotKindFromWire(actor.u8());
-    const state: ZLinkActorAuthorityState | undefined =
-      stateValue === 0 && operation === 1
-        ? 'creating'
-        : stateValue === 1 && operation === 0
-          ? 'ready'
-          : undefined;
+    const state = ACTOR_AUTHORITY_STATES.find((name) => {
+      const wire = ACTOR_AUTHORITY_STATE_WIRE[name];
+      return wire.state === stateValue && wire.operation === operation;
+    });
     if (
       !actor.done ||
       state === undefined ||

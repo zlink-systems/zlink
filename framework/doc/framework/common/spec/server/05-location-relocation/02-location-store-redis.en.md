@@ -403,7 +403,7 @@ nodes at once, or rerunning it after an interruption, gives the same result.
    node's batch moved it, so the record is done. If the old record's bytes changed, retry with the new bytes.
    If the old record's bytes are unchanged and any target counter key exists, no writer can repair the state,
    because a normal batch changes both together. The node doesn't retry and stops with a startup
-   configuration error. A counter whose value is `0` isn't Put (an absent key is `0`). The RID part of the old
+   configuration error. A counter whose value is `0` isn't Put (an absent key is `0`). Such a key isn't a "target counter key": the `Missing` conditions, the check for remaining counter keys and the §4 key limit count only the keys this batch Puts. The RID part of the old
    record's key is decoded to bytes and compared with both the raw RID bytes and the rendered string of each
    current descriptor: when exactly one descriptor matches, it maps to that RID's `routingIdHex`; when none
    does, to the `routingIdHex` of those bytes parsed literally as a RoutingId. The old record value is read in

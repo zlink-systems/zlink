@@ -210,7 +210,7 @@ STREAM send/request all use the same contract.
 | Item | Contract |
 |---|---|
 | Key and value | UTF-8, and never contain NUL |
-| Total size | At most 1024 bytes, including the encoded key and value and structural overhead |
+| Total size | At most 1024 bytes, measured by the single calculation in [Wire protocol §4](../02-channel-transport/06-wire-protocol.en.md#decode-validation-and-size-limits) (the sum of each entry's `ChannelHeader` field 13 encoding length) |
 | Same key | The value most recently set on the outbound builder applies |
 | Receiving | The handler context provides an unmodifiable [snapshot](02-glossary.en.md#snapshot) |
 | Lifetime | Valid until the [handler turn](02-glossary.en.md#handler-turn) ends; the application copies a value if it needs to keep it |
@@ -296,8 +296,8 @@ are verified. Each item maps to one test.
 
 **Metadata Limits**
 
-- If the application metadata's total size, including the encoded key/value and
-  structural overhead, exceeds 1024 bytes, it's treated as a protocol error
+- If the application metadata's total size, measured by the calculation in
+  [Wire protocol §4](../02-channel-transport/06-wire-protocol.en.md#decode-validation-and-size-limits), exceeds 1024 bytes, it's treated as a protocol error
   without calling the handler.
 - Setting the same key multiple times means only the value most recently set on
   the outbound builder arrives at the handler context.
