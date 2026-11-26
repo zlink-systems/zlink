@@ -5,6 +5,8 @@ const { NestFactory } = require('@nestjs/core');
 const nestjs = require('../../packages/nestjs/dist');
 const { ZLinkFrameworkErrorKind } = require('../../packages/framework/dist');
 const { ZLinkInMemoryProviderLocationStore } = require('../../packages/framework/dist/internal');
+const connector = require('../../packages/stream-connector/dist');
+const { createBrowserSafeStreamApp } = require('./helpers/browser-safe-stream-app');
 const {
   decodeActorAuthorityPayload
 } = require('../../packages/framework/dist/runtime/actors/actor-authority-payload-codec');
@@ -22,6 +24,8 @@ async function startActorHost(t, fault) {
   const storeError = new Error('Controlled Actor authority write failure');
   const deleteObserved = deferred();
   const allowDelete = deferred();
+  const closingObserved = deferred();
+  const allowClosing = deferred();
   let remainingFaults = 0;
   let deleteCalls = 0;
   let conflicts = 0;
@@ -44,6 +48,8 @@ async function startActorHost(t, fault) {
         )
       ) {
         remainingFaults--;
+        closingObserved.resolve();
+        await allowClosing.promise;
         throw storeError;
       }
       const deletion = request.mutations.find(
@@ -115,6 +121,19 @@ async function startActorHost(t, fault) {
       return { generation: String(actorContext.objectGeneration) };
     }
   }
+  let sessionContext;
+  class SessionFactory {
+    async create(context) {
+      sessionContext = context;
+      return {
+        context,
+        async onDispatch() {
+          await context.actors.bindOrGet(actorRef);
+          await context.client.reply({ bound: true }).submit();
+        }
+      };
+    }
+  }
   nestjs.zlinkEntrySpotActorRequestHandler({
     entrySpot: () => Entry,
     actor: () => Player,
@@ -133,15 +152,24 @@ async function startActorHost(t, fault) {
     .server()
     .addEntrySpot(Entry, 'player')
     .addActorFactory('player', Factory, (factory) => factory.disableRelocation());
+  const withSession = fault === 'session';
+  if (withSession) {
+    builder
+      .addStreamNode('clients')
+      .bind('ws://127.0.0.1:*')
+      .enableActorDispatch()
+      .registerSession(SessionFactory);
+  }
   class AppModule {}
   Module({
     imports: [nestjs.ZLinkModule.forRoot(builder.build())],
-    providers: [Factory, SelfDestroy, ReadGeneration]
+    providers: [Factory, SelfDestroy, ReadGeneration, ...(withSession ? [SessionFactory] : [])]
   })(AppModule);
-  const app = await NestFactory.createApplicationContext(AppModule, {
-    logger: false,
-    abortOnError: false
-  });
+  const createApp = () =>
+    NestFactory.createApplicationContext(AppModule, { logger: false, abortOnError: false });
+  const app = withSession
+    ? await createBrowserSafeStreamApp(createApp, 'clients')
+    : await createApp();
   t.after(() => app.close());
   actors = app.get(nestjs.ZLINK_ACTOR_MANAGER);
   const create = () => actors.getOrCreate('destroy-player', 'player').inMesh('destroy').submit();
@@ -151,8 +179,9 @@ async function startActorHost(t, fault) {
   actorRef = created.actor;
   assert.ok(actorRef.objectGeneration > 1n);
   deleteCalls = 0;
+  const readRecord = () => base.read({ value: 'authority\0actor\0destroy-player' });
   async function readAuthority() {
-    const result = await base.read({ value: 'authority\0actor\0destroy-player' });
+    const result = await readRecord();
     assert.equal(result.kind, 'found');
     return JSON.parse(Buffer.from(result.value.bytes).toString('utf8'));
   }
@@ -162,6 +191,8 @@ async function startActorHost(t, fault) {
     actorRef,
     create,
     storeError,
+    closingObserved: closingObserved.promise,
+    allowClosing: allowClosing.resolve,
     deleteObserved: deleteObserved.promise,
     allowDelete: allowDelete.resolve,
     get deleteCalls() {
@@ -178,7 +209,20 @@ async function startActorHost(t, fault) {
     },
     selfDestroy: () => request('SelfDestroy'),
     readGeneration: () => request('ReadGeneration'),
-    authority: readAuthority
+    authority: readAuthority,
+    readRecord,
+    async bindSession() {
+      const client = connector.zlinkStreamConnectorFactory.create({
+        endpoint: app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME).getListenerStatus('stream', 'clients')
+          .endpoint,
+        dispatchMode: connector.ZlinkStreamDispatchMode.Immediate
+      });
+      t.after(() => client.close());
+      await client.connect();
+      assert.deepEqual(await client.request({}).packetName('Bind').submit(), { bound: true });
+      assert.equal(sessionContext.boundActors[0]?.actorId, actorRef.actorId);
+      return sessionContext.stream;
+    }
   };
 
   async function request(packetName) {
@@ -200,6 +244,7 @@ test(
   async (t) => {
     const host = await startActorHost(t, 'closing');
     host.arm();
+    host.allowClosing();
     await assert.rejects(
       () => host.actors.destroy(host.actorRef),
       (error) =>
@@ -211,6 +256,51 @@ test(
       generation: String(host.actorRef.objectGeneration)
     });
     assert.equal(await host.actors.destroy(host.actorRef), true);
+  }
+);
+
+test(
+  'an Actor request can retry after a pending Closing CAS fails',
+  { timeout: 20000 },
+  async (t) => {
+    const host = await startActorHost(t, 'closing');
+    host.arm();
+    const destroy = assert.rejects(
+      host.actors.destroy(host.actorRef),
+      (error) =>
+        error.kind === ZLinkFrameworkErrorKind.Unavailable && error.cause === host.storeError
+    );
+    let refusal;
+    try {
+      await host.closingObserved;
+      refusal = await host.readGeneration().catch((error) => error);
+    } finally {
+      host.allowClosing();
+      await destroy;
+    }
+    assert.deepEqual(await host.readGeneration(), {
+      generation: String(host.actorRef.objectGeneration)
+    });
+    assert.equal(refusal.kind, ZLinkFrameworkErrorKind.Unavailable, String(refusal));
+  }
+);
+
+test(
+  'destroy removes authority after the bound connection closes',
+  { timeout: 20000 },
+  async (t) => {
+    const host = await startActorHost(t, 'session');
+    const stream = await host.bindSession();
+    // Close the transport before normal Session cleanup removes the binding.
+    await stream.close();
+    const result = await host.actors.destroy(host.actorRef).catch(async (error) => {
+      t.diagnostic(
+        `Authority state after destroy failed: ${actorAuthorityState(await host.authority())}`
+      );
+      throw error;
+    });
+    assert.equal(result, true);
+    assert.equal((await host.readRecord()).kind, 'missing');
   }
 );
 

@@ -8,6 +8,10 @@ import {
 } from '../application-jobs/application-job-queue-scope';
 import { macrotaskBoundary } from '../abort';
 import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import {
   diagnosticWorkName,
   guardStateLaneCompletion,
   isStructuralGuardEnabled,
@@ -313,7 +317,13 @@ export class ZLinkSerialExecutionQueue {
     packetAdmission?: () => Promise<T> | T,
     applicationAdmission?: ApplicationJobPermitPort
   ): Promise<T> {
-    if (this.admissionClosed) throw new Error('The serial execution queue is closed.');
+    if (this.closed === 'pending') {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable,
+        'Actor admission is closed while destroy is being accepted.'
+      );
+    }
+    if (this.closed) throw new Error('The serial execution queue is closed.');
     const lane = options?.lane ?? 'application';
     const target = lane === 'application' ? this.application : this.lifecycle;
     let released = false;
