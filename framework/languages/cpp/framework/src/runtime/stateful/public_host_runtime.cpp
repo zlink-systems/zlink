@@ -1473,7 +1473,8 @@ public_host_runtime_t::accept_committed_actor_request (
       [&] () -> std::optional<stateful::relocation_restore_identity_t> {
           for (const auto &[key, attempt] : _relocation_target_attempts) {
               const auto &target = attempt.prepare.target;
-              if (!staged_owner || !attempt.cutover_received || relocation_target_terminal (attempt)
+              if (!staged_owner || attempt.phase == relocation_target_phase_t::waiting_cutover
+                  || relocation_target_terminal (attempt)
                   || target.target_node_routing_id != query.target_node_routing_id
                   || target.target_node_generation != query.target_node_generation
                   || target.target_owner_id != staged_owner->owner_id
