@@ -1255,6 +1255,10 @@ public final class ZLinkChannelRuntime
         callFactories = Objects.requireNonNull(value, "value");
     }
 
+    public ZLinkServiceOperationRegistry spotRequestOperations() {
+        return callRuntime.operations;
+    }
+
     ZLinkChannelCallRuntime callRuntimeForCalls() {
         return callRuntime;
     }
@@ -1318,7 +1322,7 @@ public final class ZLinkChannelRuntime
         return defaultRequestTimeout;
     }
 
-    private Duration effectiveRouteTimeout(Duration timeout) {
+    Duration effectiveRouteTimeout(Duration timeout) {
         return timeout == null || timeout.isZero() ? defaultRequestTimeout : timeout;
     }
 

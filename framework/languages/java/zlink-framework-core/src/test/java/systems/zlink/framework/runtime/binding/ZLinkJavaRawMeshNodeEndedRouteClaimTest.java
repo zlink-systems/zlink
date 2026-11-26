@@ -54,19 +54,23 @@ final class ZLinkJavaRawMeshNodeEndedRouteClaimTest {
 
                 fixture.handshake(replacement, ServiceWireConstants.COMMAND_HELLO);
                 assertFalse(fixture.topology.isReady(fixture.sourceRid));
+                // The receiver admitted the replacement HELLO, so it processes the record
+                // before its own HELLO is answered (mesh-node receive admission).
                 fixture.sendChannel(replacement, "before ADMIT");
                 fixture.dispatch(selected);
-                assertTrue(fixture.channelPayloads.isEmpty());
+                assertEquals(List.of("before ADMIT"), fixture.channelPayloads);
 
                 fixture.node.dispatch(beforeAdmit);
-                assertEquals(List.of("buffered"), fixture.channelPayloads);
+                assertEquals(List.of("before ADMIT", "buffered"), fixture.channelPayloads);
 
                 fixture.handshake(replacement, ServiceWireConstants.COMMAND_ADMIT);
                 assertTrue(fixture.topology.isReady(fixture.sourceRid));
                 fixture.node.dispatch(afterAdmit);
                 fixture.sendChannel(replacement, "after ADMIT");
                 fixture.dispatch(selected);
-                assertEquals(List.of("buffered", "after ADMIT"), fixture.channelPayloads);
+                assertEquals(
+                        List.of("before ADMIT", "buffered", "after ADMIT"),
+                        fixture.channelPayloads);
             }
         }
     }
@@ -165,7 +169,7 @@ final class ZLinkJavaRawMeshNodeEndedRouteClaimTest {
                 sendChannel(source, "buffered");
                 sendChannel(source, "buffered");
                 sendAdmission(source, ServiceWireConstants.COMMAND_ADMIT);
-                assertTrue(port.waitForReadable(target, WAIT));
+                awaitReadable();
             }
             long deadline = System.nanoTime() + WAIT.toNanos();
             while (!port.routesSnapshot(target).isEmpty()) {
@@ -208,8 +212,24 @@ final class ZLinkJavaRawMeshNodeEndedRouteClaimTest {
                     .join();
         }
 
+        private void awaitReadable() {
+            long deadline = System.nanoTime() + WAIT.toNanos();
+            int ready;
+            do {
+                long remaining = deadline - System.nanoTime();
+                assertTrue(remaining > 0, "Expected Core to return a queued record");
+                ready = port.waitForReady(target, Duration.ofNanos(remaining));
+                if ((ready
+                                & (ZLinkJavaSocketReceivePoller.ROUTE_CHANGED
+                                        | ZLinkJavaSocketReceivePoller.CONNECTION_CHANGED))
+                        != 0) {
+                    node.observeTransportState(ready);
+                }
+            } while ((ready & ZLinkJavaSocketReceivePoller.READABLE) == 0);
+        }
+
         private ZLinkJavaRawServicePort.Inbound receive() {
-            assertTrue(port.waitForReadable(target, WAIT));
+            awaitReadable();
             var inbound = port.receiveNow(target);
             assertNotNull(inbound);
             return inbound;
