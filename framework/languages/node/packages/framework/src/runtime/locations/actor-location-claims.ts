@@ -15,6 +15,7 @@ import { encodeAuthorityKey } from './authority-key-codec';
 import { routingIdsEqual } from '../routing-id';
 import {
   decodeActorAuthorityIdentity,
+  encodeActorAuthorityIdentity,
   rewriteActorAuthorityRoute
 } from '../actors/actor-authority-publication';
 import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
@@ -240,7 +241,7 @@ export class ZLinkActorLocationClaims {
     }
     const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
     if (
-      identity === undefined ||
+      identity?.state !== 'ready' ||
       identity.actorType !== actorType ||
       identity.ownerNodeGeneration !== ownerNodeGeneration ||
       identity.owner.ownerId !== owner.ownerId ||
@@ -281,6 +282,50 @@ export class ZLinkActorLocationClaims {
       );
     }
     this.confirmAuthority(actorId, { ...result, kind: 'snapshot' });
+  }
+
+  async beginClosing(actorRef: ActorRef): Promise<void> {
+    const store = this.authorityStore;
+    if (store === undefined) return;
+    const owner = this.runtime.currentOwnerToken;
+    const key = encodeAuthorityKey('actor', actorRef.actorId);
+    const current = await store.readAuthority(key);
+    if (owner === undefined || !matchesActorAuthority(current, actorRef, owner)) {
+      throw new ZLinkFrameworkException(
+        classifyMembershipAuthorityFailure(current, actorRef),
+        `Actor '${actorRef.actorId}' no longer owns its authority.`
+      );
+    }
+    const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
+    if (
+      identity?.state !== 'ready' ||
+      identity.actor.actorId !== actorRef.actorId ||
+      current.relocation !== undefined
+    ) {
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.Unavailable,
+        `Actor '${actorRef.actorId}' authority cannot enter Closing.`
+      );
+    }
+    const payload = encodeActorAuthorityIdentity({ ...identity, state: 'closing' });
+    const result = await store.compareExchangeAuthority(key, current.storeVersion, {
+      kind: 'put',
+      generationTransition: 'preserve',
+      payload
+    });
+    if (result.kind !== 'stored') {
+      throw new ZLinkFrameworkException(
+        result.kind === 'conflict'
+          ? classifyMembershipAuthorityFailure(result.current, actorRef)
+          : ZLinkFrameworkErrorKind.InternalFailure,
+        `Actor '${actorRef.actorId}' Closing CAS failed with status ${result.kind}.`
+      );
+    }
+    this.confirmAuthority(actorRef.actorId, {
+      ...current,
+      payload,
+      storeVersion: result.storeVersion
+    });
   }
 
   async release(_actorType: string, actorId: string, actorRef?: ActorRef): Promise<void> {

@@ -66,7 +66,10 @@ internal sealed partial class ZLinkActorSessionManager(
             ? ValueTask.CompletedTask
             : DiscardLocationExecutionAsync(state);
 
-    internal ValueTask DiscardLocationExecutionAsync(ZLinkActorRuntimeState state)
+    internal ValueTask DiscardLocationExecutionAsync(
+        ZLinkActorRuntimeState state,
+        CancellationToken generationShutdown = default
+    )
     {
         state.FenceRuntimeGeneration();
         var bound = state.TryGetBoundSession(out var session);
@@ -86,8 +89,19 @@ internal sealed partial class ZLinkActorSessionManager(
                 if (bound)
                     runtime.RemoveActorSessionBinding(state.ActorId, session.BindingToken);
                 if (nativeActor is { } native && getActorSpotNode() is { } node)
-                    await DestroyNativeActorAttemptAsync(node, native, CancellationToken.None)
-                        .ConfigureAwait(false);
+                {
+                    try
+                    {
+                        await DestroyNativeActorAttemptAsync(node, native, CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                    catch (ZLinkFrameworkException error)
+                        when (ZLinkLocationRuntime.IsExpectedDiscardTransportShutdown(
+                                error,
+                                generationShutdown
+                            )
+                        ) { }
+                }
                 _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
             }
         );
