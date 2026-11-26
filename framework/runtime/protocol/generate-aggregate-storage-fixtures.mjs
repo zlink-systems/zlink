@@ -32,10 +32,14 @@ export function generateAggregateStorageFixtures(schema) {
     const key = keyFor(kind, { ...decoded, ...keyFields });
     return { key, decoded, jcsUtf8: bytes.toString("utf8"), jcsHex: bytes.toString("hex"), sha256: sha256(bytes) };
   }
-  function inventory(name, count, longEntries = false, keyFields = undefined) {
+  // §8.3: a participant without a membership change stores the UTF-8 body `[]`.
+  const NO_MEMBERSHIP_CHANGE_HEX = Buffer.from("[]", "utf8").toString("hex");
+  function inventory(
+    name, count, longEntries = false, keyFields = undefined,
+    membershipMutationHex = "0100fe806d75746174696f6e",
+  ) {
     // §8.3 stores participant records verbatim, outside JSON canonicalization.
     const authorityPayloadHex = "00ff807061796c6f6164";
-    const membershipMutationHex = "0100fe806d75746174696f6e";
     const authorityPayloadSha256 = sha256(Buffer.from(authorityPayloadHex, "hex"));
     const membershipMutationSha256 = sha256(Buffer.from(membershipMutationHex, "hex"));
     const entries = Array.from({ length: count }, (_, index) => ({
@@ -137,7 +141,8 @@ export function generateAggregateStorageFixtures(schema) {
   return {
     spec: storage.spec, canonicalization: "RFC8785 (canonicalize@2.1.0)",
     byteEncoding: "jcsHex is exact UTF-8 storage bytes; no BOM or trailing newline",
-    cases: [small, multiPage, inventory("empty-0", 0), inventory("byte-limited-256", 256, true)],
+    cases: [small, multiPage, inventory("empty-0", 0), inventory("byte-limited-256", 256, true),
+      inventory("no-membership-change-1", 1, false, undefined, NO_MEMBERSHIP_CHANGE_HEX)],
     rejected,
     directJoin: inventory("direct-join-1", 1, false, directJoinKeyFields),
   };
