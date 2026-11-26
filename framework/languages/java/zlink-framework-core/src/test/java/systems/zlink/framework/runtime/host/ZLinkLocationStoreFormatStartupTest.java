@@ -393,24 +393,6 @@ final class ZLinkLocationStoreFormatStartupTest {
     }
 
     @Test
-    void conflictingCounterOfZeroValueStopsWithoutChangingEitherRecord() throws Exception {
-        ProbeStore store = new ProbeStore();
-        String old = legacyUsage("{}", "{}", 0, 0);
-        var counter = capacity("61", "actors", "active");
-        put(store.inner, legacy("a"), old);
-        put(store.inner, counter, "7");
-        store.limitConversionAttempts = true;
-        try (var host = start(store)) {
-            var failure = startupFailure(host);
-            assertInstanceOf(ZLinkConfigurationException.class, failure);
-            assertTrue(failure.getMessage().contains("counter"), failure.toString());
-        }
-        assertEquals(old, value(store.inner, legacy("a")));
-        assertEquals("7", value(store.inner, counter));
-        assertEquals(1, store.conversionAttempts.get());
-    }
-
-    @Test
     void zeroCapacityWithLostResponseFinishes() throws Exception {
         ProbeStore store = new ProbeStore();
         put(store.inner, legacy("a"), legacyUsage("{}", "{}", 0, 0));

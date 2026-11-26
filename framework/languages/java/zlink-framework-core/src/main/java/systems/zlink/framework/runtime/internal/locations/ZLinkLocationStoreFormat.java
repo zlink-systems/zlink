@@ -177,19 +177,20 @@ final class ZLinkLocationStoreFormat {
     private CompletionStage<Void> writeCapacity(
             ZLinkStoreKey oldKey, ZLinkMeshNodeDescriptorKey target, ZLinkStoreValue oldValue) {
         byte[] bytes = oldValue.bytes();
-        var legacy = ZLinkLegacyCapacity.decode(oldKey, bytes);
-        // Every target counter key must be missing, including zero-valued ones that are not Put.
-        var counterKeys = legacy.counterKeys(target);
-        var counters = legacy.counterPuts(target);
-        if (counterKeys.size() >= ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
+        var counters = ZLinkLegacyCapacity.decode(oldKey, bytes).counterPuts(target);
+        // Zero-valued counters are not target keys: only Put keys are conditioned and counted.
+        var counterKeys = counters.stream().map(ZLinkStorePut::key).toList();
+        if (counters.size() >= ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
             throw new ZLinkConfigurationException(
                     "v11 capacity conversion exceeds the Location Store batch key limit for "
                             + oldKey.value());
-        var conditions = new ArrayList<ZLinkStoreCondition>(counterKeys.size() + 1);
+        var conditions = new ArrayList<ZLinkStoreCondition>(counters.size() + 1);
         var mutations = new ArrayList<ZLinkStoreMutation>(counters.size() + 1);
         conditions.add(new ZLinkStoreValueCondition(oldKey, bytes));
-        for (var key : counterKeys) conditions.add(new ZLinkStoreMissingCondition(key));
-        mutations.addAll(counters);
+        for (var counter : counters) {
+            conditions.add(new ZLinkStoreMissingCondition(counter.key()));
+            mutations.add(counter);
+        }
         mutations.add(new ZLinkStoreDelete(oldKey));
         return write(new ZLinkStoreWriteRequest(conditions, mutations))
                 .<CompletionStage<Void>>handle(
