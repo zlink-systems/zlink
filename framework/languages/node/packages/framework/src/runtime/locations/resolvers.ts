@@ -502,6 +502,7 @@ export class ZLinkStoreLocationResolvers
       return { kind: 'missing' };
     }
     const decoded = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
+    if (decoded !== undefined && decoded.state !== 'ready') return { kind: 'missing' };
     const currentOwner = {
       ownerId: current.ownerId,
       leaseGeneration: current.ownerLeaseGeneration

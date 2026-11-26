@@ -1929,10 +1929,18 @@ void app_t::_apply_zlink_framework ()
           })
           .get ();
     }
-    _state->has_manual_service_topology = [options, mesh_node_registrations,
+    _state->has_manual_service_topology = [options, mesh_node_registrations, channel_runtime,
                                            channel_runtime_manager] () mutable {
-        if (!options.client_endpoint_connections ().empty ()
-            || !options.subscriber_endpoint_connections ().empty ()) {
+        const auto has_manual_endpoints = [] (const auto &channel_connections) {
+            return detail::endpoint_connections_runtime_t::has_connections (
+              channel_connections.second);
+        };
+        if (std::ranges::any_of (options.client_endpoint_connections (), has_manual_endpoints)
+            || std::ranges::any_of (options.subscriber_endpoint_connections (),
+                                    has_manual_endpoints)
+            || std::ranges::any_of (channel_runtime.channel_snapshots (), [] (const auto &channel) {
+                   return channel.publisher.enabled && !channel.publisher.discovery;
+               })) {
             return true;
         }
         for (const auto &registration : mesh_node_registrations) {
