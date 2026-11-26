@@ -1005,7 +1005,12 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         new systems.zlink.framework.errors.ZLinkFrameworkException(
                                 systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
                                 "adopted request rejected"));
-                recoveredBackend.executor.drain();
+                // The replay terminal completes only after its failure relay to the source.
+                recoveredBackend.executor.drainUntil(
+                        CompletableFuture.allOf(
+                                        recoveredBackend.queuedTerminals.toArray(
+                                                CompletableFuture[]::new))
+                                .handle((ignored, failure) -> null));
                 assertEquals(1, sourceFailures.size());
                 assertEquals(
                         systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
