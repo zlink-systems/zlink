@@ -139,7 +139,11 @@ internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore pr
         }
         return result switch
         {
-            ZLinkBlobReadResult.Found found => new ZLinkRelocationReadResult.Found(found.Bytes),
+            ZLinkBlobReadResult.Found found => new ZLinkRelocationReadResult.Found(
+                found.Bytes,
+                found.ExpiresAt,
+                found.StoreNow
+            ),
             ZLinkBlobReadResult.Missing => new ZLinkRelocationReadResult.Missing(),
             _ => throw new InvalidOperationException(),
         };

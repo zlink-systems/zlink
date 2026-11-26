@@ -6,7 +6,13 @@ import type {
   ZLinkActorJoinCompletion,
   ZLinkActorRelocationAdapter
 } from '@zlink-systems/framework';
-import { TownView, DungeonView, restoreNotification, type Notification, ActionRejected } from './messages';
+import {
+  TownView,
+  DungeonView,
+  restoreNotification,
+  type Notification,
+  ActionRejected
+} from './messages';
 import { Rejection } from './constants';
 export class Player implements ZLinkActor {
   async deliver(packetName: string, payload: Notification, visible = true): Promise<void> {

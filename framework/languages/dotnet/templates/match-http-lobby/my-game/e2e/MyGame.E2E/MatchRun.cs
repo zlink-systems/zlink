@@ -3,17 +3,17 @@ using MyGame.Shared;
 
 namespace MyGame.E2E;
 
-internal sealed class MatchRun(string root) : IAsyncDisposable
+internal sealed class MatchRun(
+    string root,
+    RunOutcome outcome,
+    string runDirectory,
+    bool foreground = false
+) : IAsyncDisposable
 {
-    public RunOutcome Outcome { get; } = new();
+    public RunOutcome Outcome { get; } = outcome;
     private const int RunRoomCapacity = 1;
     private readonly List<ManagedProcess> nodes = [];
     private readonly string project = "my-game-e2e-" + Guid.NewGuid().ToString("N");
-    private readonly string runDirectory = Path.Combine(
-        root,
-        ".logs",
-        "run-" + Guid.NewGuid().ToString("N")
-    );
     private readonly string? dockerProject = Environment.GetEnvironmentVariable(
         "MY_GAME_DOCKER_PROJECT"
     );
@@ -25,15 +25,29 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
     public string Endpoint { get; private set; } = "";
     public string LobbyEndpoint { get; private set; } = "";
 
+    public ServerEndpoints PublishedEndpoints => new([Endpoint], LobbyEndpoint);
+
+    public void Attach(ServerEndpoints endpoints)
+    {
+        Endpoint = endpoints.Streams.Single();
+        LobbyEndpoint = endpoints.Api ?? throw new InvalidDataException("Missing lobby endpoint.");
+    }
+
+    public async Task WaitForExitAsync(CancellationToken ct)
+    {
+        var exit = await Task.WhenAny(nodes.Select(node => node.WaitForExitAsync(ct)));
+        throw new InvalidOperationException($"{await exit} exited while the server was running.");
+    }
+
     private string[] Compose(params string[] arguments) =>
         ["compose", "-f", Path.Combine(root, "docker-compose.yml"), "-p", project, .. arguments];
 
     public async Task StartAsync(CancellationToken ct)
     {
         Directory.CreateDirectory(runDirectory);
-        Console.WriteLine($"Run logs: {runDirectory}");
         if (dockerProject is null)
         {
+            Console.WriteLine("[redis] Starting");
             composeStarted = true;
             await Commands.RunAsync(
                 "docker",
@@ -47,6 +61,7 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
                 Path.Combine(runDirectory, "redis-port.log"),
                 ct
             );
+            Console.WriteLine("[redis] Ready");
         }
         else
             redisEndpoint = "location:6379";
@@ -83,7 +98,7 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
         settings = settings with
         {
             RedisEndpoint = redisEndpoint,
-            RoomCapacity = RunRoomCapacity,
+            RoomCapacity = foreground ? settings.RoomCapacity : RunRoomCapacity,
             KeyPrefix = project + ":",
             MeshEndpoint = "tcp://127.0.0.1:0",
             StreamEndpoint = settings.StreamEndpoint is null ? null : "ws://127.0.0.1:0",
@@ -151,12 +166,17 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
                 "net8.0",
                 assembly + ".dll"
             );
+            var command = new[] { "dotnet", dll, "--config", config };
+            // Handle terminal interrupts in the runner and stop the node through stdin.
+            if (foreground && !OperatingSystem.IsWindows())
+                command = ["sh", "-c", "trap '' INT; exec \"$@\"", "node", .. command];
             node = new ManagedProcess(
                 Outcome,
-                "dotnet",
-                [dll, "--config", config],
+                command[0],
+                command[1..],
                 runDirectory,
-                suffix
+                suffix,
+                foreground
             );
         }
         nodes.Add(node);
@@ -167,6 +187,7 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
             ) ?? throw new InvalidOperationException($"Invalid readiness for {configName}.");
         if (ready.Id != settings.Id || ready.MeshEndpoint.EndsWith(":0", StringComparison.Ordinal))
             throw new InvalidOperationException($"Incorrect listener readiness for {configName}.");
+        node.Ready();
         return (node, ready);
     }
 
@@ -222,6 +243,7 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
         }
         if (composeStarted)
         {
+            Console.WriteLine("[redis] Stopping");
             try
             {
                 await Commands.RunAsync(

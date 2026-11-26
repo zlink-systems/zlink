@@ -11,6 +11,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFo
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
@@ -73,6 +74,10 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
 
     public boolean isOwnerAdmissionOpen() {
         return runtime.isOwnerAdmissionOpen();
+    }
+
+    public boolean isOwnerLeaseValid(ZLinkLocationOwnerToken owner) {
+        return runtime.admittedOwnerToken().filter(owner::equals).isPresent();
     }
 
     public void ensureOwnerAdmissionOpen() {

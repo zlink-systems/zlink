@@ -57,7 +57,9 @@ import systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.spots.SpotNodeRegistration;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime;
 import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime.RelocationAuthorityErrorException;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime.RelocationBlockedException;
 import systems.zlink.framework.runtime.streams.ZLinkStreamRuntime;
 import systems.zlink.framework.spots.ActorSpotHandleResolver;
 import systems.zlink.framework.spots.SpotHandleResolver;
@@ -1419,98 +1421,51 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         }
         terminationDeadline.set(Instant.now().plus(deadline));
         Instant relocationDeadline = terminationDeadline.get();
-        withinRelocationDeadline(
-                        relocationPreflightUntilDeadline(relocationDeadline), relocationDeadline)
-                .whenComplete(
-                        (reason, failure) -> {
-                            Throwable preflightFailure = unwrapCompletionFailure(failure);
-                            ZLinkFrameworkRelocationReason blocker =
-                                    relocationReason(
-                                            preflightFailure,
-                                            failure == null
-                                                    ? toPublicRelocationReason(reason)
-                                                    : ZLinkFrameworkRelocationReason.NONE);
-                            if (blocker != ZLinkFrameworkRelocationReason.NONE) {
-                                completeRelocation(
-                                        candidate,
-                                        blockedRelocation(
-                                                options.mode(), effectiveTargetVersion, blocker),
-                                        ZLinkFrameworkRuntimeState.SERVING);
-                                return;
-                            }
-                            AtomicBoolean relocationPublished = new AtomicBoolean(false);
-                            CompletionStage<Void> relocation =
-                                    relocateWithTargetWait(
-                                            relocationDeadline,
+        ZLinkFrameworkRelocationReason topology = validateRelocationTopology();
+        if (topology != ZLinkFrameworkRelocationReason.NONE) {
+            completeRelocation(
+                    candidate,
+                    blockedRelocation(options.mode(), effectiveTargetVersion, topology),
+                    ZLinkFrameworkRuntimeState.SERVING);
+            return independentRelocationWaiter(completion);
+        }
+        AtomicBoolean relocationPublished = new AtomicBoolean(false);
+        CompletionStage<Void> relocation =
+                relocateWithTargetWait(
+                        relocationDeadline,
+                        options.mode(),
+                        effectiveTargetVersion,
+                        relocationPublished,
+                        candidate.cancellation());
+        relocation.whenComplete(
+                (ignored, relocationFailure) -> {
+                    Throwable relocationCause = unwrapCompletionFailure(relocationFailure);
+                    ZLinkFrameworkRelocationReason failureReason =
+                            relocationReason(relocationCause, ZLinkFrameworkRelocationReason.NONE);
+                    ZLinkFrameworkRelocationResult result =
+                            relocationFailure == null && activeTermination.get() == null
+                                    ? new ZLinkFrameworkRelocationResult(
                                             options.mode(),
                                             effectiveTargetVersion,
-                                            relocationPublished,
-                                            candidate.cancellation());
-                            relocation.whenComplete(
-                                    (ignored, relocationFailure) -> {
-                                        Throwable relocationCause =
-                                                unwrapCompletionFailure(relocationFailure);
-                                        ZLinkFrameworkRelocationReason failureReason =
-                                                relocationReason(
-                                                        relocationCause,
-                                                        ZLinkFrameworkRelocationReason.NONE);
-                                        ZLinkFrameworkRelocationResult result =
-                                                relocationFailure == null
-                                                                && activeTermination.get() == null
-                                                        ? new ZLinkFrameworkRelocationResult(
-                                                                options.mode(),
-                                                                effectiveTargetVersion,
-                                                                ZLinkFrameworkRelocationOutcome
-                                                                        .RELOCATED,
-                                                                ZLinkFrameworkRelocationReason.NONE)
-                                                        : blockedRelocation(
-                                                                options.mode(),
-                                                                effectiveTargetVersion,
-                                                                failureReason);
-                                        //  Settled unit authority decides the host state
-                                        //  (spec 30 §13): every unit on the target is
-                                        //  Relocated, a split or an expired source lease is
-                                        //  Error, every unit on the source is Serving.
-                                        completeRelocation(
-                                                candidate,
-                                                result,
-                                                result.outcome()
-                                                                == ZLinkFrameworkRelocationOutcome
-                                                                        .RELOCATED
-                                                        ? ZLinkFrameworkRuntimeState.RELOCATED
-                                                        : relocationCause
-                                                                                instanceof
-                                                                                RelocationAuthorityErrorException
-                                                                        && activeTermination.get()
-                                                                                == null
-                                                                ? ZLinkFrameworkRuntimeState.ERROR
-                                                                : ZLinkFrameworkRuntimeState
-                                                                        .SERVING);
-                                    });
-                        });
+                                            ZLinkFrameworkRelocationOutcome.RELOCATED,
+                                            ZLinkFrameworkRelocationReason.NONE)
+                                    : blockedRelocation(
+                                            options.mode(), effectiveTargetVersion, failureReason);
+                    //  Settled unit authority decides the host state
+                    //  (spec 30 §13): every unit on the target is
+                    //  Relocated, a split or an expired source lease is
+                    //  Error, every unit on the source is Serving.
+                    completeRelocation(
+                            candidate,
+                            result,
+                            result.outcome() == ZLinkFrameworkRelocationOutcome.RELOCATED
+                                    ? ZLinkFrameworkRuntimeState.RELOCATED
+                                    : relocationCause instanceof RelocationAuthorityErrorException
+                                                    && activeTermination.get() == null
+                                            ? ZLinkFrameworkRuntimeState.ERROR
+                                            : ZLinkFrameworkRuntimeState.SERVING);
+                });
         return independentRelocationWaiter(completion);
-    }
-
-    private CompletionStage<ZLinkTerminationReason> relocationPreflightUntilDeadline(
-            Instant deadline) {
-        if (activeTermination.get() != null) {
-            return CompletableFuture.completedFuture(ZLinkTerminationReason.RUNTIME_NOT_READY);
-        }
-        return retirePreflight()
-                .thenCompose(
-                        reason -> {
-                            if (reason != ZLinkTerminationReason.TARGET_UNAVAILABLE
-                                    || !Instant.now().isBefore(deadline)) {
-                                return CompletableFuture.completedFuture(reason);
-                            }
-                            return CompletableFuture.runAsync(
-                                            () -> {},
-                                            CompletableFuture.delayedExecutor(
-                                                    RELOCATION_TARGET_WAIT_POLL_MILLIS,
-                                                    TimeUnit.MILLISECONDS))
-                                    .thenCompose(
-                                            ignored -> relocationPreflightUntilDeadline(deadline));
-                        });
     }
 
     private static <T> CompletionStage<T> withinRelocationDeadline(
@@ -1543,19 +1498,23 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             ZLinkFrameworkRelocationReason.TARGET_UNAVAILABLE,
                             "No eligible relocation target became Ready before the deadline"));
         }
-        //  Without a unit inventory owner no unit can be moved (retire preflight
-        //  blocks such a host when it owns one), so there is no target to find.
         CompletionStage<Void> attempt =
                 spotRetire == null
-                        ? beginRelocationAdmission().thenRun(() -> relocationPublished.set(true))
+                        ? ZLinkUserSpotRetireRuntime.preflightWithoutRelocationRuntime(
+                                        spots(),
+                                        actors(),
+                                        registration.meshNodes(),
+                                        () ->
+                                                validateRelocationTargets(
+                                                        mode, targetVersion, deadline))
+                                .thenCompose(ignored -> beginRelocationAdmission())
+                                .thenRun(() -> relocationPublished.set(true))
                         : spotRetire.relocateAll(
                                 deadline,
                                 () -> activeTermination.get() != null,
                                 mode,
                                 targetVersion,
-                                () ->
-                                        validateRelocationTargetPopulation(
-                                                mode, targetVersion, deadline),
+                                () -> validateRelocationTargets(mode, targetVersion, deadline),
                                 () ->
                                         beginRelocationAdmission()
                                                 .thenRun(() -> relocationPublished.set(true)),
@@ -1653,6 +1612,25 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             actors().beginRelocation();
         }
         return publishRuntimeStateAwaited(ZLinkFrameworkRuntimeState.RELOCATING);
+    }
+
+    private CompletionStage<Void> validateRelocationTargets(
+            ZLinkFrameworkRelocationMode mode, long targetVersion, Instant deadline) {
+        return automaticRouteMeshRetirePreflight()
+                .thenCompose(
+                        reason ->
+                                reason == ZLinkTerminationReason.NONE
+                                        ? retireActorTargetPreflight()
+                                        : CompletableFuture.completedFuture(reason))
+                .thenCompose(
+                        reason ->
+                                reason == ZLinkTerminationReason.NONE
+                                        ? validateRelocationTargetPopulation(
+                                                mode, targetVersion, deadline)
+                                        : CompletableFuture.failedFuture(
+                                                new RelocationBlockedException(
+                                                        toPublicRelocationReason(reason),
+                                                        "Host relocation target preflight failed")));
     }
 
     private CompletionStage<Void> validateRelocationTargetPopulation(
@@ -1972,49 +1950,17 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         });
     }
 
-    private CompletionStage<ZLinkTerminationReason> retirePreflight() {
-        if (!runtimeState.get().isReadyState()) {
-            return CompletableFuture.completedFuture(ZLinkTerminationReason.RUNTIME_NOT_READY);
-        }
+    private ZLinkFrameworkRelocationReason validateRelocationTopology() {
         boolean locationStoreAvailable = storeLocationResolvers != null;
         if (registration.channels().stream()
                         .anyMatch(channel -> channel.blocksAutomaticRetire(locationStoreAvailable))
                 || registration.meshNodes().stream().anyMatch(node -> !node.peers().isEmpty())) {
-            return CompletableFuture.completedFuture(
-                    ZLinkTerminationReason.MANUAL_TOPOLOGY_UNSUPPORTED);
+            return ZLinkFrameworkRelocationReason.MANUAL_TOPOLOGY_UNSUPPORTED;
         }
-        //  Spec 30 §5.1: a host with no unit to move needs no target, so the
-        //  target readiness checks below apply only to a host that owns a unit.
-        if (!systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime.hasRelocationUnits(
-                spots(), actors())) {
-            return CompletableFuture.completedFuture(ZLinkTerminationReason.NONE);
-        }
-        return automaticRouteMeshRetirePreflight()
-                .thenCompose(
-                        reason ->
-                                reason == ZLinkTerminationReason.NONE
-                                        ? retireWorkloadPreflight()
-                                        : CompletableFuture.completedFuture(reason));
+        return ZLinkFrameworkRelocationReason.NONE;
     }
 
-    private CompletionStage<ZLinkTerminationReason> retireWorkloadPreflight() {
-        boolean hasActiveRelocatableWork =
-                (actors() != null && !actors().activeActorTypes().isEmpty())
-                        || (spots() != null && spots().activeUserSpotCount() > 0);
-        if (hasActiveRelocatableWork) {
-            boolean relocationPolicyConfigured =
-                    registration.meshNodes().stream()
-                            .anyMatch(
-                                    systems.zlink.framework.runtime.mesh.MeshNodeRegistration
-                                            ::hasRelocatableFactories);
-            if (!relocationPolicyConfigured) {
-                return CompletableFuture.completedFuture(
-                        ZLinkTerminationReason.RELOCATION_DISABLED);
-            }
-            if (spotRetire == null || !spotRetire.supportsActiveInventory()) {
-                return CompletableFuture.completedFuture(ZLinkTerminationReason.STATE_INCOMPATIBLE);
-            }
-        }
+    private CompletionStage<ZLinkTerminationReason> retireActorTargetPreflight() {
         if (actors() == null || actors().activeActorTypes().isEmpty()) {
             return CompletableFuture.completedFuture(ZLinkTerminationReason.NONE);
         }

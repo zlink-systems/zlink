@@ -18,6 +18,19 @@ flowchart LR
   TownB -->|Location / lease| Redis
 ```
 
+## Server and e2e
+
+Run the server from the project directory. The local build requires CMake, Ninja, a C++20 compiler and Docker Compose for Redis.
+
+| Shell | Start the server | Run e2e in a second terminal |
+| --- | --- | --- |
+| Bash | `./run-server.sh` | `./run-e2e.sh` |
+| Windows (PowerShell 7) | `.\run-server.cmd` | `.\run-e2e.cmd` |
+
+Use the WebSocket address printed after `Server ready` for game clients. Press Ctrl+C in the server terminal to stop the nodes and Redis. E2e attaches automatically when the server has published `.logs/server.json`. With no running server, e2e starts an isolated Docker deployment. Attached runs skip `update`, which replaces a Play node.
+
+Each run saves node stdout (`*.out.log`), stderr (`*.err.log`), Framework message-flow (`*.flow.log`) and failure details (`failure.log`, on failure) under `.logs/run-<id>/`. Build and Docker Compose logs are also under `.logs/`. See [한국어](README.ko.md).
+
 ## Prerequisites
 
 Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain and CMake; the host does not need them for the default run.
@@ -30,7 +43,7 @@ Public Framework 0.34.1 is pinned in `bootstrap.cmake`, the only file that names
 
 Connect to the Session `players` STREAM listener. `server/config/session.json` pins `StreamEndpoint` to `ws://127.0.0.1:0`: loopback with an OS-assigned port. Read the Session stdout line `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}` and use its actual `streamEndpoint`, not port `0`. `server/shared/hosting.hpp` emits this value and `e2e/world.hpp` consumes it. Mesh and Redis addresses are internal endpoints.
 
-The listener is reachable from its host/network namespace. Keep a deployment running separately from e2e, which owns and removes its nodes; configure a reachable `StreamEndpoint` interface and port and expose it from containers for external clients. The checked-in configuration uses WebSocket; `e2e/world.hpp` overrides this listener to `tcp://127.0.0.1:0` for its test deployment. The WebSocket URL has no application path (use `/`). Browsers can use it; an HTTPS page requires a secure `wss://` deployment, which this default does not provide.
+The listener is reachable from its host/network namespace. Keep a deployment running separately from e2e, which owns and removes its nodes; configure a reachable `StreamEndpoint` interface and port and expose it from containers for external clients. The server and e2e use this WebSocket configuration. The WebSocket URL has no application path (use `/`). Browsers can use it; an HTTPS page requires a secure `wss://` deployment, which this default does not provide.
 
 Send `JoinTownRequest` (`playerId`, integer `channel`, for example `1`) first. Successful entry pushes `TownView` with town membership. Join before changing channel, creating/joining a party or entering a dungeon; `ActionRejected` reports rejected actions. These operations use `send(...).submit()` and server pushes, not a correlated connector `request` reply. This template does not authenticate player identity; validate it before binding in a production game.
 
@@ -114,7 +127,7 @@ The script removes its unique image tags after checking the build. Docker retain
 On Windows, use PowerShell 7:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 `Dockerfile` defines the Ubuntu 24.04 build and runtime base once in `UBUNTU_IMAGE`. All node roles share the multi-stage image. The runner adds Docker CLI 28.5.1 to the same runtime. These base arguments can be replaced when the deployment base image becomes available.
@@ -133,10 +146,10 @@ Linux:
 Windows:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario channel,dungeon,reconnect,update
+.\run-e2e.cmd -CheckStructure
+.\run-e2e.cmd -CheckDomain
 ```
 
 The runner and nodes execute in containers. The script checks structure before Redis startup, then uses a unique Compose network, project, container names and Redis key prefixes. Nodes share the runner's network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied into each node before attaching stdin and stdout; `drain`, `shutdown` and lifecycle output retain their existing protocol.
@@ -169,7 +182,7 @@ The script runs `cmake -P bootstrap.cmake`, `cmake --preset default` and `cmake 
 On Windows, run:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -Local
+.\run-e2e.cmd -Local
 ```
 
 Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenario selection works in both modes. Local build-only uses `--local --build-only` or `-Local -BuildOnly`.
@@ -185,6 +198,10 @@ Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenar
 - **READY and Serving** — Framework nodes print `READY` after observing runtime `Serving`. [Guide](https://docs.zlink.systems/cpp/guide/server/12-operations/#wait-for-serving). [server/shared/hosting.hpp:44](server/shared/hosting.hpp); [server/shared/hosting.hpp:93](server/shared/hosting.hpp).
 
 ## Known issues
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
+
+The pinned C++ Framework release can publish a `tcp://` address for a STREAM listener configured with WebSocket. The runner reports a startup failure when this occurs. [#5460](https://github.com/zlink-systems/zlink/issues/5460)
 
 Validated against the published Framework 0.34.1 packages.
 

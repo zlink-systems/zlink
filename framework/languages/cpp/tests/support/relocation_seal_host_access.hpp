@@ -47,10 +47,13 @@ struct public_host_runtime_test_access_t
     static void stage_relay (public_host_runtime_t &host,
                              const protocol::relocation_prepare_t &prepare,
                              const stateful::object_ref_t &source,
-                             const stateful::object_ref_t &target)
+                             const stateful::object_ref_t &target,
+                             stateful::relocation_restore_identity_t verified_restore = {})
     {
         public_host_runtime_t::relocation_target_attempt_t attempt;
         attempt.prepare = prepare;
+        attempt.cutover_received = !verified_restore.reference.empty ();
+        attempt.restore_identity = std::move (verified_restore);
         attempt.sources = {source};
         attempt.targets = {target};
         host._relocation_target_attempts[{1, 2, 1}] = std::move (attempt);

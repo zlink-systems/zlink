@@ -35,8 +35,8 @@ public sealed class ChangeChannel
     )
     {
         if (request.Channel > GameRules.MaxInteger)
-            return actor.Context.BoundSession
-                .Send(new ActionRejected(Rejection.IntegerOutOfRange, 0))
+            return actor
+                .Context.BoundSession.Send(new ActionRejected(Rejection.IntegerOutOfRange, 0))
                 .Async();
 
         actor
@@ -64,8 +64,10 @@ public sealed class EarnGold : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor,
         if (decision.Accepted)
             await spot.ShowAsync(actor);
         else
-            await actor.Context.BoundSession
-                .Send(new ActionRejected(decision.Reason!, checked((int)decision.RetryAfterMs)))
+            await actor
+                .Context.BoundSession.Send(
+                    new ActionRejected(decision.Reason!, checked((int)decision.RetryAfterMs))
+                )
                 .Async();
     }
 }
@@ -83,7 +85,8 @@ public sealed class ViewPlayer : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActo
 }
 
 [ZLinkSpotActorSendHandler(nameof(ChannelViewRequest))]
-public sealed class ViewChannel : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, ChannelViewRequest>
+public sealed class ViewChannel
+    : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, ChannelViewRequest>
 {
     public ValueTask HandleAsync(
         ZoneSpot spot,
@@ -126,8 +129,12 @@ public sealed class ZoneEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<
     public void Configure()
     {
         Context.Handlers.AddActorPacket<EnterPlayer, PlayerActor>(nameof(EnterWorldRequest));
-        Context.Handlers.AddActorPacket<ZoneEntryPlayerViewNotification, PlayerActor>(nameof(PlayerView));
-        Context.Handlers.AddActorPacket<ZoneEntryChannelViewNotification, PlayerActor>(nameof(ChannelView));
+        Context.Handlers.AddActorPacket<ZoneEntryPlayerViewNotification, PlayerActor>(
+            nameof(PlayerView)
+        );
+        Context.Handlers.AddActorPacket<ZoneEntryChannelViewNotification, PlayerActor>(
+            nameof(ChannelView)
+        );
     }
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct) =>
@@ -157,15 +164,27 @@ public sealed class EnterPlayer
 }
 
 [ZLinkSpotActorSendHandler(nameof(PlayerView))]
-public sealed class ZoneEntryPlayerViewNotification : IZLinkEntrySpotActorSendHandler<ZoneEntry, PlayerActor, PlayerView>
+public sealed class ZoneEntryPlayerViewNotification
+    : IZLinkEntrySpotActorSendHandler<ZoneEntry, PlayerActor, PlayerView>
 {
-    public ValueTask HandleAsync(ZoneEntry spot, PlayerActor actor, IZLinkMessageContext context,
-        PlayerView message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        ZoneEntry spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        PlayerView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }
 
 [ZLinkSpotActorSendHandler(nameof(ChannelView))]
-public sealed class ZoneEntryChannelViewNotification : IZLinkEntrySpotActorSendHandler<ZoneEntry, PlayerActor, ChannelView>
+public sealed class ZoneEntryChannelViewNotification
+    : IZLinkEntrySpotActorSendHandler<ZoneEntry, PlayerActor, ChannelView>
 {
-    public ValueTask HandleAsync(ZoneEntry spot, PlayerActor actor, IZLinkMessageContext context,
-        ChannelView message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        ZoneEntry spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        ChannelView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }
