@@ -33,12 +33,7 @@ public static class GameNames
     public static string BorderTopic(string source, string target) => $"{source}:{target}";
 }
 
-public sealed record WorldState(
-    string ZoneId,
-    string NodeId,
-    double X,
-    long Sequence
-);
+public sealed record WorldState(string ZoneId, string NodeId, double X, long Sequence);
 
 public sealed record Position(double X);
 
@@ -48,10 +43,8 @@ public sealed record MoveRequest(double Delta, long Sequence);
 
 public sealed record EnterZone(Position Position, long Sequence, int RemainingMs);
 
-public sealed class PlayerLeftReasonConverter() : JsonStringEnumConverter<PlayerLeftReason>(
-    JsonNamingPolicy.KebabCaseLower
-)
-{ }
+public sealed class PlayerLeftReasonConverter()
+    : JsonStringEnumConverter<PlayerLeftReason>(JsonNamingPolicy.KebabCaseLower) { }
 
 [JsonConverter(typeof(PlayerLeftReasonConverter))]
 public enum PlayerLeftReason
@@ -61,10 +54,8 @@ public enum PlayerLeftReason
     OutOfRange,
 }
 
-public sealed class BorderPresenceKindConverter() : JsonStringEnumConverter<BorderPresenceKind>(
-    JsonNamingPolicy.KebabCaseLower
-)
-{ }
+public sealed class BorderPresenceKindConverter()
+    : JsonStringEnumConverter<BorderPresenceKind>(JsonNamingPolicy.KebabCaseLower) { }
 
 [JsonConverter(typeof(BorderPresenceKindConverter))]
 public enum BorderPresenceKind
@@ -76,7 +67,12 @@ public enum BorderPresenceKind
 
 public sealed record PlayerAppeared(string PlayerId, Position Position, string SourceSpotId = "");
 
-public sealed record PlayerMoved(string PlayerId, Position Position, long Sequence, string SourceSpotId = "");
+public sealed record PlayerMoved(
+    string PlayerId,
+    Position Position,
+    long Sequence,
+    string SourceSpotId = ""
+);
 
 public sealed record PlayerLeft(string PlayerId, PlayerLeftReason Reason, string SourceSpotId = "");
 

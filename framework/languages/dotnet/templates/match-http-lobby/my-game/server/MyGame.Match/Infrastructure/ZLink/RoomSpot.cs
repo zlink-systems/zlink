@@ -73,9 +73,11 @@ public sealed class RoomSpot(
             await actor.Context.BoundSession.Send(rejection).Async();
         else
         {
-            var player = state.View().Single(candidate => candidate.PlayerId == actor.Context.ActorId);
-            await actor.Context.BoundSession
-                .Send(new MoveResult(player.X, player.Y, request.Sequence))
+            var player = state
+                .View()
+                .Single(candidate => candidate.PlayerId == actor.Context.ActorId);
+            await actor
+                .Context.BoundSession.Send(new MoveResult(player.X, player.Y, request.Sequence))
                 .Async();
             await BroadcastAsync(View(), ct);
         }
@@ -89,8 +91,8 @@ public sealed class RoomSpot(
             await actor.Context.BoundSession.Send(rejection).Async();
             return;
         }
-        await actor.Context.BoundSession
-            .Send(new ShotResult("hit", request.TargetId, request.Sequence))
+        await actor
+            .Context.BoundSession.Send(new ShotResult("hit", request.TargetId, request.Sequence))
             .Async();
         await BroadcastAsync(View(), ct);
         if (state.Winner is { } winner)
@@ -107,7 +109,8 @@ public sealed class RoomSpot(
 
     public void Restore(ReadOnlyMemory<byte> payload)
     {
-        var snapshot = JsonSerializer.Deserialize<HttpRoomSnapshot>(payload.Span)
+        var snapshot =
+            JsonSerializer.Deserialize<HttpRoomSnapshot>(payload.Span)
             ?? throw new InvalidDataException("Missing room state.");
         roster.Restore(snapshot.Roster);
         state.Restore(JsonSerializer.SerializeToUtf8Bytes(snapshot.Game));

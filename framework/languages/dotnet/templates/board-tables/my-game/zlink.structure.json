@@ -6,19 +6,24 @@
   "run": {
     "commands": {
       "sh": [
+        "./run-server.sh",
         "./run-e2e.sh --build-only",
         "./run-e2e.sh",
-        "./run-e2e.sh --scenario table,reconnect,update"
+        "./run-e2e.sh --scenario table,reconnect,match,match-cancel,persist,update"
       ],
       "powershell": [
-        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
-        "pwsh -NoProfile -File ./run-e2e.ps1",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update"
+        ".\\run-server.cmd",
+        ".\\run-e2e.cmd -BuildOnly",
+        ".\\run-e2e.cmd",
+        ".\\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,persist,update"
       ]
     },
     "scenarios": [
       "table",
       "reconnect",
+      "match",
+      "match-cancel",
+      "persist",
       "update"
     ]
   },
@@ -48,13 +53,44 @@
       "config": "server/config/table-b.json"
     },
     {
+      "id": "matchmaker",
+      "role": "matchmaker",
+      "title": "Matchmaker node",
+      "config": "server/config/matchmaker.json"
+    },
+    {
+      "id": "api",
+      "role": "api",
+      "title": "API node (Actor DB)",
+      "config": "server/config/api.json"
+    },
+    {
       "id": "location",
       "role": "location-store",
       "title": "Location Store",
       "config": "docker-compose.yml"
     }
   ],
-  "channels": [],
+  "channels": [
+    {
+      "name": "my-game-player-records",
+      "owner": "tableA",
+      "kind": "client-server",
+      "role": "client"
+    },
+    {
+      "name": "my-game-player-records",
+      "owner": "tableB",
+      "kind": "client-server",
+      "role": "client"
+    },
+    {
+      "name": "my-game-player-records",
+      "owner": "api",
+      "kind": "client-server",
+      "role": "server"
+    }
+  ],
   "spots": [
     {
       "id": "table-entry-a",
@@ -74,6 +110,20 @@
       "type": "Table",
       "owner": "tableA",
       "dynamic": true
+    },
+    {
+      "id": "room-provisioner",
+      "kind": "instance",
+      "type": "RoomProvisioner",
+      "owner": "tableA",
+      "logicalId": "room-provisioner-board"
+    },
+    {
+      "id": "pool",
+      "kind": "instance",
+      "type": "Pool",
+      "owner": "matchmaker",
+      "logicalId": "pool-board"
     }
   ],
   "edges": [
@@ -92,6 +142,31 @@
       "to": "location",
       "label": "Location / lease",
       "semantic": "location-authority"
+    },
+    {
+      "from": "tableA",
+      "to": "matchmaker",
+      "label": "match requests"
+    },
+    {
+      "from": "matchmaker",
+      "to": "tableA",
+      "label": "room preparation"
+    },
+    {
+      "from": "tableA",
+      "to": "api",
+      "label": "loadPlayer / commitRound"
+    },
+    {
+      "from": "tableB",
+      "to": "api",
+      "label": "loadPlayer / commitRound"
+    },
+    {
+      "from": "api",
+      "to": "location",
+      "label": "Player records / round results"
     }
   ]
 }

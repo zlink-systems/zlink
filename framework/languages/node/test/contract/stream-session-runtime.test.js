@@ -1387,6 +1387,57 @@ test('stream session runtime closes without a first inbound frame at the heartbe
   await runtime.dispose();
 });
 
+for (const complete of [true, false]) {
+  test(`STREAM reader expiry with a ${complete ? 'complete' : 'partial'} ping`, async (t) => {
+    const socket = new FakeStreamSocket();
+    const clock = new FakeLivenessClock();
+    const runtime = createStreamRuntime({
+      socket,
+      livenessClock: clock,
+      heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 5000,
+      readablePoller: {
+        ...idlePoller(),
+        wait() { return socket.received.length > 0; }
+      },
+      sessionFactory(context) { return { context }; }
+    });
+    t.after(() => runtime.dispose());
+    runtime.start();
+    runtime.markConnected('peer');
+    await clock.flush();
+    await clock.advance(4999);
+
+    const header = fakeHeader({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      name: '$zlink.heartbeat.ping'
+    });
+    const frame = rawStreamFrame(header.data(), []);
+    header.close();
+    // Leave the reader parked until the deadline timer runs.
+    socket.emitRaw('peer', [complete ? frame : frame.subarray(0, -1)]);
+    assert.equal(socket.received.length, complete ? 1 : 0);
+    await clock.advance(1);
+
+    const names = socket.sent.map((sent) => controlHeader(sent).name);
+    t.diagnostic(JSON.stringify({
+      names,
+      closeReason: names.includes('session-closing')
+        ? decodeSessionClosing(socket.sent.at(-1)).payload[1]
+        : undefined
+    }));
+    if (complete) {
+      assert.deepEqual(socket.disconnects, []);
+      assert.ok(names.includes('$zlink.heartbeat.pong'));
+    } else {
+      assert.deepEqual(socket.disconnects, ['peer']);
+      assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1],
+        streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
+    }
+  });
+}
+
 for (const inboundKind of ['data', 'pong']) {
   test(`stream heartbeat stays connected with inbound ${inboundKind} before each timeout`, async (t) => {
     const socket = new FakeStreamSocket();

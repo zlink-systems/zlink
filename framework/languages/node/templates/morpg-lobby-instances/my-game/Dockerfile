@@ -2,8 +2,8 @@ ARG NODE_IMAGE=node:22.20.0-trixie
 ARG DOCKER_CLI_IMAGE=docker:28.5.1-cli
 FROM ${NODE_IMAGE} AS build
 WORKDIR /template
-COPY package.json ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY tsconfig.json ./
 COPY scripts scripts
 COPY server server

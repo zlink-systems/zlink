@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { diagnostics } from './diagnostics';
 import '../../.zlink-framework-json-schemas.cjs';
 import { NestFactory } from '@nestjs/core';
-import { Global, Module, type Type } from '@nestjs/common';
+import { Global, Module, type Provider } from '@nestjs/common';
 import { createInterface } from 'node:readline';
 import {
   ZLinkRedisLocationStore,
@@ -14,7 +14,7 @@ import {
   ZLinkModule,
   ZLINK_FRAMEWORK_RUNTIME,
   ZLINK_ROUTE_MESH_RUNTIME,
-  type ZLinkNestMeshNodeBuilder
+  type ZLinkNestFrameworkOptionsBuilder
 } from '@zlink-systems/nestjs';
 import {
   ZLinkFrameworkRuntimeState,
@@ -24,22 +24,27 @@ import {
   ZLinkFrameworkTerminationReason,
   type ZLinkFrameworkRuntime,
   type ZLinkFrameworkRuntimeStatus,
+  type ZLinkListenerKind,
   type ZLinkRouteMeshRuntime,
   type ZLinkRouteMeshStatus
 } from '@zlink-systems/framework';
 import { Names, Limits, Control } from './constants';
 import { NODE_CONFIG, readConfig, type NodeConfig } from './config';
 interface HostComposition {
-  providers: Type[];
-  listener: { kind: 'stream' | 'routeMesh'; name: string };
-  ready: (status: ZLinkRouteMeshStatus) => boolean;
+  providers: Provider[];
+  listener: { kind: ZLinkListenerKind; name: string };
+  ready?: (status: ZLinkRouteMeshStatus) => boolean;
+  initialize?: (
+    app: Awaited<ReturnType<typeof NestFactory.createApplicationContext>>
+  ) => Promise<void>;
 }
+export function addGameMesh(builder: ZLinkNestFrameworkOptionsBuilder, config: NodeConfig) {
+  if (!config.meshEndpoint) throw new Error('Game mesh requires meshEndpoint');
+  return builder.addRouteMesh(Names.mesh).setRoutingIdPrefix(config.id).listen(config.meshEndpoint);
+}
+
 export async function runHost(
-  configure: (
-    builder: ReturnType<typeof zlinkFramework>,
-    config: NodeConfig,
-    mesh: ZLinkNestMeshNodeBuilder
-  ) => HostComposition
+  configure: (builder: ReturnType<typeof zlinkFramework>, config: NodeConfig) => HostComposition
 ): Promise<void> {
   const config = readConfig(process.argv[2]);
   const location = new ZLinkRedisLocationStore({
@@ -59,11 +64,7 @@ export async function runHost(
   builder.addLocationStore(location);
   builder.addRelocationStore(relocation);
   builder.configureDispatch().messageFlow('normal');
-  const mesh = builder
-    .addRouteMesh(Names.mesh)
-    .setRoutingIdPrefix(config.id)
-    .listen(config.meshEndpoint);
-  const composition = configure(builder, config, mesh);
+  const composition = configure(builder, config);
   zlinkModule({
     providerDiscovery: [],
     imports: [Configuration, ZLinkModule.forRoot(builder.build())],
@@ -74,7 +75,6 @@ export async function runHost(
     abortOnError: false
   });
   const runtime = app.get<ZLinkFrameworkRuntime>(ZLINK_FRAMEWORK_RUNTIME);
-  const meshes = app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME);
   function describe(observed: unknown): string {
     return JSON.stringify(observed, (_, value: unknown) =>
       typeof value === 'bigint' ? value.toString() : value
@@ -89,7 +89,8 @@ export async function runHost(
     }
     throw new Error('Runtime observation ended before Serving');
   }
-  async function waitReady(): Promise<void> {
+  async function waitReady(ready: (status: ZLinkRouteMeshStatus) => boolean): Promise<void> {
+    const meshes = app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME);
     let lastStatus: ZLinkRouteMeshStatus | undefined;
     for await (const observed of meshes.observe(
       Names.mesh,
@@ -100,12 +101,12 @@ export async function runHost(
         throw new Error('Readiness observation lost');
       const status = observed.status;
       lastStatus = status;
-      if (status.isReady && composition.ready(status)) return;
+      if (status.isReady && ready(status)) return;
     }
     throw new Error(
       'Readiness observation deadline expired: ' +
         (lastStatus
-          ? describe({ status: lastStatus, compositionReady: composition.ready(lastStatus) })
+          ? describe({ status: lastStatus, compositionReady: ready(lastStatus) })
           : 'no status observed')
     );
   }
@@ -126,7 +127,8 @@ export async function runHost(
   const failures: unknown[] = [];
   try {
     await waitServing();
-    await waitReady();
+    if (composition.ready) await waitReady(composition.ready);
+    await composition.initialize?.(app);
     const listener = runtime.getListenerStatus(
       composition.listener.kind,
       composition.listener.name

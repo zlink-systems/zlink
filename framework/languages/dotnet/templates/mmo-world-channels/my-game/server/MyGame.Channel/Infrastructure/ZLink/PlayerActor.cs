@@ -1,7 +1,7 @@
-using MyGame.Shared;
 using System.Text.Json;
 using MyGame.Channel.Domain;
 using MyGame.Channel.Infrastructure.Redis;
+using MyGame.Shared;
 using Zlink.Framework.Contracts.Actors;
 
 namespace MyGame.Channel.Infrastructure.ZLink;
@@ -21,6 +21,7 @@ public sealed class PlayerActor(IZLinkActorContext context, PlayerData data, lon
             return ValueTask.CompletedTask;
         return Context.BoundSession.Send(message).Async();
     }
+
     public IZLinkActorContext Context { get; } = context;
     public GoldBalance Gold { get; } = new(gold, TimeProvider.System);
 
@@ -65,7 +66,8 @@ public sealed class PlayerRelocation : IZLinkActorRelocationAdapter<PlayerActor>
         CancellationToken ct
     )
     {
-        var snapshot = JsonSerializer.Deserialize<GoldSnapshot>(payload.Span)
+        var snapshot =
+            JsonSerializer.Deserialize<GoldSnapshot>(payload.Span)
             ?? throw new InvalidDataException("Gold relocation state is empty.");
         actor.Gold.Restore(snapshot);
         return ValueTask.CompletedTask;

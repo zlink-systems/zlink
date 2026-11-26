@@ -19,7 +19,6 @@ public final class ZLinkActorSpotRoutePackets {
     public static final String JOIN_SPOT_PACKET_NAME = "__zlink.actor.joinSpot";
     public static final String ADMISSION_PHASE = "admission";
     public static final String COMMIT_PHASE = "commit";
-    public static final String BOUND_SESSION_SEND_PACKET_NAME = "__zlink.actor.boundSession.send";
     public static final String SESSION_DISCONNECTED_PACKET_NAME =
             "zlink.framework.actor.session_disconnected";
     public static final String ACTOR_PACKET_NAME = "__zlink.actor.packet";
@@ -28,7 +27,6 @@ public final class ZLinkActorSpotRoutePackets {
     private static final int TRANSFER_REQUEST_FIELD_COUNT = 33;
     private static final int HANDOFF_BACKLOG_START_PART = 3;
     private static final int HANDOFF_BACKLOG_PART_STRIDE = 5;
-    private static final int BOUND_SESSION_SEND_MIN_PART_COUNT = 3;
     private static final int ACTOR_PACKET_MIN_PART_COUNT = 5;
     private static final int HANDOFF_ARRIVAL_PART = ACTOR_PACKET_MIN_PART_COUNT;
     private static final int ACCEPTED_JOURNAL_PART = HANDOFF_ARRIVAL_PART + 1;
@@ -422,14 +420,6 @@ public final class ZLinkActorSpotRoutePackets {
                 replyBytes.length == 0 ? Message.from(new byte[0]) : Message.from(replyBytes));
     }
 
-    public static List<Message> createBoundSessionSendParts(
-            ZLinkBackendActorRef actorRef, Message frame) {
-        return List.of(
-                Message.from(BOUND_SESSION_SEND_PACKET_NAME.getBytes(StandardCharsets.UTF_8)),
-                encodeActorRef(actorRef),
-                Message.from(frame));
-    }
-
     public static List<Message> createActorPacketParts(
             ZLinkBackendActorRef actorRef,
             ZLinkStreamHeader header,
@@ -467,18 +457,6 @@ public final class ZLinkActorSpotRoutePackets {
                 Message.from(acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord));
     }
 
-    public static BoundSessionSend decodeBoundSessionSend(List<Message> parts) {
-        if (parts.size() < BOUND_SESSION_SEND_MIN_PART_COUNT
-                || !BOUND_SESSION_SEND_PACKET_NAME.equals(parts.get(0).toUtf8String())) {
-            throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                    "invalid routed actor bound session send packet");
-        }
-        return new BoundSessionSend(
-                decodeActorRef(parts.get(1), "invalid routed actor bound session send metadata"),
-                Message.from(parts.get(2)));
-    }
-
     public static ActorPacket decodeActorPacket(List<Message> parts) {
         if (parts.size() < ACTOR_PACKET_MIN_PART_COUNT
                 || !ACTOR_PACKET_NAME.equals(parts.get(0).toUtf8String())) {
@@ -486,7 +464,7 @@ public final class ZLinkActorSpotRoutePackets {
                     ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "invalid routed actor packet");
         }
         return new ActorPacket(
-                decodeActorRef(parts.get(1), "invalid routed actor packet metadata"),
+                decodeActorRef(parts.get(1)),
                 decodeReplyRoute(parts.get(2)),
                 ZLinkStreamHeaderCodec.decodeOrPlain(parts.get(3).toByteArray()),
                 Message.from(parts.get(4)),
@@ -555,10 +533,11 @@ public final class ZLinkActorSpotRoutePackets {
                 Integer.parseUnsignedInt(fields[6]));
     }
 
-    private static ZLinkBackendActorRef decodeActorRef(Message metadata, String errorMessage) {
+    private static ZLinkBackendActorRef decodeActorRef(Message metadata) {
         String[] fields = metadata.toUtf8String().split("\n", -1);
         if (fields.length != ACTOR_REF_FIELD_COUNT || fields[0].isBlank() || fields[1].isBlank()) {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, errorMessage);
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "invalid routed actor packet metadata");
         }
         return new ZLinkBackendActorRef(
                 RoutingId.from(fields[0]), fields[1], Long.parseUnsignedLong(fields[2]));
@@ -810,14 +789,6 @@ public final class ZLinkActorSpotRoutePackets {
         @Override
         public void close() {
             reply.close();
-        }
-    }
-
-    public record BoundSessionSend(ZLinkBackendActorRef actorRef, Message frame)
-            implements AutoCloseable {
-        @Override
-        public void close() {
-            frame.close();
         }
     }
 

@@ -120,7 +120,7 @@ import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 final class ZLinkStreamRuntimeIngressTest {
-    private static final RoutingId PEER_A = RoutingId.from("peer-a");
+    static final RoutingId PEER_A = RoutingId.from("peer-a");
     private static final RoutingId PEER_B = RoutingId.from("peer-b");
     private static final String MESH = "replacement-mesh";
     private static final String REPLACEMENT_ACTOR = "replacement-actor";
@@ -276,7 +276,8 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void heartbeatContractStaggeredConnectionsRetainTheirPhaseAfterLateExecution() {
+    void heartbeatContractStaggeredConnectionsRetainTheirPhaseAfterLateExecution()
+            throws Exception {
         var stream = new FakeStream();
         var clock = new java.util.concurrent.atomic.AtomicLong();
         var runtime = startDeterministic(stream, clock);
@@ -654,11 +655,20 @@ final class ZLinkStreamRuntimeIngressTest {
 
     private final Map<ZLinkStreamRuntime, ManualScheduledExecutor> livenessTimers = new HashMap<>();
 
-    private void runLivenessTimers(ZLinkStreamRuntime runtime) {
+    void fireLivenessTimers(ZLinkStreamRuntime runtime) {
         livenessTimers.get(runtime).runDueCommands();
     }
 
-    private ZLinkStreamRuntime startDeterministic(
+    private void runLivenessTimers(ZLinkStreamRuntime runtime) throws Exception {
+        var stream = livenessTimers.get(runtime).stream;
+        int priorWakes = stream.livenessWakes.get();
+        fireLivenessTimers(runtime);
+        if (stream.livenessWakes.get() != priorWakes) {
+            stream.awaitReaderProgress();
+        }
+    }
+
+    ZLinkStreamRuntime startDeterministic(
             FakeStream stream, java.util.concurrent.atomic.AtomicLong clock) {
         return startDeterministic(stream, clock, ignored -> {});
     }
@@ -714,6 +724,7 @@ final class ZLinkStreamRuntimeIngressTest {
         var registration = options.registration();
         lastRegistration = registration;
         var scheduler = new ManualScheduledExecutor(clock::get);
+        scheduler.stream = stream;
         var runtime =
                 new ZLinkStreamRuntime(
                                 new FakeProvider(stream),
@@ -3583,7 +3594,7 @@ final class ZLinkStreamRuntimeIngressTest {
         }
     }
 
-    private static AutoCloseable installClosedMetricSink(List<String> closeReasons) {
+    static AutoCloseable installClosedMetricSink(List<String> closeReasons) {
         return ZLinkRuntimeMetrics.install(
                 new ZLinkRuntimeMetrics.Sink() {
                     @Override
@@ -3888,6 +3899,7 @@ final class ZLinkStreamRuntimeIngressTest {
                 new LinkedBlockingQueue<>();
 
         private final java.util.function.LongSupplier clock;
+        private FakeStream stream;
 
         private ManualScheduledExecutor() {
             this(() -> 0);
@@ -3937,15 +3949,16 @@ final class ZLinkStreamRuntimeIngressTest {
         }
     }
 
-    private static class FakeStream implements ZLinkBackendStreamSocket {
-        private Runnable readabilityObserver = () -> {};
+    static class FakeStream implements ZLinkBackendStreamSocket {
+        volatile Runnable readabilityObserver = () -> {};
         private final Queue<ZLinkBackendStreamReceived> received = new ConcurrentLinkedQueue<>();
         private final AtomicInteger successfulReceives = new AtomicInteger();
         private final CompletableFuture<Void> secondSuccessfulReceive = new CompletableFuture<>();
         private final AtomicInteger readinessWaits = new AtomicInteger();
+        private final AtomicInteger livenessWakes = new AtomicInteger();
         private final AtomicInteger zeroReadinessWaits = new AtomicInteger();
         private final AtomicBoolean receiveReady = new AtomicBoolean();
-        private final AtomicInteger sessionClosingSends = new AtomicInteger();
+        final AtomicInteger sessionClosingSends = new AtomicInteger();
         private final List<Integer> heartbeatPongPayloadLengths = new CopyOnWriteArrayList<>();
         private final AtomicInteger actorUnboundSubmissions = new AtomicInteger();
         private final CountDownLatch sessionClosingSendsLatch = new CountDownLatch(1);
@@ -3966,13 +3979,13 @@ final class ZLinkStreamRuntimeIngressTest {
         private final List<RoutingId> heartbeatPingPeers =
                 new java.util.concurrent.CopyOnWriteArrayList<>();
         private final CountDownLatch heartbeatPingAttempted = new CountDownLatch(2);
-        private final CountDownLatch heartbeatPongAsyncAttempted = new CountDownLatch(1);
+        final CountDownLatch heartbeatPongAsyncAttempted = new CountDownLatch(1);
         private final AtomicInteger synchronousHeartbeatPongSends = new AtomicInteger();
         private final CompletableFuture<Void> deferredHeartbeatPong = new CompletableFuture<>();
         private final AtomicInteger closeCalls = new AtomicInteger();
-        private ZLinkBackendStreamErrorHandler errorHandler;
+        ZLinkBackendStreamErrorHandler errorHandler;
 
-        private void enqueue(RoutingId routingId, byte[] bytes) {
+        void enqueue(RoutingId routingId, byte[] bytes) {
             enqueuePacket(routingId, bytes, null);
         }
 
@@ -4056,6 +4069,16 @@ final class ZLinkStreamRuntimeIngressTest {
 
         @Override
         public void setMaxMessageSize(long value) {}
+
+        void awaitReaderProgress() throws Exception {
+            int startingWaits = readinessWaits.get();
+            awaitCondition(() -> readinessWaits.get() >= startingWaits + 2);
+        }
+
+        @Override
+        public void wakeReceive() {
+            livenessWakes.incrementAndGet();
+        }
 
         @Override
         public boolean waitForReadable(Duration timeout) {

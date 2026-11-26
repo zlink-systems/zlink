@@ -52,7 +52,7 @@ public sealed record SessionInfoRequest;
 
 public sealed record SessionInfo(string SessionId, string ActorId, ulong ObjectGeneration);
 
-public sealed record JoinTableRequest(string PlayerId, string TableId);
+public sealed record JoinTableRequest(string PlayerId, string TableId, bool Reconnect = false);
 
 public sealed record TableViewRequest;
 
@@ -87,7 +87,12 @@ public sealed record HandResult(
 
 public sealed record ActionRejected(string Reason, int RetryAfterMs);
 
-public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEndpoint);
+public sealed record NodeReady(
+    string Id,
+    string? MeshEndpoint,
+    string? StreamEndpoint,
+    string? ApiEndpoint
+);
 
 public static class HostTiming
 {
