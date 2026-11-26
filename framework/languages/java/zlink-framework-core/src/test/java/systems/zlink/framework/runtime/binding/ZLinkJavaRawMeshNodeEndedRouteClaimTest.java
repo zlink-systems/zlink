@@ -54,19 +54,22 @@ final class ZLinkJavaRawMeshNodeEndedRouteClaimTest {
 
                 fixture.handshake(replacement, ServiceWireConstants.COMMAND_HELLO);
                 assertFalse(fixture.topology.isReady(fixture.sourceRid));
+                // The receiver admitted the replacement HELLO, so it processes the record
+                // before its own HELLO is answered (mesh-node receive admission).
                 fixture.sendChannel(replacement, "before ADMIT");
                 fixture.dispatch(selected);
-                assertTrue(fixture.channelPayloads.isEmpty());
+                assertEquals(List.of("before ADMIT"), fixture.channelPayloads);
 
                 fixture.node.dispatch(beforeAdmit);
-                assertEquals(List.of("buffered"), fixture.channelPayloads);
+                assertEquals(List.of("before ADMIT", "buffered"), fixture.channelPayloads);
 
                 fixture.handshake(replacement, ServiceWireConstants.COMMAND_ADMIT);
                 assertTrue(fixture.topology.isReady(fixture.sourceRid));
                 fixture.node.dispatch(afterAdmit);
                 fixture.sendChannel(replacement, "after ADMIT");
                 fixture.dispatch(selected);
-                assertEquals(List.of("buffered", "after ADMIT"), fixture.channelPayloads);
+                assertEquals(
+                        List.of("before ADMIT", "buffered", "after ADMIT"), fixture.channelPayloads);
             }
         }
     }
