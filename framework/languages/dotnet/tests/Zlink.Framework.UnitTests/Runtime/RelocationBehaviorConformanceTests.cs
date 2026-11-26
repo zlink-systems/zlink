@@ -876,13 +876,20 @@ public sealed partial class RelocationBehaviorConformanceTests
         trace.TargetNodeRid = target.LocalNodeRid;
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
 
-        var join = source
-            .Services.GetRequiredService<IZLinkActorClient>()
+        var client = source.Services.GetRequiredService<IZLinkActorClient>();
+        var join = client
             .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
             .AsTask();
         await trace.WaitAsync("relocationRequested");
+        var saved = replacePrepared
+            ? client
+                .RequestToActor(actorId, new BehaviorWork("saved"))
+                .Timeout(TimeSpan.FromSeconds(15))
+                .Async<BehaviorAck>()
+                .AsTask()
+            : null;
         trace.ReleaseJoinHandler.TrySetResult();
         _ = await join.WaitAsync(TimeSpan.FromSeconds(15));
         await trace.WaitAsync("targetAdmissionReplied");
@@ -914,7 +921,35 @@ public sealed partial class RelocationBehaviorConformanceTests
                 Assert.Equal(2UL, authority.Relocation!.Target!.AttemptGeneration);
                 Assert.Equal(trace.SourceNodeRid, authority.Allocation.Descriptor.Rid);
                 Assert.Equal(1, GetTargetAttemptState(target.Runtime).Staged);
-                await transport.AbortRetriedTargetPrepareAsync(attemptIncrement: 1);
+                Assert.Equal(2, trace.Events.Count(value => value == "targetStateRestored"));
+                Assert.False(saved!.IsCompleted);
+                await transport.AbortRetriedTargetPrepareAsync();
+                Assert.Equal(1, GetTargetAttemptState(target.Runtime).Staged);
+
+                trace.ReleaseTargetLifecycle.TrySetResult();
+                trace.ReleaseSourceLeave.TrySetResult();
+                await transport.DeliverCapturedCutoverAsync(attemptIncrement: 1);
+                await trace.WaitAsync("targetLifecycleStarted");
+
+                var committed = Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await target
+                            .Runtime.Registration.Locations.ResolveStore()!
+                            .ReadAuthorityAsync(
+                                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId)
+                            )
+                    )
+                    .Snapshot;
+                Assert.Equal(target.LocalNodeRid, committed.Allocation.Descriptor.Rid);
+                await trace.WaitAsync("publicJoinCompleted");
+                Assert.Equal("saved", (await saved.WaitAsync(TimeSpan.FromSeconds(5))).Marker);
+                var handled = await target
+                    .Services.GetRequiredService<IZLinkActorClient>()
+                    .RequestToActor(actorId, new BehaviorWork("direct"))
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Async<BehaviorAck>();
+                Assert.Equal("direct", handled.Marker);
+                Assert.Equal(new[] { "saved", "direct" }, trace.DeliveredMarkers);
                 return;
             }
 
@@ -3960,12 +3995,22 @@ internal sealed class CanonicalRelocationTransportProbe
             cancellationToken
         ) ?? throw new InvalidOperationException("No canonical cutover transport was captured.");
 
-    internal ValueTask DeliverCapturedCutoverAsync() =>
-        (_target ?? throw new InvalidOperationException("No target was captured.")).CutoverAsync(
-            _cutover ?? throw new InvalidOperationException("No cutover was captured."),
-            _cutover.Coordinator.NodeRid,
+    internal ValueTask DeliverCapturedCutoverAsync(ulong attemptIncrement = 0)
+    {
+        var cutover = _cutover ?? throw new InvalidOperationException("No cutover was captured.");
+        return (
+            _target ?? throw new InvalidOperationException("No target was captured.")
+        ).CutoverAsync(
+            cutover with
+            {
+                TargetAttemptGeneration = checked(
+                    cutover.TargetAttemptGeneration + attemptIncrement
+                ),
+            },
+            cutover.Coordinator.NodeRid,
             CancellationToken.None
         );
+    }
 
     internal void RecordSourceLeaveSubmission()
     {

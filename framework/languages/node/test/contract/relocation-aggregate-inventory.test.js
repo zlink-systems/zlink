@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
+const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const golden = require('../../../../runtime/protocol/golden/aggregate-storage-v1.json');
 const schema = require('../../../../runtime/protocol/service-wire-v1.schema.json');
 const {
@@ -192,9 +193,9 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
   const description = {
     captured: 'restores Node source inventory',
     damaged: 'rejects damaged Node source inventory',
-    prepared: 'replaces staged work after Prepared'
+    prepared: 'keeps replacement staging after the old Ready expires'
   }[phase];
-  test(`Node target Restore attempt 2 ${description}`, async () => {
+  test(`Node target Restore attempt 2 ${description}`, async (t) => {
     const provider = new ZLinkInMemoryProviderLocationStore();
     const store = new ZLinkAggregateInventoryStore(provider);
     const key = encodeAuthorityKey('user_spot', 'room');
@@ -305,9 +306,6 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
         }
       })
     });
-    receiver.targetAssemblies.set('attempt', {
-      assembly: { payload: async () => encodeServiceRelocationEnvelope(captured.envelope, 1n) }
-    });
     const prepare = {
       kind: 'prepare',
       relocation: {
@@ -341,6 +339,15 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
       deadlineUnixMs: BigInt(Date.now() + 10_000)
     };
     const events = [];
+    const attemptId = `${prepare.relocation.high}:${prepare.relocation.low}:2`;
+    const oldId = `${prepare.relocation.high}:${prepare.relocation.low}:1`;
+    receiver.targetAssemblies.set(attemptId, {
+      assembly: { payload: async () => encodeServiceRelocationEnvelope(captured.envelope, 1n) }
+    });
+    const handler = {};
+    const queue = [Buffer.from([5])];
+    const staging = { handler, queue };
+    let expireOldReady;
     if (phase === 'prepared') {
       current = {
         ...current,
@@ -355,7 +362,6 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
           }
         }
       };
-      const oldId = `${prepare.relocation.high}:${prepare.relocation.low}:1`;
       receiver.targetStages.set(oldId, {
         phase: 'ready',
         offer: { prepareFingerprint: 'previous request' },
@@ -369,6 +375,26 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
         },
         staging: { primaryAuthorityKey: key }
       });
+      const timer = t.mock.method(globalThis, 'setTimeout', (callback) => {
+        expireOldReady = callback;
+        return { unref() {} };
+      });
+      try {
+        const first = { ...prepare, targetAttemptGeneration: 1n };
+        await receiver.deliverTargetReady(
+          'mesh',
+          oldId,
+          first,
+          {
+            reply() {
+              return SubmitResult.NotConnected;
+            }
+          },
+          Promise.resolve({ ...first, kind: 'ready', senderRole: 'target' })
+        );
+      } finally {
+        timer.mock.restore();
+      }
     }
     receiver.materializeTargetEnvelope = async (_mesh, envelope) => {
       events.push('materialized');
@@ -377,9 +403,12 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
         owner: {
           async restoreSavedWork() {
             events.push('restored');
+          },
+          async abort() {
+            assert.fail('the old Ready expiry must not abort the replacement');
           }
         },
-        staging: {},
+        staging,
         target: {}
       };
     };
@@ -399,7 +428,7 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
       events.push('prepared');
       return { prepared: {} };
     };
-    const result = receiver.handlePrepareControl('mesh', 'attempt', prepare, 'source');
+    const result = receiver.handlePrepareControl('mesh', attemptId, prepare, 'source');
     if (damaged) {
       await assert.rejects(result, (error) => {
         assert.equal(relocationFailedFailureCode(error), 35);
@@ -414,6 +443,15 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
         'restored',
         'prepared'
       ]);
+      if (phase === 'prepared') {
+        expireOldReady();
+        assert.equal(receiver.targetStages.has(oldId), false);
+        const replacement = receiver.targetStages.get(attemptId);
+        assert.equal(replacement.phase, 'ready');
+        assert.equal(replacement.staging, staging);
+        assert.equal(replacement.staging.handler, handler);
+        assert.deepEqual(replacement.staging.queue, [Buffer.from([5])]);
+      }
     }
   });
 }
@@ -748,6 +786,7 @@ async function spotWideMatrix(provider, staleMember, mode) {
         memberBefore.storeVersion.value
       );
       assert.equal((await repository.commitAggregate(prepared.fence)).kind, 'stale');
+      assert.equal((await repository.abortAggregate(prepared.fence)).kind, 'stale');
       const committed = await repository.commitAggregate(replacement.prepared.fence);
       assert.equal(committed.kind, 'committed');
       const {
