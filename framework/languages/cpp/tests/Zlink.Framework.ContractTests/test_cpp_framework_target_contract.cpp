@@ -502,7 +502,7 @@ int main ()
     gate.require (framework_json_header.find ("<zlink/json_profile.hpp>") != std::string::npos,
                   "CPP-WIRE-003", "server JSON codec does not use the shared profile");
     for (const std::string required :
-         {"zlink::detail::json_profile::encode", "zlink::detail::json_profile::decode"}) {
+         {"zlink::detail::json_profile::try_encode", "zlink::detail::json_profile::try_decode"}) {
         gate.require (serializer_header.find (required) != std::string::npos, "CPP-WIRE-003",
                       "default typed serializer bypasses the JSON profile: " + required);
     }
@@ -1276,7 +1276,7 @@ int main ()
     /* CPP-OWN-004 — the default JSON serializer writes and reads the encoded
      * payload directly instead of round-tripping through a binding message. */
     gate.require (
-      serializer_header.find ("zlink::detail::json_profile::encode (") != std::string::npos
+      serializer_header.find ("zlink::detail::json_profile::try_encode (") != std::string::npos
         && serializer_header.find ("nlohmann::json (value)") == std::string::npos
         && serializer_header.find ("payload.to_raw ().template parse_json") == std::string::npos
         && serializer_header.find ("zlink::message_t::from_json (value)") == std::string::npos,
