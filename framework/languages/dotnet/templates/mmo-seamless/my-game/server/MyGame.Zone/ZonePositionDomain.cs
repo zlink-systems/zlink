@@ -89,10 +89,8 @@ public sealed class ZonePositionDomain(string zoneId, Func<long>? monotonicMilli
         var distance = Math.Abs(request.Delta);
         if (distance > budget)
         {
-            var retryAfterMs = (int)Math.Max(
-                1,
-                (long)Math.Ceiling((distance - budget) * 1000 / MaxSpeed)
-            );
+            var retryAfterMs = (int)
+                Math.Max(1, (long)Math.Ceiling((distance - budget) * 1000 / MaxSpeed));
             return Reject(actorId, "move-budget", retryAfterMs);
         }
 
@@ -227,12 +225,7 @@ public sealed class ZonePositionDomain(string zoneId, Func<long>? monotonicMilli
             var acceptedAt = now - (FullBudgetAfterMs - state.RemainingMs);
             players.Add(
                 actorId,
-                new PlayerState(
-                    state.Position,
-                    state.Sequence,
-                    acceptedAt,
-                    state.Connected
-                )
+                new PlayerState(state.Position, state.Sequence, acceptedAt, state.Connected)
             );
         }
         arrivals.Clear();

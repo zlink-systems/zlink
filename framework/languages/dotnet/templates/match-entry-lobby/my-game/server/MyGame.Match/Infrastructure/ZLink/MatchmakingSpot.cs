@@ -57,7 +57,9 @@ public sealed class MatchmakingSpot(
         if (!state.TryAllocateRoom(out var roomId))
         {
             foreach (var player in pair)
-                await actors.SendToActor(player.PlayerId, new ActionRejected(Rejection.IntegerOutOfRange)).Async();
+                await actors
+                    .SendToActor(player.PlayerId, new ActionRejected(Rejection.IntegerOutOfRange))
+                    .Async();
             return;
         }
         var created = await spots

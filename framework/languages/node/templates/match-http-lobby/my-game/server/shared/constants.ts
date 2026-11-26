@@ -49,11 +49,14 @@ export const Rejection = {
 const messageFollowMs = 30_000;
 const relocationMs = 25_000;
 const messageMs = 10_000;
+const startupMs = 30_000;
 export const Limits = {
   messageFollowMs,
   observationCapacity: 64,
   messageMs,
-  startupMs: 30_000,
+  startupMs,
+  // The server waits for runtime serving and mesh readiness in sequence.
+  startupBudgetMs: 2 * startupMs,
   relocationMs,
   safeShutdownMs: messageFollowMs + relocationMs,
   shutdownMs: 10_000

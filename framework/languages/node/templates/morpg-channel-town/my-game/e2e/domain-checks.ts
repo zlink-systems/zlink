@@ -3,12 +3,7 @@ import { Game, Rejection } from '../server/shared/constants';
 import { ChannelRules } from '../server/shared/channel-rules';
 import { DungeonState, type DungeonSnapshot } from '../server/instance/dungeon-state';
 import { PartyRun } from '../server/town/party-run';
-import {
-  ActionRejected,
-  JoinDungeon,
-  PrepareDungeon,
-  RunPhase
-} from '../server/shared/messages';
+import { ActionRejected, JoinDungeon, PrepareDungeon, RunPhase } from '../server/shared/messages';
 
 export function runDomainChecks(): void {
   let checkedCount = 0;
@@ -22,19 +17,13 @@ export function runDomainChecks(): void {
     ChannelRules.validate(Game.maximumInteger + 1n) === Rejection.integerOutOfRange,
     'channel above maximum'
   );
-  check(
-    ChannelRules.validate(Game.maximumInteger) === Rejection.invalidChannel,
-    'channel maximum'
-  );
+  check(ChannelRules.validate(Game.maximumInteger) === Rejection.invalidChannel, 'channel maximum');
   check(
     ChannelRules.validate(-Game.maximumInteger - 1n) === Rejection.integerOutOfRange,
     'channel below minimum'
   );
   check(ChannelRules.validate(0n) === Rejection.invalidChannel, 'channel zero');
-  check(
-    ChannelRules.validate(1n) === null && ChannelRules.validate(2n) === null,
-    'valid channels'
-  );
+  check(ChannelRules.validate(1n) === null && ChannelRules.validate(2n) === null, 'valid channels');
   check(ChannelRules.validate(3n) === Rejection.invalidChannel, 'channel above count');
 
   for (const phase of Object.values(RunPhase)) {
@@ -57,8 +46,7 @@ export function runDomainChecks(): void {
               : sample.completed(runId);
       const allowed =
         action === 'enter' ||
-        (action === 'prepared' &&
-          (phase === RunPhase.Preparing || phase === RunPhase.Entering)) ||
+        (action === 'prepared' && (phase === RunPhase.Preparing || phase === RunPhase.Entering)) ||
         (action === 'started' && (phase === RunPhase.Entering || phase === RunPhase.Active)) ||
         (action === 'completed' && (phase === RunPhase.Active || phase === RunPhase.Completed));
       check(
@@ -116,7 +104,10 @@ export function runDomainChecks(): void {
   check(party.changeChannel() === Rejection.runInProgress, 'active channel');
   party.leave('member');
   check(party.members.length === 2, 'active retains member');
-  check(party.completed(runId) === null && party.phase === RunPhase.Completed, 'completed transition');
+  check(
+    party.completed(runId) === null && party.phase === RunPhase.Completed,
+    'completed transition'
+  );
   check(party.completed(runId) === null, 'completed retry');
   check(
     party.prepared(runId) === Rejection.runMismatch &&
@@ -128,8 +119,9 @@ export function runDomainChecks(): void {
   check(party.members.length === 2, 'completed retains member');
   const partySnapshot = json(party.capture());
   check(
-    json(PartyRun.restore(JSON.parse(partySnapshot) as ReturnType<PartyRun['capture']>).capture()) ===
-      partySnapshot,
+    json(
+      PartyRun.restore(JSON.parse(partySnapshot) as ReturnType<PartyRun['capture']>).capture()
+    ) === partySnapshot,
     'party snapshot'
   );
   check(
@@ -146,23 +138,27 @@ export function runDomainChecks(): void {
   check(dungeon.advance() === Rejection.runNotActive && dungeon.stage === 0n, 'unprepared advance');
   check(dungeon.prepare(target, request) === null, 'prepare dungeon');
   before = json(dungeon.capture());
-  check(dungeon.prepare(target, request) === null && json(dungeon.capture()) === before, 'idempotent prepare');
   check(
-    dungeon.prepare(target, new PrepareDungeon(party.runId!, party.partyId, 'town-2', request.members)) ===
-      Rejection.runMismatch &&
-      json(dungeon.capture()) === before,
+    dungeon.prepare(target, request) === null && json(dungeon.capture()) === before,
+    'idempotent prepare'
+  );
+  check(
+    dungeon.prepare(
+      target,
+      new PrepareDungeon(party.runId!, party.partyId, 'town-2', request.members)
+    ) === Rejection.runMismatch && json(dungeon.capture()) === before,
     'wrong run unchanged'
   );
   check(
-    dungeon.prepare(target, new PrepareDungeon(runId, party.partyId, 'town-2', ['member', 'leader'])) ===
-      Rejection.runMismatch &&
-      json(dungeon.capture()) === before,
+    dungeon.prepare(
+      target,
+      new PrepareDungeon(runId, party.partyId, 'town-2', ['member', 'leader'])
+    ) === Rejection.runMismatch && json(dungeon.capture()) === before,
     'wrong members unchanged'
   );
   check(
     dungeon.prepare(target, new PrepareDungeon(runId, party.partyId, 'town-1', request.members)) ===
-      Rejection.runMismatch &&
-      json(dungeon.capture()) === before,
+      Rejection.runMismatch && json(dungeon.capture()) === before,
     'wrong owner unchanged'
   );
   check(
@@ -170,7 +166,10 @@ export function runDomainChecks(): void {
     'entering advance unchanged'
   );
   check(!dungeon.accepts('other', target, new JoinDungeon(target, runId)), 'nonmember admission');
-  check(!dungeon.accepts('leader', target, new JoinDungeon(target, 'other')), 'wrong run admission');
+  check(
+    !dungeon.accepts('leader', target, new JoinDungeon(target, 'other')),
+    'wrong run admission'
+  );
   check(dungeon.accepts('leader', target, new JoinDungeon(target, runId)), 'member admission');
   check(!dungeon.join('other') && dungeon.joined.size === 0, 'unknown join unchanged');
   check(!dungeon.join('leader') && dungeon.phase === RunPhase.Entering, 'partial arrival');

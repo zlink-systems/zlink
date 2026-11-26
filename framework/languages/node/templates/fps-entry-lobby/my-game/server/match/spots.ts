@@ -120,7 +120,9 @@ export class Room implements ZLinkSpot<Player> {
       await actor.context.boundSession.send(rejected).submit();
       return;
     }
-    const player = this.state.players.find((candidate) => candidate.playerId === actor.context.actorId);
+    const player = this.state.players.find(
+      (candidate) => candidate.playerId === actor.context.actorId
+    );
     if (!player) throw new Error('Unknown room player');
     await actor.context.boundSession
       .send(new MoveResult(player.position, request.sequence))
