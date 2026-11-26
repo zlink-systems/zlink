@@ -84,6 +84,8 @@ Core `zlink.dll`과 서드파티 DLL이 실행 파일 옆에 함께 복사된다
 Redis가 `127.0.0.1:6379`에서 실행 중이어야 한다. Spot·Actor·Location 단계는 이를 Location Store로 사용한다.
 아래 블록은 Redis를 Docker로 실행하고 Server와 Client를 시작한 뒤 두 process의 `/ops/ready`가
 HTTP 200을 반환할 때까지 기다린다. Actor 요청은 두 host가 `Serving` 상태에 도달한 뒤 보낸다.
+비어 있는 Redis에서 두 host는 `Serving`까지 약 20초가 걸린다. 고정 routing id를 쓰므로 fencing margin의
+세 배(기본 15초)를 기다린 뒤 그 id를 claim하고, 다음 lease 갱신 때 descriptor를 게시하기 때문이다.
 handler와 filter의 로그는 **stderr**로 기록된다.
 
 **Linux · macOS · WSL — bash**
