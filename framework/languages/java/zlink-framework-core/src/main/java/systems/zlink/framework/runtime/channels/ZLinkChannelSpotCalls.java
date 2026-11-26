@@ -382,6 +382,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
     final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
     private final Duration timeout;
+    private final Duration defaultTimeout;
     private final String contentType;
     private final ZLinkChannelEnvelope.PreparedNames channelNames;
     private final ZLinkChannelEnvelope.PreparedNames names;
@@ -400,6 +401,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
             ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             Duration timeout,
+            Duration defaultTimeout,
             String contentType,
             ZLinkChannelEnvelope.PreparedNames channelNames,
             ZLinkChannelEnvelope.PreparedNames names,
@@ -417,6 +419,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                 payload,
                 packetName,
                 timeout,
+                defaultTimeout,
                 contentType,
                 channelNames,
                 names,
@@ -438,6 +441,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
             ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             Duration timeout,
+            Duration defaultTimeout,
             String contentType,
             ZLinkChannelEnvelope.PreparedNames channelNames,
             ZLinkChannelEnvelope.PreparedNames names,
@@ -458,6 +462,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
         this.payload = payload;
         this.packetName = packetName;
         this.timeout = timeout;
+        this.defaultTimeout = defaultTimeout;
         this.contentType = contentType;
         this.channelNames = channelNames;
         this.names = names;
@@ -478,6 +483,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                 payload,
                 Optional.of(packetName),
                 timeout,
+                defaultTimeout,
                 contentType,
                 channelNames,
                 names,
@@ -499,6 +505,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
             ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             Duration timeout,
+            Duration defaultTimeout,
             String contentType,
             ZLinkChannelEnvelope.PreparedNames channelNames,
             ZLinkChannelEnvelope.PreparedNames names,
@@ -516,6 +523,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                 payload,
                 packetName,
                 timeout,
+                defaultTimeout,
                 contentType,
                 channelNames,
                 names,
@@ -559,6 +567,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                 payload,
                 packetName,
                 timeout,
+                defaultTimeout,
                 contentType,
                 channelNames,
                 names,
@@ -583,6 +592,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                 payload,
                 packetName,
                 timeout,
+                defaultTimeout,
                 contentType,
                 channelNames,
                 names,
@@ -606,6 +616,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                 payload,
                 packetName,
                 timeout,
+                defaultTimeout,
                 contentType,
                 channelNames,
                 names,
@@ -629,6 +640,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                 payload,
                 packetName,
                 timeout,
+                defaultTimeout,
                 contentType,
                 channelNames,
                 names,
@@ -652,6 +664,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                 payload,
                 packetName,
                 timeout,
+                defaultTimeout,
                 contentType,
                 channelNames,
                 names,
@@ -726,9 +739,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                         resolver,
                         target,
                         instanceIntent,
-                        timeout == null && host != null
-                                ? host.get().effectiveRouteTimeout(null)
-                                : timeout,
+                        effectiveTimeout(),
                         runtime::nanoTime,
                         runtime.operations,
                         result,
@@ -755,6 +766,12 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
             }
             return ZLinkSerialExecutionQueue.manageCurrent(result);
         }
+    }
+
+    private Duration effectiveTimeout() {
+        return timeout != null
+                ? timeout
+                : host != null ? host.get().effectiveRouteTimeout(null) : defaultTimeout;
     }
 
     private <TReply> CompletionStage<TReply> activateRequest(
