@@ -6,6 +6,8 @@
     "getOrCreate": "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md:448",
     "find": "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md:462",
     "ownerDestroy": "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md:490",
+    "closingCasRollback": "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md:516",
+    "actorRequestErrors": "framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md:952",
     "remoteDestroy": "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md:521",
     "authorityRecord": "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md:479",
     "conditionalRelease": "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md:1041",
@@ -274,27 +276,125 @@
       "observe": ["processExit", "exactAuthorityReads", "exactLeaseReadsWithStoreTime", "publicApiResults", "providerReadAndCommitEvents", "factoryEvents", "transportFrames"]
     },
     {
-      "name": "remote-destroy-without-admitted-owner-is-unavailable",
-      "specClauses": ["remoteDestroy", "routeAdmission", "routeReadiness", "submissionErrors", "destroyErrors", "oneWayUnavailable"],
-      "given": { "authority": "oldReady", "ownerLease": "valid", "routeBToA": "connectedButNotAdmittedForOwnerLifecycle", "destroyRef": { "actorId": "id", "objectGeneration": "g" } },
+      "name": "request-during-closing-cas-is-unavailable-and-served-after-cas-failure",
+      "testNames": {
+        "cpp": "RequestDuringClosingCasIsUnavailableAndServedAfterCasFailure",
+        "dotnet": "RequestDuringClosingCasIsUnavailableAndServedAfterCasFailure",
+        "java": "requestDuringClosingCasIsUnavailableAndServedAfterCasFailure",
+        "node": "an Actor request is unavailable during the Closing CAS and is served after it fails"
+      },
+      "specClauses": ["ownerDestroy", "closingCasRollback", "actorRequestErrors"],
+      "given": { "authority": "oldReady", "ownerLease": "valid", "recreation": "disabled during this scenario" },
       "steps": [
         {
-          "act": "B calls Destroy(oldRef) while A's ADMIT is withheld",
-          "expect": {
-            "kind": "Unavailable",
-            "authority": "oldReady",
-            "command27Submissions": 0,
-            "command27Sends": 0,
-            "command27Replies": 0,
-            "authorityWrites": 0
-          }
+          "act": "A starts local Destroy(oldRef); hold the first Closing CAS before provider submission",
+          "expect": { "kind": "pending", "authority": "oldReady", "closingCommitsByA": 0 }
+        },
+        {
+          "act": "A requests a probe by ActorId while the Closing CAS is held",
+          "expect": { "kind": "Unavailable", "retryable": true, "authority": "oldReady", "probeHandlerCallsForRequest": 0 }
+        },
+        {
+          "act": "Fail the held Closing CAS without committing a write and collect the destroy result",
+          "expect": { "kind": "error", "errorSource": "injectedClosingCasFailure", "authority": "oldReady", "closingCommitsByA": 0 }
+        },
+        {
+          "act": "A submits a new probe request for the same ActorId after the failed destroy completes",
+          "expect": { "kind": "return", "value": { "objectGeneration": "g" }, "authority": "oldReady", "probeHandlerCallsForRequest": 1 }
+        },
+        {
+          "act": "A starts a new Destroy(oldRef); let the Closing CAS commit and hold the final owner Delete",
+          "expect": { "kind": "pending", "authority": "oldClosing", "closingCommitsByA": 1 }
+        },
+        {
+          "act": "A makes a fresh request by ActorId after the Closing commit while Delete is held",
+          "expect": { "kind": "NotFound", "authority": "oldClosing", "probeHandlerCallsForRequest": 0 }
+        },
+        {
+          "act": "Resume Delete and collect the new destroy result",
+          "expect": { "kind": "return", "value": true, "authority": "missing", "ownerDeleteCommitsByA": 1 }
         }
       ],
       "requiredOrder": [
-        ["destroyReturned", "destroyDeadline"],
-        ["destroyReturned", "admissionAllowed"]
+        ["closingCasHeld", "pendingCasProbeReturned"],
+        ["pendingCasProbeReturned", "closingCasFailed"],
+        ["failedDestroyReturned", "retryProbeHandled"],
+        ["closingCommitted", "postCommitProbeReturned"],
+        ["postCommitProbeReturned", "ownerDeleteResumed"]
       ],
-      "observe": ["publicApiResults", "routeAdmissionEvents", "exactAuthorityReads", "providerReadAndCommitEvents", "transportSubmissions", "transportFrames"]
+      "observe": ["publicApiResults", "exactAuthorityReads", "providerReadAndCommitEvents", "probeHandlerEvents"]
+    },
+    {
+      "name": "remote-destroy-releases-closing-after-owner-lease-ends",
+      "testNames": {
+        "cpp": "RemoteDestroyReleasesClosingAfterOwnerLeaseEnds",
+        "dotnet": "RemoteDestroyReleasesClosingAfterOwnerLeaseEnds",
+        "java": "remoteDestroyReleasesClosingAfterOwnerLeaseEnds",
+        "node": "a remote destroy releases Closing after the owner lease ends"
+      },
+      "specClauses": ["ownerDestroy", "remoteDestroy", "conditionalRelease", "releaseBatch"],
+      "given": {
+        "authority": "oldReady",
+        "ownerLease": "valid",
+        "routeBToA": "admitted",
+        "destroyRef": { "actorId": "id", "objectGeneration": "g" },
+        "recreation": "disabled during this scenario"
+      },
+      "steps": [
+        {
+          "act": "B starts Destroy(oldRef); hold A's final owner Delete and observe B reading Closing for g with the original lease still valid",
+          "expect": { "kind": "pending", "authority": "oldClosing", "ownerLease": "valid", "releaseCommitsByB": 0, "command27Sends": 1, "command27Replies": 0 }
+        },
+        {
+          "act": "End A's original lease while keeping its Delete uncommitted; observe B reading Closing for g and committing release ended reservation",
+          "expect": {
+            "kind": "observation",
+            "authority": "missing",
+            "releaseCommitsByB": 1,
+            "ownerDeleteCommitsByA": 0,
+            "releaseBatch": {
+              "conditions": ["vClosing", "invalidLeaseForOriginalOwnerToken", "ownerDescriptorState", "ownerCapacityRecord"],
+              "oldMembershipRemoved": true,
+              "oldActiveActorCapacityDelta": -1,
+              "requiresRelocationPolicy": false
+            }
+          }
+        },
+        {
+          "act": "Collect the original B Destroy result and exact-read id",
+          "expect": { "kind": "return", "value": true, "authority": "missing", "command27Sends": 1, "command27Replies": 0 }
+        }
+      ],
+      "requiredOrder": [
+        ["callerObservedClosingWithValidLease", "ownerLeaseEnded"],
+        ["ownerLeaseEnded", "releaseCommitted"],
+        ["callerObservedClosingForRelease", "releaseCommitted"],
+        ["releaseCommitted", "destroyReturned"]
+      ],
+      "observe": ["exactAuthorityReads", "exactLeaseReadsWithStoreTime", "publicApiResults", "providerReadAndCommitEvents", "transportFrames"]
     }
-  ]
+  ],
+  "admissionCheck": {
+    "name": "remote-destroy-without-admitted-owner-is-unavailable",
+    "specClauses": ["remoteDestroy", "routeAdmission", "routeReadiness", "submissionErrors", "destroyErrors", "oneWayUnavailable"],
+    "given": { "authority": "oldReady", "ownerLease": "valid", "routeBToA": "connectedButNotAdmittedForOwnerLifecycle", "destroyRef": { "actorId": "id", "objectGeneration": "g" } },
+    "steps": [
+      {
+        "act": "B calls Destroy(oldRef) while A's ADMIT is withheld",
+        "expect": {
+          "kind": "Unavailable",
+          "authority": "oldReady",
+          "command27Submissions": 0,
+          "command27Sends": 0,
+          "command27Replies": 0,
+          "authorityWrites": 0
+        }
+      }
+    ],
+    "requiredOrder": [
+      ["destroyReturned", "destroyDeadline"],
+      ["destroyReturned", "admissionAllowed"]
+    ],
+    "observe": ["publicApiResults", "routeAdmissionEvents", "exactAuthorityReads", "providerReadAndCommitEvents", "transportSubmissions", "transportFrames"]
+  }
 }
