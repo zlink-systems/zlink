@@ -39,6 +39,12 @@ internal sealed class ControllableTimeProvider : TimeProvider
         }
     }
 
+    internal bool HasTimerDueIn(TimeSpan delay)
+    {
+        lock (_gate)
+            return _timers.Any(timer => timer.IsDueAt(_timestamp + delay.Ticks));
+    }
+
     private event Action<TimeSpan>? TimerCreated;
 
     internal Task WaitForNextTimerAsync(
