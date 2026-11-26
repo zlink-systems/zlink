@@ -255,8 +255,12 @@ final class ZLinkUserSpotRetireSourceBuilder {
             ZLinkSpot<?> spot,
             ZLinkRelocationTargetPolicy targetPolicy,
             ZLinkStoreCancellation cancellation) {
-        List<String> actorIds = actors.actorIdsInSpot(spotId);
-        return readInventory(spotId, actorIds, cancellation)
+        var barrier = spots.relocationBarrier(spotId, actors);
+        List<String> shellActorTypes =
+                barrier.relocatesActorMembers()
+                        ? List.of()
+                        : actors.actorIdsInSpot(spotId).stream().map(actors::actorType).toList();
+        return readInventory(spotId, barrier.participantActorIds(), cancellation)
                 .thenCompose(
                         inventory -> {
                             validateLiveInventory(spot, inventory);
@@ -268,7 +272,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                             selectTarget(
                                                                     inventory,
                                                                     descriptors,
-                                                                    targetPolicy)));
+                                                                    targetPolicy,
+                                                                    shellActorTypes)));
                         });
     }
 
@@ -1079,13 +1084,28 @@ final class ZLinkUserSpotRetireSourceBuilder {
     private ZLinkMeshNodeDescriptor selectTarget(
             Inventory inventory,
             List<ZLinkMeshNodeDescriptor> descriptors,
-            ZLinkRelocationTargetPolicy targetPolicy) {
+            ZLinkRelocationTargetPolicy targetPolicy,
+            List<String> shellActorTypes) {
         return ZLinkRelocationTargetSelector.select(
                 descriptors,
                 targetPolicy,
                 this::baseEligible,
-                candidate -> hasCapabilities(inventory, candidate),
-                candidate -> hasCapacity(inventory, candidate),
+                candidate ->
+                        hasCapabilities(inventory, candidate)
+                                && shellActorTypes.stream()
+                                        .allMatch(
+                                                type -> {
+                                                    var factory = actorFactories.get(type);
+                                                    return factory != null
+                                                            && hasCapability(
+                                                                    candidate,
+                                                                    ZLinkPlacementObjectKind.ACTOR,
+                                                                    type,
+                                                                    factory.relocationPolicy());
+                                                }),
+                candidate ->
+                        hasCapacity(inventory, candidate)
+                                && candidate.capacity().actors().hasRoomFor(shellActorTypes.size()),
                 "No eligible User Spot relocation target is Ready");
     }
 
@@ -1123,16 +1143,27 @@ final class ZLinkUserSpotRetireSourceBuilder {
     }
 
     private static boolean hasCapability(ZLinkMeshNodeDescriptor target, Owned participant) {
-        ZLinkPlacementObjectKind kind = participant.snapshot().allocation().objectKind();
-        ZLinkObjectMaintenancePolicyKind policy = policyKind(participant.policy());
+        return hasCapability(
+                target,
+                participant.snapshot().allocation().objectKind(),
+                participant.stableType(),
+                participant.policy());
+    }
+
+    private static boolean hasCapability(
+            ZLinkMeshNodeDescriptor target,
+            ZLinkPlacementObjectKind kind,
+            String stableType,
+            RelocationPolicy relocationPolicy) {
+        ZLinkObjectMaintenancePolicyKind policy = policyKind(relocationPolicy);
         return target.objectCapabilities().stream()
                 .anyMatch(
                         capability ->
                                 capability.objectKind() == kind
-                                        && capability.stableType().equals(participant.stableType())
+                                        && capability.stableType().equals(stableType)
                                         && capability.policy() == policy
                                         && capability.hasSnapshotAdapter()
-                                                == isSnapshot(participant.policy()));
+                                                == isSnapshot(relocationPolicy));
     }
 
     private static boolean hasTypeCapacity(
@@ -1748,7 +1779,10 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             () -> relocationReplies.closeActorTimers(actorId)));
             }
             cleanups.add(() -> actors.completeRelocationSource(actorIds));
-            cleanups.add(() -> spots.completeRelocationSource(spotId, generation, deadline));
+            // A shell's member Actors still use the source context until their own batch settles.
+            if (barrier.relocatesActorMembers()) {
+                cleanups.add(() -> spots.completeRelocationSource(spotId, generation, deadline));
+            }
             return ZLinkHandlerStages.completeAll(cleanups);
         }
     }

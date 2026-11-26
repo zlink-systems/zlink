@@ -47,12 +47,14 @@ struct accepted_record_authority_query_t
     // Packet address fence; target remains the exact native mailbox owner.
     std::uint64_t requested_authority_owner_generation = 0;
     std::uint64_t requested_object_generation = 0;
+    bool direct_request = false;
 };
 
 struct accepted_record_authority_t
 {
     protocol::request_source_fence_t source;
     std::uint64_t target_owner_lease_generation = 0;
+    std::shared_ptr<const committed_target_ingress_t> committed_target;
 };
 
 using accepted_record_authority_resolver_t =
@@ -120,10 +122,12 @@ class raw_stateful_dispatch_t
     // it, or an original a relocation cut already took before its owner's seal bound.
     using ingress_original_t =
       std::variant<mesh::service_mailbox_t::claim_handle_t, mesh::service_mailbox_record_t>;
-    task_t<stateful_error_t> ingest_claimed (object_ref_t owner,
-                                             ingress_original_t original,
-                                             std::optional<retained_relocation_source_t> retained,
-                                             std::optional<claimed_ingress_t> prepared = {});
+    task_t<stateful_error_t>
+    ingest_claimed (object_ref_t owner,
+                    ingress_original_t original,
+                    std::optional<retained_relocation_source_t> retained,
+                    std::optional<claimed_ingress_t> prepared = std::nullopt,
+                    object_ref_t *accepted_owner = nullptr);
     task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
     accepted_actor_authority (object_ref_t owner,
                               protocol::actor_message_header_t header,
@@ -168,7 +172,8 @@ class raw_stateful_dispatch_t
       std::shared_ptr<runtime::serial_application_record_t> application_record,
       ingress_original_t original,
       std::optional<mesh::service_mailbox_record_t> &taken,
-      std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal);
+      std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal,
+      const committed_target_ingress_t *committed_target = nullptr);
     task_t<stateful_error_t>
     complete_async (const stateful_delivery_t &delivery,
                     std::optional<protocol::application_payload_t> reply = std::nullopt);
@@ -266,12 +271,14 @@ class raw_stateful_dispatch_t
                                  stateful_error_t collision_error,
                                  ingress_admission_t &admission);
     template <class Take>
-    task_t<stateful_error_t> commit_accepted_ingress (const object_ref_t &owner,
-                                                      turn_record_t turn,
-                                                      pending_delivery_t pending,
-                                                      Take take,
-                                                      stateful_error_t collision_error,
-                                                      ingress_admission_t &admission);
+    task_t<stateful_error_t>
+    commit_accepted_ingress (const object_ref_t &owner,
+                             turn_record_t turn,
+                             pending_delivery_t pending,
+                             Take take,
+                             stateful_error_t collision_error,
+                             ingress_admission_t &admission,
+                             const committed_target_ingress_t *committed_target);
     stateful_error_t register_accepted_ingress (const object_ref_t &owner,
                                                 turn_record_t &turn,
                                                 pending_delivery_t &pending,

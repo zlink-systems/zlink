@@ -1,6 +1,6 @@
-using Systems.Zlink.Stream.Connector.Contracts;
-using Systems.Zlink.Stream.Connector;
 using MyGame.Shared;
+using Systems.Zlink.Stream.Connector;
+using Systems.Zlink.Stream.Connector.Contracts;
 
 namespace MyGame.E2E;
 
@@ -9,7 +9,7 @@ internal static class Scenarios
     private const string Party = "party";
     private const string Reconnect = "reconnect";
     private const string Update = "update";
-    public static readonly string[] All = [Party, Reconnect, Update];
+    public static readonly string[] All = [Party, Reconnect, Update, "dungeon-leave"];
 
     public static string[] Select(string? value)
     {
@@ -34,6 +34,25 @@ internal static class Scenarios
             throw new InvalidDataException(message);
     }
 
+    private static async Task LeaveAsync(
+        GameClient leader,
+        GameClient member,
+        DungeonView dungeon,
+        CancellationToken ct
+    )
+    {
+        var leaderLeft = await leader.LeaveDungeonAsync(ct);
+        var memberLeft = await member.LeaveDungeonAsync(ct);
+        Require(
+            leaderLeft.DungeonId == dungeon.DungeonId
+                && leaderLeft.DungeonId == memberLeft.DungeonId
+                && leaderLeft.ObjectGeneration == memberLeft.ObjectGeneration
+                && leaderLeft.RemainingPlayers == 1
+                && memberLeft.RemainingPlayers == 0,
+            "Dungeon departure identified a different Spot."
+        );
+    }
+
     private static void SameActor(SessionInfo before, SessionInfo after) =>
         Require(
             before.ActorId == after.ActorId && before.ObjectGeneration == after.ObjectGeneration,
@@ -45,7 +64,8 @@ internal static class Scenarios
             before.DungeonId == after.DungeonId
                 && before.PartyId == after.PartyId
                 && before.Stage == after.Stage
-                && before.RunId == after.RunId && before.Phase == after.Phase
+                && before.RunId == after.RunId
+                && before.Phase == after.Phase
                 && before.Members.SequenceEqual(after.Members),
             "Dungeon state changed."
         );
@@ -56,18 +76,29 @@ internal static class Scenarios
         CancellationToken ct
     )
     {
-        var unknown = await leader.SendAsync<ActionRejected, JoinPartyRequest>(new(GameNames.NewPartyId()), _ => true, ct);
-        Require(unknown.Reason == Rejection.InvalidParty && unknown.RetryAfterMs == 0, "Unknown party allowed.");
+        var unknown = await leader.SendAsync<ActionRejected, JoinPartyRequest>(
+            new(GameNames.NewPartyId()),
+            _ => true,
+            ct
+        );
+        Require(
+            unknown.Reason == Rejection.InvalidParty && unknown.RetryAfterMs == 0,
+            "Unknown party allowed."
+        );
         var created = await leader.SendAsync<PartyView, CreatePartyRequest>(
             new(),
             view =>
-                view.Phase == RunPhase.Forming && view.RunId is null
+                view.Phase == RunPhase.Forming
+                && view.RunId is null
                 && view.Members.SequenceEqual(new[] { leader.PlayerId })
                 && view.Ready.SequenceEqual(new[] { false }),
             ct
         );
         var party = created.PartyId;
-        Require(System.Text.RegularExpressions.Regex.IsMatch(party, "^party-[0-9a-f]{32}$"), "Party ID format.");
+        Require(
+            System.Text.RegularExpressions.Regex.IsMatch(party, "^party-[0-9a-f]{32}$"),
+            "Party ID format."
+        );
         var leaderParty = leader.ReceiveAsync<PartyView>(
             view => view.PartyId == party && view.Members.Length == 2,
             ct
@@ -75,7 +106,8 @@ internal static class Scenarios
         var joined = await member.SendAsync<PartyView, JoinPartyRequest>(
             new(party),
             view =>
-                view.Phase == RunPhase.Forming && view.RunId is null
+                view.Phase == RunPhase.Forming
+                && view.RunId is null
                 && view.Members.SequenceEqual(new[] { leader.PlayerId, member.PlayerId }),
             ct
         );
@@ -99,15 +131,42 @@ internal static class Scenarios
             "Dungeon entry before readiness was not rejected."
         );
         var unchanged = await leader.SendAsync<PartyView, ViewRequest>(new(), _ => true, ct);
-        Require(unchanged.Phase == RunPhase.Forming && unchanged.RunId is null
-            && unchanged.Ready.SequenceEqual(joined.Ready) && unchanged.Members.SequenceEqual(joined.Members), "Rejected entry changed party.");
-        var nonLeader = await member.SendAsync<ActionRejected, EnterDungeonRequest>(new(), _ => true, ct);
-        Require(nonLeader.Reason == Rejection.NotLeader && nonLeader.RetryAfterMs == 0, "Non-leader entry rejection.");
+        Require(
+            unchanged.Phase == RunPhase.Forming
+                && unchanged.RunId is null
+                && unchanged.Ready.SequenceEqual(joined.Ready)
+                && unchanged.Members.SequenceEqual(joined.Members),
+            "Rejected entry changed party."
+        );
+        var nonLeader = await member.SendAsync<ActionRejected, EnterDungeonRequest>(
+            new(),
+            _ => true,
+            ct
+        );
+        Require(
+            nonLeader.Reason == Rejection.NotLeader && nonLeader.RetryAfterMs == 0,
+            "Non-leader entry rejection."
+        );
         var nonLeaderState = await member.SendAsync<PartyView, ViewRequest>(new(), _ => true, ct);
-        Require(nonLeaderState == unchanged || (nonLeaderState.Phase == unchanged.Phase && nonLeaderState.RunId == unchanged.RunId
-            && nonLeaderState.Ready.SequenceEqual(unchanged.Ready) && nonLeaderState.Members.SequenceEqual(unchanged.Members)), "Non-leader changed party.");
-        var denied = await member.SendAsync<ActionRejected, JoinDungeon>(new("dungeon-forged", "run-forged"), _ => true, ct);
-        Require(denied.Reason == Rejection.PacketNotAllowed && denied.RetryAfterMs == 0, "Internal packet allowed.");
+        Require(
+            nonLeaderState == unchanged
+                || (
+                    nonLeaderState.Phase == unchanged.Phase
+                    && nonLeaderState.RunId == unchanged.RunId
+                    && nonLeaderState.Ready.SequenceEqual(unchanged.Ready)
+                    && nonLeaderState.Members.SequenceEqual(unchanged.Members)
+                ),
+            "Non-leader changed party."
+        );
+        var denied = await member.SendAsync<ActionRejected, JoinDungeon>(
+            new("dungeon-forged", "run-forged"),
+            _ => true,
+            ct
+        );
+        Require(
+            denied.Reason == Rejection.PacketNotAllowed && denied.RetryAfterMs == 0,
+            "Internal packet allowed."
+        );
         var memberReady = member.ReceiveAsync<PartyView>(
             view => view.Ready.SequenceEqual(new[] { true, false }),
             ct
@@ -128,8 +187,14 @@ internal static class Scenarios
             ct
         );
         await leaderReady;
-        var memberArrival = member.ReceiveAsync<DungeonView>(view => view.PartyId == party && view.Phase == RunPhase.Active, ct);
-        var leaderArrival = leader.ReceiveAsync<DungeonView>(view => view.PartyId == party && view.Phase == RunPhase.Active, ct);
+        var memberArrival = member.ReceiveAsync<DungeonView>(
+            view => view.PartyId == party && view.Phase == RunPhase.Active,
+            ct
+        );
+        var leaderArrival = leader.ReceiveAsync<DungeonView>(
+            view => view.PartyId == party && view.Phase == RunPhase.Active,
+            ct
+        );
         await leader.Connector.Send(new EnterDungeonRequest()).Async(ct);
         await leader.Connector.Send(new EnterDungeonRequest()).Async(ct);
         var leaderView = await leaderArrival;
@@ -138,8 +203,12 @@ internal static class Scenarios
         Require(
             leaderView.DungeonId == GameNames.DungeonId(leaderView.RunId!)
                 && leaderView.NodeId == memberView.NodeId
-                && leaderView.Stage == 0 && leaderView.Phase == RunPhase.Active
-                && System.Text.RegularExpressions.Regex.IsMatch(leaderView.RunId ?? "", "^run-[0-9a-f]{32}$")
+                && leaderView.Stage == 0
+                && leaderView.Phase == RunPhase.Active
+                && System.Text.RegularExpressions.Regex.IsMatch(
+                    leaderView.RunId ?? "",
+                    "^run-[0-9a-f]{32}$"
+                )
                 && leaderView.Members.SequenceEqual(new[] { leader.PlayerId, member.PlayerId }),
             "Party did not enter the same fresh dungeon."
         );
@@ -147,18 +216,78 @@ internal static class Scenarios
         SameDungeon(
             leaderView,
             await leader.DungeonAsync(
-                view => view.Stage == leaderView.Stage && view.NodeId == leaderView.NodeId && view.Phase == leaderView.Phase && view.RunId == leaderView.RunId,
+                view =>
+                    view.Stage == leaderView.Stage
+                    && view.NodeId == leaderView.NodeId
+                    && view.Phase == leaderView.Phase
+                    && view.RunId == leaderView.RunId,
                 ct
             )
         );
         SameDungeon(
             memberView,
             await member.DungeonAsync(
-                view => view.Stage == memberView.Stage && view.NodeId == memberView.NodeId && view.Phase == memberView.Phase && view.RunId == memberView.RunId,
+                view =>
+                    view.Stage == memberView.Stage
+                    && view.NodeId == memberView.NodeId
+                    && view.Phase == memberView.Phase
+                    && view.RunId == memberView.RunId,
                 ct
             )
         );
         return leaderView;
+    }
+
+    private static async Task VerifyDungeonLeaveAsync(
+        string endpoint,
+        WorldRun run,
+        CancellationToken ct
+    )
+    {
+        async Task<GameClient> ConnectAsync(string suffix) =>
+            await GameClient.ConnectAsync(run.Outcome, endpoint, run.PlayerId(suffix), ct);
+
+        async Task<DungeonView> EnterPairAsync(GameClient leader, GameClient member)
+        {
+            await leader.JoinAsync(ct);
+            await member.JoinAsync(ct);
+            return await EnterAsync(leader, member, ct);
+        }
+
+        await using var leader = await ConnectAsync("leave-leader");
+        await using var member = await ConnectAsync("leave-member");
+        await using var otherLeader = await ConnectAsync("leave-other-leader");
+        await using var otherMember = await ConnectAsync("leave-other-member");
+        await using var freshLeader = await ConnectAsync("leave-fresh-leader");
+        await using var freshMember = await ConnectAsync("leave-fresh-member");
+        var original = await EnterPairAsync(leader, member);
+        var other = await EnterPairAsync(otherLeader, otherMember);
+        Require(original.NodeId != other.NodeId, "Each instance must hold one Dungeon.");
+
+        var first = await leader.LeaveDungeonAsync(ct);
+        var continued = await member.SendAsync<DungeonView, AdvanceRequest>(
+            new(),
+            view => view.DungeonId == original.DungeonId && view.Stage == original.Stage + 1,
+            ct
+        );
+        SameDungeon(original with { Stage = original.Stage + 1 }, continued);
+        var last = await member.LeaveDungeonAsync(ct);
+        Require(
+            first.DungeonId == original.DungeonId
+                && last.DungeonId == original.DungeonId
+                && first.ObjectGeneration == last.ObjectGeneration
+                && first.RemainingPlayers == 1
+                && last.RemainingPlayers == 0,
+            "Expected the Dungeon to report one remaining player and then zero."
+        );
+
+        var fresh = await EnterPairAsync(freshLeader, freshMember);
+        Require(
+            fresh.NodeId == original.NodeId && fresh.DungeonId != original.DungeonId,
+            "Last departure did not release the original Dungeon slot."
+        );
+        await LeaveAsync(freshLeader, freshMember, fresh, ct);
+        await LeaveAsync(otherLeader, otherMember, other, ct);
     }
 
     public static async Task RunAsync(
@@ -168,151 +297,189 @@ internal static class Scenarios
         CancellationToken ct
     )
     {
-        var passed = 0;
-        string current = selected[0];
+        if (selected.Contains("dungeon-leave"))
+        {
+            await VerifyDungeonLeaveAsync(endpoint, run, ct);
+            return;
+        }
+        await using var p1 = await GameClient.ConnectAsync(
+            run.Outcome,
+            endpoint,
+            run.PlayerId("p1"),
+            ct
+        );
+        await p1.JoinAsync(ct);
+        var p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, run.PlayerId("p2"), ct);
         try
         {
-            current = selected[0];
-            await using var p1 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p1", ct);
-            await p1.JoinAsync(ct);
-            var p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p2", ct);
-            try
+            await p2.JoinAsync(ct);
+            var before1 = await p1.SessionAsync(ct);
+            var before2 = await p2.SessionAsync(ct);
+            var dungeon = await EnterAsync(p1, p2, ct);
+            var secondStage = p2.ReceiveAsync<DungeonView>(view => view.Stage == 1, ct);
+            var advanced = await p1.SendAsync<DungeonView, AdvanceRequest>(
+                new(),
+                view => view.Stage == 1,
+                ct
+            );
+            SameDungeon(advanced, await secondStage);
+            Require(advanced.NodeId == dungeon.NodeId, "Advance changed the dungeon host.");
+            var activeParty = await p1.SendAsync<PartyView, EnterDungeonRequest>(
+                new(),
+                view =>
+                    view.PartyId == dungeon.PartyId
+                    && view.RunId == dungeon.RunId
+                    && view.Phase == RunPhase.Active,
+                ct
+            );
+            Require(
+                activeParty.Members.SequenceEqual(dungeon.Members),
+                "Dungeon member lost PartyView."
+            );
+            Require(
+                before1 == await p1.SessionAsync(ct) && before2 == await p2.SessionAsync(ct),
+                "Session identity changed while entering dungeon."
+            );
+            if (selected.Contains(Reconnect))
             {
-                await p2.JoinAsync(ct);
-                var before1 = await p1.SessionAsync(ct);
-                var before2 = await p2.SessionAsync(ct);
-                var dungeon = await EnterAsync(p1, p2, ct);
-                var secondStage = p2.ReceiveAsync<DungeonView>(view => view.Stage == 1, ct);
-                var advanced = await p1.SendAsync<DungeonView, AdvanceRequest>(
+                await p2.DisposeAsync();
+                p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, run.PlayerId("p2"), ct);
+                var restored = await p2.SendAsync<DungeonView, JoinLobbyRequest>(
+                    new(run.PlayerId("p2")),
+                    _ => true,
+                    ct
+                );
+                SameDungeon(advanced, restored);
+                Require(restored.NodeId == advanced.NodeId, "Reconnect changed the dungeon host.");
+                var rebound = await p2.SessionAsync(ct);
+                SameActor(before2, rebound);
+                Require(
+                    rebound.SessionId != before2.SessionId,
+                    "Reconnect reused physical Session."
+                );
+            }
+            if (selected.Contains(Update))
+            {
+                var session1 = await p1.SessionAsync(ct);
+                var session2 = await p2.SessionAsync(ct);
+                var source = run.Instances[advanced.NodeId];
+                await source.CommandAsync(NodeProtocol.Drain);
+                await source.WaitLineAsync(NodeProtocol.RelocationRequested, ct);
+                await source.WaitLineAsync(NodeProtocol.Relocated, ct);
+                await source.WaitLineAsync(NodeProtocol.SafeToShutdown, ct);
+                var relocated = await p1.DungeonAsync(
+                    view => view.Stage == advanced.Stage && view.NodeId != advanced.NodeId,
+                    ct
+                );
+                SameDungeon(advanced, relocated);
+                var relocatedMember = await p2.DungeonAsync(
+                    view => view.Stage == relocated.Stage && view.NodeId == relocated.NodeId,
+                    ct
+                );
+                SameDungeon(relocated, relocatedMember);
+                Require(
+                    relocatedMember.NodeId == relocated.NodeId
+                        && relocated.NodeId != advanced.NodeId
+                        && run.Instances.ContainsKey(relocated.NodeId),
+                    "Dungeon did not move to the other instance."
+                );
+                Require(
+                    session1 == await p1.SessionAsync(ct)
+                        && session2 == await p2.SessionAsync(ct)
+                        && !p1.Disconnected
+                        && !p2.Disconnected,
+                    "Session continuity failed during host relocation."
+                );
+                await run.ReplaceInstanceAsync(advanced.NodeId, ct);
+                await using var p3 = await GameClient.ConnectAsync(
+                    run.Outcome,
+                    endpoint,
+                    run.PlayerId("p3"),
+                    ct
+                );
+                await p3.JoinAsync(ct);
+                await using var p4 = await GameClient.ConnectAsync(
+                    run.Outcome,
+                    endpoint,
+                    run.PlayerId("p4"),
+                    ct
+                );
+                await p4.JoinAsync(ct);
+                var fresh = await EnterAsync(p3, p4, ct);
+                Require(
+                    fresh.DungeonId != advanced.DungeonId && fresh.RunId != advanced.RunId,
+                    "Two parties shared a run."
+                );
+                Require(
+                    fresh.NodeId == advanced.NodeId,
+                    "Replacement instance did not accept new work."
+                );
+                var freshMember = p4.ReceiveAsync<DungeonView>(view => view.Stage == 1, ct);
+                var freshAdvanced = await p3.SendAsync<DungeonView, AdvanceRequest>(
                     new(),
                     view => view.Stage == 1,
                     ct
                 );
-                SameDungeon(advanced, await secondStage);
-                Require(advanced.NodeId == dungeon.NodeId, "Advance changed the dungeon host.");
-                var activeParty = await p1.SendAsync<PartyView, EnterDungeonRequest>(new(),
-                    view => view.PartyId == dungeon.PartyId && view.RunId == dungeon.RunId
-                        && view.Phase == RunPhase.Active, ct);
-                Require(activeParty.Members.SequenceEqual(dungeon.Members), "Dungeon member lost PartyView.");
-                Require(
-                    before1 == await p1.SessionAsync(ct) && before2 == await p2.SessionAsync(ct),
-                    "Session identity changed while entering dungeon."
-                );
-                if (selected.Contains(Reconnect))
-                {
-                    current = Reconnect;
-                    await p2.DisposeAsync();
-                    p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p2", ct);
-                    var restored = await p2.SendAsync<DungeonView, JoinLobbyRequest>(
-                        new("p2"),
-                        _ => true,
-                        ct
-                    );
-                    SameDungeon(advanced, restored);
-                    Require(
-                        restored.NodeId == advanced.NodeId,
-                        "Reconnect changed the dungeon host."
-                    );
-                    var rebound = await p2.SessionAsync(ct);
-                    SameActor(before2, rebound);
-                    Require(rebound.SessionId != before2.SessionId, "Reconnect reused physical Session.");
-
-                }
-                if (selected.Contains(Update))
-                {
-                    current = Update;
-                    var session1 = await p1.SessionAsync(ct);
-                    var session2 = await p2.SessionAsync(ct);
-                    var source = run.Instances[advanced.NodeId];
-                    await source.CommandAsync(NodeProtocol.Drain);
-                    await source.WaitLineAsync(NodeProtocol.RelocationRequested, ct);
-                    await source.WaitLineAsync(NodeProtocol.Relocated, ct);
-                    await source.WaitLineAsync(NodeProtocol.SafeToShutdown, ct);
-                    var relocated = await p1.DungeonAsync(
-                        view => view.Stage == advanced.Stage && view.NodeId != advanced.NodeId,
-                        ct
-                    );
-                    SameDungeon(advanced, relocated);
-                    var relocatedMember = await p2.DungeonAsync(
-                        view => view.Stage == relocated.Stage && view.NodeId == relocated.NodeId,
-                        ct
-                    );
-                    SameDungeon(relocated, relocatedMember);
-                    Require(
-                        relocatedMember.NodeId == relocated.NodeId
-                            && relocated.NodeId != advanced.NodeId
-                            && run.Instances.ContainsKey(relocated.NodeId),
-                        "Dungeon did not move to the other instance."
-                    );
-                    Require(
-                        session1 == await p1.SessionAsync(ct)
-                            && session2 == await p2.SessionAsync(ct)
-                            && !p1.Disconnected
-                            && !p2.Disconnected,
-                        "Session continuity failed during host relocation."
-                    );
-                    await run.ReplaceInstanceAsync(advanced.NodeId, ct);
-                    await using var p3 = await GameClient.ConnectAsync(
-                        run.Outcome,
-                        endpoint,
-                        "p3",
-                        ct
-                    );
-                    await p3.JoinAsync(ct);
-                    await using var p4 = await GameClient.ConnectAsync(
-                        run.Outcome,
-                        endpoint,
-                        "p4",
-                        ct
-                    );
-                    await p4.JoinAsync(ct);
-                    var fresh = await EnterAsync(p3, p4, ct);
-                    Require(fresh.DungeonId != advanced.DungeonId && fresh.RunId != advanced.RunId, "Two parties shared a run.");
-                    Require(
-                        fresh.NodeId == advanced.NodeId,
-                        "Replacement instance did not accept new work."
-                    );
-                    var freshMember = p4.ReceiveAsync<DungeonView>(view => view.Stage == 1, ct);
-                    var freshAdvanced = await p3.SendAsync<DungeonView, AdvanceRequest>(new(), view => view.Stage == 1, ct);
-                    SameDungeon(freshAdvanced, await freshMember);
-
-
-                }
-                if (selected.Contains(Party))
-                {
-                    await using var p3 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p3", ct);
-                    await using var p4 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p4", ct);
-                    await p3.JoinAsync(ct); await p4.JoinAsync(ct);
-                    var separate = await EnterAsync(p3, p4, ct);
-                    Require(separate.DungeonId != advanced.DungeonId && separate.RunId != advanced.RunId, "Two parties shared a run.");
-                }
-                for (var stage = 2; stage <= GameNames.FinalStage; stage++)
-                {
-                    var nextStage = stage;
-                    var observed = p2.ReceiveAsync<DungeonView>(view => view.Stage == nextStage, ct);
-                    advanced = await p1.SendAsync<DungeonView, AdvanceRequest>(new(), view => view.Stage == nextStage, ct);
-                    SameDungeon(advanced, await observed);
-                }
-                Require(advanced.Phase == RunPhase.Completed, "Final stage did not complete run.");
-                var completedRejected = await p1.SendAsync<ActionRejected, AdvanceRequest>(new(), _ => true, ct);
-                Require(completedRejected.Reason == Rejection.RunNotActive && completedRejected.RetryAfterMs == 0, "Completed advance allowed.");
-                SameDungeon(advanced, await p1.DungeonAsync(view => view.Phase == advanced.Phase && view.Stage == advanced.Stage, ct));
-                Console.WriteLine($"✓ {selected[0]}");
-                passed++;
+                SameDungeon(freshAdvanced, await freshMember);
+                await LeaveAsync(p3, p4, fresh, ct);
             }
-            finally
+            if (selected.Contains(Party))
             {
-                await p2.DisposeAsync();
+                await using var p3 = await GameClient.ConnectAsync(
+                    run.Outcome,
+                    endpoint,
+                    run.PlayerId("p3"),
+                    ct
+                );
+                await using var p4 = await GameClient.ConnectAsync(
+                    run.Outcome,
+                    endpoint,
+                    run.PlayerId("p4"),
+                    ct
+                );
+                await p3.JoinAsync(ct);
+                await p4.JoinAsync(ct);
+                var separate = await EnterAsync(p3, p4, ct);
+                Require(
+                    separate.DungeonId != advanced.DungeonId && separate.RunId != advanced.RunId,
+                    "Two parties shared a run."
+                );
+                await LeaveAsync(p3, p4, separate, ct);
             }
-        }
-        catch
-        {
-            Console.WriteLine($"✗ {current}");
-            throw;
+            for (var stage = 2; stage <= GameNames.FinalStage; stage++)
+            {
+                var nextStage = stage;
+                var observed = p2.ReceiveAsync<DungeonView>(view => view.Stage == nextStage, ct);
+                advanced = await p1.SendAsync<DungeonView, AdvanceRequest>(
+                    new(),
+                    view => view.Stage == nextStage,
+                    ct
+                );
+                SameDungeon(advanced, await observed);
+            }
+            Require(advanced.Phase == RunPhase.Completed, "Final stage did not complete run.");
+            var completedRejected = await p1.SendAsync<ActionRejected, AdvanceRequest>(
+                new(),
+                _ => true,
+                ct
+            );
+            Require(
+                completedRejected.Reason == Rejection.RunNotActive
+                    && completedRejected.RetryAfterMs == 0,
+                "Completed advance allowed."
+            );
+            SameDungeon(
+                advanced,
+                await p1.DungeonAsync(
+                    view => view.Phase == advanced.Phase && view.Stage == advanced.Stage,
+                    ct
+                )
+            );
+            await LeaveAsync(p1, p2, dungeon, ct);
         }
         finally
         {
-            Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed");
+            await p2.DisposeAsync();
         }
     }
 }
