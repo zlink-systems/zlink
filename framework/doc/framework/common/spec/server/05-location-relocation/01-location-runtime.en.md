@@ -1683,6 +1683,8 @@ An Actor move that doesn't change User Spot membership changes owner with a sing
 number and prep info — it doesn't swap in a different target. A previous attempt can't
 change the owner.
 
+- **The first target attempt number of a relocation is `1`, and each replacement adds 1.** Comparison is
+  by equality only.
 - **The representative authority alone owns the target attempt number.** After `Prepared`, a new
   attempt on the same target changes the representative authority's `target.attemptGeneration` with one
   CAS conditioned on its `StoreVersion`. The aggregate record isn't changed because the prepare request
@@ -1755,6 +1757,10 @@ seal before a target is chosen and are reused when the target attempt changes. V
 decides, such as the target node, route, and target-side membership, are owned by the aggregate record's
 target fields (`targetDescriptor`, `targetDescriptorLifecycleGeneration`, `targetOwner`) and the Restore
 request (command 40), and commit builds the target-side change from those values.
+
+**Membership change bytes are opaque; other runtimes don't interpret the content and compare only the
+SHA-256.** A participant with no membership change has the UTF-8 body `[]` (2 bytes). An empty body is
+never written.
 
 **Common body rules.** The bodies of the aggregate record and the inventory root and pages are UTF-8
 JSON objects, stored exactly as the bytes produced by
