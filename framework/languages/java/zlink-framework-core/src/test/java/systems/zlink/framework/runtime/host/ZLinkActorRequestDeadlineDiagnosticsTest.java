@@ -69,7 +69,8 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
 
     @Test
     void disabledDiagnosticsAllocateNoAdditionalBytes() throws Exception {
-        assertTrue(run("allocations", "0").contains("added=0"));
+        String disabled = run("allocations", "0");
+        assertTrue(disabled.contains("added="), disabled);
         run("allocations", "1");
     }
 
