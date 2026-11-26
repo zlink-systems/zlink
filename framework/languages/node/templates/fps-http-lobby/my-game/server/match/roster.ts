@@ -50,8 +50,7 @@ export class RoomRoster {
   }
 
   restore(snapshot: RosterSnapshot): void {
-    if (this.matchId !== null)
-      throw new Error('Cannot restore an already prepared Room roster.');
+    if (this.matchId !== null) throw new Error('Cannot restore an already prepared Room roster.');
     if (snapshot.matchId !== null)
       this.prepare(snapshot.matchId, new PrepareRoom(snapshot.matchId, snapshot.members));
     else if (snapshot.members.length !== 0)

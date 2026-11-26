@@ -4,18 +4,18 @@ import { Matchmaker } from '../server/lobby/matchmaker.js';
 import { RoomRoster } from '../server/match/roster.js';
 import { encodeRoomSnapshot, decodeRoomSnapshot } from '../server/match/snapshot.js';
 import type { RoomSnapshot } from '../server/match/domain.js';
-function manualClock(start = 0) { return new ManualClock(start); }
+function manualClock(start = 0) {
+  return new ManualClock(start);
+}
 import assert from 'node:assert/strict';
 import { Game, Rejection } from '../server/shared/constants.js';
-import {
-  ActionRejected,
-  MoveRequest,
-  ShootRequest,
-} from '../server/shared/messages.js';
+import { ActionRejected, MoveRequest, ShootRequest } from '../server/shared/messages.js';
 import { RoomState, type RoomClock } from '../server/match/domain.js';
 
 const cases: { name: string; run(): void }[] = [];
-function test(name: string, run: () => void): void { cases.push({ name, run }); }
+function test(name: string, run: () => void): void {
+  cases.push({ name, run });
+}
 
 class ManualClock implements RoomClock {
   constructor(private milliseconds: number) {}
@@ -73,14 +73,16 @@ test('shared action sequences commit only accepted actions', () => {
   const overflowSequence = BigInt(Game.maxSafeInteger) + 1n;
   room.players[0].lastSequence = overflowSequence;
   const beforeOverflow = room.capture();
-  rejection(room.move('a', new MoveRequest(0, 0, BigInt(overflowSequence))), Rejection.integerOutOfRange);
+  rejection(
+    room.move('a', new MoveRequest(0, 0, BigInt(overflowSequence))),
+    Rejection.integerOutOfRange
+  );
   assert.deepEqual(room.capture(), beforeOverflow, 'out-of-range move changed room state');
   rejection(
     room.shoot('a', new ShootRequest('b', BigInt(overflowSequence))),
     Rejection.integerOutOfRange
   );
   assert.deepEqual(room.capture(), beforeOverflow, 'out-of-range shot changed room state');
-
 });
 
 test('MaxStep and inclusive map bounds are enforced', () => {
@@ -125,13 +127,19 @@ test('closed wall endpoints and crossing block movement', () => {
   for (const endpointY of [Game.wallMinY, Game.wallMaxY]) {
     const room = positioned(clock, Game.wallX - Game.maxStep, endpointY);
     const before = room.capture();
-    rejection(room.move('a', new MoveRequest(Game.maxStep, 0, BigInt(1))), Rejection.moveBlockedByWall);
+    rejection(
+      room.move('a', new MoveRequest(Game.maxStep, 0, BigInt(1))),
+      Rejection.moveBlockedByWall
+    );
     assert.deepEqual(room.capture(), before, `wall endpoint ${endpointY} changed room state`);
   }
 
   const crossing = positioned(clock, Game.wallX - 1, (Game.wallMinY + Game.wallMaxY) / 2);
   const crossingBefore = crossing.capture();
-  rejection(crossing.move('a', new MoveRequest(Game.maxStep, 0, BigInt(1))), Rejection.moveBlockedByWall);
+  rejection(
+    crossing.move('a', new MoveRequest(Game.maxStep, 0, BigInt(1))),
+    Rejection.moveBlockedByWall
+  );
   assert.deepEqual(crossing.capture(), crossingBefore, 'wall crossing changed room state');
 
   const clearLane = positioned(clock, Game.wallX - Game.maxStep, Game.wallMinY - 1);
@@ -180,7 +188,11 @@ test('fire interval rejects early shots and accepts the exact boundary', () => {
   const room = newRoom(clock);
   assert.equal(room.shoot('a', new ShootRequest('b', BigInt(1))), null);
   const before = room.capture();
-  rejection(room.shoot('a', new ShootRequest('b', BigInt(2))), Rejection.fireTooSoon, Game.fireIntervalMs);
+  rejection(
+    room.shoot('a', new ShootRequest('b', BigInt(2))),
+    Rejection.fireTooSoon,
+    Game.fireIntervalMs
+  );
   assert.deepEqual(room.capture(), before);
   clock.advance(Game.fireIntervalMs - 1);
   const lastMillisecondBefore = room.capture();
@@ -213,7 +225,11 @@ test('relocation snapshot stores remaining milliseconds and restores under anoth
   assert.equal(destination.Phase, source.Phase);
   assert.equal(destination.Winner, source.Winner);
   assert.equal(player(destination, 'a').lastSequence, 2n);
-  rejection(destination.move('a', new MoveRequest(Game.maxStep, 0, BigInt(3))), Rejection.moveBudget, 140);
+  rejection(
+    destination.move('a', new MoveRequest(Game.maxStep, 0, BigInt(3))),
+    Rejection.moveBudget,
+    140
+  );
   rejection(destination.shoot('a', new ShootRequest('b', BigInt(3))), Rejection.fireTooSoon, 190);
   destinationClock.advance(140);
   assert.equal(destination.move('a', new MoveRequest(Game.maxStep, 0, BigInt(3))), null);
@@ -260,12 +276,24 @@ export async function runHttpDomainChecks(): Promise<void> {
   };
   const roster = new RoomRoster();
   check(!roster.canAdmit('a') && !roster.canAdmit('outsider'), 'unprepared Room rejects admission');
-  check(rejects(() => roster.prepare('room', new PrepareRoom('other', ['a', 'b']))), 'wrong match identity');
-  check(rejects(() => roster.prepare('room', new PrepareRoom('room', ['a', 'a']))), 'duplicate roster member');
-  check(rejects(() => roster.prepare('room', new PrepareRoom('room', ['a']))), 'incomplete roster');
+  check(
+    rejects(() => roster.prepare('room', new PrepareRoom('other', ['a', 'b']))),
+    'wrong match identity'
+  );
+  check(
+    rejects(() => roster.prepare('room', new PrepareRoom('room', ['a', 'a']))),
+    'duplicate roster member'
+  );
+  check(
+    rejects(() => roster.prepare('room', new PrepareRoom('room', ['a']))),
+    'incomplete roster'
+  );
 
   const members = ['a', 'b'];
-  check(roster.prepare('room', new PrepareRoom('room', members)) === 'room', 'preparation acknowledges identity');
+  check(
+    roster.prepare('room', new PrepareRoom('room', members)) === 'room',
+    'preparation acknowledges identity'
+  );
   members[0] = 'outsider';
   check(
     roster.canAdmit('a') && roster.canAdmit('b') && !roster.canAdmit('outsider'),
@@ -286,7 +314,10 @@ export async function runHttpDomainChecks(): Promise<void> {
   game.admit('b');
   game.move('a', new MoveRequest(1, 0, 1n));
   game.shoot('a', new ShootRequest('b', 2n));
-  const envelope = { Game: JSON.parse(new TextDecoder().decode(game.capture())) as RoomSnapshot, Roster: roster.capture() },
+  const envelope = {
+      Game: JSON.parse(new TextDecoder().decode(game.capture())) as RoomSnapshot,
+      Roster: roster.capture()
+    },
     restored = decodeRoomSnapshot<{
       Game: RoomSnapshot;
       Roster: ReturnType<RoomRoster['capture']>;
@@ -342,7 +373,10 @@ export async function runHttpDomainChecks(): Promise<void> {
   );
   await Promise.resolve();
   const [rankedFirst, rankedSecond] = await Promise.all([rankedA, rankedB]);
-  check(!casualSettled && rankedFirst.roomId === rankedSecond.roomId, 'interleaved modes pair only matching members');
+  check(
+    !casualSettled && rankedFirst.roomId === rankedSecond.roomId,
+    'interleaved modes pair only matching members'
+  );
   const casualB = firstProcess.match(new MatchRequest('cb', 'casual'), signal),
     [casualFirst, casualSecond] = await Promise.all([casualA, casualB]);
   check(

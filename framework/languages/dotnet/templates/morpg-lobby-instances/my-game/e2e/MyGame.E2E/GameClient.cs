@@ -82,6 +82,9 @@ internal sealed class GameClient(
     public Task<LobbyView> JoinAsync(CancellationToken ct) =>
         SendAsync<LobbyView, JoinLobbyRequest>(new(PlayerId), _ => true, ct);
 
+    public Task<DungeonLeft> LeaveDungeonAsync(CancellationToken ct) =>
+        Connector.Request(new LeaveDungeonRequest()).Async<DungeonLeft>(ct).AsTask();
+
     public Task<SessionInfo> SessionAsync(CancellationToken ct) =>
         Connector.Request(new SessionInfoRequest()).Async<SessionInfo>(ct).AsTask();
 

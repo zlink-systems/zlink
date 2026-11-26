@@ -52,7 +52,7 @@ public sealed record SessionInfoRequest;
 
 public sealed record SessionInfo(string SessionId, string ActorId, ulong ObjectGeneration);
 
-public sealed record JoinTableRequest(string PlayerId, string TableId);
+public sealed record JoinTableRequest(string PlayerId, string TableId, bool Reconnect = false);
 
 public sealed record TableViewRequest;
 

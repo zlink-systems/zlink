@@ -153,6 +153,11 @@ public sealed class PartyDelivery : IZLinkSpotActorSendHandler<FieldSpot, Player
 [ZLinkSpotActorSendHandler(nameof(ViewRequest))]
 public sealed class FieldQuery : IZLinkSpotActorSendHandler<FieldSpot, PlayerActor, ViewRequest>
 {
-    public ValueTask HandleAsync(FieldSpot spot, PlayerActor actor, IZLinkMessageContext context,
-        ViewRequest request, CancellationToken ct) => spot.ShowAsync(actor, ct);
+    public ValueTask HandleAsync(
+        FieldSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        ViewRequest request,
+        CancellationToken ct
+    ) => spot.ShowAsync(actor, ct);
 }
