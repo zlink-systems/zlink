@@ -199,7 +199,7 @@ import {
   type ZLinkDetachedTaskRunner,
   type ZLinkSpotManagerOptions
 } from '../spots';
-import type { ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
+import { entrySpotRouteTarget, type ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
 import {
   DefaultZLinkBoundSessionFactory,
   ZLinkStreamBindingRuntime,
@@ -2947,6 +2947,20 @@ export class ZLinkFrameworkRuntimeHost
       actorMeshName: (actorType) => this.meshRouters.actorMeshName(actorType),
       createLocationSpotRouteResolver: () => this.createLocationSpotRouteResolver(),
       createActorLocationResolver: () => this.createActorLocationResolver(),
+      entrySpotTargetSelector: async (meshName, stableType, signal) => {
+        const resolvedMeshName = meshName ?? this.meshRouters.primaryMeshName();
+        if (resolvedMeshName === undefined || stableType === undefined) return undefined;
+        const meshNode = this.spotNodeRuntime?.meshNode(resolvedMeshName);
+        const target =
+          await this.spotNodeRuntime?.locationAutoConnect?.requestSources.selectPlacement(
+            resolvedMeshName,
+            'actor',
+            stableType,
+            meshNode,
+            signal
+          );
+        return target === undefined ? undefined : entrySpotRouteTarget(resolvedMeshName, target);
+      },
       forgetDestroyedActorRef: (actorId) => this.destroyedActorRefs.delete(actorId),
       rememberDestroyedActorRef: (actorId, actorRef) =>
         this.destroyedActorRefs.set(actorId, actorRef),

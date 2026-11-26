@@ -2435,7 +2435,6 @@ test('remote actor join retains the complete Ready authority snapshot for packet
     actorFactories: new Map([['player', PlayerFactory]]),
     joinCoordinator: new framework.ZLinkActorNativeJoinCoordinator({
       node,
-      entrySpotIdProvider: () => 'entry-source',
       completionTableProvider: () => node.completionTable,
       spotRouteResolver: {
         async resolve(spotId) {
@@ -2712,7 +2711,6 @@ test('cross-owner formal join rejection returns its typed terminal to the source
       locationLifecycle: {
         currentOwnerToken: { ownerId: 'source-owner', leaseGeneration: 1n }
       },
-      entrySpotIdProvider: () => 'play-entry-123e4567-e89b-42d3-a456-426614174000',
       completionTableProvider: () => node.completionTable,
       spotRouteResolver: {
         async resolve(spotId) {
@@ -3893,20 +3891,27 @@ test('public cross-node Entry Join reuses the Host relocation owner after admiss
     createActor() {
       return sourceRef;
     },
-    joinActorEntrySpot(actorRef, nodeRid, request, callback) {
+    joinActorEntrySpot(actorRef, target, request, callback) {
       const wire = JSON.parse(request.getString('utf8'));
       assert.equal(wire.actorType, 'player');
       assert.equal(wire.sourceSpotId, 'room-1');
-      assert.equal(wire.spotId, 'node-entry');
+      assert.equal(wire.spotId, 'entry-uuid');
       assert.equal(typeof wire.transferId, 'string');
       assert.equal(wire.phase, 'admission');
       assert.equal(wire.transferState, undefined);
-      events.push(`joinEntry:${String(nodeRid)}:${wire.phase}:${wire.sourceSpotId}`);
+      assert.deepEqual(target, {
+        spot: { spotId: 'entry-uuid', generation: 7n },
+        targetNodeRid: rid('node-entry'),
+        targetNodeGeneration: 3n,
+        authorityOwnerGeneration: 4n,
+        ownerLeaseGeneration: 5n
+      });
+      events.push(`joinEntry:${target.spot.spotId}:${wire.phase}:${wire.sourceSpotId}`);
       callback({
         result: 0,
         joinResultCode: 0,
-        actor: { ...actorRef, nodeRid, generation: entryRef.generation },
-        joinedSpotId: nodeRid,
+        actor: { ...actorRef, nodeRid: target.targetNodeRid, generation: entryRef.generation },
+        joinedSpotId: target.spot.spotId,
         joinEpoch: 8n
       }, [zlink.Message.from('entry-ok')]);
       return true;
@@ -3916,24 +3921,22 @@ test('public cross-node Entry Join reuses the Host relocation owner after admiss
     actorFactories: new Map([['player', PlayerFactory]]),
     joinCoordinator: new framework.ZLinkActorNativeJoinCoordinator({
       node,
-      entrySpotIdProvider: () => 'node-entry',
       completionTableProvider: () => node.completionTable,
-      spotRouteResolver: {
-        async resolve(spotId) {
-          events.push(`resolve:${String(spotId)}`);
-          return {
-            routerChannelId: 'play.route',
-            targetNodeRid: rid('node-entry'),
-            spotId,
-            spotKind: framework.ZLinkSpotKind.Entry,
-            targetSpotGeneration: 7n,
-            targetNodeGeneration: 3n,
-            authorityOwnerGeneration: 4n,
-            targetOwnerId: 'entry-owner',
-            ownerLeaseGeneration: 5n,
-            authorityStoreVersion: 'entry:7'
-          };
-        }
+      entrySpotTargetSelector: async () => {
+        const spotId = 'entry-uuid';
+        events.push(`resolve:${String(spotId)}`);
+        return {
+          routerChannelId: 'play.route',
+          targetNodeRid: rid('node-entry'),
+          spotId,
+          spotKind: framework.ZLinkSpotKind.Entry,
+          targetSpotGeneration: 7n,
+          targetNodeGeneration: 3n,
+          authorityOwnerGeneration: 4n,
+          targetOwnerId: 'entry-owner',
+          ownerLeaseGeneration: 5n,
+          authorityStoreVersion: 'entry:7'
+        };
       },
       sourceTransfer: {},
       actorJoinRelocation: {
@@ -3968,10 +3971,10 @@ test('public cross-node Entry Join reuses the Host relocation owner after admiss
   );
   assert.equal(accepted, true);
   assert.deepEqual(events.slice(0, 2), [
-    'resolve:node-entry',
-    'joinEntry:node-entry:admission:room-1'
+    'resolve:entry-uuid',
+    'joinEntry:entry-uuid:admission:room-1'
   ]);
-  assert.match(events[2], /^relocate:[0-9a-f-]+:node-entry$/);
+  assert.match(events[2], /^relocate:[0-9a-f-]+:entry-uuid$/);
   assert.equal(events[3], 'bind:node-entry');
 });
 
@@ -5282,7 +5285,7 @@ async function localCoordinatorFixture({ entry = false, admissionError } = {}) {
       node, completionTableProvider: () => node.completionTable,
       reportSourceLeaveError(error) { throw error; },
       spotRouteResolver: { async resolve() { return target; } },
-      entrySpotIdProvider: () => 'node-a',
+      entrySpotTargetSelector: async () => target,
       locationLifecycle: { async commitActorMembership() { events.push('store'); } },
       async localSpotJoin(_spot, _actor, _request, commit) {
         events.push('admission');

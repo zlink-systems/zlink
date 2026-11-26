@@ -73,7 +73,7 @@ function fixture({
     spot: { onJoinedActor: joined },
     serial: { execute: (operation) => operation() }
   };
-  const manager = {
+  const manager = Object.assign(Object.create(DefaultZLinkSpotManager.prototype), {
     formalRemoteActorAdmissions: {
       get: () => ({
         state: 'admitted',
@@ -127,7 +127,7 @@ function fixture({
         }
       }
     }
-  };
+  });
   return {
     events,
     completions,

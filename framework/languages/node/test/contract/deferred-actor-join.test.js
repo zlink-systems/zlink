@@ -199,7 +199,12 @@ for (const targetKind of ['entry', 'user']) {
     const submitJoin = async () => {
       const pending =
         targetKind === 'entry'
-          ? serviceRuntime.joinActorEntrySpot(serviceActor.ref, 'node-a', undefined, 5_000)
+          ? serviceRuntime.joinActorEntrySpot(
+              serviceActor.ref,
+              serviceRuntime.tryEntrySpotFence(),
+              undefined,
+              5_000
+            )
           : serviceRuntime.joinActor(
               serviceActor.ref,
               'node-a',

@@ -3085,7 +3085,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const originalRequests: Array<{ id?: bigint; deadlineMs?: number; timeoutMs: number }> = [];
   const capture = (label: string, index: number) => {
     const packet = actorJoinHandoffPacket(index, label);
-    const parts = [Message.from('header:' + label), Message.from(label)];
+    const parts = actorJoinHandoffParts(label);
     try {
       const captured = sourceHandoff.capture(
         'remote',
@@ -4185,7 +4185,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     },
     async lateMessage() {
       const packet = actorJoinHandoffPacket(3, 'late');
-      const parts = [Message.from('header:late'), Message.from('late')];
+      const parts = actorJoinHandoffParts('late');
       try {
         return await sourceHandoff.capture(
           'remote',
@@ -4464,8 +4464,23 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
   };
 }
 
+function actorJoinHandoffParts(label: string): readonly Message[] {
+  return [
+    Message.from(
+      encodeStreamHeader({
+        kind: ZLinkStreamMessageKind.Send,
+        flags: ZLinkStreamHeaderFlags.None,
+        codec: ZLinkStreamCodec.Raw,
+        name: label,
+        metadata: new Map()
+      })
+    ),
+    Message.from(label)
+  ];
+}
+
 function actorJoinHandoffPacket(index: number, label: string) {
-  const parts = [Message.from(`header:${label}`), Message.from(label)];
+  const parts = actorJoinHandoffParts(label);
   try {
     const messageFollowContext = createInitialActorMessageFollowContext(
       {

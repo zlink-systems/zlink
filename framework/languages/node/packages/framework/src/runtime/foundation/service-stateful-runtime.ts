@@ -602,7 +602,8 @@ export class ServiceStatefulRuntime {
     readonly nodeRid: string,
     readonly nodeGeneration: bigint,
     onPendingOperationsChanged?: () => void,
-    private readonly requests?: RequestRuntime
+    private readonly requests?: RequestRuntime,
+    entrySpotId?: string
   ) {
     this.operations = new ServiceTerminalOperationRegistry(
       requests?.operations<ServiceStatefulResult, bigint>() ??
@@ -611,8 +612,8 @@ export class ServiceStatefulRuntime {
         ),
       requests === undefined ? undefined : () => {}
     );
-    this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration);
-    this.registry.createEntrySpot(nodeRid);
+    this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration, entrySpotId);
+    this.registry.createEntrySpot();
     raw.setServiceIngress((record) => this.ingress(record), acceptsStatefulIngress);
   }
 
@@ -721,7 +722,7 @@ export class ServiceStatefulRuntime {
   }
 
   entrySpot(): ServiceSpotState {
-    return this.registry.createEntrySpot(this.nodeRid);
+    return this.registry.createEntrySpot();
   }
 
   createActor(actorId: string, stableType = 'actor'): ServiceActorState {
@@ -2005,7 +2006,7 @@ export class ServiceStatefulRuntime {
       ...targetSpot,
       generation: targetSpotGeneration
     });
-    this.submitActorJoin(pending, actor, targetNodeRid, target, payload, deadlineMs);
+    this.submitActorJoin(pending, actor, target, payload, deadlineMs, false);
     return pending;
   }
 
@@ -2025,7 +2026,7 @@ export class ServiceStatefulRuntime {
       ...targetSpot,
       generation: targetSpotGeneration
     });
-    this.submitActorJoin(pending, actor, targetNodeRid, target, request, deadlineMs, {
+    this.submitActorJoin(pending, actor, target, request, deadlineMs, false, {
       request,
       actorFence,
       local
@@ -2035,26 +2036,19 @@ export class ServiceStatefulRuntime {
 
   joinActorEntrySpot(
     actor: ServiceActorRef,
-    targetNodeRid: string,
+    target: ServiceSpotRouteFence,
     payload: ServiceApplicationPayload | undefined,
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
     const pending = this.operations.register(timeoutMs, 'registry', undefined, deadlineMs);
-    this.submitActorJoin(
-      pending,
-      actor,
-      targetNodeRid,
-      () => this.tryEntrySpotFence(targetNodeRid),
-      payload,
-      deadlineMs
-    );
+    this.submitActorJoin(pending, actor, target, payload, deadlineMs, true);
     return pending;
   }
 
   joinActorEntrySpotCanonical(
     actor: ServiceActorRef,
-    targetNodeRid: string,
+    target: ServiceSpotRouteFence,
     request: ServiceApplicationPayload,
     actorFence: ServiceCanonicalActorJoinCandidate['actorFence'],
     local: ServiceCanonicalActorJoinCandidate['local'],
@@ -2062,15 +2056,11 @@ export class ServiceStatefulRuntime {
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
     const pending = this.operations.register(timeoutMs, 'registry', undefined, deadlineMs);
-    this.submitActorJoin(
-      pending,
-      actor,
-      targetNodeRid,
-      () => this.tryEntrySpotFence(targetNodeRid),
+    this.submitActorJoin(pending, actor, target, request, deadlineMs, true, {
       request,
-      deadlineMs,
-      { request, actorFence, local }
-    );
+      actorFence,
+      local
+    });
     return pending;
   }
 
@@ -5199,10 +5189,10 @@ export class ServiceStatefulRuntime {
   private submitActorJoin(
     pending: ServiceStatefulPendingOperation,
     actor: ServiceActorRef,
-    targetNodeRid: string,
-    target: ServiceSpotRouteFence | undefined | (() => ServiceSpotRouteFence | undefined),
+    target: ServiceSpotRouteFence | undefined,
     payload: ServiceApplicationPayload | undefined,
     deadlineMs: number,
+    entrySpot: boolean,
     canonical?: ServiceCanonicalActorJoinCandidate
   ): void {
     const actorRoute =
@@ -5213,6 +5203,7 @@ export class ServiceStatefulRuntime {
       pending.reply(internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale));
       return;
     }
+    const targetNodeRid = target.targetNodeRid;
     if (canonical !== undefined) {
       this.canonicalActorJoinHandoffs.set(
         pending.id,
@@ -5225,19 +5216,7 @@ export class ServiceStatefulRuntime {
         })
       );
     }
-    const resolveTarget = typeof target === 'function' ? target : () => target;
-    const initialTarget = resolveTarget();
-    const retainedPayload =
-      initialTarget === undefined && payload !== undefined
-        ? { ...payload, payload: copyPayloadBytes(payload.payload) }
-        : payload;
     const encode = () => {
-      const target = initialTarget ?? resolveTarget();
-      if (target === undefined)
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-          'Entry Spot descriptor is unavailable.'
-        );
       return encodeActorJoin28({
         correlation: pending.id,
         actor: {
@@ -5248,7 +5227,7 @@ export class ServiceStatefulRuntime {
           expectedAuthorityOwnerGeneration: actorRoute.authorityOwnerGeneration,
           expectedOwnerLeaseGeneration: actorRoute.ownerLeaseGeneration
         },
-        entry: target.spot.spotId === targetNodeRid,
+        entry: entrySpot,
         targetSpot: {
           id: target.spot.spotId,
           generation: target.spot.generation,
@@ -5257,12 +5236,12 @@ export class ServiceStatefulRuntime {
           expectedAuthorityOwnerGeneration: target.authorityOwnerGeneration,
           expectedOwnerLeaseGeneration: target.ownerLeaseGeneration
         },
-        ...(retainedPayload === undefined ? {} : { payload: retainedPayload })
+        ...(payload === undefined ? {} : { payload })
       }).map((frame) => Buffer.from(frame));
     };
-    let parts: readonly Buffer[] | (() => readonly Buffer[]);
+    let parts: readonly Buffer[];
     try {
-      parts = initialTarget === undefined ? encode : encode();
+      parts = encode();
     } catch (error) {
       this.canonicalActorJoinHandoffs.delete(pending.id);
       pending.replyFailure(error);
@@ -5273,8 +5252,8 @@ export class ServiceStatefulRuntime {
         this.submitRequest(
           pending,
           targetNodeRid,
-          initialTarget!.targetNodeGeneration,
-          typeof parts === 'function' ? parts() : parts,
+          target.targetNodeGeneration,
+          parts,
           Math.max(0, Math.ceil(deadlineMs - performance.now())),
           'actorJoin',
           actor
@@ -5291,8 +5270,7 @@ export class ServiceStatefulRuntime {
       pending.id,
       'actorJoin',
       pending,
-      initialTarget?.targetNodeGeneration ??
-        (typeof target === 'function' ? () => resolveTarget()?.targetNodeGeneration : undefined)
+      target.targetNodeGeneration
     ).then(
       (reply) => this.completeRemoteReply(pending, targetNodeRid, 'actorJoin', actor, reply),
       (error) => {
@@ -6008,7 +5986,15 @@ export class ServiceStatefulRuntime {
       throw new ServiceStaleGenerationError('spot', fence.spot.spotId);
     }
     const spot = this.registry.requireSpot(fence.spot);
-    if (spot.authorityOwnerGeneration !== fence.authorityOwnerGeneration) {
+    if (
+      spot.authorityOwnerGeneration !== fence.authorityOwnerGeneration ||
+      (spot.kind === 'entry' &&
+        !isEntrySpotFence(
+          fence,
+          spot,
+          this.localSessionOwner()?.leaseGeneration ?? this.nodeGeneration
+        ))
+    ) {
       throw new ServiceStaleGenerationError('spot', fence.spot.spotId);
     }
     return spot;
@@ -6038,7 +6024,13 @@ export class ServiceStatefulRuntime {
       );
     }
     if (spot.kind === 'entry') {
-      if (!isEntrySpotFence(fence)) {
+      if (
+        !isEntrySpotFence(
+          fence,
+          spot,
+          this.localSessionOwner()?.leaseGeneration ?? this.nodeGeneration
+        )
+      ) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.SpotMoving,
           `Entry Spot '${fence.spot.spotId}' has an invalid owner fence.`
@@ -6344,26 +6336,19 @@ export class ServiceStatefulRuntime {
       : undefined;
   }
 
-  /**
-   * Entry Spot owner fence: G is the target descriptor's lifecycle generation
-   * (spec 05-location-relocation/01-location-runtime). No descriptor, no fence.
-   */
-  tryEntrySpotFence(targetNodeRid: string): ServiceDirectSpotRouteFence | undefined {
-    const targetNodeGeneration =
-      targetNodeRid === this.nodeRid
-        ? this.nodeGeneration
-        : this.raw.peerLifecycleGeneration(targetNodeRid);
-    if (targetNodeGeneration === undefined) return undefined;
+  /** The selected descriptor route is carried unchanged into the Entry fence. */
+  tryEntrySpotFence(target?: ServiceSpotRouteFence): ServiceDirectSpotRouteFence | undefined {
+    if (target !== undefined) {
+      return { ...target, storeVersion: `entry:${target.targetNodeGeneration}` };
+    }
+    const entry = this.registry.createEntrySpot();
     return {
-      spot: {
-        spotId: targetNodeRid,
-        generation: targetNodeGeneration
-      },
-      targetNodeRid,
-      targetNodeGeneration,
-      authorityOwnerGeneration: targetNodeGeneration,
-      ownerLeaseGeneration: targetNodeGeneration,
-      storeVersion: `entry:${targetNodeGeneration}`
+      spot: entry.ref,
+      targetNodeRid: this.nodeRid,
+      targetNodeGeneration: this.nodeGeneration,
+      authorityOwnerGeneration: entry.authorityOwnerGeneration,
+      ownerLeaseGeneration: this.localSessionOwner()?.leaseGeneration ?? this.nodeGeneration,
+      storeVersion: `entry:${this.nodeGeneration}`
     };
   }
 
@@ -6383,9 +6368,11 @@ export class ServiceStatefulRuntime {
     if (
       local?.kind === 'entry' &&
       sameSpotRef(local.ref, spot) &&
-      targetNodeGeneration === this.nodeGeneration &&
-      requested.authorityOwnerGeneration === local.authorityOwnerGeneration &&
-      isEntrySpotFence(requested)
+      isEntrySpotFence(
+        requested,
+        local,
+        this.localSessionOwner()?.leaseGeneration ?? this.nodeGeneration
+      )
     ) {
       return requested;
     }
@@ -6487,12 +6474,17 @@ export class ServiceStatefulRuntime {
   }
 }
 
-function isEntrySpotFence(fence: ServiceSpotRouteFence): boolean {
+function isEntrySpotFence(
+  fence: ServiceSpotRouteFence,
+  entry: ServiceSpotState,
+  ownerLeaseGeneration: bigint
+): boolean {
   return (
-    fence.spot.spotId === fence.targetNodeRid &&
-    fence.spot.generation === fence.targetNodeGeneration &&
-    fence.authorityOwnerGeneration === fence.targetNodeGeneration &&
-    fence.ownerLeaseGeneration === fence.targetNodeGeneration
+    fence.spot.spotId === entry.ref.spotId &&
+    fence.spot.generation === entry.ref.generation &&
+    fence.targetNodeGeneration === entry.ref.generation &&
+    fence.authorityOwnerGeneration === entry.authorityOwnerGeneration &&
+    fence.ownerLeaseGeneration === ownerLeaseGeneration
   );
 }
 

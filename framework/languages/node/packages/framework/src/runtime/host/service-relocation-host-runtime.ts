@@ -17,6 +17,15 @@ import { inspectRuntime } from '../internal-observation';
 import { encodeActorReply } from '../actors/actor-reply';
 import { ZLinkStreamMessageKind } from '../streams/protocol';
 import {
+  decodeQueuedHandoffPacket,
+  encodeHandoffQueuedMessages,
+  encodeActorAcceptedRecord,
+  handoffSourceFence,
+  isLegacyActorAcceptedRecord,
+  parseHandoffOperationId
+} from '../actors/actor-accepted-record';
+
+import {
   decodeApplicationPayload,
   encodeMultipartPayload,
   decodeMultipartParts,
@@ -28,7 +37,7 @@ import {
 } from '../foundation/service-wire-constants.generated';
 import { OperationTimeoutError } from '../foundation/operation-registry';
 import { durableRequestCanReplay } from '../foundation/durable-service-request';
-import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes } from 'node:crypto';
 import {
   type RoutingId,
@@ -158,13 +167,11 @@ import {
   M6bServiceWireCommand,
   decodeMaintenanceReplyRelay,
   decodeMaintenanceReplyRelayAck,
-  decodeServiceWireFrozenRecord,
   decodeSessionRelocationRoute,
   decodeSessionRelocationSeal,
   decodeSessionRelocationSealed,
   encodeMaintenanceReplyRelay,
   encodeMaintenanceReplyRelayAck,
-  encodeServiceWireFrozenActorApplicationRecord,
   encodeSessionRelocationRoute,
   encodeSessionRelocationSeal,
   encodeSessionRelocationSealed,
@@ -210,8 +217,8 @@ import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../
 import type { DefaultZLinkSpotManager } from '../spots';
 import type { ZLinkSpotActivation } from '../spots/spot-activation-state';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import { entrySpotRouteTarget } from '../spots/spot-routing-internal';
 import { createProviderInstance } from '../spots/spot-provider';
-import { decodeHandoffBacklog } from '../spots/spot-remote-codec';
 import { committedActorOwnerFence, type ZLinkActorTransferRuntime } from './actor-transfer-runtime';
 import { BoundedReplayMap } from './bounded-replay-map';
 import {
@@ -226,6 +233,8 @@ import {
   ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE,
   type ZLinkInternalRelocationIntegrityFaultGate
 } from './relocation-integrity-fault-gate';
+
+export { decodeQueuedHandoffPacket, encodeHandoffQueuedMessages };
 import {
   captureRelocationAdapterState,
   restoreRelocationAdapterState,
@@ -2446,9 +2455,20 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       state.meshName ?? meshName ?? '',
       state.actorType ?? authority.allocation.stableType
     );
+    const participant = {
+      key: encodeAuthorityKey('actor', state.actorId).value,
+      objectKind: 'actor',
+      objectGeneration: authority.objectGeneration
+    } as const;
+    const source = () => ({
+      ownerId: authority.ownerId,
+      leaseGeneration: authority.ownerLeaseGeneration,
+      nodeRid: authority.allocation.descriptor.rid,
+      nodeGeneration: authority.allocation.descriptorLifecycleGeneration
+    });
     let ownSession: SourceActorSession | undefined;
     return {
-      authorityKey: encodeAuthorityKey('actor', state.actorId).value,
+      authorityKey: participant.key,
       objectKind: 'actor',
       stableType: authority.allocation.stableType,
       objectGeneration: authority.objectGeneration,
@@ -2497,7 +2517,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
                     prepared.prepared.target.serviceWireRelocation.session.bindingGeneration
                 }
               }),
-          queuedMessages: encodeHandoffQueuedMessages(prepared?.prepared.handoffBacklog ?? []),
+          queuedMessages: (prepared?.prepared.handoffBacklog ?? []).map((packet) => ({
+            sequence: BigInt(packet.index) + 1n,
+            payload: encodeActorAcceptedRecord(participant, packet, source).canonicalBytes
+          })),
           timers: []
         };
       },
@@ -2514,6 +2537,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           return;
         const failures: unknown[] = [];
         try {
+          const targetRoute = targetMembership ?? entrySpotRouteTarget(meshName, target);
+          if (targetRoute === undefined) {
+            throw new Error(`Relocation target RouteMesh '${meshName}' has no Entry Spot.`);
+          }
           const committedAuthority = followAuthorities.get(
             encodeAuthorityKey('actor', state.actorId).value
           );
@@ -2524,12 +2551,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             nodeRid: target.rid
           };
           await ownSession.prepared.commit(
-            targetMembership ?? {
-              routerChannelId: meshName,
-              targetNodeRid: target.rid,
-              spotId: (target.entrySpotId ?? String(target.rid)) as RoutingId,
-              spotKind: ZLinkSpotKind.Entry
-            },
+            targetRoute,
             targetActorRef,
             committedAuthority === undefined
               ? null
@@ -2808,17 +2830,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     // The captured payload stays in source memory: this copy is the only
     // handoff original until the cutover submit terminal and the
     // retransmission window end (spec 28 §4.2).
-    const canonicalEnvelope = canonicalizeCapturedHandoffBacklog(
-      captured.envelope,
-      coordinator,
-      targetFence
-    );
     const actorJoinProfile = this.sourceActorJoinProfiles.get(captured.envelope.aggregateId);
     const transportEnvelope =
       actorJoinProfile?.canonicalRecovery === undefined
-        ? canonicalEnvelope
+        ? captured.envelope
         : appendCanonicalActorJoinRecovery(
-            canonicalEnvelope,
+            captured.envelope,
             actorJoinProfile,
             coordinator,
             primary
@@ -2923,11 +2940,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             );
           }
           for (const packet of session.prepared.takeRelocationRelay()) {
-            const frozenRecord = canonicalRelayFrozenRecord(
-              participant,
-              packet,
-              coordinator,
-              targetFence
+            const frozenRecord = encodeActorAcceptedRecord(participant, packet, () =>
+              coordinatorSource(coordinator)
             );
             const data = {
               kind: 'data',
@@ -4014,18 +4028,25 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const frozen = request.frozenRecord;
     const target = frozen.target;
     const payload = frozen.applicationPayload;
-    const preparedTarget = stage.offer.prepare.target;
+    // Boundary records retain the accepting node's fence. The original
+    // Node JSON profile wrote the prepared target's fence instead.
+    const owner = isLegacyActorAcceptedRecord(frozen)
+      ? stage.offer.prepare.target
+      : {
+          nodeRid: request.coordinator.nodeRid,
+          nodeGeneration: request.coordinator.nodeGeneration,
+          ownerLeaseGeneration: request.coordinator.leaseGeneration
+        };
     if (
       request.object.kind !== 'actor' ||
       target?.kind !== 'actor' ||
       payload === undefined ||
-      payload.packetName !== '__zlink.actor.handoff.accepted' ||
       target.actorId !== request.object.actorId ||
       target.generation !== request.object.objectGeneration ||
-      target.targetNodeRid !== preparedTarget.nodeRid ||
-      target.targetNodeGeneration !== preparedTarget.nodeGeneration ||
+      !routingIdsEqual(target.targetNodeRid, owner.nodeRid) ||
+      target.targetNodeGeneration !== owner.nodeGeneration ||
       target.authorityOwnerGeneration !== request.object.expectedAuthorityOwnerGeneration ||
-      target.ownerLeaseGeneration !== preparedTarget.ownerLeaseGeneration
+      target.ownerLeaseGeneration !== owner.ownerLeaseGeneration
     ) {
       throw new Error('Relocation data does not target the exact temporary Actor queue.');
     }
@@ -4045,11 +4066,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     request: ServiceMaintenanceRelocationData,
     signal?: AbortSignal
   ): Promise<void> {
-    const payload = request.frozenRecord.applicationPayload!;
     await stage.owner.replayRelayedMessage(
       stage.staging,
       encodeAuthorityKey('actor', (request.object as { actorId: string }).actorId).value,
-      { sequence: 0n, payload: Buffer.from(payload.bytes) },
+      { sequence: 0n, payload: request.frozenRecord.canonicalBytes },
       signal
     );
   }
@@ -5670,13 +5690,16 @@ function actorRootTargetMembership(
 
 class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> {
   private readonly joinAdmissionId: string;
+  private readonly actorSourceOwnerId?: string;
 
   constructor(
     private readonly options: ZLinkHostRelocationOptions,
     private readonly meshName: string,
     private readonly envelope: ServiceRelocationEnvelope
   ) {
-    this.joinAdmissionId = actorJoinAdmissionIdentity(envelope);
+    const recovery = canonicalActorJoinRecovery(envelope.participants);
+    this.joinAdmissionId = recovery?.request.handoffId ?? envelope.aggregateId;
+    this.actorSourceOwnerId = recovery?.source.ownerId;
   }
 
   async createHidden(
@@ -5965,9 +5988,24 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       await this.requireSpotManager().restoreCanonicalActorJoinRecovery(recovery);
       return;
     }
-    const packet = decodeQueuedHandoffPacket(message);
-    const state = this.requireActorManager().getState(hidden.actor.context.actorId);
-    if (state === undefined) throw new Error('Relocated Actor state is not staged.');
+    const last = hidden.replayPackets.at(-1);
+    const sequence =
+      message.sequence === 0n
+        ? (last === undefined
+            ? (hidden.participant.queuedMessages.at(-1)?.sequence ?? 0n)
+            : BigInt(last.index) + 1n) + 1n
+        : message.sequence;
+    const packet = decodeQueuedHandoffPacket(
+      { ...message, sequence },
+      this.actorSourceOwnerId,
+      hidden.actor.context.actorId
+    );
+    if (
+      packet.messageFollowContext.objectGeneration !==
+      hidden.participant.objectGeneration.toString()
+    ) {
+      throw new Error('Relocation Actor frozen record names a different generation.');
+    }
     hidden.replayPackets.push(packet);
   }
 
@@ -6200,75 +6238,6 @@ interface RelocationTerminalCompletion {
 
 type RelocationTerminalDelivery = 'terminalReceived' | 'alreadyTerminal' | 'sourceLeaseExpired';
 
-export function decodeQueuedHandoffPacket(
-  message: ServiceRelocationQueuedMessage
-): ZLinkActorHandoffPacket {
-  const payload = Buffer.from(message.payload);
-  const frozen = isCanonicalFrozenRecord(payload)
-    ? decodeServiceWireFrozenRecord(payload)
-    : undefined;
-  const value = JSON.parse(
-    Buffer.from(frozen?.applicationPayload?.bytes ?? payload).toString('utf8')
-  ) as Record<string, unknown>;
-  const index = value.index;
-  if (!Number.isSafeInteger(index) || (index as number) < 0) {
-    throw new TypeError('Relocation Actor packet index is invalid.');
-  }
-  const messageFollowOrigin = decodeQueuedMessageFollowOrigin(value.messageFollowOrigin);
-  const decoded = decodeHandoffBacklog([
-    {
-      ...value,
-      index: 0,
-      ...(messageFollowOrigin === undefined ? {} : { messageFollowOrigin })
-    }
-  ])[0]!;
-  const requestSource =
-    decoded.source === undefined ? undefined : handoffSourceFence(decoded.source);
-  if (
-    messageFollowOrigin !== undefined &&
-    requestSource !== undefined &&
-    routingIdsEqual(messageFollowOrigin.sourceNodeRid, requestSource.nodeRid)
-  ) {
-    return {
-      ...decoded,
-      index: index as number,
-      messageFollowOrigin: {
-        ...messageFollowOrigin,
-        requestSource
-      }
-    };
-  }
-  return { ...decoded, index: index as number };
-}
-
-/**
- * The JSON relocation envelope remains the Stage 1 container, but Actor
- * backlog entries are frozen service-wire records before it leaves source
- * ownership. This makes correlation, reply route and canonical payload
- * validation part of the captured record rather than an ad-hoc JSON packet.
- */
-function canonicalizeCapturedHandoffBacklog(
-  envelope: ServiceRelocationEnvelope,
-  coordinator: ServiceWireRelocationCoordinatorFence,
-  target: ServiceWireRelocationTarget
-): ServiceRelocationEnvelope {
-  return {
-    ...envelope,
-    participants: envelope.participants.map((participant) =>
-      participant.objectKind !== 'actor'
-        ? participant
-        : {
-            ...participant,
-            queuedMessages: participant.queuedMessages.map((message) => ({
-              ...message,
-              payload: canonicalQueuedFrozenRecord(participant, message, coordinator, target)
-                .canonicalBytes
-            }))
-          }
-    )
-  };
-}
-
 function appendCanonicalActorJoinRecovery(
   envelope: ServiceRelocationEnvelope,
   profile: SourceActorJoinProfile,
@@ -6359,15 +6328,6 @@ function appendCanonicalActorJoinRecovery(
   if (!attachment.attached)
     throw new Error('Canonical Actor Join recovery Actor participant is missing.');
   return { ...envelope, participants };
-}
-
-function isCanonicalFrozenRecord(payload: Uint8Array): boolean {
-  try {
-    decodeServiceWireFrozenRecord(payload);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function relocationWireId(value: string): { readonly high: bigint; readonly low: bigint } {
@@ -6539,17 +6499,6 @@ function sameRequestSource(
     routingIdsEqual(left.nodeRid, right.nodeRid) &&
     left.nodeGeneration === right.nodeGeneration
   );
-}
-
-function handoffSourceFence(
-  value: NonNullable<ZLinkActorHandoffPacket['source']>
-): ServiceWireRequestSourceFence {
-  return {
-    ownerId: value.ownerId,
-    leaseGeneration: BigInt(value.ownerLeaseGeneration),
-    nodeRid: decodeRoutingId(value.nodeRid, value.nodeRidHex),
-    nodeGeneration: BigInt(value.nodeGeneration)
-  };
 }
 
 function maintenanceReplyRelay(
@@ -6795,16 +6744,6 @@ function validateTargetOneWayControl(
   }
 }
 
-function canonicalRelayFrozenRecord(
-  participant: ServiceRelocationParticipant,
-  packet: ZLinkActorHandoffPacket,
-  coordinator: ServiceWireRelocationCoordinatorFence,
-  target: ServiceWireRelocationTarget
-) {
-  const message = encodeHandoffQueuedMessages([packet])[0]!;
-  return canonicalQueuedFrozenRecord(participant, message, coordinator, target);
-}
-
 function raceAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise<T>((resolve, reject) => {
@@ -6821,69 +6760,6 @@ function raceAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
       }
     );
   });
-}
-
-function canonicalQueuedFrozenRecord(
-  participant: ServiceRelocationParticipant,
-  message: ServiceRelocationQueuedMessage,
-  coordinator: ServiceWireRelocationCoordinatorFence,
-  target: ServiceWireRelocationTarget
-) {
-  if (participant.objectKind !== 'actor') {
-    throw new Error('Only Actor object-mailbox participants can contain accepted packets.');
-  }
-  const packet = decodeQueuedHandoffPacket(message);
-  const identity = decodeAuthorityKey({ value: participant.key } as ZLinkAuthorityKey).globalId;
-  const source =
-    packet.source === undefined
-      ? coordinatorSource(coordinator)
-      : handoffSourceFence(packet.source);
-  const operationId = parseHandoffOperationId(packet.messageFollowContext.operationId);
-  if (packet.returnResponse && packet.source === undefined) {
-    throw new Error('Captured Actor request has no exact request-source fence.');
-  }
-  if (
-    !packet.returnResponse &&
-    packet.source === undefined &&
-    packet.remoteBoundSessionTarget !== undefined
-  ) {
-    // A durable frozen record is permitted only for a lease-backed source.
-    // Work tied to a Session connection's lifetime drains before Captured,
-    // so freezing it under the coordinator's fence is a protocol error.
-    throw new Error('Captured connection-bound Actor send cannot enter a relocation envelope.');
-  }
-  return encodeServiceWireFrozenActorApplicationRecord({
-    source,
-    target: {
-      actorId: identity,
-      objectGeneration: participant.objectGeneration,
-      nodeRid: target.nodeRid,
-      nodeGeneration: target.nodeGeneration,
-      authorityOwnerGeneration: participant.authorityOwnerGeneration,
-      ownerLeaseGeneration: target.ownerLeaseGeneration
-    },
-    operationId,
-    ...(packet.returnResponse ? { replyRouteId: BigInt(packet.source!.replyRouteId) } : {}),
-    payload: {
-      packetName: '__zlink.actor.handoff.accepted',
-      contentType: ZlinkStreamContentType.Json,
-      bytes: message.payload
-    }
-  });
-}
-
-function parseHandoffOperationId(value: string): { readonly high: bigint; readonly low: bigint } {
-  if (!/^[0-9a-f]{32}$/.test(value)) {
-    throw new Error('Captured Actor operation ID is invalid.');
-  }
-  const operation = {
-    high: BigInt(`0x${value.slice(0, 16)}`),
-    low: BigInt(`0x${value.slice(16)}`)
-  };
-  if (operation.high === 0n && operation.low === 0n) {
-    throw new Error('Captured Actor operation ID must not be zero.');
-  }
-  return operation;
 }
 
 function stringifyWire(value: unknown): string {
@@ -7055,74 +6931,6 @@ function replyRelayPendingKey(
     encodeRoutingIdStorageHex(ackTargetNodeRid),
     replyRelayIdentityKey(value)
   ]);
-}
-
-export function encodeHandoffQueuedMessages(
-  backlog: readonly ZLinkActorHandoffPacket[]
-): readonly ServiceRelocationQueuedMessage[] {
-  return backlog.map((packet) => ({
-    sequence: BigInt(packet.index) + 1n,
-    payload: Buffer.from(
-      JSON.stringify({
-        ...packet,
-        ...(packet.messageFollowOrigin === undefined
-          ? {}
-          : {
-              messageFollowOrigin: {
-                sourceNodeRid: String(packet.messageFollowOrigin.sourceNodeRid),
-                sourceNodeRidHex: encodeRoutingIdStorageHex(
-                  packet.messageFollowOrigin.sourceNodeRid
-                ),
-                originalOperation: {
-                  high: packet.messageFollowOrigin.originalOperation.high.toString(),
-                  low: packet.messageFollowOrigin.originalOperation.low.toString()
-                },
-                originalReplyRouteId: packet.messageFollowOrigin.originalReplyRouteId.toString()
-              }
-            })
-      }),
-      'utf8'
-    )
-  }));
-}
-
-function decodeQueuedMessageFollowOrigin(value: unknown) {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'object' || value === null) {
-    throw new TypeError('Relocation Actor Message Follow origin is invalid.');
-  }
-  const origin = value as Record<string, unknown>;
-  const operation = origin.originalOperation;
-  if (
-    typeof origin.sourceNodeRid !== 'string' ||
-    origin.sourceNodeRid.length === 0 ||
-    typeof operation !== 'object' ||
-    operation === null
-  ) {
-    throw new TypeError('Relocation Actor Message Follow origin is invalid.');
-  }
-  const operationRecord = operation as Record<string, unknown>;
-  const high = queuedMessageU64(operationRecord.high, 'originalOperation.high');
-  const low = queuedMessageU64(operationRecord.low, 'originalOperation.low');
-  if (high === 0n && low === 0n) {
-    throw new TypeError('Relocation Actor Message Follow operation must not be zero.');
-  }
-  return {
-    sourceNodeRid: decodeRoutingId(origin.sourceNodeRid, origin.sourceNodeRidHex),
-    originalOperation: { high, low },
-    originalReplyRouteId: queuedMessageU64(origin.originalReplyRouteId, 'originalReplyRouteId')
-  };
-}
-
-function queuedMessageU64(value: unknown, field: string): bigint {
-  if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(value)) {
-    throw new TypeError(`Relocation Actor Message Follow ${field} is invalid.`);
-  }
-  const result = BigInt(value);
-  if (result > UINT64_MAX) {
-    throw new TypeError(`Relocation Actor Message Follow ${field} is outside u64.`);
-  }
-  return result;
 }
 
 function toServiceTimer(

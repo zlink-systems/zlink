@@ -42,6 +42,7 @@ import type {
   ServiceDirectSpotRouteFence,
   ServiceInstanceRouteFence,
   ServiceInstanceColdActivationTarget,
+  ServiceSpotRouteFence,
   ServiceUserSpotCloseRecord,
   ServiceUserSpotCreateRecord
 } from '../../foundation/service-stateful-wire-codec';
@@ -416,13 +417,13 @@ export interface ZLinkBackendMeshNode {
   ): MeshOperationId;
   joinActorEntrySpot(
     actor: ZLinkBackendActorRef,
-    targetNodeRid: unknown,
+    target: ServiceSpotRouteFence,
     request: ServiceApplicationPayload,
     timeoutMs?: number
   ): MeshOperationId;
   joinActorEntrySpotCanonical(
     actor: ZLinkBackendActorRef,
-    targetNodeRid: unknown,
+    target: ServiceSpotRouteFence,
     request: ServiceApplicationPayload,
     actorFence: {
       readonly targetNodeGeneration: bigint;
@@ -902,6 +903,7 @@ export interface ZLinkMeshBackendAdapter {
       readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
       readonly infrastructureTaskRunner?: import('../../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner;
       readonly peerAdmissionSealed?: () => boolean;
+      readonly entrySpotId?: string;
     }
   ): ZLinkBackendMeshNode;
 }
