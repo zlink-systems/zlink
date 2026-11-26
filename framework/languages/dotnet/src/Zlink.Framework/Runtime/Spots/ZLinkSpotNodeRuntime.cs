@@ -78,12 +78,14 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             messageFollowIngress.SetActorMessageFollowIngressAdmission(ingress =>
                 ZLinkActorHandoffIngress.CanAdmitStaleManagedIngress(runtime, ingress)
             );
-            messageFollowIngress.SetActorMessageFollowIngressHandler(parts =>
-                ZLinkActorHandoffIngress.TryCaptureOrFollowStaleManagedIngress(
-                    runtime,
-                    parts,
-                    receiverMeshName
-                )
+            messageFollowIngress.SetActorMessageFollowIngressHandler(
+                (ingress, parts) =>
+                    ZLinkActorHandoffIngress.TryCaptureOrFollowStaleManagedIngress(
+                        runtime,
+                        parts,
+                        receiverMeshName,
+                        ingress
+                    )
             );
         }
         if (node is IZLinkBackendMessageFollowNotifications messageFollowNotifications)
@@ -1319,8 +1321,15 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     public bool ConnectPeerAuto(
         RoutingId? peerRid,
         string endpoint,
-        string expectedSecurityIdentity
-    ) => _peerConnector.ConnectPeerAuto(peerRid, endpoint, expectedSecurityIdentity);
+        string expectedSecurityIdentity,
+        ulong expectedLifecycleGeneration
+    ) =>
+        _peerConnector.ConnectPeerAuto(
+            peerRid,
+            endpoint,
+            expectedSecurityIdentity,
+            expectedLifecycleGeneration
+        );
 
     internal void ObservePeerExpectation(ZLinkAutoConnectTarget target)
     {

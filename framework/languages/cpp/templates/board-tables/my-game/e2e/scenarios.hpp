@@ -348,7 +348,7 @@ inline Continuity in_progress (Client &a, Client &b)
     require (before.turnSeat == 1, "Second player must own turn");
     return {ah, bh, before};
 }
-inline void reconnect (const std::string &endpoint)
+inline void reconnect (const std::string &endpoint, World &fresh_world)
 {
     const auto id = unique_id (), table_id = "table-" + id, player = "p2-" + id;
     Client a (endpoint, "p1-" + id, table_id), b (endpoint, player, table_id);
@@ -356,7 +356,7 @@ inline void reconnect (const std::string &endpoint)
     const auto before = b.info (), a_info = a.info ();
     b.close ();
     Client replacement (endpoint, player, table_id);
-    const auto view = replacement.join ();
+    const auto view = replacement.join (true);
     const auto after = replacement.info ();
     require (after.sessionId != before.sessionId && after.actorId == before.actorId
                && after.objectGeneration == before.objectGeneration,
@@ -367,6 +367,19 @@ inline void reconnect (const std::string &endpoint)
     settle (a, replacement, state.a, state.b, Bets::continuity_first, Bets::continuity_second);
     a.close ();
     replacement.close ();
+
+    const auto fresh_endpoint = fresh_world.start ();
+    Client stale (fresh_endpoint, player, table_id);
+    stale.send (JoinTableRequest{player, table_id, true});
+    const auto rejection = stale.next<ActionRejected> ();
+    require (rejection.reason == Rules::not_seated && rejection.retryAfterMs == 0,
+             "Reconnect accepted a seat missing from the fresh deployment");
+    stale.close ();
+    Client fresh (fresh_endpoint, a.player_id, table_id);
+    const auto joined = fresh.join ();
+    require (joined.yourSeat == 0 && joined.seats.size () == 1,
+             "Rejected reconnect left a seat in the table");
+    fresh.close ();
 }
 inline void update (const std::string &endpoint, World &world)
 {

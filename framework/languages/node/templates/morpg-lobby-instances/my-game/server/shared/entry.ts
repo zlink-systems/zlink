@@ -23,7 +23,8 @@ export class Entry implements ZLinkEntrySpot<Player> {
     const id = partyId;
     if (create) {
       const result = await this.spots.getOrCreate(id, Names.party).inMesh(Names.mesh).submit();
-      if (result.state === ZLinkSpotCreateState.Rejected) throw new Error('Party creation rejected');
+      if (result.state === ZLinkSpotCreateState.Rejected)
+        throw new Error('Party creation rejected');
     }
     actor.context.joinSpot(id, new PartyJoin(partyId, create)).defer();
   }

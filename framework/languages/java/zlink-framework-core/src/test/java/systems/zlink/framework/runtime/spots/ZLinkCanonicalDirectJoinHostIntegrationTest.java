@@ -19,6 +19,12 @@ import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locationprovider.ZLinkStorePut;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
+import systems.zlink.framework.locationprovider.ZLinkStoreVersionCondition;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
@@ -296,19 +302,50 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                     .read(ZLinkAuthorityKeyCodec.actor(ACTOR_ID), OPEN)
                                     .toCompletableFuture()
                                     .get());
-            // Authority owner generations are provider-wide monotonic
-            // allocations, not per-object source + 1 values. Advance the
-            // provider sequence before this Actor commits at the target so
-            // command 29 must carry and accept a non-adjacent generation.
-            for (int index = 0; index < 3; index++) {
-                assertInstanceOf(
-                        ZLinkActorCreateResult.Created.class,
-                        sourceHost
-                                .actorManager()
-                                .create("generation-gap-" + index, ACTOR_TYPE)
-                                .submit()
-                                .toCompletableFuture()
-                                .get());
+            // A prior allocation can advance this Actor's counter without changing current
+            // authority.
+            var ownerCounter =
+                    new ZLinkStoreKey("zlink:v12:authority-owner-counter\0actor\0" + ACTOR_ID);
+            var currentCounter =
+                    assertInstanceOf(
+                            ZLinkStoreReadFound.class,
+                            locationStore
+                                    .read(ownerCounter, () -> false)
+                                    .toCompletableFuture()
+                                    .get());
+            long nextOwnerGeneration = sourceAuthority.authorityOwnerGeneration() + 4;
+            assertInstanceOf(
+                    ZLinkStoreWriteApplied.class,
+                    locationStore
+                            .write(
+                                    new ZLinkStoreWriteRequest(
+                                            List.of(
+                                                    new ZLinkStoreVersionCondition(
+                                                            ownerCounter,
+                                                            currentCounter.value().version())),
+                                            List.of(
+                                                    new ZLinkStorePut(
+                                                            ownerCounter,
+                                                            Long.toString(nextOwnerGeneration)
+                                                                    .getBytes(
+                                                                            StandardCharsets
+                                                                                    .US_ASCII),
+                                                            null))),
+                                    () -> false)
+                            .toCompletableFuture()
+                            .get());
+
+            if (scenario == Scenario.RELOCATE_BEFORE_SOURCE_LEAVE) {
+                for (int index = 0; index < 3; index++) {
+                    assertInstanceOf(
+                            ZLinkActorCreateResult.Created.class,
+                            sourceHost
+                                    .actorManager()
+                                    .create("source-inventory-" + index, ACTOR_TYPE)
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .get());
+                }
             }
 
             var sourceRegistration = sourceOptions.registration().meshNodes().getFirst();
@@ -491,19 +528,27 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         }
 
                         @Override
-                        public ZLinkSpotRetireControl.TargetProfile applyTargetProfile(
-                                ZLinkSpotRetireControl.StageRequest request,
-                                long defaultActorSpotGeneration) {
+                        public CompletionStage<ZLinkSpotRetireControl.TargetProfile>
+                                applyTargetProfile(
+                                        ZLinkSpotRetireControl.TargetProfile targetProfile,
+                                        java.util.function.Supplier<CompletionStage<Void>>
+                                                awaitShell) {
                             try {
-                                var profile =
-                                        endpoint.applyTargetProfile(
-                                                request, defaultActorSpotGeneration);
-                                EVENTS.add(
-                                        "target.profile:"
-                                                + profile.actorSpotGeneration()
-                                                + ":"
-                                                + profile.actorSpotKind());
-                                return profile;
+                                return endpoint.applyTargetProfile(targetProfile, awaitShell)
+                                        .whenComplete(
+                                                (profile, failure) -> {
+                                                    if (failure == null) {
+                                                        EVENTS.add(
+                                                                "target.profile:"
+                                                                        + profile
+                                                                                .actorSpotGeneration()
+                                                                        + ":"
+                                                                        + profile.actorSpotKind());
+                                                    } else {
+                                                        EVENTS.add(
+                                                                "target.profile.failed:" + failure);
+                                                    }
+                                                });
                             } catch (RuntimeException failure) {
                                 EVENTS.add("target.profile.failed:" + failure);
                                 throw failure;
@@ -947,9 +992,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 verifyDuplicateLeftPreservesRefreshedFollow(sourceActors, sourceRef, link);
                 return;
             }
-            assertTrue(
-                    link.lastLeft.currentAuthorityOwnerGeneration()
-                            > sourceAuthority.authorityOwnerGeneration() + 1,
+            assertEquals(
+                    nextOwnerGeneration,
+                    link.lastLeft.currentAuthorityOwnerGeneration(),
                     "command 29 must preserve the Store-issued owner generation");
             var savedWork =
                     ZLinkServiceRelocationEnvelopeCodec.decode(
@@ -1204,7 +1249,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             .destroy(
                                     sourceHost
                                             .actorDirectory()
-                                            .find("generation-gap-" + index)
+                                            .find("source-inventory-" + index)
                                             .toCompletableFuture()
                                             .get(4, TimeUnit.SECONDS)
                                             .orElseThrow())
@@ -2116,7 +2161,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             actors.publishRelocatedActor(
                     (ZLinkActorRuntime.PreparedTransferredActor) actor,
                     request.targetSpotId(),
-                    targetOwnerGeneration);
+                    targetOwnerGeneration,
+                    null);
         }
 
         @Override

@@ -19,6 +19,8 @@ internal interface IZLinkAutoConnectExecutor
     bool Disconnect(ZLinkAutoConnectTarget target);
 
     void RefreshTarget(ZLinkAutoConnectTarget target) { }
+
+    void ForgetTarget(ZLinkAutoConnectTarget target) { }
 }
 
 /// <summary>
@@ -485,7 +487,7 @@ internal sealed class ZLinkAutoConnectReconciler
             return;
         }
 
-        var connectableDesired = await _lane
+        var desiredUpdate = await _lane
             .RunAsync(() =>
             {
                 if (_storeFailed)
@@ -516,6 +518,13 @@ internal sealed class ZLinkAutoConnectReconciler
                 {
                     foreach (var (key, target) in _lastDesired)
                         selected.TryAdd(key, target);
+                }
+                List<ZLinkAutoConnectTarget>? forgottenTargets = null;
+                foreach (var (key, target) in _lastDesired)
+                {
+                    if (selected.ContainsKey(key) || _active.ContainsKey(key))
+                        continue;
+                    (forgottenTargets ??= []).Add(target);
                 }
                 _lastDesired = selected;
                 // Membership snapshot for fail-fast target classification on the
@@ -559,10 +568,19 @@ internal sealed class ZLinkAutoConnectReconciler
                     _retainedMemberRids = retained;
                 }
 
-                return selected;
+                return (Selected: selected, Forgotten: forgottenTargets);
             })
             .ConfigureAwait(false);
-        await ReconcileConnectionsAsync(connectableDesired, peer).ConfigureAwait(false);
+        if (desiredUpdate.Forgotten is { } forgottenTargets)
+        {
+            foreach (var target in forgottenTargets)
+            {
+                if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                    return;
+                _executor.ForgetTarget(target);
+            }
+        }
+        await ReconcileConnectionsAsync(desiredUpdate.Selected, peer).ConfigureAwait(false);
     }
 
     private async ValueTask ReconcileConnectionsAsync(

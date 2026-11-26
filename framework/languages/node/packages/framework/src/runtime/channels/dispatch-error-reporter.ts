@@ -80,7 +80,10 @@ export class ZLinkDispatchErrorReporter {
       errorReason: normalized.reason,
       errorAction: normalized.action,
       errorType: errorInfo.errorType,
-      errorMessage: errorInfo.errorMessage,
+      errorMessage:
+        normalized.reason === ZLinkDispatchErrorReason.PayloadEncodeFailed
+          ? (errorInfo.errorCauseMessage ?? errorInfo.errorMessage)
+          : errorInfo.errorMessage,
       errorCauseType: errorInfo.errorCauseType,
       errorCauseMessage: errorInfo.errorCauseMessage,
       severity: normalized.severity

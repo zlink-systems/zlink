@@ -1130,7 +1130,7 @@ final class ZLinkProviderDescriptorRepository {
         return ZLinkOpaqueRecordKey.of("mesh-node", meshName, rid.toHex());
     }
 
-    private static String meshPrefix(String meshName) {
+    static String meshPrefix(String meshName) {
         return ZLinkOpaqueRecordKey.of("mesh-node", meshName).value() + "\0";
     }
 

@@ -561,7 +561,8 @@ class mesh_node_runtime_t
     struct remote_actor_join_state_t;
 
     task_t<actor_join_reply_t>
-    join_remote_application_actor_to_spot (std::shared_ptr<remote_actor_join_state_t> state);
+    join_remote_application_actor_to_spot (std::shared_ptr<remote_actor_join_state_t> state,
+                                           std::optional<observed_spot_authority_t> observed);
     task_t<actor_join_reply_t>
     admit_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<actor_join_reply_t>
@@ -582,6 +583,7 @@ class mesh_node_runtime_t
                                                std::uint64_t operation_high,
                                                std::uint64_t operation_low,
                                                const result_t<actor_join_reply_t> &joined);
+    void assign_remote_actor_join_operation_id (remote_actor_join_state_t &state);
     task_t<actor_join_reply_t> fail_remote_actor_join (const remote_actor_join_state_t &state,
                                                        const result_t<actor_join_reply_t> &failed,
                                                        std::string message);

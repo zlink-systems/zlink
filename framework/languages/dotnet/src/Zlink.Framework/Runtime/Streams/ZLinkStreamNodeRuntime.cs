@@ -11,6 +11,7 @@ namespace Zlink.Framework.Runtime.Streams;
 internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 {
     private readonly ZLinkStreamSessionTable _sessions;
+    private readonly ZLinkStreamSessionLiveness.Reader _readerLiveness;
     private readonly ZLinkSessionSerialExecutor _sessionIngress;
     private readonly ZLinkSessionSerialExecutor _controlIngress;
     private readonly CancellationTokenSource _stopSource = new();
@@ -67,6 +68,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 )
             );
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _readerLiveness = new ZLinkStreamSessionLiveness.Reader(_timeProvider);
         _transport = transport;
         _maxMessageSize = maxMessageSize;
         var runtime = services.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -88,7 +90,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             _timeProvider,
             actorDispatchEnabled,
             _runtime.ErrorSink,
-            _livenessOptions
+            _livenessOptions,
+            _readerLiveness
         );
     }
 
@@ -305,9 +308,13 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 break;
             RoutingId? routingId = null;
             ZLinkBackendStreamReceive? received = null;
-            ZLinkApplicationJobQueueLease? admission = await _applicationJobQueue
-                .AcquireAsync(stopToken, ZLinkApplicationJobOrigin.Remote)
-                .ConfigureAwait(false);
+            var permit = _applicationJobQueue.AcquireAsync(
+                stopToken,
+                ZLinkApplicationJobOrigin.Remote
+            );
+            if (!permit.IsCompleted)
+                permit = _readerLiveness.WaitForPermitAsync(permit);
+            ZLinkApplicationJobQueueLease? admission = await permit.ConfigureAwait(false);
             try
             {
                 await _receivePoller!.ResumeAsync().ConfigureAwait(false);

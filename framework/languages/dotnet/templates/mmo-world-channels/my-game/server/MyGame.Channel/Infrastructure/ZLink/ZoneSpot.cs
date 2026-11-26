@@ -67,8 +67,8 @@ public sealed class ZoneSpot(
     }
 
     public ValueTask ShowPlayersAsync(PlayerActor actor) =>
-        actor.Context.BoundSession
-            .Send(
+        actor
+            .Context.BoundSession.Send(
                 new ChannelView(
                     GameNames.Channel(Context.SpotId),
                     _playerIds.OrderBy(playerId => playerId, StringComparer.Ordinal).ToArray()
@@ -103,13 +103,10 @@ public sealed class ZoneRelocation : IZLinkSpotRelocationAdapter<ZoneSpot>
             JsonSerializer.SerializeToUtf8Bytes(new ZoneSnapshot(spot.CapturePlayerIds()))
         );
 
-    public ValueTask RestoreAsync(
-        ZoneSpot spot,
-        ReadOnlyMemory<byte> payload,
-        CancellationToken ct
-    )
+    public ValueTask RestoreAsync(ZoneSpot spot, ReadOnlyMemory<byte> payload, CancellationToken ct)
     {
-        var snapshot = JsonSerializer.Deserialize<ZoneSnapshot>(payload.Span)
+        var snapshot =
+            JsonSerializer.Deserialize<ZoneSnapshot>(payload.Span)
             ?? throw new InvalidDataException("Zone relocation state is empty.");
         spot.RestorePlayerIds(snapshot.PlayerIds);
         return ValueTask.CompletedTask;

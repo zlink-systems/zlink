@@ -10,16 +10,17 @@ import type {
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
 import { PacketNames } from '../shared/constants';
 import {
- restoreNotification,
- DungeonView,
- DungeonPrepared,
- JoinDungeon,
- PrepareDungeon,
- PartyCommand,
- PartyCommandResult,
- DungeonMemberEntered,
- RunStarted,
- RunCompleted
+  restoreNotification,
+  DungeonLeft,
+  DungeonView,
+  DungeonPrepared,
+  JoinDungeon,
+  PrepareDungeon,
+  PartyCommand,
+  PartyCommandResult,
+  DungeonMemberEntered,
+  RunStarted,
+  RunCompleted
 } from '../shared/messages';
 import { Player } from '../shared/player';
 import { DungeonState } from './domain';
@@ -42,17 +43,33 @@ export class Dungeon implements ZLinkSpot<Player> {
   }
   async onJoinedActor(actor: Player): Promise<void> {
     this.state.arrived(actor.context.actorId);
-    const entered = await this.context.outbound.requestToSpot(this.state.partyId,
-      new DungeonMemberEntered(this.state.runId, actor.context.actorId)).submit<PartyCommandResult>();
+    const entered = await this.context.outbound
+      .requestToSpot(
+        this.state.partyId,
+        new DungeonMemberEntered(this.state.runId, actor.context.actorId)
+      )
+      .submit<PartyCommandResult>();
     if (entered.rejection) throw new Error(entered.rejection.reason);
     if (this.state.phase === 'Active') {
-      const started = await this.context.outbound.requestToSpot(this.state.partyId,
-        new RunStarted(this.state.runId)).submit<PartyCommandResult>();
+      const started = await this.context.outbound
+        .requestToSpot(this.state.partyId, new RunStarted(this.state.runId))
+        .submit<PartyCommandResult>();
       if (started.rejection) throw new Error(started.rejection.reason);
-      for (const id of this.state.members) await this.actors.sendToActor(id, this.view()).submit();
+      for (const id of this.state.entered) await this.actors.sendToActor(id, this.view()).submit();
     }
   }
-  async onLeaveActor(_actor: Player): Promise<void> {}
+  async onLeaveActor(actor: Player): Promise<void> {
+    this.state.entered = this.state.entered.filter((id) => id !== actor.context.actorId);
+  }
+
+  async leave(actor: Player): Promise<DungeonLeft> {
+    await this.context.leaveActor(actor);
+    return new DungeonLeft(
+      String(this.context.spotId),
+      this.context.objectGeneration,
+      this.state.entered.length
+    );
+  }
   async onDisconnectActor(_actor: Player): Promise<void> {}
   private view(): DungeonView {
     return new DungeonView(
@@ -60,7 +77,9 @@ export class Dungeon implements ZLinkSpot<Player> {
       this.config.id,
       this.state.partyId,
       [...this.state.members],
-      this.state.stage, this.state.runId, this.state.phase
+      this.state.stage,
+      this.state.runId,
+      this.state.phase
     );
   }
   async show(actor: Player): Promise<void> {
@@ -68,21 +87,29 @@ export class Dungeon implements ZLinkSpot<Player> {
   }
   async advance(actor: Player): Promise<void> {
     const rejection = this.state.advance();
-    if (rejection) { await actor.context.boundSession.send(rejection).submit(); return; }
+    if (rejection) {
+      await actor.context.boundSession.send(rejection).submit();
+      return;
+    }
     if (this.state.phase === 'Completed') {
-      const completed = await this.context.outbound.requestToSpot(this.state.partyId,
-        new RunCompleted(this.state.runId)).submit<PartyCommandResult>();
+      const completed = await this.context.outbound
+        .requestToSpot(this.state.partyId, new RunCompleted(this.state.runId))
+        .submit<PartyCommandResult>();
       if (completed.rejection) throw new Error(completed.rejection.reason);
     }
     const view = this.view();
     await actor.context.boundSession.send(view).submit();
-    for (const id of this.state.members)
+    for (const id of this.state.entered)
       if (id !== actor.context.actorId) await this.actors.sendToActor(id, view).submit();
   }
   async enter(actor: Player): Promise<void> {
-    const result = await this.context.outbound.requestToSpot(this.state.partyId,
-      new PartyCommand(actor.context.actorId, false, true)).submit<PartyCommandResult>();
-    if (result.rejection) await actor.context.boundSession.send(restoreNotification(PacketNames.actionRejected, result.rejection)).submit();
+    const result = await this.context.outbound
+      .requestToSpot(this.state.partyId, new PartyCommand(actor.context.actorId, false, true))
+      .submit<PartyCommandResult>();
+    if (result.rejection)
+      await actor.context.boundSession
+        .send(restoreNotification(PacketNames.actionRejected, result.rejection))
+        .submit();
   }
   capture(): Uint8Array {
     return Buffer.from(JSON.stringify(this.state));

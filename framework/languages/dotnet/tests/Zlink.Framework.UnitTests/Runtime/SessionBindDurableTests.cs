@@ -271,24 +271,25 @@ public sealed partial class EntrySpotActorDispatchTests
                     await store.ReadAuthorityAsync(authorityKey)
                 )
                 .Snapshot;
-            var current = Assert
-                .IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
-                    await store.CompareExchangeAuthorityAsync(
-                        authorityKey,
-                        before.StoreVersion,
-                        new ZLinkAuthorityMutation.Put(
-                            before.Payload,
-                            ZLinkAuthorityGenerationTransition.NewOwner,
-                            new ZLinkLocationOwnerToken(
-                                before.OwnerId,
-                                before.OwnerLeaseGeneration
-                            ),
-                            before.Allocation,
-                            before.AuthorityOwnerGeneration + 2
+            var current = before;
+            for (var move = 0; move < 2; move++)
+                current = Assert
+                    .IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                        await store.CompareExchangeAuthorityAsync(
+                            authorityKey,
+                            current.StoreVersion,
+                            new ZLinkAuthorityMutation.Put(
+                                current.Payload,
+                                ZLinkAuthorityGenerationTransition.NewOwner,
+                                new ZLinkLocationOwnerToken(
+                                    current.OwnerId,
+                                    current.OwnerLeaseGeneration
+                                ),
+                                current.Allocation
+                            )
                         )
                     )
-                )
-                .Snapshot;
+                    .Snapshot;
             Assert.Equal(before.ObjectGeneration, current.ObjectGeneration);
             Assert.NotEqual(cachedRow.AuthorityOwnerGeneration, current.AuthorityOwnerGeneration);
             Assert.Equal(

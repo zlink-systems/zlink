@@ -4,7 +4,6 @@ import {
   type ZLinkSpot,
   type ZLinkSpotPacketHandler,
   type ZLinkSpotRequestHandler,
-  ZLinkFrameworkException,
   zlinkMessageMetadata
 } from '../../contracts';
 
@@ -40,15 +39,12 @@ import {
 import { SPOT_DIRECT_ENVELOPE } from '../channels/spot-direct-envelope';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
-import {
-  internalFrameworkErrorKind,
-  ZLinkFrameworkInternalErrorKind
-} from '../framework-errors-internal';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
 import { resolveMessageTypeForDecode } from '../../contracts/Common/HandlerMessageType';
 import { REMOTE_ACTOR_JOIN_PACKET } from './spot-remote-codec';
 import { appendRouteReplyParts, hasReplyToken, submitRouteReply } from './spot-route-replies';
+import { reportSpotPacketFailure } from './spot-packet-terminal';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 
 interface ZLinkSpotRoutePacketDispatchOptions {
@@ -144,6 +140,12 @@ export class ZLinkSpotRoutePacketDispatch {
       }
       return true;
     }
+    const inboundFlow = createInboundFlow(
+      envelope.header.flowId,
+      envelope.header.flowOrigin,
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+      undefined
+    );
     const context = {
       channelName: envelope.header.channelName,
       contentType: envelope.header.contentType,
@@ -156,43 +158,36 @@ export class ZLinkSpotRoutePacketDispatch {
       let response: unknown;
       const applicationClaim = this.options.claimApplicationWork?.();
       try {
-        await runWithFlow(
-          createInboundFlow(
-            envelope.header.flowId,
-            envelope.header.flowOrigin,
-            this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
-            undefined
-          ),
-          () =>
-            this.options.serial.execute(
-              async () => {
-                const spot = this.options.getTarget();
-                // Keep the wire payload raw until this Spot has acquired its
-                // execution authority. A rejected or superseded work item must not
-                // pay the deserialization cost.
-                const payload = decodeChannelPayload(
-                  envelope,
-                  this.channelCodecs(),
-                  resolveMessageTypeForDecode(registrations[0]?.messageType)
+        await runWithFlow(inboundFlow, () =>
+          this.options.serial.execute(
+            async () => {
+              const spot = this.options.getTarget();
+              // Keep the wire payload raw until this Spot has acquired its
+              // execution authority. A rejected or superseded work item must not
+              // pay the deserialization cost.
+              const payload = decodeChannelPayload(
+                envelope,
+                this.channelCodecs(),
+                resolveMessageTypeForDecode(registrations[0]?.messageType)
+              );
+              for (const registration of registrations) {
+                const handler = await resolveLifecycleHandler(
+                  spot,
+                  registration.handlerType as Type<
+                    | ZLinkSpotPacketHandler<ZLinkSpot, unknown>
+                    | ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
+                  >,
+                  this.options.providerResolver
                 );
-                for (const registration of registrations) {
-                  const handler = await resolveLifecycleHandler(
-                    spot,
-                    registration.handlerType as Type<
-                      | ZLinkSpotPacketHandler<ZLinkSpot, unknown>
-                      | ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
-                    >,
-                    this.options.providerResolver
-                  );
-                  releaseApplicationJobPermitBeforeHandler();
-                  response = await handler.handle(spot, payload, context);
-                }
-              },
-              zlinkSerialWorkOptions(
-                envelope.payload.byteLength,
-                zlinkMetadataByteLength(envelope.header.metadata)
-              )
+                releaseApplicationJobPermitBeforeHandler();
+                response = await handler.handle(spot, payload, context);
+              }
+            },
+            zlinkSerialWorkOptions(
+              envelope.payload.byteLength,
+              zlinkMetadataByteLength(envelope.header.metadata)
             )
+          )
         );
       } finally {
         applicationClaim?.close();
@@ -207,25 +202,22 @@ export class ZLinkSpotRoutePacketDispatch {
       }
       return true;
     } catch (error) {
-      const payloadDecodeFailed =
-        error instanceof ZLinkFrameworkException &&
-        internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed;
-      this.options.dispatchErrors?.report({
-        surface: ZLinkDispatchErrorSurface.SpotRoute,
-        messageKind: replyable ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
-        reason: payloadDecodeFailed
-          ? ZLinkDispatchErrorReason.PayloadDecodeFailed
-          : ZLinkDispatchErrorReason.HandlerException,
-        action,
-        packetName: envelope.packetName,
-        channelName: envelope.header.channelName,
-        spotId: this.options.nativeSpotId,
-        sourceRid: received.routingId === null ? undefined : String(received.routingId),
-        correlationId: envelope.header.correlationId ?? undefined,
-        flowId: envelope.header.flowId,
-        flowOrigin: envelope.header.flowOrigin,
+      const reason = reportSpotPacketFailure(
+        this.options.dispatchErrors,
+        {
+          surface: ZLinkDispatchErrorSurface.SpotRoute,
+          messageKind: replyable ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
+          action,
+          packetName: envelope.packetName,
+          channelName: context.channelName,
+          spotId: this.options.nativeSpotId,
+          sourceRid: received.routingId === null ? undefined : String(received.routingId),
+          correlationId: context.correlationId,
+          flowId: inboundFlow?.flowId,
+          flowOrigin: inboundFlow?.flowOrigin
+        },
         error
-      });
+      );
       if (replyable) {
         // D5: only a decode failure created by the framework's own payload
         // decoding carries the framework-origin marker; application handler
@@ -236,7 +228,9 @@ export class ZLinkSpotRoutePacketDispatch {
             encodeChannelErrorReplyParts(
               envelope.header,
               error,
-              payloadDecodeFailed ? FRAMEWORK_ORIGIN_REPLY_METADATA : undefined
+              reason === ZLinkDispatchErrorReason.PayloadDecodeFailed
+                ? FRAMEWORK_ORIGIN_REPLY_METADATA
+                : undefined
             )
           )
         );
@@ -281,49 +275,63 @@ export class ZLinkSpotRoutePacketDispatch {
       }
       return;
     }
+    const inboundFlow = createInboundFlow(
+      undefined,
+      undefined,
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+      undefined
+    );
     try {
       let response: unknown;
-      await this.options.serial.execute(
-        async () => {
-          const spot = this.options.getTarget();
-          for (const registration of registrations) {
-            const handler = await resolveLifecycleHandler(
-              spot,
-              registration.handlerType as Type<
-                | ZLinkSpotPacketHandler<ZLinkSpot, unknown>
-                | ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
-              >,
-              this.options.providerResolver
-            );
-            const handlerContext = {
-              channelName: envelope.channelName,
-              packetName: envelope.packetName!,
-              metadata: zlinkMessageMetadata(envelope.metadata),
-              correlationId: undefined,
-              receivedAt
-            };
-            releaseApplicationJobPermitBeforeHandler();
-            response = await handler.handle(spot, envelope.payload, handlerContext);
-          }
-        },
-        zlinkSerialWorkOptions(
-          received.parts[0]?.size() ?? 0,
-          zlinkMetadataByteLength(envelope.metadata)
+      await runWithFlow(inboundFlow, () =>
+        this.options.serial.execute(
+          async () => {
+            const spot = this.options.getTarget();
+            for (const registration of registrations) {
+              const handler = await resolveLifecycleHandler(
+                spot,
+                registration.handlerType as Type<
+                  | ZLinkSpotPacketHandler<ZLinkSpot, unknown>
+                  | ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
+                >,
+                this.options.providerResolver
+              );
+              const handlerContext = {
+                channelName: envelope.channelName,
+                packetName: envelope.packetName!,
+                metadata: zlinkMessageMetadata(envelope.metadata),
+                correlationId: undefined,
+                receivedAt
+              };
+              releaseApplicationJobPermitBeforeHandler();
+              response = await handler.handle(spot, envelope.payload, handlerContext);
+            }
+          },
+          zlinkSerialWorkOptions(
+            received.parts[0]?.size() ?? 0,
+            zlinkMetadataByteLength(envelope.metadata)
+          )
         )
       );
       if (replyable) {
         submitRouteReply(received.reply().message(encodeSpotDirectReply(true, response)));
       }
     } catch (error) {
-      this.options.dispatchErrors?.report({
-        surface: ZLinkDispatchErrorSurface.SpotRoute,
-        messageKind,
-        reason: ZLinkDispatchErrorReason.HandlerException,
-        action,
-        packetName: envelope.packetName,
-        channelName: envelope.channelName,
+      reportSpotPacketFailure(
+        this.options.dispatchErrors,
+        {
+          surface: ZLinkDispatchErrorSurface.SpotRoute,
+          messageKind,
+          action,
+          packetName: envelope.packetName,
+          channelName: envelope.channelName,
+          spotId: this.options.nativeSpotId,
+          sourceRid: received.routingId === null ? undefined : String(received.routingId),
+          flowId: inboundFlow?.flowId,
+          flowOrigin: inboundFlow?.flowOrigin
+        },
         error
-      });
+      );
       if (replyable) {
         submitRouteReply(
           received

@@ -262,7 +262,11 @@ class ZLinkInstanceRequestDeadlineDiagnosticsTest {
                     "calls=%d baseline=%d measured=%d added=%d%n",
                     calls, cost.baselineBytes(), cost.measuredBytes(), added);
             if ("1".equals(System.getenv(FLAG))) assertTrue(added > 0, cost.toString());
-            else assertEquals(0, added, cost.toString());
+            else {
+                // Disabled diagnostics may add no bytes. The baseline can include one-off JVM
+                // allocations, so only an increase over it is a cost.
+                assertTrue(added <= 0, cost.toString());
+            }
         }
     }
 

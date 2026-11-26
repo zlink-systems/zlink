@@ -1,4 +1,6 @@
 #pragma once
+#include <iostream>
+#include <syncstream>
 #include "server/shared/player.hpp"
 #include "domain.hpp"
 namespace MyGame
@@ -58,6 +60,7 @@ class Dungeon final : public fx::spot_t<Player>
     {
         const auto actor_id = std::string (actor.context ().actor_id ().value ());
         state.arrived (actor_id);
+        std::osyncstream (std::cout) << "GAME Player entered Dungeon" << std::endl;
         const auto entered = co_await context_
                                .request_to_spot (state.partyId,
                                                  DungeonMemberEntered{state.runId, actor_id})

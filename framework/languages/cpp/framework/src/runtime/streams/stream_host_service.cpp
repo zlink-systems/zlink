@@ -1105,9 +1105,10 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     template <typename Close>
     void evaluate_liveness (stream_t &stream,
                             const std::shared_ptr<session_liveness_t> &liveness,
+                            const session_liveness_t::reader_t &reader,
                             const Close &close)
     {
-        switch (liveness->evaluate ()) {
+        switch (liveness->evaluate (session_liveness_t::clock_t::now (), reader)) {
             case session_liveness_t::decision_t::none:
                 break;
             case session_liveness_t::decision_t::send_heartbeat:
@@ -1126,10 +1127,12 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     }
 
     template <typename OnDue>
-    static void
-    schedule_liveness (asio::steady_timer &timer, const session_liveness_t &liveness, OnDue on_due)
+    static void schedule_liveness (asio::steady_timer &timer,
+                                   const session_liveness_t &liveness,
+                                   const session_liveness_t::reader_t &reader,
+                                   OnDue on_due)
     {
-        const auto due = liveness.next_due ();
+        const auto due = liveness.next_due (reader);
         if (due == session_liveness_t::clock_t::time_point::max ())
             return;
         timer.expires_at (due);
@@ -1459,7 +1462,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     void schedule_core_liveness (const std::shared_ptr<core_session_t> &session)
     {
         schedule_liveness (
-          *session->liveness_timer, *session->liveness,
+          *session->liveness_timer, *session->liveness, _core_reader_liveness,
           [listener = weak_from_this (), session = std::weak_ptr<core_session_t> (session)] {
               if (const auto owner = listener.lock ())
                   owner->post_core_work (session);
@@ -1472,7 +1475,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         if (!current || current->closing || _stop->load (std::memory_order_acquire))
             return;
         const auto rid = current->stream.routing_id ().value ();
-        evaluate_liveness (current->stream, current->liveness,
+        evaluate_liveness (current->stream, current->liveness, _core_reader_liveness,
                            [this, rid] (stream_close_reason_t reason) {
                                request_core_peer_disconnect (rid, liveness_close_label (reason));
                            });
@@ -1694,6 +1697,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                     // is unavailable preserves Core RCVHWM backpressure.
                     _core_application_supply->ensure_waiter ();
                     auto reserved = _core_application_supply->take ();
+                    _core_reader_liveness.observe_permit (reserved.has_value ());
                     if (!reserved)
                         continue;
 
@@ -2855,6 +2859,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         asio::io_context io;
         tcp::socket socket;
         std::atomic_bool closing{false};
+        session_liveness_t::reader_t reader_liveness;
         std::shared_ptr<stream_write_queue_t> write_queue;
 
         explicit tcp_connection_t (asio::io_context &transport_io) :
@@ -2883,12 +2888,12 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                 const Close &close)
     {
         schedule_liveness (
-          timer, *liveness,
+          timer, *liveness, owner->reader_liveness,
           [this, &timer, weak = std::weak_ptr<tcp_connection_t> (owner), stream, liveness, close] {
               if (const auto owner = weak.lock ();
                   owner && !owner->closing.load (std::memory_order_acquire)) {
                   auto current = stream;
-                  evaluate_liveness (current, liveness, close);
+                  evaluate_liveness (current, liveness, owner->reader_liveness, close);
                   schedule_tcp_liveness (timer, owner, current, liveness, close);
               }
           });
@@ -3602,23 +3607,27 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                     application_job_queue_t::permit_t application_permit;
                     const auto reserve = [&] {
                         application_job_queue_t::supply_request_t supply;
-                        std::optional<std::optional<application_job_queue_t::permit_t>> reserved;
                         const auto wake = [weak_owner = std::weak_ptr<tcp_connection_t> (owner)] {
                             if (const auto connection_owner = weak_owner.lock ())
                                 connection_owner->wake_reader ();
                         };
-                        while (!(reserved = supply.take (*_application_jobs,
-                                                         std::chrono::milliseconds::zero (), wake,
-                                                         application_job_queue_t::origin_t::remote))
-                               && !stream_stop_requested (*_stop, &owner->closing)) {
+                        for (;;) {
+                            auto reserved =
+                              supply.take (*_application_jobs, std::chrono::milliseconds::zero (),
+                                           wake, application_job_queue_t::origin_t::remote);
+                            owner->reader_liveness.observe_permit (reserved.has_value ());
+                            if (reserved) {
+                                if (!*reserved)
+                                    return false;
+                                application_permit = std::move (**reserved);
+                                return true;
+                            }
+                            if (stream_stop_requested (*_stop, &owner->closing))
+                                return false;
                             io.restart ();
                             const auto running = asio::make_work_guard (io);
                             io.run_one ();
                         }
-                        if (!reserved || !*reserved)
-                            return false;
-                        application_permit = std::move (**reserved);
-                        return true;
                     };
                     auto frame = read_frame (*connection, reserve, io, &owner->closing);
                     if (!frame) {
@@ -3886,6 +3895,9 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     std::unique_ptr<zlink::poller_t> _core_poller;
     eventing::runtime_wake_timer_t _core_wake_timer;
     std::unique_ptr<application_supply_slot_t> _core_application_supply;
+    // Core exposes the peer identity after recv_packet. The permit gates this
+    // listener's reader, so its receive clock is shared by all Core sessions.
+    session_liveness_t::reader_t _core_reader_liveness;
     std::mutex _core_pending_work_mutex;
     std::vector<core_work_t> _core_pending_work;
     std::mutex _core_sessions_mutex;

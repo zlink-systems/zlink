@@ -79,9 +79,17 @@ public sealed record JoinDungeon(string DungeonId, string RunId);
 public sealed record ActionRejected(string Reason, int RetryAfterMs = 0);
 
 [JsonConverter(typeof(JsonStringEnumConverter<RunPhase>))]
-public enum RunPhase { Forming, Preparing, Entering, Active, Completed }
+public enum RunPhase
+{
+    Forming,
+    Preparing,
+    Entering,
+    Active,
+    Completed,
+}
 
 public sealed record RunStarted(string RunId);
+
 public sealed record RunCompleted(string RunId);
 
 public sealed record PartyViewRequest(string PlayerId);

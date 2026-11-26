@@ -218,7 +218,7 @@ internal interface IZLinkBackendActorMessageFollowIngress
     void SetActorMessageFollowIngressAdmission(Func<ActorMessageFollowIngress, bool> admission);
 
     void SetActorMessageFollowIngressHandler(
-        Func<IReadOnlyList<ZLinkBackendActorPart>, bool> handler
+        Func<ActorMessageFollowIngress, IReadOnlyList<ZLinkBackendActorPart>, bool> handler
     );
 }
 

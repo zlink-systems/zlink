@@ -246,6 +246,8 @@ preparation without opening application dispatch**. The `ready to receive relay`
 for this means only that this preparation is finished — it doesn't mean an owner change
 or an open queue.
 
+The target does not read the source owner lease from the Location Store separately when it receives the Restore request. The §4.5 CAS decides whether the source is still a valid owner. That CAS uses the Store versions of the inventory the source sealed as its condition. If the source lease has ended, the CAS fails or the `Preserve` fence of [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received) settles the owner. (#4718)
+
 ### 4.4 Ordered Relay and One-Way Cutover
 
 After the source receives the target's ready-to-receive-relay reply, it relays only the
