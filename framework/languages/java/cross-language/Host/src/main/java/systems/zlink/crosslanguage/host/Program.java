@@ -81,8 +81,12 @@ public final class Program {
     private Program() {
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         HostArgs parsed = new HostArgs(args);
+        if ("login-admission-connector".equals(parsed.mode())) {
+            LoginAdmission.connect(parsed.require("stream-endpoint"));
+            return;
+        }
         ConfigurableApplicationContext context = new SpringApplicationBuilder(Program.class)
             .web(WebApplicationType.NONE)
             .initializers(applicationContext ->
@@ -174,6 +178,15 @@ public final class Program {
                 locations.setStoreFailureGrace(OutageLeaseProfile.duration("storeFailureGraceMs"));
             }
             String mode = args.mode();
+            if ("login-admission-server".equals(mode)) {
+                options.addStreamNode("stream.login-admission")
+                    .bind(args.require("stream-endpoint"))
+                    .registerSession(LoginAdmission.Session.class)
+                    .authenticationPacketName(LoginAdmission.setting("ZLINK_LOGIN_PACKET"))
+                    .maxConcurrentAuthentications(LoginAdmission.number("ZLINK_LOGIN_LIMIT"))
+                    .authenticationRetryDelay(Duration.ofMillis(LoginAdmission.number("ZLINK_LOGIN_RETRY_MS")));
+                return;
+            }
             if ("entry-spot-source".equals(mode) || "entry-spot-target".equals(mode)) {
                 String meshName = args.require("mesh-name");
                 String nodeRid = args.require("node-rid");

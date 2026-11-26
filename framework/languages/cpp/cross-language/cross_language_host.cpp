@@ -43,6 +43,7 @@
 namespace fw = zlink::framework;
 namespace runtime = zlink::framework::runtime;
 
+#include "login_admission.hpp"
 #include "outage_location_store.hpp"
 
 namespace
@@ -2010,6 +2011,9 @@ int main (int argc, char **argv)
     }
 
     try {
+        if (mode == "login-admission-connector") {
+            return login_admission::run_connector (require ("stream-endpoint"));
+        }
         if (mode == "stream-connector") {
             return run_stream_connector ();
         }
@@ -2095,6 +2099,18 @@ int main (int argc, char **argv)
                   .enable_publisher (require ("publisher-endpoint"));
                 return;
             }
+            if (mode == "login-admission-server") {
+                options.services ().add_singleton<login_admission::barrier_t> ();
+                options.add_stream_node ("stream.login-admission")
+                  .bind (require ("stream-endpoint"))
+                  .register_session<login_admission::session_t> ()
+                  .set_authentication_packet_name (login_admission::setting ("ZLINK_LOGIN_PACKET"))
+                  .set_max_concurrent_authentications (
+                    std::stoi (login_admission::setting ("ZLINK_LOGIN_LIMIT")))
+                  .set_authentication_retry_delay (std::chrono::milliseconds (
+                    std::stoi (login_admission::setting ("ZLINK_LOGIN_RETRY_MS"))));
+                return;
+            }
             if (mode == "stream-server") {
                 options.add_stream_node ("stream.raw")
                   .bind (require ("stream-endpoint"))
@@ -2175,7 +2191,7 @@ int main (int argc, char **argv)
               std::stoi (option ("placement-weight", "100"))));
         }
         if (mode == "channel-server" || mode == "channel-subscriber" || mode == "stream-server"
-            || mode == "spot-route-server") {
+            || mode == "spot-route-server" || mode == "login-admission-server") {
             write_ready ();
         }
         return app.run (argc, argv);

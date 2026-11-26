@@ -21,17 +21,20 @@ public final class EnterWorld {
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationPlayerAppeared(Entry spot, Player actor, ZLinkMessageContext context, PlayerAppeared message) {
+    public CompletionStage<Void> notificationPlayerAppeared(
+            Entry spot, Player actor, ZLinkMessageContext context, PlayerAppeared message) {
         return actor.deliver(message);
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationPlayerMoved(Entry spot, Player actor, ZLinkMessageContext context, PlayerMoved message) {
+    public CompletionStage<Void> notificationPlayerMoved(
+            Entry spot, Player actor, ZLinkMessageContext context, PlayerMoved message) {
         return actor.deliver(message);
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationPlayerLeft(Entry spot, Player actor, ZLinkMessageContext context, PlayerLeft message) {
+    public CompletionStage<Void> notificationPlayerLeft(
+            Entry spot, Player actor, ZLinkMessageContext context, PlayerLeft message) {
         return actor.deliver(message);
     }
 }

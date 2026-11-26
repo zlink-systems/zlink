@@ -84,6 +84,7 @@ final class SpotPreReadyMulticastTest {
             List<Message> retained = List.of();
             boolean applicationQueued = false;
             try {
+                assertFalse(retainsApplicationInSpotQueue(WAIT_SECONDS, TimeUnit.SECONDS));
                 var observedTopic = new CompletableFuture<ZLinkBackendTopicMessage>();
                 try (var observation =
                         ZLinkSpotRuntimeTesting.observeNextTopic(HeldSpot.context, observedTopic)) {
@@ -173,6 +174,7 @@ final class SpotPreReadyMulticastTest {
             store.entered.get(WAIT_SECONDS, TimeUnit.SECONDS);
             try {
                 List<Message> retained;
+                assertFalse(retainsApplicationInSpotQueue(WAIT_SECONDS, TimeUnit.SECONDS));
                 var observedTopic = new CompletableFuture<ZLinkBackendTopicMessage>();
                 try (var observation =
                         ZLinkSpotRuntimeTesting.observeNextTopic(HeldSpot.context, observedTopic)) {
@@ -277,12 +279,27 @@ final class SpotPreReadyMulticastTest {
         return ZLinkSpotRuntimeTesting.spotQueue(HeldSpot.context);
     }
 
-    // The local child reaches the Spot queue in an infrastructure turn after the topic is
-    // accepted. Once that turn has finished, every release happens in a Spot queue turn.
     private static boolean awaitRetainedInSpotQueue() throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
+        long remaining;
+        while ((remaining = deadline - System.nanoTime()) > 0) {
+            try {
+                if (retainsApplicationInSpotQueue(remaining, TimeUnit.NANOSECONDS)) return true;
+            } catch (TimeoutException timeout) {
+                return false;
+            }
+            remaining = deadline - System.nanoTime();
+            if (remaining > 0)
+                TimeUnit.NANOSECONDS.sleep(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(10)));
+        }
+        return false;
+    }
+
+    private static boolean retainsApplicationInSpotQueue(long timeout, TimeUnit unit)
+            throws Exception {
         return ZLinkSpotRuntimeTesting.retainsApplicationAfterPublication(HeldSpot.context)
                 .toCompletableFuture()
-                .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                .get(timeout, unit);
     }
 
     private static void awaitReleased(List<Message> parts) throws Exception {

@@ -11,9 +11,11 @@ import java.util.concurrent.*;
 @ZLinkHandlerGroup(Names.PLAYER)
 public final class Join {
     private final ZLinkSpotManager spots;
+    private final PlayerApi players;
 
-    public Join(ZLinkSpotManager spots) {
+    public Join(ZLinkSpotManager spots, PlayerApi players) {
         this.spots = spots;
+        this.players = players;
     }
 
     @ZLinkSpotActorSend
@@ -21,15 +23,24 @@ public final class Join {
             Entry entry, Player actor, ZLinkMessageContext dispatch, JoinTableRequest request) {
         if (!actor.context().actorId().equals(request.playerId()))
             throw new IllegalArgumentException("Player identity differs from Actor");
-        return spots.getOrCreate(request.tableId(), Names.TABLE)
-                .inMesh(Names.MESH)
-                .request(request)
-                .submit()
+        if (request.reconnect()) {
+            return actor.reply(new ActionRejected(Rules.NOT_SEATED, 0));
+        }
+        if (actor.state.joining != null || actor.state.ticketId != null) {
+            return actor.reply(new ActionRejected(Rules.TABLE_FULL, 0));
+        }
+        return actor.loadPlayer(players)
+                .thenCompose(
+                        ignored ->
+                                spots.getOrCreate(request.tableId(), Names.TABLE)
+                                        .inMesh(Names.MESH)
+                                        .request(request)
+                                        .submit())
                 .thenAccept(
                         created -> {
                             if (created.state() == ZLinkSpotCreateState.REJECTED)
                                 throw new IllegalStateException("Table creation rejected");
-                            actor.context().joinSpot(request.tableId(), request).defer();
+                            actor.joinTable(request.tableId());
                         });
     }
 }

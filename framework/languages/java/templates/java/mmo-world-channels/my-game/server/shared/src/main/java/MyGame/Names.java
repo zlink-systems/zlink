@@ -28,8 +28,7 @@ public final class Names {
     }
 
     public static String zone(long channel) {
-        if (channel < 1)
-            throw new IllegalArgumentException("Channel is out of range");
+        if (channel < 1) throw new IllegalArgumentException("Channel is out of range");
         return FIELD + channel;
     }
 

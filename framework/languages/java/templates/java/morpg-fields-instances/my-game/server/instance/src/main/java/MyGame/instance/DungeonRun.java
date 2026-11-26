@@ -14,8 +14,9 @@ public final class DungeonRun {
 
     public ActionRejected prepare(PrepareDungeon request) {
         if (!runId.isEmpty())
-            return runId.equals(request.runId()) && partyId.equals(request.partyId())
-                    && members.equals(request.members())
+            return runId.equals(request.runId())
+                            && partyId.equals(request.partyId())
+                            && members.equals(request.members())
                     ? null
                     : new ActionRejected(Rejection.RUN_MISMATCH);
         var requestedMembers = request.members();
@@ -38,8 +39,7 @@ public final class DungeonRun {
 
     public void arrived(String actorId) {
         entered.add(actorId);
-        if (entered.size() == members.size() && phase == RunPhase.Entering)
-            phase = RunPhase.Active;
+        if (entered.size() == members.size() && phase == RunPhase.Entering) phase = RunPhase.Active;
     }
 
     public ActionRejected advance() {
