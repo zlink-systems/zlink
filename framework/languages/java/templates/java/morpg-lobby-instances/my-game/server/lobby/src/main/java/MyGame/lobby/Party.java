@@ -28,8 +28,7 @@ public final class Party implements ZLinkSpot<Player> {
     public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(String id, ZLinkMessage payload) {
         var join = payload.decode(PartyJoin.class);
         return CompletableFuture.completedFuture(
-                (join.partyId()).equals(context.spotId())
-                                && state.join(id, join)
+                (join.partyId()).equals(context.spotId()) && state.join(id, join)
                         ? ZLinkSpotActorJoinResult.accept()
                         : ZLinkSpotActorJoinResult.reject());
     }
@@ -63,11 +62,13 @@ public final class Party implements ZLinkSpot<Player> {
     public CompletionStage<Void> enter(Player actor) {
         return enterPlayer(actor.context().actorId());
     }
+
     public CompletionStage<Void> enterPlayer(String playerId) {
         String reason = state.enter(playerId);
         if (reason != null)
             return actors.sendToActor(playerId, new ActionRejected(reason)).submit();
-        if (state.phase == RunPhase.Active) return actors.sendToActor(playerId, state.view()).submit();
+        if (state.phase == RunPhase.Active)
+            return actors.sendToActor(playerId, state.view()).submit();
         var runId = state.runId;
         String id = Names.dungeonId(runId);
         var members = List.copyOf(state.members);
@@ -85,17 +86,19 @@ public final class Party implements ZLinkSpot<Player> {
                         })
                 .thenCompose(
                         prepared -> {
-                            if (!id.equals(prepared.dungeonId()) || state.prepared(prepared.runId()) != null)
+                            if (!id.equals(prepared.dungeonId())
+                                    || state.prepared(prepared.runId()) != null)
                                 throw new IllegalStateException(
                                         "Dungeon preparation identity mismatch");
                             CompletionStage<Void> sent = CompletableFuture.completedFuture(null);
                             var travel = new JoinDungeon(id, runId);
                             for (var member : members)
-                                if (!state.entered.contains(member)) sent =
-                                        sent.thenCompose(
-                                                ignored ->
-                                                        actors.sendToActor(member, travel)
-                                                                .submit());
+                                if (!state.entered.contains(member))
+                                    sent =
+                                            sent.thenCompose(
+                                                    ignored ->
+                                                            actors.sendToActor(member, travel)
+                                                                    .submit());
                             return sent;
                         });
     }

@@ -3,8 +3,8 @@ using Systems.Zlink.Stream.Connector.Runtime;
 namespace Zlink.Framework.Runtime.Messaging;
 
 // Owns the metadata half of every mesh-plane call builder (05-route-mesh §6):
-// last-write-wins accumulation and canonical-frame encoding with the 1024-byte
-// cap. Call builders allocate this owner only when metadata is supplied.
+// last-write-wins accumulation and canonical-frame encoding. Call builders
+// allocate this owner only when metadata is supplied.
 internal sealed class ZLinkCallMetadata
 {
     private Dictionary<string, string>? _values;
@@ -49,9 +49,8 @@ internal sealed class ZLinkCallMetadata
 
     /// <summary>
     ///     Encodes the accumulated entries as the canonical application
-    ///     metadata frame; empty when no entry was set. Throws
-    ///     <see cref="ZLinkFrameworkException" /> when the encoded frame
-    ///     exceeds the 1024-byte contract cap.
+    ///     metadata frame. Throws <see cref="ArgumentException" /> when
+    ///     the entries exceed the ChannelHeader field 13 size limit.
     /// </summary>
     public ReadOnlyMemory<byte> Encode()
     {
@@ -67,7 +66,7 @@ internal sealed class ZLinkCallMetadata
 
     public ZlinkStreamMetadata ToStreamMetadata()
     {
-        _ = Encode();
+        _ = ZLinkMeshMetadataCodec.MeasureEncodedLength(Snapshot());
         var metadata = ZlinkStreamMetadata.Empty;
         if (_values is null)
             return metadata;

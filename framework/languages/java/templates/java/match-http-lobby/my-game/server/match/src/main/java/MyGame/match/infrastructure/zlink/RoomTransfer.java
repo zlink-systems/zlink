@@ -1,6 +1,7 @@
 package MyGame.match.infrastructure.zlink;
 
 import MyGame.Json;
+
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.spots.*;
 
@@ -12,7 +13,8 @@ public final class RoomTransfer implements ZLinkSpotRelocationAdapter<Room> {
         try {
             return CompletableFuture.completedFuture(
                     Json.MAPPER.writeValueAsBytes(
-                            new RoomTransferSnapshot(entity.state.capture(), entity.roster.capture())));
+                            new RoomTransferSnapshot(
+                                    entity.state.capture(), entity.roster.capture())));
         } catch (Exception error) {
             return CompletableFuture.failedFuture(error);
         }

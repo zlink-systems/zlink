@@ -23,7 +23,8 @@ class Room(
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
         checkJoin(actorId, request.decode<JoinRoomRequest>())
-        return if (roster.canAdmit(actorId) && state.admit(actorId)) ZLinkSpotActorJoinResult.accept()
+        return if (roster.canAdmit(actorId) && state.admit(actorId))
+            ZLinkSpotActorJoinResult.accept()
         else ZLinkSpotActorJoinResult.reject()
     }
 
@@ -34,6 +35,7 @@ class Room(
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {
+        println("EVENT Room joined: ${context.spotId()}")
         broadcast(view())
     }
 
@@ -67,11 +69,17 @@ class Room(
         }
         reply(actor, ShotResult("hit", request.targetId, request.sequence))
         broadcast(view())
-        state.winner?.let { broadcast(MatchEnded(it)) }
+        state.winner?.let {
+            println("EVENT Match completed: ${context.spotId()}")
+            broadcast(MatchEnded(it))
+        }
     }
 
     private suspend fun broadcast(message: Any) {
-        for (playerId in state.view().map { it.playerId }) clients.kotlin().sendToActor(playerId, message).await()
+        for (playerId in state.view().map { it.playerId }) clients
+            .kotlin()
+            .sendToActor(playerId, message)
+            .await()
     }
 
     companion object {
@@ -89,7 +97,10 @@ class RoomTransfer : ZLinkSpotRelocationAdapter<Room> {
         cancellation.ensureActive()
         return CompletableFuture.completedFuture(
             Json.mapper.writeValueAsBytes(
-                RoomTransferSnapshot(Json.mapper.readTree(entity.state.capture()), entity.roster.capture())
+                RoomTransferSnapshot(
+                    Json.mapper.readTree(entity.state.capture()),
+                    entity.roster.capture(),
+                )
             )
         )
     }

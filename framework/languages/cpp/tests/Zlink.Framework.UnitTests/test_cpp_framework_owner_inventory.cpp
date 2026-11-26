@@ -3,12 +3,21 @@
 #include "allocation_counter.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/execution/serial_application_record.hpp"
+#include "runtime/dispatch/completion_turn.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include <gtest/gtest.h>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <future>
 #include <thread>
 
 using zlink::framework::test::begin_reserved_object;
+
+namespace zlink::framework::test
+{
+void close_test_completion_owner ();
+}
 
 namespace
 {
@@ -45,6 +54,86 @@ stateful::object_ref_t create (stateful::stateful_object_runtime_t &objects,
     EXPECT_EQ (created.error, stateful::stateful_error_t::none);
     EXPECT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     return owner;
+}
+
+void verify_waiter_delivery (auto &waiting, auto notify, bool after_close)
+{
+    ASSERT_FALSE (waiting.await_ready ());
+    auto observation = std::make_shared<std::promise<bool>> ();
+    auto terminal = observation->get_future ();
+    fw::detail::observe_task_terminal (waiting, [observation] (const auto &) {
+        observation->set_value (fw::runtime::state_lane_t::current () == nullptr
+                                && fw::detail::current_completion_owner () != nullptr);
+    });
+    if (after_close) {
+        fw::test::close_test_completion_owner ();
+        ASSERT_TRUE (fw::detail::observe_completion_dispatcher ().expired ());
+    }
+    try {
+        notify ();
+    }
+    catch (const fw::framework_exception_t &error) {
+        std::fprintf (stderr, "Waiter notification threw: %s\n", error.what ());
+        FAIL () << error.what ();
+    }
+    const auto result = waiting.result_for (std::chrono::seconds (1));
+    ASSERT_TRUE (result.has_value ());
+    ASSERT_EQ (terminal.wait_for (std::chrono::seconds (1)), std::future_status::ready);
+    if (after_close) {
+        ASSERT_FALSE (*result);
+        EXPECT_EQ (result->error_kind (), fw::framework_error_kind_t::shutting_down);
+    } else {
+        EXPECT_TRUE (*result);
+        EXPECT_TRUE (terminal.get ());
+    }
+}
+
+void verify_source_move_waiter (bool after_close)
+{
+    fw::detail::actor_transfer_coordinator_t transfers;
+    ASSERT_TRUE (transfers.try_reserve_source ("source"));
+    auto waiting = transfers.wait_for_source_completion ("source");
+    verify_waiter_delivery (waiting, [&] { transfers.cancel_move ("source"); }, after_close);
+}
+
+void verify_quiescence_waiter (bool after_close)
+{
+    stateful::stateful_object_runtime_t objects;
+    const auto owner = create (objects, stateful::object_kind_t::user_spot, "quiescence");
+    const auto domain = stateful::turn_domain_t::application;
+    ASSERT_EQ (objects.enqueue (owner, domain, {1, {1}}), stateful::stateful_error_t::none);
+    ASSERT_TRUE (objects.try_claim (owner, domain).second.has_value ());
+    auto waiting = objects.try_claim_async (owner, domain);
+    verify_waiter_delivery (
+      waiting,
+      [&] { EXPECT_EQ (objects.complete_claim (owner, domain), stateful::stateful_error_t::none); },
+      after_close);
+}
+
+TEST (CompletionOwnerDeathTest, SourceMoveWaiterAfterClose)
+{
+    ASSERT_EXIT (
+      {
+          verify_source_move_waiter (true);
+          std::_Exit (::testing::Test::HasFailure () ? EXIT_FAILURE : EXIT_SUCCESS);
+      },
+      ::testing::ExitedWithCode (0), "");
+}
+
+TEST (CompletionOwnerDeathTest, QuiescenceWaiterAfterClose)
+{
+    ASSERT_EXIT (
+      {
+          verify_quiescence_waiter (true);
+          std::_Exit (::testing::Test::HasFailure () ? EXIT_FAILURE : EXIT_SUCCESS);
+      },
+      ::testing::ExitedWithCode (0), "");
+}
+
+TEST (CompletionOwner, SourceMoveAndQuiescenceWaitersBeforeClose)
+{
+    verify_source_move_waiter (false);
+    verify_quiescence_waiter (false);
 }
 
 TEST (OwnerInventory, IdleOwnersDoNotAddDrainAllocations)

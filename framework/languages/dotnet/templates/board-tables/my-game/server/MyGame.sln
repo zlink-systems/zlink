@@ -10,6 +10,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MyGame.Table", "MyGame.Tabl
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MyGame.E2E", "..\e2e\MyGame.E2E\MyGame.E2E.csproj", "{BD851608-2A13-445B-972C-7B519C412005}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MyGame.Matchmaker", "MyGame.Matchmaker\MyGame.Matchmaker.csproj", "{98D857A3-73E4-41D7-862C-C4E7CFB67EE6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MyGame.Api", "MyGame.Api\MyGame.Api.csproj", "{30D8AFB3-D64A-4BC7-925C-EA2F2947833B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -32,5 +36,16 @@ Global
 		{BD851608-2A13-445B-972C-7B519C412005}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{BD851608-2A13-445B-972C-7B519C412005}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{BD851608-2A13-445B-972C-7B519C412005}.Release|Any CPU.Build.0 = Release|Any CPU
+		{98D857A3-73E4-41D7-862C-C4E7CFB67EE6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{98D857A3-73E4-41D7-862C-C4E7CFB67EE6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{98D857A3-73E4-41D7-862C-C4E7CFB67EE6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{98D857A3-73E4-41D7-862C-C4E7CFB67EE6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{30D8AFB3-D64A-4BC7-925C-EA2F2947833B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{30D8AFB3-D64A-4BC7-925C-EA2F2947833B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{30D8AFB3-D64A-4BC7-925C-EA2F2947833B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{30D8AFB3-D64A-4BC7-925C-EA2F2947833B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
 	EndGlobalSection
 EndGlobal
