@@ -43,6 +43,11 @@ struct public_host_runtime_test_access_t
 
     static void lifecycle_turn (public_host_runtime_t &host, std::function<void ()> work);
 
+    static void observe_actor_join (
+      public_host_runtime_t &host,
+      std::function<void (const protocol::actor_join_request_t &)> received,
+      std::function<void (std::uint64_t, const actor_join_operation_result_t &)> replied);
+
     static task_t<zlink::submit_result_t> join (actor_handle_t &actor,
                                                 const zlink::routing_id_t &rid,
                                                 const std::string &spot,

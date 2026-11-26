@@ -689,7 +689,7 @@ int main ()
         && source_cleanup_terminal != std::string::npos
         && source_cleanup_terminal > source_follow_publish
         && source_cleanup_begin != std::string::npos
-        && source_cleanup.find ("fail_remote_actor_join") == std::string::npos
+        && source_cleanup.find ("settle_application_actor_join") == std::string::npos
         && source_cleanup.find ("deliver_actor_join") == std::string::npos
         && source_cleanup.find ("actor_join_accepted_t") == std::string::npos
         && source_cleanup.find ("actor_join_failed_t") == std::string::npos

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
+#include "../support/actor_maintenance_join_entry_admission_observation.hpp"
 #include "../support/actor_maintenance_join_host_fixture.hpp"
 #include "../support/actor_maintenance_join_packets.hpp"
 #include "../support/actor_maintenance_join_location_store_fixtures.hpp"
@@ -603,4 +604,130 @@ TEST (ActorMaintenanceJoin, RemoteJoinDoesNotLeaveLocalRelocationWork)
     EXPECT_EQ (result->value ().outcome, fw::relocation_outcome_t::relocated);
     EXPECT_EQ (result->value ().reason, fw::relocation_reason_t::none);
 }
+class ActorEntryJoinAfterRestart : public testing::TestWithParam<entry_kind_t>
+{
+};
+
+TEST_P (ActorEntryJoinAfterRestart,
+        RemoteEntryJoinAfterRestartUsesNewPeerGenerationOrCompletesUnavailable)
+{
+    auto evidence = std::make_shared<observations_t> ();
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, replacement;
+    auto retired = std::make_unique<host_t> ();
+    release_callbacks_t release{*evidence};
+    configure (source, evidence, first_rid, store, relocations, default_follow_duration, 0, false,
+               entry_kind_t::none);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+
+    auto &locations = services.get_required<fw::location_repository_t> ();
+    const auto target_descriptor = [&] () -> std::optional<fw::mesh_node_descriptor_t> {
+        const auto listed = locations.list_mesh_nodes (mesh_name).result ();
+        if (listed)
+            for (const auto &descriptor : listed.value ().items)
+                if (descriptor.rid.to_string () == second_rid)
+                    return descriptor;
+        return std::nullopt;
+    };
+    configure (*retired, evidence, second_rid, store, relocations);
+    retired->start ();
+    ASSERT_TRUE (ready (*retired));
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
+    const auto previous = target_descriptor ();
+    ASSERT_TRUE (previous);
+    const auto previous_generation = previous->lifecycle_generation;
+    ASSERT_NE (previous_generation, 0u);
+    {
+        auto retired_services = retired->app.advanced ().services ().build_provider ();
+        ASSERT_TRUE (
+          peer_ready (retired_services.get_required<fw::route_mesh_runtime_t> (), first_rid));
+        ASSERT_TRUE (retired_services.get_required<fw::actor_manager_t> ()
+                       .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                       .async ()
+                       .result ());
+        ASSERT_TRUE (
+          move_to (retired_services.get_required<fw::actor_client_t> (), *evidence, local_spot, 1));
+        std::lock_guard lock (evidence->mutex);
+        const auto *moved =
+          std::get_if<fw::actor_join_accepted_t> (&evidence->completions.front ());
+        ASSERT_NE (moved, nullptr);
+        ASSERT_EQ (moved->actor.node_rid ().value (), first_rid);
+    }
+    auto &client = services.get_required<fw::actor_client_t> ();
+    ASSERT_TRUE (
+      client.request (fw::actor_id_t (actor_id), probe_t{17}).async<probe_t> ().result ());
+    retired.reset ();
+
+    configure (replacement, evidence, second_rid, store, relocations, default_follow_duration, 0,
+               false, GetParam (), std::nullopt, previous->endpoint);
+    replacement.start ();
+    ASSERT_TRUE (ready (replacement));
+    const auto current = target_descriptor ();
+    ASSERT_TRUE (current);
+    EXPECT_EQ (current->endpoint, previous->endpoint);
+    const auto capabilities = published_entry_accepted (*store);
+    const auto entry = capabilities.find ({rid_hex (second_rid), actor_type});
+    ASSERT_NE (entry, capabilities.end ());
+    ASSERT_EQ (entry->second, std::optional<bool> (GetParam () == entry_kind_t::member));
+    const auto replacement_generation = current->lifecycle_generation;
+    ASSERT_NE (replacement_generation, 0u);
+    ASSERT_NE (replacement_generation, previous_generation);
+    const auto admission = observe_entry_admission (replacement);
+    ASSERT_TRUE (admission);
+    // The replacement has published, but the source may still be admitting its route.
+    const auto completed = move_to (client, *evidence, entry_target, 2);
+    {
+        std::lock_guard lock (admission->mutex);
+        ASSERT_TRUE (completed) << "No terminal callback after target restart, previous="
+                                << previous_generation << " replacement=" << replacement_generation
+                                << " target admissions=" << admission->requests.size ();
+    }
+
+    const auto read =
+      locations.read_authority (fw::runtime::actor_authority_key (actor_id)).result ();
+    ASSERT_TRUE (read);
+    const auto *authority = std::get_if<fw::authority_snapshot_t> (&read.value ());
+    ASSERT_NE (authority, nullptr);
+    if (authority->allocation.target.node_rid.value () == first_rid) {
+        // A subsequent Actor request runs after the failed Join's deferred turn.
+        ASSERT_TRUE (
+          client.request (fw::actor_id_t (actor_id), probe_t{18}).async<probe_t> ().result ());
+    }
+    std::lock_guard admission_lock (admission->mutex);
+    std::lock_guard lock (evidence->mutex);
+    ASSERT_EQ (evidence->completions.size (), 2u);
+    const auto &terminal = evidence->completions.back ();
+    if (const auto *accepted = std::get_if<fw::actor_join_accepted_t> (&terminal)) {
+        EXPECT_EQ (GetParam (), entry_kind_t::member);
+        ASSERT_EQ (admission->requests.size (), 1u);
+        const auto &request = admission->requests.front ();
+        EXPECT_EQ (request.target_generation, replacement_generation);
+        EXPECT_EQ (accepted->operation_id_low, request.correlation);
+        EXPECT_EQ (accepted->actor.node_rid ().value (), second_rid);
+        EXPECT_EQ (authority->allocation.target.node_rid.value (), second_rid);
+        EXPECT_EQ (authority->allocation.target.node_lifecycle_generation, replacement_generation);
+        EXPECT_EQ (evidence->entry_joined, 1);
+    } else {
+        const auto *failed = std::get_if<fw::actor_join_failed_t> (&terminal);
+        ASSERT_NE (failed, nullptr);
+        EXPECT_TRUE (admission->requests.empty ());
+        EXPECT_TRUE (failed->operation_id_high != 0 || failed->operation_id_low != 0);
+        EXPECT_EQ (failed->error_kind, fw::framework_error_kind_t::unavailable);
+        ASSERT_EQ (evidence->completion_owners.size (), 2u);
+        EXPECT_EQ (evidence->completion_owners.back (), first_rid);
+        EXPECT_EQ (authority->allocation.target.node_rid.value (), first_rid);
+        EXPECT_EQ (evidence->entry_joined, 0);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P (ReplacementWithAndWithoutEntry,
+                          ActorEntryJoinAfterRestart,
+                          testing::Values (entry_kind_t::member, entry_kind_t::none));
 } // namespace zlink::framework::test::actor_maintenance_join

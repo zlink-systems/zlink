@@ -357,11 +357,9 @@ class mesh_node_runtime_t
                                                         std::uint64_t authority_owner_generation);
     task_t<actor_join_reply_t> join_application_actor_to_entry_spot (
       actor_ref_t actor,
-      mesh_node_descriptor_t target,
       zlink::message_t request,
       std::chrono::milliseconds timeout,
-      std::optional<zlink::routing_id_t> bound_session_node_rid = {},
-      std::optional<zlink::routing_id_t> bound_session_rid = {});
+      std::function<task_t<mesh_node_descriptor_t> (actor_ref_t)> select_target);
     task_t<result_t<void>>
     submit_application_actor_entry_spot_join (actor_ref_t actor,
                                               node_rid_t target_node,
@@ -372,16 +370,14 @@ class mesh_node_runtime_t
 
     void settle_application_actor_creation (const actor_ref_t &actor, bool ready);
 
-    task_t<actor_join_reply_t> join_application_actor_to_spot (
-      actor_ref_t actor,
-      spot_id_t target_spot,
-      std::shared_ptr<runtime::spot_address_resolver_t> resolver,
-      const zlink::message_t &request,
-      std::chrono::milliseconds timeout,
-      std::optional<zlink::routing_id_t> bound_session_node_rid = std::nullopt,
-      std::optional<zlink::routing_id_t> bound_session_rid = std::nullopt,
-      std::string application_packet_name = {},
-      std::string application_content_type = {});
+    task_t<actor_join_reply_t>
+    join_application_actor_to_spot (actor_ref_t actor,
+                                    spot_id_t target_spot,
+                                    std::shared_ptr<runtime::spot_address_resolver_t> resolver,
+                                    const zlink::message_t &request,
+                                    std::chrono::milliseconds timeout,
+                                    std::string application_packet_name = {},
+                                    std::string application_content_type = {});
     result_t<std::shared_ptr<deferred_barrier_t>>
     reserve_application_actor_join_barrier (const actor_ref_t &actor);
     request_task_t<std::optional<zlink::message_t>> relay_application_actor (
@@ -583,10 +579,10 @@ class mesh_node_runtime_t
                                                std::uint64_t operation_high,
                                                std::uint64_t operation_low,
                                                const result_t<actor_join_reply_t> &joined);
-    void assign_remote_actor_join_operation_id (remote_actor_join_state_t &state);
-    task_t<actor_join_reply_t> fail_remote_actor_join (const remote_actor_join_state_t &state,
-                                                       const result_t<actor_join_reply_t> &failed,
-                                                       std::string message);
+    runtime::protocol::wire_operation_id_t next_actor_join_operation_id ();
+    task_t<actor_join_reply_t>
+    settle_application_actor_join (const remote_actor_join_state_t &state,
+                                   result_t<actor_join_reply_t> joined);
     task_t<bool> abort_remote_actor_join_seal (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<runtime::messaging::message_parts_t>
     request_actor_join_spot_route (const runtime::spot_address_t &target,

@@ -45,7 +45,8 @@ void configure (host_t &host,
                 int spot_limit = 0,
                 bool application_signaled = false,
                 entry_kind_t entry = entry_kind_t::member,
-                std::optional<int> placement_weight = std::nullopt);
+                std::optional<int> placement_weight = std::nullopt,
+                std::string_view endpoint = "tcp://127.0.0.1:0");
 bool ready (host_t &host);
 bool move_to (fw::actor_client_t &sender,
               observations_t &evidence,

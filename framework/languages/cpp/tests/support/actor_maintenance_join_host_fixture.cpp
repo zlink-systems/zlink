@@ -127,7 +127,8 @@ void configure (host_t &host,
                 int spot_limit,
                 bool application_signaled,
                 entry_kind_t entry,
-                std::optional<int> placement_weight)
+                std::optional<int> placement_weight,
+                std::string_view endpoint)
 {
     auto &options = host.app.add_zlink_framework ();
     if (follow_duration != default_follow_duration) {
@@ -174,7 +175,7 @@ void configure (host_t &host,
     auto mesh = options.add_route_mesh (mesh_name);
     mesh.set_object_role (fw::object_role_t::server)
       .set_routing_id (zlink::routing_id_t::from (rid))
-      .listen ("tcp://127.0.0.1:0");
+      .listen (std::string (endpoint));
     if (placement_weight)
         mesh.set_placement_weight (*placement_weight);
     if (entry == entry_kind_t::member)

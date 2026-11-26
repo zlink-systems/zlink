@@ -2837,34 +2837,18 @@ void app_t::_apply_zlink_framework ()
                                                      "Actor creation was rejected");
           });
         actor_gateway_runtime.on_join_entry_spot (
-          [weak_application_mesh = std::weak_ptr (application_mesh),
-           weak_actor_gateway_runtime = actor_gateway_runtime.weak_state (), mesh_node_service] (
+          [weak_application_mesh = std::weak_ptr (application_mesh), mesh_node_service] (
             actor_ref_t actor, zlink::message_t request,
             std::chrono::milliseconds timeout) -> task_t<detail::actor_join_reply_t> {
               const auto application_mesh = detail::lock_runtime_owner (weak_application_mesh);
-              const auto gateway = detail::actor_gateway_runtime_t (
-                detail::lock_runtime_owner (weak_actor_gateway_runtime));
-              const auto deadline = std::chrono::steady_clock::now () + timeout;
-              const auto target =
-                co_await runtime::await_result (mesh_node_service->select_actor_entry_spot (actor));
-              if (!target)
-                  co_return detail::propagate_failure<detail::actor_join_reply_t> (
-                    target, "Entry Spot target selection failed");
-              const auto bound_session = co_await gateway.bound_session_route_async (actor);
-              const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
-                deadline - std::chrono::steady_clock::now ());
-              if (remaining <= std::chrono::milliseconds::zero ())
-                  co_return result_t<detail::actor_join_reply_t>::failure (
-                    framework_error_kind_t::deadline_exceeded,
-                    "Entry Spot join deadline elapsed during selection");
               co_return co_await application_mesh->join_application_actor_to_entry_spot (
-                actor, target.value (), request, remaining,
-                bound_session ? std::make_optional (bound_session->node_rid) : std::nullopt,
-                bound_session ? bound_session->session_rid : std::nullopt);
+                std::move (actor), std::move (request), timeout,
+                [mesh_node_service] (actor_ref_t source) {
+                    return mesh_node_service->select_actor_entry_spot (std::move (source));
+                });
           });
         actor_gateway_runtime.on_join_spot (
           [weak_application_mesh = std::weak_ptr (application_mesh),
-           weak_actor_gateway_runtime = actor_gateway_runtime.weak_state (),
            spot_locations =
              [&] {
                  auto provider = _state->services.build_provider ();
@@ -2875,13 +2859,8 @@ void app_t::_apply_zlink_framework ()
                    std::chrono::milliseconds timeout) -> task_t<detail::actor_join_reply_t> {
               const auto resolver = spot_locations;
               const auto mesh = detail::lock_runtime_owner (weak_application_mesh);
-              const auto gateway = detail::actor_gateway_runtime_t (
-                detail::lock_runtime_owner (weak_actor_gateway_runtime));
-              const auto bound_session = co_await gateway.bound_session_route_async (actor);
               co_return co_await mesh->join_application_actor_to_spot (
-                actor, std::move (target_spot), resolver, request, timeout,
-                bound_session ? std::make_optional (bound_session->node_rid) : std::nullopt,
-                bound_session ? bound_session->session_rid : std::nullopt, std::move (packet_name),
+                actor, std::move (target_spot), resolver, request, timeout, std::move (packet_name),
                 std::move (content_type));
           });
         actor_gateway_runtime.on_join_barrier (
