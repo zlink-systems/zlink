@@ -165,7 +165,7 @@ final class ZLinkJavaRawMeshNodeEndedRouteClaimTest {
                 sendChannel(source, "buffered");
                 sendChannel(source, "buffered");
                 sendAdmission(source, ServiceWireConstants.COMMAND_ADMIT);
-                assertTrue(port.waitForReadable(target, WAIT));
+                awaitReadable();
             }
             long deadline = System.nanoTime() + WAIT.toNanos();
             while (!port.routesSnapshot(target).isEmpty()) {
@@ -208,8 +208,24 @@ final class ZLinkJavaRawMeshNodeEndedRouteClaimTest {
                     .join();
         }
 
+        private void awaitReadable() {
+            long deadline = System.nanoTime() + WAIT.toNanos();
+            int ready;
+            do {
+                long remaining = deadline - System.nanoTime();
+                assertTrue(remaining > 0, "Expected Core to return a queued record");
+                ready = port.waitForReady(target, Duration.ofNanos(remaining));
+                if ((ready
+                                & (ZLinkJavaSocketReceivePoller.ROUTE_CHANGED
+                                        | ZLinkJavaSocketReceivePoller.CONNECTION_CHANGED))
+                        != 0) {
+                    node.observeTransportState(ready);
+                }
+            } while ((ready & ZLinkJavaSocketReceivePoller.READABLE) == 0);
+        }
+
         private ZLinkJavaRawServicePort.Inbound receive() {
-            assertTrue(port.waitForReadable(target, WAIT));
+            awaitReadable();
             var inbound = port.receiveNow(target);
             assertNotNull(inbound);
             return inbound;
