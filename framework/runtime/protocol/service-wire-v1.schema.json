@@ -8307,7 +8307,7 @@
         {
           "name": "messageFollowHopCount",
           "$ref": "u8",
-          "minimum": 0,
+          "minimum": 1,
           "maximum": {
             "$bound": "messageFollowHopCount"
           }

@@ -3328,7 +3328,7 @@ r.end("boundSessionClose");return new BoundSessionCloseCommand(flags, correlatio
         Rid sourceNodeRid = decodeRid(r, c, flags);
         OptionalText8 sourceSpotId = decodeOptionalText8(r, c, flags);
         U8 messageFollowHopCount = decodeU8(r, c, flags);
-        requireUnsigned(messageFollowHopCount.value(), 1, "0", null, "messageFollowHopCount");
+        requireUnsigned(messageFollowHopCount.value(), 1, "1", null, "messageFollowHopCount");
         requireUnsigned(messageFollowHopCount.value(), 1, null, "8", "messageFollowHopCount");
         SpotRouteFence targetSpot = decodeSpotRouteFence(r, c, flags);
 r.end("instanceSpotFollow");return new InstanceSpotFollowCommand(flags, operationHigh, operationLow, sourceNodeGeneration, sourceNodeRid, sourceSpotId, messageFollowHopCount, targetSpot, metadata, payload);}
@@ -3610,7 +3610,7 @@ List<byte[]> frames=new ArrayList<>();frames.add(w.result());return frames;}
         encodeNonzeroU64(item.sourceNodeGeneration(), w, c, item.flags());
         encodeRid(item.sourceNodeRid(), w, c, item.flags());
         encodeOptionalText8(item.sourceSpotId(), w, c, item.flags());
-        requireUnsigned(item.messageFollowHopCount().value(), 1, "0", "8", "messageFollowHopCount");
+        requireUnsigned(item.messageFollowHopCount().value(), 1, "1", "8", "messageFollowHopCount");
         encodeU8(item.messageFollowHopCount(), w, c, item.flags());
         encodeSpotRouteFence(item.targetSpot(), w, c, item.flags());
 List<byte[]> frames=new ArrayList<>();frames.add(w.result());if((item.flags()&1)!=0){require(item.metadata()!=null,"instanceSpotFollow metadata");frames.add(encodeMetadataFrame(item.metadata(),c));}else require(item.metadata()==null,"instanceSpotFollow metadata");require(item.payload()!=null,"instanceSpotFollow payload");if(item.payload()!=null)frames.add(encodeApplicationPayloadEnvelopeV1(item.payload(),c));return frames;}

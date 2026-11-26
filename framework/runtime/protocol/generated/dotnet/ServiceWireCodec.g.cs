@@ -7985,7 +7985,7 @@ internal static class ServiceWireCodec
         var SourceNodeRid = ReadRid(ref body, context);
         var SourceSpotId = ReadOptionalText8(ref body, context);
         var MessageFollowHopCount = ReadU8(ref body, context);
-        if (MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
+        if (MessageFollowHopCount.Value < 1) throw Error("messageFollowHopCount: minimum");
         if (MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
         var TargetSpot = ReadSpotRouteFence(ref body, context);
         body.End("body");
@@ -8006,7 +8006,7 @@ internal static class ServiceWireCodec
         WriteNonzeroU64(ref body, value.SourceNodeGeneration, context);
         WriteRid(ref body, value.SourceNodeRid, context);
         WriteOptionalText8(ref body, value.SourceSpotId, context);
-        if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
+        if (value.MessageFollowHopCount.Value < 1) throw Error("messageFollowHopCount: minimum");
         if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
         WriteU8(ref body, value.MessageFollowHopCount, context);
         WriteSpotRouteFence(ref body, value.TargetSpot, context);

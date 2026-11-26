@@ -9713,7 +9713,7 @@ export function decodeInstanceSpotFollowCommand(frames: readonly Uint8Array[], c
 
 
   value["messageFollowHopCount"] = readU8(reader, context, value, flags);
-  if (numeric(value["messageFollowHopCount"]) < 0n || numeric(value["messageFollowHopCount"]) > 8n) fail("messageFollowHopCount constraint");
+  if (numeric(value["messageFollowHopCount"]) < 1n || numeric(value["messageFollowHopCount"]) > 8n) fail("messageFollowHopCount constraint");
 
   value["targetSpot"] = readSpotRouteFence(reader, context, value, flags);
 
@@ -9746,7 +9746,7 @@ export function encodeInstanceSpotFollowCommand(value: InstanceSpotFollowCommand
 
   writeOptionalText8(value["sourceSpotId"], writer, context, value, value.flags);
   if (value["messageFollowHopCount"] === undefined) fail("messageFollowHopCount required");
-  if (numeric(value["messageFollowHopCount"]) < 0n || numeric(value["messageFollowHopCount"]) > 8n) fail("messageFollowHopCount constraint");
+  if (numeric(value["messageFollowHopCount"]) < 1n || numeric(value["messageFollowHopCount"]) > 8n) fail("messageFollowHopCount constraint");
 
   writeU8(value["messageFollowHopCount"], writer, context, value, value.flags);
   if (value["targetSpot"] === undefined) fail("targetSpot required");
