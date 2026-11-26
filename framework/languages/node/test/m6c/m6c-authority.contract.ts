@@ -4306,9 +4306,11 @@ function creationLeaseTracker(store: object): Pick<ZLinkOwnerLeaseTracker, 'isOw
 
 for (const boundary of ['attempts', 'elapsed time', 'cancellation', 'target lease loss'] as const) {
   const description =
-    boundary === 'cancellation' || boundary === 'target lease loss'
-      ? `provider aggregate commit retains its ${boundary} terminal`
-      : `provider aggregate commit remains prepared beyond its former ${boundary} boundary`;
+    boundary === 'target lease loss'
+      ? 'provider aggregate commit publishes when the target lease is lost before the write'
+      : boundary === 'cancellation'
+        ? 'provider aggregate commit retains its cancellation terminal'
+        : `provider aggregate commit remains prepared beyond its former ${boundary} boundary`;
   test(description, async (t) => {
     const provider = new ZLinkInMemoryProviderLocationStore(() => new Date(100));
     const store = new ZLinkLocationStoreRepository(provider, () => new Date(100));
@@ -4369,6 +4371,7 @@ for (const boundary of ['attempts', 'elapsed time', 'cancellation', 'target leas
             await store.releaseOwnerLease(owner(destination.ownerId, destination.leaseGeneration)),
             'released'
           );
+          return await write(...args);
         }
         if (attempts <= 65) return { kind: 'conflict' as const };
       }
@@ -4380,12 +4383,9 @@ for (const boundary of ['attempts', 'elapsed time', 'cancellation', 'target leas
         (error) => error === cancellationFailure
       );
       assert.equal(attempts, 1);
-    } else if (boundary === 'target lease loss') {
-      assert.deepEqual(await store.commitAggregate(prepared.fence), { kind: 'stale' });
-      assert.equal(attempts, 1);
     } else {
       assert.deepEqual(await store.commitAggregate(prepared.fence), { kind: 'committed' });
-      assert.equal(attempts, 66);
+      assert.equal(attempts, boundary === 'target lease loss' ? 1 : 66);
     }
   });
 }

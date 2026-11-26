@@ -1054,15 +1054,6 @@ export class ZLinkInMemoryAuthorityStore {
         }
       }
       if (participant.ownerTransition === 'newOwner') {
-        if (
-          !this.validation.isTargetLive(
-            aggregate.request.targetDescriptor,
-            aggregate.request.targetDescriptorLifecycleGeneration,
-            aggregate.request.targetOwner
-          )
-        ) {
-          return { kind: 'stale' };
-        }
         ownersNeeded++;
       } else if (!this.isOwnerLive(row.snapshot)) {
         return { kind: 'stale' };

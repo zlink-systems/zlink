@@ -1166,25 +1166,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       )
         return { kind: 'stale' };
 
-      const targetDescriptorKey = meshKey(
-        aggregate.targetDescriptor.meshName,
-        aggregate.targetDescriptor.rid
-      );
-      const targetLeaseKey = ownerKey(aggregate.targetOwner.ownerId);
       const targetCapacityKey = capacityKey(
         aggregate.targetDescriptor.meshName,
         String(aggregate.targetDescriptor.rid)
       );
-      const [descriptorRead, leaseRead] = await Promise.all([
-        this.provider.read(targetDescriptorKey, signal),
-        this.provider.read(targetLeaseKey, signal)
-      ]);
-      if (
-        liveTargetDescriptor(descriptorRead, leaseRead, aggregateTargetFromRecord(aggregate)) ===
-        undefined
-      ) {
-        return { kind: 'stale' };
-      }
 
       const capacityDeltas = new Map<string, ZLinkCapacityVector>();
       for (const row of authorityRows) {
@@ -1300,8 +1285,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         const conditions = await this.userSpotMembershipConditions(
           actor.currentSpotId,
           actor.currentSpotGeneration,
-          signal,
-          aggregate.targetOwner
+          signal
         );
         if (!Array.isArray(conditions)) return { kind: 'stale' };
         membershipConditions.push(
@@ -1315,8 +1299,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         {
           conditions: [
             { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
-            versionCondition(targetDescriptorKey, descriptorRead),
-            leaseValueCondition(targetLeaseKey, aggregate.targetOwner),
             ...membershipConditions,
             ...authorityRows.map((row) => ({
               kind: 'version' as const,
@@ -1346,10 +1328,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         if (aggregateRead.kind === 'missing') return { kind: 'stale' };
         aggregate = decodeAggregateRecord(fence, aggregateRead.value.bytes);
         if (aggregate.state === 'prepared') {
-          // The commit CAS also fences the target's live owner lease, descriptor,
-          // and capacity rows. Re-read the whole prepared fence after an
-          // auxiliary-row race; a changed aggregate or participant fence exits
-          // through the normal stale checks on the next attempt.
+          // Re-read the prepared fence after a membership or capacity race.
           continue;
         }
         if (aggregate.state !== 'committed') return { kind: 'stale' };
@@ -4192,15 +4171,6 @@ function aggregateTarget(
     nodeRid: request.targetDescriptor.rid,
     nodeLifecycleGeneration: request.targetDescriptorLifecycleGeneration,
     owner: { ...request.targetOwner }
-  };
-}
-
-function aggregateTargetFromRecord(record: AggregateRecord): ZLinkObjectCommitRequest['target'] {
-  return {
-    meshName: record.targetDescriptor.meshName,
-    nodeRid: record.targetDescriptor.rid,
-    nodeLifecycleGeneration: record.targetDescriptorLifecycleGeneration,
-    owner: { ...record.targetOwner }
   };
 }
 

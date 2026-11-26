@@ -68,6 +68,7 @@ async function prepareRelocation(store, sourceOwner, targetOwner, acceptedReques
   return {
     participants: request.participants,
     relocation,
+    targetDescriptor: request.targetDescriptor,
     targetOwner,
     fence: {
       ...prepared.fence,
@@ -188,6 +189,75 @@ test('provider relocation publishes the committed record before materialization'
 });
 
 for (const backing of ['repository', 'in-memory']) {
+  for (const change of ['descriptor removed', 'lease expired', 'identity mismatch']) {
+    test(`aggregate commit fences authority identity/${backing}/${change}`, async () => {
+      let timeMs = Date.now();
+      const now = () => new Date(timeMs);
+      const store =
+        backing === 'repository'
+          ? new ZLinkLocationStoreRepository(new ZLinkInMemoryProviderLocationStore(now))
+          : new ZLinkInMemoryLocationStore(now);
+      const source = await store.claimOwnerLease('source-owner', 120_000);
+      const target = await store.claimOwnerLease('target-owner', 60_000);
+      assert.equal(source.kind, 'claimed');
+      assert.equal(target.kind, 'claimed');
+      const prepared = await prepareRelocation(store, source.token, target.token);
+
+      if (change === 'descriptor removed') {
+        assert.equal(
+          await store.removeMeshNode(prepared.targetDescriptor, target.token),
+          ZLinkLocationWriteStatus.Stored
+        );
+        assert.equal((await store.readOwnerLease(target.token.ownerId)).kind, 'found');
+      } else if (change === 'lease expired') {
+        timeMs = target.leaseExpiresAt.getTime() + 1;
+        const lease = await store.readOwnerLease(target.token.ownerId);
+        assert.ok(lease.kind === 'missing' || lease.leaseExpiresAt <= now());
+        const { items } = await store.listMeshNodes(prepared.targetDescriptor.meshName);
+        assert.ok(items.some(({ ownerId }) => ownerId === target.token.ownerId));
+      } else {
+        const { fence } = prepared;
+        assert.equal(
+          (
+            await store.commitAggregate({
+              ...fence,
+              aggregateId: { value: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }
+            })
+          ).kind,
+          'stale'
+        );
+        assert.equal(
+          (
+            await store.commitAggregate({
+              ...fence,
+              aggregateGeneration: fence.aggregateGeneration + 1n
+            })
+          ).kind,
+          'stale'
+        );
+        assert.equal(
+          (
+            await store.commitAggregate({
+              ...fence,
+              relocationAttempt: {
+                ...fence.relocationAttempt,
+                generation: fence.relocationAttempt.generation + 1n
+              }
+            })
+          ).kind,
+          'stale'
+        );
+        assert.equal(
+          (await store.readAuthority(prepared.participants[0].authorityKey)).ownerId,
+          source.token.ownerId
+        );
+      }
+
+      assert.equal((await store.commitAggregate(prepared.fence)).kind, 'committed');
+      await assertCommittedParticipants(store, prepared);
+    });
+  }
+
   test(`completion accepted count is installed atomically at target commit/${backing}`, async () => {
     const store =
       backing === 'repository'
