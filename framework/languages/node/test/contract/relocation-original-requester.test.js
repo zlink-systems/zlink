@@ -2,10 +2,16 @@ const { inspectRuntime } = require('../../packages/framework/dist/runtime/intern
 const routingIds = require('../../packages/framework/dist/runtime/routing-id');
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const deferred = require('./helpers/deferred.cjs');
 const {
   ServiceStatefulRuntime
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
-const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
+const {
+  ZLinkFrameworkRelocationMode,
+  ZLinkFrameworkRuntimeHost,
+  ZLinkHostServiceRelocationRuntime,
+  createFrameworkRegistrationWithBuilder
+} = require('../../packages/framework/dist/internal');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const multipart = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
@@ -670,21 +676,31 @@ for (const lease of [
 
 test('Relocate deadline ends the caller while durable terminal delivery continues', async () => {
   const f = fixture();
+  const registration = createFrameworkRegistrationWithBuilder(() => {});
+  const host = new ZLinkFrameworkRuntimeHost({ registration });
+  const mode = ZLinkFrameworkRelocationMode.PlannedMaintenance;
   const deadline = new AbortController();
-  deadline.abort(new Error('Relocate deadline'));
+  const { promise: lane, resolve: release } = deferred();
+  f.stage.lane = lane;
+  const delivery = f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
+    index: 0,
+    ok: true,
+    response: { answer: 42 }
+  });
+  host.relocationOperationKey = `${mode}:${registration.applicationVersion}`;
+  host.relocationOperation = delivery;
   try {
-    await f.target.relayTerminalReply(
-      'mesh',
-      f.stage,
-      f.coordinator,
-      1n,
-      f.packet,
-      { index: 0, ok: true, response: { answer: 42 } },
-      deadline.signal
-    );
+    const waiting = host.relocate({ mode, signal: deadline.signal });
+    const reason = new Error('Relocate deadline');
+    deadline.abort(reason);
+    await assert.rejects(waiting, (error) => error === reason);
+    assert.equal(f.relays.length, 0);
+    release();
+    await delivery;
     assert.equal((await f.pending.promise).terminalResult, RequestResult.Ok);
     assert.equal(f.currentAuthority().relocation.completion.pendingDeliveries, 0n);
   } finally {
+    release();
     void f.pending.promise.catch(() => {});
     f.requester.close();
   }

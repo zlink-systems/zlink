@@ -1,7 +1,15 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const deferred = require('./helpers/deferred.cjs');
+const { setImmediate: nextTurn, setTimeout: delay } = require('node:timers/promises');
 const { completionFixture, example } = require('./helpers/relocation-completion');
-const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
+const {
+  ZLinkFrameworkRuntimeHost,
+  ZLinkFrameworkTerminationOutcome,
+  ZLinkFrameworkTerminationReason,
+  ZLinkHostServiceRelocationRuntime,
+  createFrameworkRegistrationWithBuilder
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
@@ -41,7 +49,7 @@ const packet = {
   messageFollowContext: { operationId: '00000000000000000000000000000001' }
 };
 
-function runtimeAtDelivery(f, observeActorAuthorityVersion) {
+function runtimeAtDelivery(f, observeActorAuthorityVersion, hostRuntime) {
   const stage = {
     lane: Promise.resolve(),
     offer: { prepare: { targetAttemptGeneration: 1n } },
@@ -80,7 +88,7 @@ function runtimeAtDelivery(f, observeActorAuthorityVersion) {
       return SubmitResult.Ok;
     }
   };
-  const runtime = new ZLinkHostServiceRelocationRuntime({
+  const options = {
     registration: { messageSerializers: [] },
     relocationStore: f.store,
     observeActorAuthorityVersion,
@@ -99,20 +107,145 @@ function runtimeAtDelivery(f, observeActorAuthorityVersion) {
         state: 1
       }
     ]
-  });
+  };
+  const runtime = hostRuntime ?? new ZLinkHostServiceRelocationRuntime(options);
+  if (hostRuntime !== undefined) Object.assign(hostRuntime.options, options);
   return {
     runtime,
     stage,
     ack,
     node,
-    deliver: () =>
-      runtime.relayTerminalReply('mesh', stage, coordinator, 1n, packet, {
-        index: 0,
-        ok: true,
-        response: { answer: 1 }
-      })
+    deliver: (signal) =>
+      runtime.relayTerminalReply(
+        'mesh',
+        stage,
+        coordinator,
+        1n,
+        packet,
+        { index: 0, ok: true, response: { answer: 1 } },
+        signal
+      )
   };
 }
+
+test('a canceled terminal relay makes no Store reads after teardown', async (t) => {
+  const f = completionFixture(1n, actorKey);
+  const target = runtimeAtDelivery(f);
+  t.after(() => target.runtime.dispose());
+  const controller = new AbortController();
+  const { promise: submitted, resolve: markSubmitted } = deferred();
+  target.node.sendInfrastructureControlFrames = async () => {
+    markSubmitted();
+    return SubmitResult.Ok;
+  };
+  const readAuthority = t.mock.method(f.authorities, 'readAuthority');
+  const readOwnerLease = t.mock.method(f.authorities, 'readOwnerLease');
+  const terminal = target.deliver(controller.signal);
+  const reason = new Error('Host shutdown deadline exceeded.');
+  const canceled = assert.rejects(terminal, (error) => error === reason);
+  void canceled.catch(() => {});
+  await submitted;
+  controller.abort(reason);
+  readAuthority.mock.resetCalls();
+  readOwnerLease.mock.resetCalls();
+  const operationsAtTeardown = f.events.length;
+
+  await delay(550);
+  assert.equal(readAuthority.mock.callCount(), 0);
+  assert.equal(readOwnerLease.mock.callCount(), 0);
+  assert.deepEqual(f.events.slice(operationsAtTeardown), []);
+  await canceled;
+  assert.equal(f.current().relocation.completion.pendingDeliveries, 1n);
+});
+
+test('relocation disposal observes an in-flight relay Store read', async () => {
+  const f = completionFixture(1n, actorKey);
+  const target = runtimeAtDelivery(f);
+  const { promise: started, resolve: markStarted } = deferred();
+  const { promise: resume, resolve: finishRead } = deferred();
+  const read = f.authorities.readOwnerLease;
+  f.authorities.readOwnerLease = async (ownerId, signal) => {
+    markStarted(signal);
+    await resume;
+    return read(ownerId);
+  };
+  let sends = 0;
+  target.node.sendInfrastructureControlFrames = async () => {
+    sends++;
+    return SubmitResult.Ok;
+  };
+  const canceled = assert.rejects(target.deliver(), { name: 'AbortError' });
+  const relaySignal = await started;
+  let disposed = false;
+  const stopping = target.runtime.dispose().then(() => {
+    disposed = true;
+  });
+  try {
+    await nextTurn();
+    assert.ok(relaySignal?.aborted);
+    assert.equal(disposed, false);
+  } finally {
+    finishRead();
+    await Promise.all([canceled, stopping]);
+  }
+  assert.equal(sends, 0);
+  assert.equal(f.current().relocation.completion.pendingDeliveries, 1n);
+});
+
+test(
+  'the host shutdown deadline ends an unacknowledged target relay',
+  { timeout: 4000 },
+  async (t) => {
+    const registration = createFrameworkRegistrationWithBuilder((builder) => {
+      builder.addRouteMesh('mesh').listen('inproc://completion-shutdown').routingId('target');
+    });
+    const host = new ZLinkFrameworkRuntimeHost({ registration });
+    await host.start();
+    t.after(() => host.stop());
+
+    const f = completionFixture(1n, actorKey);
+    const target = runtimeAtDelivery(f, undefined, host.serviceRelocation);
+    const { promise: submitted, resolve: markSubmitted } = deferred();
+    target.node.sendInfrastructureControlFrames = async () => {
+      markSubmitted();
+      return SubmitResult.Ok;
+    };
+    const read = f.authorities.readOwnerLease;
+    let sourceExpired = false;
+    const leases = t.mock.method(f.authorities, 'readOwnerLease', (ownerId, signal) =>
+      sourceExpired ? { kind: 'missing' } : read(ownerId, signal)
+    );
+    const terminal = target.deliver();
+    const outcome = terminal.then(
+      () => undefined,
+      (error) => error
+    );
+    const stage = target.stage;
+    stage.cutoverReceived = true;
+    stage.offer.reservation = { prepared: { plan: { targetDescriptor: { meshName: 'mesh' } } } };
+    stage.finalize = outcome.then(() => {
+      target.runtime.targetStages.delete('pending-completion');
+    });
+    target.runtime.targetStages.set('pending-completion', stage);
+
+    try {
+      await submitted;
+      const termination = await host.shutdown({ deadlineMs: 75 });
+      assert.equal(termination.outcome, ZLinkFrameworkTerminationOutcome.ForceStopped);
+      assert.equal(termination.reason, ZLinkFrameworkTerminationReason.DeadlineExceeded);
+      leases.mock.resetCalls();
+      const operationsAtTeardown = f.events.length;
+      await delay(550);
+      assert.equal(leases.mock.callCount(), 0);
+      assert.deepEqual(f.events.slice(operationsAtTeardown), []);
+      assert.equal((await outcome)?.name, 'DeadlineExceededError');
+      assert.equal(f.current().relocation.completion.pendingDeliveries, 1n);
+    } finally {
+      sourceExpired = true;
+      await outcome;
+    }
+  }
+);
 
 test('terminal cleanup unpublishes before deleting the ACKed manifest and chunks', async () => {
   for (const loseClearResponse of [false, true]) {

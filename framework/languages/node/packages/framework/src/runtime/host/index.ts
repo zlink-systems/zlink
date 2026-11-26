@@ -1248,6 +1248,7 @@ export class ZLinkFrameworkRuntimeHost
     return await this.runWithShutdownDeadline(deadlineMs, async () => {
       const deadlineAtMs = performance.now() + deadlineMs;
       const shutdownSignal = this.shutdownDeadline!.signal;
+      this.serviceRelocation.observeTargetCompletionDeadline(shutdownSignal);
       return traceHostShutdown(deadlineAtMs, shutdownSignal, async (step) => {
         try {
           let drain: Awaited<ReturnType<ZLinkRouteMeshRuntimeCoordinator['shutdownHost']>> = {
@@ -1821,6 +1822,7 @@ export class ZLinkFrameworkRuntimeHost
       return;
     }
     state.abortController.abort();
+    await this.serviceRelocation.stopTargetCompletions();
 
     const channelRuntime = this.channelRuntime;
     const spotNodeRuntime = this.spotNodeRuntime;

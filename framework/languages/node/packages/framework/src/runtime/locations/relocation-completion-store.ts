@@ -59,6 +59,7 @@ export class RelocationCompletionStore {
     authority: ZLinkAuthoritySnapshot,
     signal?: AbortSignal
   ): Promise<RelocationCompletionRecord> {
+    signal?.throwIfAborted();
     const relocation = authority.relocation;
     if (relocation?.completion === undefined)
       return completionDataLost('Completion authority is missing.');
@@ -101,6 +102,7 @@ export class RelocationCompletionStore {
         completion.pendingDeliveries > 0n &&
         stored.expiresAt.getTime() - stored.storeNow.getTime() <= RETENTION_MS / 2
       ) {
+        signal?.throwIfAborted();
         if (
           (await this.blobs.renew(relocationBlobReference(entry.reference), RETENTION_MS, signal))
             .kind === 'missing'
@@ -128,6 +130,7 @@ export class RelocationCompletionStore {
       completion.pendingDeliveries > 0n &&
       root.expiresAt.getTime() - root.storeNow.getTime() <= RETENTION_MS / 2
     ) {
+      signal?.throwIfAborted();
       if (
         (
           await this.blobs.renew(
@@ -196,14 +199,17 @@ export class RelocationCompletionStore {
     );
   }
 
-  async retainIfPending(authority: ZLinkAuthoritySnapshot | undefined): Promise<void> {
+  async retainIfPending(
+    authority: ZLinkAuthoritySnapshot | undefined,
+    signal?: AbortSignal
+  ): Promise<void> {
     if (
       authority === undefined ||
       (authority.relocation?.completion?.pendingDeliveries ?? 0n) === 0n
     )
       return;
     try {
-      await this.read(authority);
+      await this.read(authority, signal);
     } catch (error) {
       // Only a current authority read can diagnose loss of a possibly superseded blob.
       if (!(
@@ -218,12 +224,15 @@ export class RelocationCompletionStore {
     const reference = relocation?.completion?.reference;
     if (relocation === undefined || reference == null) return;
     const root = relocationBlobReference(reference);
+    signal?.throwIfAborted();
     const stored = await this.blobs.read(root, signal);
     if (stored.kind === 'missing') return;
     const manifest = completionManifest(stored.bytes, relocation.sourceInventorySha256);
     for (const chunk of manifest.chunks) {
+      signal?.throwIfAborted();
       await this.blobs.delete(relocationBlobReference(chunk.reference), signal);
     }
+    signal?.throwIfAborted();
     await this.blobs.delete(root, signal);
   }
 
@@ -274,6 +283,7 @@ export class RelocationCompletionStore {
       payload: expected.payload,
       relocation: { ...expected.relocation!, completion }
     };
+    signal?.throwIfAborted();
     const result = await this.authorities
       .compareExchangeAuthority(key, expected.storeVersion, mutation, signal)
       .catch(async (error: unknown) => {
@@ -311,6 +321,7 @@ export class RelocationCompletionStore {
     return stored.reference.value;
   }
   private async requireBlob(reference: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const read = await this.blobs.read(relocationBlobReference(reference), signal);
     if (read.kind !== 'found') return completionDataLost('Published completion blob is missing.');
     return read;

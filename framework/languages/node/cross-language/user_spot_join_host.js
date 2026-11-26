@@ -478,6 +478,7 @@ async function userSpotJoinSource() {
     UserSpotJoinSourceModule,
     { logger: false, abortOnError: false }
   );
+  app.enableShutdownHooks(['SIGTERM']);
   installCanonicalWireProbe(app, meshName);
   writeReady();
 
@@ -642,6 +643,7 @@ async function userSpotJoinTarget() {
     UserSpotJoinTargetModule,
     { logger: false, abortOnError: false }
   );
+  app.enableShutdownHooks(['SIGTERM']);
   installCanonicalReceiverProbe(app);
   const spots = app.get(nestjs.ZLINK_SPOT_MANAGER, { strict: false });
   const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });

@@ -83,6 +83,7 @@ import {
 } from './internal-location-contracts';
 import type { ZLinkFanoutLocationStore } from './internal-store-contracts';
 import { ZLinkLocationKeyCodec } from './key-codec';
+import { canTakeOverStoredLocation } from './location-write-policy';
 import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
 import {
   ZLinkOwnerLeaseReleaseDelay,
@@ -322,35 +323,35 @@ export class ZLinkInMemoryLocationStore
       this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
       return stored(1n, updatedAt);
     }
-    const currentLease = this.leases.get(current.ownerId);
-    const currentOwner = {
-      ownerId: current.ownerId,
-      leaseGeneration: current.leaseGeneration
-    };
-    const currentOwnerLive =
-      currentLease !== undefined &&
-      currentLease.token.leaseGeneration === current.leaseGeneration &&
-      currentLease.leaseExpiresAt.getTime() > updatedAt.getTime();
-    if (
+    const currentToken = this.liveOwnerLease(current.ownerId, updatedAt)?.token;
+    const fixedRidPredecessor =
       intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
-      current.ownerId !== descriptor.ownerId
-    ) {
-      const claimAllowed = this.ownerLeaseReleaseDelay.allows(
+      current.ownerId !== descriptor.ownerId;
+    const currentLeaseGeneration =
+      fixedRidPredecessor &&
+      (currentToken === undefined ||
+        currentToken.ownerId !== current.ownerId ||
+        currentToken.leaseGeneration !== current.leaseGeneration)
+        ? undefined
+        : currentToken?.leaseGeneration;
+    if (
+      fixedRidPredecessor &&
+      !this.ownerLeaseReleaseDelay.allows(
         releaseDelayScope,
-        currentOwner,
-        currentOwnerLive
-      );
-      if (!currentOwnerLive && !claimAllowed) throw new ZLinkOwnerLeaseReleaseDelayPendingError();
+        current,
+        currentLeaseGeneration !== undefined
+      )
+    ) {
+      throw new ZLinkOwnerLeaseReleaseDelayPendingError();
     }
     if (
-      canTakeOver(
+      canTakeOverStoredLocation(
+        intent,
         current.ownerId,
         current.leaseGeneration,
-        currentLease,
         descriptor.ownerId,
         descriptor.leaseGeneration,
-        intent,
-        updatedAt
+        currentLeaseGeneration
       )
     ) {
       this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
@@ -374,8 +375,7 @@ export class ZLinkInMemoryLocationStore
       (intent === ZLinkLocationWriteIntent.NewClaim ||
         intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim ||
         intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim) &&
-      currentLease !== undefined &&
-      currentLease.leaseExpiresAt.getTime() > updatedAt.getTime()
+      currentLeaseGeneration !== undefined
     ) {
       return rejectedConflict();
     }
@@ -485,16 +485,15 @@ export class ZLinkInMemoryLocationStore
       this.bump(ZLinkLocationKind.ClientServer, descriptor.channelName);
       return stored(generation, updatedAt);
     }
-    const currentLease = this.leases.get(current.ownerId);
+    const currentLease = this.liveOwnerLease(current.ownerId, updatedAt);
     if (
-      canTakeOver(
+      canTakeOverStoredLocation(
+        intent,
         current.ownerId,
         current.leaseGeneration,
-        currentLease,
         descriptor.ownerId,
         descriptor.leaseGeneration,
-        intent,
-        updatedAt
+        currentLease?.token.leaseGeneration
       )
     ) {
       const generation = (this.clientServers.generations.get(key) ?? 0n) + 1n;
@@ -580,16 +579,15 @@ export class ZLinkInMemoryLocationStore
       this.fanoutPublishers.generations.set(key, generation);
       return stored(generation, updatedAt);
     }
-    const currentLease = this.leases.get(current.ownerId);
+    const currentLease = this.liveOwnerLease(current.ownerId, updatedAt);
     if (
-      canTakeOver(
+      canTakeOverStoredLocation(
+        intent,
         current.ownerId,
         current.leaseGeneration,
-        currentLease,
         descriptor.ownerId,
         descriptor.leaseGeneration,
-        intent,
-        updatedAt
+        currentLease?.token.leaseGeneration
       )
     ) {
       const generation = (this.fanoutPublishers.generations.get(key) ?? 0n) + 1n;
@@ -725,14 +723,13 @@ export class ZLinkInMemoryLocationStore
     }
     if (
       current !== undefined &&
-      !canTakeOver(
+      !canTakeOverStoredLocation(
+        intent,
         current.ownerId,
         current.leaseGeneration,
-        this.leases.get(current.ownerId),
         spot.ownerId,
         spot.leaseGeneration,
-        intent,
-        updatedAt
+        this.liveOwnerLease(current.ownerId, updatedAt)?.token.leaseGeneration
       )
     )
       return rejectedConflict();
@@ -811,14 +808,13 @@ export class ZLinkInMemoryLocationStore
     }
     if (
       current !== undefined &&
-      !canTakeOver(
+      !canTakeOverStoredLocation(
+        intent,
         current.ownerId,
         current.leaseGeneration,
-        this.leases.get(current.ownerId),
         actor.ownerId,
         actor.leaseGeneration,
-        intent,
-        updatedAt
+        this.liveOwnerLease(current.ownerId, updatedAt)?.token.leaseGeneration
       )
     )
       return rejectedConflict();
@@ -1612,38 +1608,4 @@ function rejectedConflict(): ZLinkLocationWriteResult {
     generation: 0n,
     updatedAt: new Date(0)
   };
-}
-
-function canTakeOver(
-  currentOwnerId: string,
-  currentLeaseGeneration: bigint,
-  currentLease: InMemoryOwnerLease | undefined,
-  nextOwnerId: string,
-  nextLeaseGeneration: bigint,
-  intent: ZLinkMeshNodeWriteIntent,
-  now: Date
-): boolean {
-  if (intent === ZLinkLocationWriteIntent.Takeover) {
-    // Takeover is an explicit handoff operation. The row generation and the
-    // next owner's lease still fence concurrent stale writes.
-    return true;
-  }
-  const recovery = intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim;
-  if (
-    intent !== ZLinkLocationWriteIntent.NewClaim &&
-    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
-    !recovery
-  ) {
-    return false;
-  }
-  const ownerGone =
-    currentLease === undefined || currentLease.leaseExpiresAt.getTime() <= now.getTime();
-  // Recovery replaces only this owner's row from an earlier lease generation.
-  if (ownerGone && !recovery) return true;
-  return (
-    currentLease !== undefined &&
-    currentOwnerId === nextOwnerId &&
-    currentLeaseGeneration !== nextLeaseGeneration &&
-    currentLease.token.leaseGeneration === nextLeaseGeneration
-  );
 }
