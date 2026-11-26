@@ -1,0 +1,4 @@
+user-spot-source-peer-ready|ready=true
+user-spot-source-actor-created|status=created|node=cpp-entry-join-target
+user-spot-join-request-reply|accepted=true|actor=cross-lang-entry-join-actor|spot=cross-lang-entry-join-spot
+user-spot-join-request-reply|accepted=true|actor=cross-lang-entry-join-actor-restart|spot=cross-lang-entry-join-spot

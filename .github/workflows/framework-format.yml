@@ -58,6 +58,9 @@ jobs:
       - name: Check generated service-wire codecs
         run: node framework/runtime/protocol/generate-service-wire-codecs.mjs --check
 
+      - name: Test entry join smoke harness
+        run: bash framework/languages/cpp/cross-language/test_entry_join_reports_host_exit_and_cpp_unavailable.sh
+
       - name: Check Framework SPDX licenses
         run: bash scripts/dev/check-spdx-licenses.sh
 

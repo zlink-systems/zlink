@@ -1,0 +1,3 @@
+user-spot-created|spot=cross-lang-entry-join-spot-restarted|nodeRid=node-entry-join-target|state=created
+entry-spot-joined|actor=cross-lang-entry-join-actor-restart|nodeRid=node-entry-join-target
+user-spot-probe|nodeRid=node-entry-join-target|targetRid=node-entry-join-target|actor=cross-lang-entry-join-actor-restart|stateVersion=7

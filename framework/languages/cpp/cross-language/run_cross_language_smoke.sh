@@ -290,10 +290,23 @@ start_java() {
 wait_for_ready() {
   local file="$1"
   local timeout_seconds="${2:-60}"
+  local pid="${3:-}"
   local deadline=$((SECONDS + timeout_seconds))
+  local role="${file##*/}" log="${file%.ready}.log" status=0
   while ((SECONDS < deadline)); do
     if [[ -f "${file}" ]]; then
       return 0
+    fi
+    if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
+      wait "${pid}" || status=$?
+      if [[ -f "${file}" ]]; then
+        return 0
+      fi
+      echo "${role%.ready} exited before ready (status ${status}), see ${log}" >&2
+      if [[ -f "${log}" ]]; then
+        tail -40 "${log}" >&2
+      fi
+      return 1
     fi
     sleep 0.2
   done
@@ -2226,6 +2239,39 @@ entry_join_store_fence() {
   ' 1 "${prefix}:location:{zlink-location-v3}:opaque:map" "${kind}" "${identity}" "${old_generation}"
 }
 
+wait_for_entry_join_line() {
+  local file="$1" needle="$2" source_events="$3" actor="$4" phase="$5" cell="$6"
+  local deadline=$((SECONDS + 90)) failure kind
+  while ((SECONDS < deadline)); do
+    if [[ -f "${file}" ]] && grep -qF -- "${needle}" "${file}"; then
+      return 0
+    fi
+    failure="$(awk -F '|' -v actor="${actor}" '
+      $1 == "user-spot-join-failed" && $2 ~ /^kind=/ && $3 == "actor=" actor {
+        print
+        exit
+      }
+    ' "${source_events}")"
+    if [[ -n "${failure}" ]]; then
+      kind="${failure#*|kind=}"
+      kind="${kind%%|*}"
+      if [[ "${kind,,}" == unavailable ]]; then
+        kind=Unavailable
+        if [[ "${phase}" == "restart join" ]]; then
+          kind+=" without evidence of zero binding submissions"
+        fi
+      fi
+      printf 'remote Entry Spot join %s: %s: %s\n%s\n' "${cell}" \
+        "${phase}" "${kind}" "${failure}" >&2
+      return 1
+    fi
+    sleep 0.2
+  done
+  echo "remote Entry Spot join ${cell}: ${phase}: timed out waiting for '${needle}' in ${file}" >&2
+  [[ -f "${file}" ]] && tail -40 "${file}" >&2 || true
+  return 1
+}
+
 stage_entry_join_cell() {
   local source="$1" target="$2"
   local redis_port source_port target_port run_id start_file restart_file
@@ -2256,7 +2302,7 @@ stage_entry_join_cell() {
     $(entry_join_rid_args "${source}" "${source_rid}") "${source_peer[@]}" --placement-weight 0 \
     --bind-endpoint "tcp://127.0.0.1:${source_port}" --event-file "${source_events}" \
     --entry-join 1 --restart-file "${restart_file}"
-  wait_for_ready "${RUN_DIR}/${run_id}-source.ready" 180
+  wait_for_ready "${RUN_DIR}/${run_id}-source.ready" 180 "${PIDS[-1]}"
   wait_for_line "${source_events}" "user-spot-created|spot=cross-lang-entry-join-spot" 60
 
   # The target node: creates both Actors on itself and moves them into the User Spot.
@@ -2266,7 +2312,7 @@ stage_entry_join_cell() {
     --bind-endpoint "tcp://127.0.0.1:${target_port}" --event-file "${home_events}" \
     --start-file "${start_file}" --entry-join 1
   home_pid="${PIDS[-1]}"
-  wait_for_ready "${RUN_DIR}/${run_id}-target.ready" 180
+  wait_for_ready "${RUN_DIR}/${run_id}-target.ready" 180 "${home_pid}"
   wait_for_line "${home_events}" "user-spot-source-peer-ready|ready=true" 90
   # Only the .NET, Java and C++ User Spot nodes report that they reached the
   # target node; a .NET target has no routing id to probe.
@@ -2280,9 +2326,12 @@ stage_entry_join_cell() {
   wait_for_line "${source_events}" "user-spot-probe|nodeRid=" 90
 
   # First Actor: User Spot of the source node -> Entry Spot of the target node.
-  wait_for_line "${source_events}" "entry-join-request-reply|phase=join|accepted=true|actor=${actor}" 90
-  wait_for_line "${home_events}" "entry-spot-joined|actor=${actor}|nodeRid=" 90
-  wait_for_line "${source_events}" "entry-join-probe|actor=${actor}|nodeRid=" 90
+  wait_for_entry_join_line "${source_events}" "entry-join-request-reply|phase=join|accepted=true|actor=${actor}" \
+    "${source_events}" "${actor}" "first join" "${source}->${target}"
+  wait_for_entry_join_line "${home_events}" "entry-spot-joined|actor=${actor}|nodeRid=" \
+    "${source_events}" "${actor}" "first join" "${source}->${target}"
+  wait_for_entry_join_line "${source_events}" "entry-join-probe|actor=${actor}|nodeRid=" \
+    "${source_events}" "${actor}" "first join" "${source}->${target}"
   local joined_rid probe_rid
   joined_rid="$(sed -n "s/^entry-spot-joined|actor=${actor}|nodeRid=\\(.*\\)\$/\\1/p" "${home_events}" | head -n 1)"
   probe_rid="$(sed -n "s/^entry-join-probe|actor=${actor}|nodeRid=\\([^|]*\\)|.*\$/\\1/p" "${source_events}" | head -n 1)"
@@ -2314,7 +2363,7 @@ stage_entry_join_cell() {
     --spot-id cross-lang-entry-join-spot-restarted --actor-id "${second}" \
     $(entry_join_rid_args "${target}" "${home_rid}") --placement-weight 100 \
     --bind-endpoint "tcp://127.0.0.1:${target_port}" --event-file "${restart_events}"
-  wait_for_ready "${RUN_DIR}/${run_id}-target-restarted.ready" 180
+  wait_for_ready "${RUN_DIR}/${run_id}-target-restarted.ready" 180 "${PIDS[-1]}"
   wait_for_line "${restart_events}" "user-spot-created|spot=cross-lang-entry-join-spot-restarted" 60
   restarted_fence="$(entry_join_store_fence "${redis_port}" "${redis_prefix}" descriptor \
     "tcp://127.0.0.1:${target_port}" "${old_generation}")"
@@ -2323,46 +2372,19 @@ stage_entry_join_cell() {
     exit 1
   fi
   touch "${restart_file}"
-  wait_for_line "${source_events}" "entry-join-request-reply|phase=restart|accepted=true|actor=${second}" 90
+  wait_for_entry_join_line "${source_events}" "entry-join-request-reply|phase=restart|accepted=true|actor=${second}" \
+    "${source_events}" "${second}" "restart join" "${source}->${target}"
 
-  local outcome="" deadline
-  deadline=$((SECONDS + 90))
-  while ((SECONDS < deadline)); do
-    if grep -qF "entry-spot-joined|actor=${second}|nodeRid=" "${restart_events}"; then
-      outcome="joined"
-      break
-    fi
-    if grep -qF "user-spot-join-failed|kind=Unavailable|actor=${second}" "${source_events}"; then
-      outcome="Unavailable"
-      break
-    fi
-    if grep -qF "user-spot-join-failed|kind=" "${source_events}"; then
-      outcome="failed"
-      break
-    fi
-    sleep 0.2
-  done
-  case "${outcome}" in
-    joined)
-      wait_for_line "${restart_events}" "user-spot-probe|nodeRid=" 90
-      actor_fence="$(entry_join_store_fence "${redis_port}" "${redis_prefix}" actor "${second}")"
-      if [[ "${actor_fence}" != "${restarted_fence}" ]] \
-        || grep -qF "entry-spot-joined|actor=${second}|nodeRid=" "${home_events}"; then
-        echo "remote Entry Spot join ${source}->${target}: expected restarted fence '${restarted_fence}', got '${actor_fence}'" >&2
-        exit 1
-      fi
-      outcome="joined at generation ${restarted_fence##* } (was ${old_generation})"
-      ;;
-    Unavailable)
-      echo "remote Entry Spot join ${source}->${target}: Unavailable without evidence of zero binding submissions" >&2
-      exit 1
-      ;;
-    *)
-      echo "remote Entry Spot join ${source}->${target}: restarted target outcome '${outcome:-timeout}'" >&2
-      grep -F "user-spot-join-" "${source_events}" >&2 || true
-      exit 1
-      ;;
-  esac
+  wait_for_entry_join_line "${restart_events}" "entry-spot-joined|actor=${second}|nodeRid=" \
+    "${source_events}" "${second}" "restart join" "${source}->${target}"
+  wait_for_line "${restart_events}" "user-spot-probe|nodeRid=" 90
+  actor_fence="$(entry_join_store_fence "${redis_port}" "${redis_prefix}" actor "${second}")"
+  if [[ "${actor_fence}" != "${restarted_fence}" ]] \
+    || grep -qF "entry-spot-joined|actor=${second}|nodeRid=" "${home_events}"; then
+    echo "remote Entry Spot join ${source}->${target}: expected restarted fence '${restarted_fence}', got '${actor_fence}'" >&2
+    exit 1
+  fi
+  local outcome="joined at generation ${restarted_fence##* } (was ${old_generation})"
   stop_all
   RESULTS+=("remote Entry Spot join: ${source} source -> ${target} target (join committed on the target Entry Spot, owner probe; target restart: ${outcome})")
 }

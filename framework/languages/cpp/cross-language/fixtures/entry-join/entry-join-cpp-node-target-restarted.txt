@@ -1,0 +1,1 @@
+Node User-Spot Join source failed: ZLinkMeshNodeDescriptorConflictException: MeshNode 'cross.entry-join' descriptor publication failed: rejectedConflict.
