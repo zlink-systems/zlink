@@ -36,10 +36,9 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
     typeof DefaultZLinkActorClient
   >[0]['transportDeliveryGate'];
   readonly discardActorActivation?: (actor: ZLinkActor, error: unknown) => void;
-  readonly terminateActorActivation: (
-    actor: ZLinkActor,
-    terminal: () => Promise<void>
-  ) => Promise<void>;
+  readonly terminateActorActivation: NonNullable<
+    ZLinkActorManagerOptions['terminateActorActivation']
+  >;
   readonly registration: ZLinkFrameworkRegistration;
   /** Message flow tracer, so a failed deferred Join records its cause on the flow. */
   readonly messageFlow?: () =>
@@ -287,18 +286,14 @@ export class ZLinkActorRuntimeOptionsFactory {
         return this.options.notifyEntrySpotActorCreated(nodeRid, actor, createRequest, signal);
       },
       discardActorActivation: this.options.discardActorActivation,
-      actorDestroyedCleanup: (actorId) => {
+      actorDestroyedCleanup: async (actorId) => {
         this.options.invalidateActorRoute(actorId);
         const actorRef = this.options.actorManager()?.getState(actorId)?.nativeActorRef as
           ActorRef | undefined;
         if (actorRef !== undefined) {
           this.options.rememberDestroyedActorRef(actorId, actorRef);
         }
-        // Destroy is already committed; an unbound control that fails on a closed connection is a
-        // post-commit infrastructure failure, reported once instead of left unobserved.
-        void this.options.streamBindingRuntime
-          .unbindActor(actorId)
-          .catch((error: unknown) => this.options.reportPostCommitError(error));
+        await this.options.streamBindingRuntime.unbindActor(actorId);
       },
       publishActorAuthority: this.options.publishActorAuthority
     };

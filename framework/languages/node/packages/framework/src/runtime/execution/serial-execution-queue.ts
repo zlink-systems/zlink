@@ -8,6 +8,10 @@ import {
 } from '../application-jobs/application-job-queue-scope';
 import { macrotaskBoundary } from '../abort';
 import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import {
   diagnosticWorkName,
   guardStateLaneCompletion,
   isStructuralGuardEnabled,
@@ -99,7 +103,7 @@ export class ZLinkSerialExecutionQueue {
   private lifecycleStreak = 0;
   private lifecycleDebt = false;
   private claimStartedAt?: number;
-  private closed = false;
+  private closed: boolean | 'pending' = false;
   private executionPolicy?: ZLinkExecutionPolicy;
   private captureExecutionOwner?: () => object | undefined;
 
@@ -284,8 +288,24 @@ export class ZLinkSerialExecutionQueue {
     this.closed = true;
   }
 
+  /**
+   * Blocks admission while a lifecycle close is accepted. A permanent close takes precedence.
+   * @internal
+   */
+  async closeAdmissionOnSuccess(accept: () => Promise<void>): Promise<void> {
+    if (this.admissionClosed) return await accept();
+    try {
+      this.closed = 'pending';
+      await accept();
+    } catch (error) {
+      if (this.closed === 'pending') this.closed = false;
+      throw error;
+    }
+    this.closeAdmission();
+  }
+
   get admissionClosed(): boolean {
-    return this.closed;
+    return this.closed !== false;
   }
 
   admit<T>(
@@ -297,6 +317,12 @@ export class ZLinkSerialExecutionQueue {
     packetAdmission?: () => Promise<T> | T,
     applicationAdmission?: ApplicationJobPermitPort
   ): Promise<T> {
+    if (this.closed === 'pending') {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable,
+        'Actor admission is closed while destroy is being accepted.'
+      );
+    }
     if (this.closed) throw new Error('The serial execution queue is closed.');
     const lane = options?.lane ?? 'application';
     const target = lane === 'application' ? this.application : this.lifecycle;

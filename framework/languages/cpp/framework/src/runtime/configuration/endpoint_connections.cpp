@@ -80,12 +80,11 @@ void endpoint_connections_runtime_t::thaw (endpoint_connections_t &connections)
     state.frozen = false;
 }
 
-std::vector<std::string>
-endpoint_connections_runtime_t::snapshot (const endpoint_connections_t &connections)
+bool endpoint_connections_runtime_t::has_connections (const endpoint_connections_t &connections)
 {
     const auto &state = *connections._state;
     const std::lock_guard lock (state.mutex);
-    return state.endpoints;
+    return !state.endpoints.empty ();
 }
 
 } // namespace detail
@@ -137,4 +136,3 @@ std::vector<std::string> endpoint_connections_t::list_connections () const
 }
 
 } // namespace zlink::framework
-#include <mutex>

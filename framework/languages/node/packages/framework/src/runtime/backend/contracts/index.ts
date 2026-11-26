@@ -1,3 +1,4 @@
+import type { ServiceActorRouteFence } from '../../foundation/service-stateful-wire-codec';
 import type { PendingOperation } from '../../foundation/operation-registry';
 import type { RequestRuntime } from '../../foundation/request-runtime';
 import type {
@@ -190,6 +191,7 @@ export interface ZLinkBackendMeshNode {
     request: Omit<ServiceUserSpotCloseRecord, 'kind' | 'correlation' | 'operation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult>;
+  sendActorDestroy(fence: ServiceActorRouteFence): Promise<void>;
   requestActorCreate(
     targetNodeRid: string,
     request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation'>,

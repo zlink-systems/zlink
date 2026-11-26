@@ -1,3 +1,4 @@
+import type { ServiceActorRouteFence } from '../../foundation/service-stateful-wire-codec';
 import type { MeshOperationSubmission } from '../mesh-completion-table';
 import type { RequestRuntime } from '../../foundation/request-runtime';
 import type { PendingOperation } from '../../foundation/operation-registry';
@@ -1435,6 +1436,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       OperationKind.ActorLookup,
       this.requireStateful().lookupRemoteActor(String(targetNodeRid), actorId, timeoutMs)
     );
+  }
+
+  sendActorDestroy(fence: ServiceActorRouteFence): Promise<void> {
+    return this.requireStateful().sendActorDestroy(fence);
   }
 
   destroyActor(

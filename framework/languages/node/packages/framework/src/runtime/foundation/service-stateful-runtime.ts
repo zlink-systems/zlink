@@ -490,6 +490,7 @@ export interface ServiceUserSpotOperationHandler {
     record: ServiceUserSpotCloseRecord,
     signal: AbortSignal
   ): Promise<ServiceUserSpotOperationResult>;
+  destroyActor?(fence: ServiceActorRouteFence): void;
   createActor?(
     record: ServiceActorCreateRecord,
     signal: AbortSignal
@@ -562,7 +563,7 @@ export class ServiceStatefulRuntime {
   private nextSpotId = 1n;
   private nextSessionSequence = 1n;
   private nextInstanceOperation = 1n;
-  private nextUserSpotOperation = 1n;
+  private nextObjectOperationCorrelation = 1n;
   private instanceAuthority?: ServiceInstanceActivationAuthority;
   private asyncInstanceAuthority?: ServiceAsyncInstanceActivationAuthority;
   private instanceApplicationLifecycle?: ServiceInstanceApplicationLifecycle;
@@ -976,7 +977,7 @@ export class ServiceStatefulRuntime {
     request: Omit<ServiceUserSpotCreateRecord, 'kind' | 'correlation' | 'operation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
-    const correlation = this.nextUserSpotOperation++;
+    const correlation = this.nextObjectOperationCorrelation++;
     const operation = {
       high: this.nodeGeneration,
       low: correlation
@@ -1002,7 +1003,7 @@ export class ServiceStatefulRuntime {
     request: Omit<ServiceUserSpotCloseRecord, 'kind' | 'correlation' | 'operation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
-    const correlation = this.nextUserSpotOperation++;
+    const correlation = this.nextObjectOperationCorrelation++;
     const operation = {
       high: this.nodeGeneration,
       low: correlation
@@ -1028,7 +1029,7 @@ export class ServiceStatefulRuntime {
     request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
-    const correlation = this.nextUserSpotOperation++;
+    const correlation = this.nextObjectOperationCorrelation++;
     return this.requestUserSpotOperation(
       targetNodeRid,
       encodeActorCreateHeader({
@@ -1967,29 +1968,26 @@ export class ServiceStatefulRuntime {
 
   destroyActor(actor: ServiceActorRef, timeoutMs: number): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
-    const local = actor.nodeRid === this.nodeRid;
-    if (local) {
-      queueMicrotask(() => {
-        try {
-          this.registry.destroyActor(actor);
-          pending.reply({ terminalResult: RequestResult.Ok, failureCode: 0 });
-        } catch (error) {
-          pending.reply(failure(error));
-        }
-      });
-      return pending;
-    }
-    const route = this.actorFence(actor);
-    const header = encodeActorDestroyHeader(pending.id, route);
-    this.submitRequest(
-      pending,
-      actor.nodeRid,
-      route.targetNodeGeneration,
-      [header],
-      timeoutMs,
-      'actorDestroy'
-    );
+    queueMicrotask(() => {
+      try {
+        this.registry.destroyActor(actor);
+        pending.reply({ terminalResult: RequestResult.Ok, failureCode: 0 });
+      } catch (error) {
+        pending.reply(failure(error));
+      }
+    });
     return pending;
+  }
+
+  async sendActorDestroy(route: ServiceActorRouteFence): Promise<void> {
+    const { actor, targetNodeGeneration } = route;
+    const header = encodeActorDestroyHeader(this.nextObjectOperationCorrelation++, route);
+    if (!(await this.raw.sendApplication(actor.nodeRid, [header], targetNodeGeneration))) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+        `Actor '${actor.actorId}' owner route is unavailable.`
+      );
+    }
   }
 
   joinActor(
@@ -2502,6 +2500,12 @@ export class ServiceStatefulRuntime {
   private async ingress(
     record: RawServiceIngressRecord
   ): Promise<RawServicePumpResult | undefined> {
+    if (
+      record.command === M6bServiceWireCommand.actorDestroy &&
+      record.requestSequence !== undefined
+    ) {
+      return 'dropped';
+    }
     let decoded: ServiceStatefulWireRecord;
     let canonicalActorJoin: ActorJoin28 | undefined;
     try {
@@ -2543,10 +2547,11 @@ export class ServiceStatefulRuntime {
           decoded.kind === 'actorSend' ||
           decoded.kind === 'actorRequest') &&
         (record.flags & M6bServiceWireFlag.metadata) !== 0;
-      const userSpotInfrastructure =
+      const singleFrameInfrastructure =
         decoded.kind === 'userSpotCreate' ||
         decoded.kind === 'userSpotClose' ||
         decoded.kind === 'actorCreate' ||
+        decoded.kind === 'actorDestroy' ||
         decoded.kind === 'messageFollow' ||
         decoded.kind === 'boundSessionReplaced' ||
         decoded.kind === 'boundSessionClose';
@@ -2557,7 +2562,7 @@ export class ServiceStatefulRuntime {
           decoded.kind !== 'actorJoin' &&
           record.parts.length !== ((record.flags & M6bServiceWireFlag.metadata) !== 0 ? 3 : 2)) ||
         (decoded.kind === 'instanceSpot' && record.parts.length !== (instanceMetadata ? 3 : 2)) ||
-        (userSpotInfrastructure && record.parts.length !== 1)
+        (singleFrameInfrastructure && record.parts.length !== 1)
       ) {
         return 'protocolError';
       }
@@ -2823,7 +2828,13 @@ export class ServiceStatefulRuntime {
       case 'actorLookup':
         return this.replyLookup(ingress, record);
       case 'actorDestroy':
-        return this.replyDestroy(ingress, record);
+        if (
+          record.actor.actor.nodeRid === this.nodeRid &&
+          record.actor.targetNodeGeneration === this.nodeGeneration
+        ) {
+          this.userSpotOperationHandler?.destroyActor?.(record.actor);
+        }
+        return 'infrastructure';
       case 'actorJoin':
         // Canonical command-28 is a request/reply control.  A one-way ingress
         // cannot carry its typed terminal, so report it as a protocol error
@@ -3983,21 +3994,6 @@ export class ServiceStatefulRuntime {
     return 'infrastructure';
   }
 
-  private replyDestroy(
-    ingress: RawServiceIngressRecord,
-    record: Extract<ServiceStatefulWireRecord, { readonly kind: 'actorDestroy' }>
-  ): RawServicePumpResult {
-    try {
-      this.validateActorFence(record.actor);
-      this.registry.destroyActor(record.actor.actor);
-      this.replyWire(ingress, record.correlation, RequestResult.Ok, 0);
-    } catch (error) {
-      const result = failure(error);
-      this.replyWire(ingress, record.correlation, result.terminalResult, result.failureCode);
-    }
-    return 'infrastructure';
-  }
-
   private async replySessionBind(
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'boundSessionBind' }>
@@ -5086,7 +5082,6 @@ export class ServiceStatefulRuntime {
       | 'spotRequest'
       | 'actorRequest'
       | 'actorLookup'
-      | 'actorDestroy'
       | 'actorJoin'
       | 'streamBind'
       | 'streamUnbind'
@@ -5287,7 +5282,6 @@ export class ServiceStatefulRuntime {
       | 'spotRequest'
       | 'actorRequest'
       | 'actorLookup'
-      | 'actorDestroy'
       | 'actorJoin'
       | 'streamBind'
       | 'streamUnbind'
@@ -5323,15 +5317,6 @@ export class ServiceStatefulRuntime {
               kindData: lookupKindData(found)
             }
       );
-      return;
-    }
-    if (decoded.kind === 'actorDestroy') {
-      try {
-        this.registry.destroyActor(decoded.actor.actor);
-        pending.reply({ terminalResult: RequestResult.Ok, failureCode: 0 });
-      } catch (error) {
-        pending.reply(failure(error));
-      }
       return;
     }
     const localReply: ServiceStatefulMailboxData['reply'] = (
@@ -5537,7 +5522,6 @@ export class ServiceStatefulRuntime {
       | 'spotRequest'
       | 'actorRequest'
       | 'actorLookup'
-      | 'actorDestroy'
       | 'actorJoin'
       | 'streamBind'
       | 'streamUnbind'
@@ -6776,6 +6760,7 @@ function requireApplicationJobOwner(
 }
 
 function statefulCorrelation(record: ServiceStatefulWireRecord): bigint | undefined {
+  if (record.kind === 'actorDestroy') return undefined;
   if ('correlation' in record) return record.correlation;
   return record.kind === 'instanceSpot' && record.operationKind === 'request'
     ? record.replyRouteId
