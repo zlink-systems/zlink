@@ -218,6 +218,22 @@ void dispatch_completion (const std::shared_ptr<task_wait_registration_t> &waite
       inline_allowed, nullptr, std::move (dispatcher));
 }
 
+task_t<void> lane_completion_waiter_t::task () const
+{
+    // The task registration owns delivery, including cancellation when a
+    // dispatcher rejects a continuation after shutdown.
+    return with_task_resume_scheduler (
+      _completion.task (),
+      [owner = this, dispatcher = _dispatcher] (std::function<void ()> continuation) {
+          dispatch_completion (std::move (continuation), false, owner, dispatcher);
+      });
+}
+
+void lane_completion_waiter_t::complete ()
+{
+    _completion.complete (result_t<void>::success ());
+}
+
 std::size_t completion_dispatcher_worker_count () noexcept
 {
     if (completion_owner)

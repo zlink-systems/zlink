@@ -12,6 +12,14 @@ class Prepare {
 
 @ZLinkHandlerGroup(Names.PLAYER)
 class DungeonActions {
+    @ZLinkSpotActorRequest
+    suspend fun leave(
+        spot: Dungeon,
+        actor: Player,
+        context: ZLinkMessageContext,
+        request: LeaveDungeonRequest,
+    ): DungeonLeft = spot.leave(actor)
+
     @ZLinkSpotActorSend
     suspend fun reconnect(
         spot: Dungeon,
@@ -95,7 +103,12 @@ class DungeonActions {
     }
 
     @ZLinkSpotActorSend
-    suspend fun notificationBorderVisible(spot: Dungeon, actor: Player, context: ZLinkMessageContext, message: BorderVisible) {
+    suspend fun notificationBorderVisible(
+        spot: Dungeon,
+        actor: Player,
+        context: ZLinkMessageContext,
+        message: BorderVisible,
+    ) {
         actor.deliver(message)
     }
 }

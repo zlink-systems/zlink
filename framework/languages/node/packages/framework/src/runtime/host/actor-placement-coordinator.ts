@@ -1,4 +1,5 @@
-import { createObjectCreationDeadline } from './object-creation-deadline';
+import { awaitWithAbort } from '../abort';
+import { createObjectOperationDeadline } from './object-operation-deadline';
 import type { ZLinkOwnerLeaseTracker } from '../locations/lease-tracker';
 import { sameAuthorityIncarnation } from '../locations/lifecycle-runtime';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
@@ -14,10 +15,8 @@ import type { ActorRef, RoutingId, ZLinkActorCreateResult } from '../../contract
 import { ZLinkSpotKind } from '../../contracts';
 import type {
   ZLinkAuthoritySnapshot,
-  ZLinkAuthorityReadResult,
   ZLinkCreationOperationIdentity,
-  ZLinkLocationOwnerToken,
-  ZLinkObjectReserveResult
+  ZLinkLocationOwnerToken
 } from '../locations/internal-location-contracts';
 import type {
   ZLinkAuthorityStore,
@@ -28,6 +27,7 @@ import { randomOperationId } from '../locations/creation-operation-id';
 import { diagnosticTextOrAbsent } from '../diagnostics/diagnostic-text';
 import type {
   ServiceActorCreateRecord,
+  ServiceActorRouteFence,
   ServiceUserSpotReservationFence
 } from '../foundation/service-stateful-wire-codec';
 import type { ServiceUserSpotOperationResult } from '../foundation/service-stateful-runtime';
@@ -83,6 +83,67 @@ export interface ZLinkActorPlacementCoordinatorOptions {
 export class ZLinkActorPlacementCoordinator {
   constructor(readonly options: ZLinkActorPlacementCoordinatorOptions) {}
 
+  async destroy(
+    actor: ActorRef,
+    timeoutMs: number,
+    send: (meshName: string, fence: ServiceActorRouteFence) => Promise<void>,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    const deadline = createObjectOperationDeadline(timeoutMs, 'Actor destroy', signal);
+    const key = encodeAuthorityKey('actor', actor.actorId);
+    const store = this.options.store;
+    try {
+      const current = await store.readAuthority(key, deadline.signal);
+      deadline.signal.throwIfAborted();
+      if (current.kind === 'missing') return false;
+      if (current.objectGeneration !== actor.objectGeneration) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.ActorGenerationStale,
+          `Actor '${actor.actorId}' generation is stale.`
+        );
+      }
+      if (current.relocation !== undefined) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.ActorMoving,
+          `Actor '${actor.actorId}' is sealed for relocation.`
+        );
+      }
+      const { descriptor, descriptorLifecycleGeneration, state } = current.allocation;
+      if (state !== 'active') {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+          `Actor '${actor.actorId}' has no active owner route.`
+        );
+      }
+      await awaitWithAbort(
+        send(descriptor.meshName, {
+          actor: {
+            actorId: actor.actorId,
+            generation: current.objectGeneration,
+            nodeRid: String(descriptor.rid)
+          },
+          targetNodeGeneration: descriptorLifecycleGeneration,
+          authorityOwnerGeneration: current.authorityOwnerGeneration,
+          ownerLeaseGeneration: current.ownerLeaseGeneration
+        }),
+        deadline.signal
+      );
+      for (;;) {
+        const observed = await store.readAuthority(key, deadline.signal);
+        deadline.signal.throwIfAborted();
+        if (observed.kind === 'missing' || observed.objectGeneration > current.objectGeneration) {
+          return true;
+        }
+        await waitForAuthorityChange(deadline.signal);
+      }
+    } catch (error) {
+      deadline.signal.throwIfAborted();
+      throw error;
+    } finally {
+      deadline.close();
+    }
+  }
+
   async create(
     actorId: string,
     stableType: string,
@@ -94,7 +155,7 @@ export class ZLinkActorPlacementCoordinator {
   ): Promise<ZLinkActorCreateResult> {
     const deadlineUnixMs = Date.now() + timeoutMs;
     const remainingMs = Math.max(0, deadlineUnixMs - Date.now());
-    const deadline = createObjectCreationDeadline(remainingMs, 'Actor', signal);
+    const deadline = createObjectOperationDeadline(remainingMs, 'Actor creation', signal);
     const deadlineMs = performance.now() + remainingMs;
     const contentReference = encodeLocationCreationContent(requestPayload);
     const requestSha256 = createHash('sha256').update(requestPayload).digest();
@@ -102,24 +163,31 @@ export class ZLinkActorPlacementCoordinator {
     const operationId = randomOperationId();
     try {
       for (;;) {
-        if (!createOnly) {
-          const current = await this.options.store.readAuthority(
-            encodeAuthorityKey('actor', actorId),
-            deadline.signal
-          );
-          const existing = existingActor(current, actorId, stableType);
+        const current = await this.options.store.readAuthority(
+          encodeAuthorityKey('actor', actorId),
+          deadline.signal
+        );
+        if (current.kind === 'snapshot' && current.allocation.state === 'active') {
+          const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
           if (
-            existing !== undefined &&
-            current.kind === 'snapshot' &&
+            identity?.actor.actorId === actorId &&
+            current.allocation.stableType === stableType &&
+            (identity.state === 'closing' || (!createOnly && identity.state === 'ready')) &&
             (await this.options.leaseTracker.isOwnerTokenLive(
-              {
-                ownerId: current.ownerId,
-                leaseGeneration: current.ownerLeaseGeneration
-              },
+              { ownerId: current.ownerId, leaseGeneration: current.ownerLeaseGeneration },
               deadline.signal
             ))
-          )
-            return { status: 'existing', actor: existing };
+          ) {
+            requireGetOrCreate(actorId, createOnly);
+            if (identity.state === 'ready') {
+              return {
+                status: 'existing',
+                actor: withActorAuthorityFence(identity.actor, current)
+              };
+            }
+            await waitForAuthorityChange(deadline.signal);
+            continue;
+          }
         }
         const target = await this.options.target(
           meshName,
@@ -166,16 +234,7 @@ export class ZLinkActorPlacementCoordinator {
           deadline.signal,
           BigInt(deadlineUnixMs)
         );
-        const existing = existingActor(reserved, actorId, stableType);
-        if (existing !== undefined) {
-          if (createOnly) {
-            throw createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.ActorAlreadyExists,
-              `Actor '${actorId}' already exists.`
-            );
-          }
-          return { status: 'existing', actor: existing };
-        }
+        if (reserved.kind === 'alreadyExists') requireGetOrCreate(actorId, createOnly);
         if (reserved.kind === 'typeMismatch') {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.ActorTypeMismatch,
@@ -344,10 +403,10 @@ export class ZLinkActorPlacementCoordinator {
     }
     if (current.allocation.state === 'active') {
       const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
-      if (identity === undefined) {
+      if (identity?.state !== 'ready') {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
-          `Actor '${record.actorId}' Ready authority is invalid.`
+          `Actor '${record.actorId}' authority is not Ready.`
         );
       }
       return actorResult('existing', identity.actor);
@@ -416,7 +475,7 @@ export class ZLinkActorPlacementCoordinator {
         );
       }
     } catch (error) {
-      const cleanup = createObjectCreationDeadline(1_000, 'Actor');
+      const cleanup = createObjectOperationDeadline(1_000, 'Actor creation');
       try {
         await this.options.store.abort(
           {
@@ -487,31 +546,13 @@ function creationTarget(snapshot: ZLinkAuthoritySnapshot) {
   };
 }
 
-function existingActor(
-  current: ZLinkObjectReserveResult | ZLinkAuthorityReadResult,
-  actorId: string,
-  stableType: string
-): ActorRef | undefined {
-  const snapshot =
-    current.kind === 'snapshot'
-      ? current
-      : current.kind === 'alreadyExists'
-        ? current.current
-        : current.kind === 'conflict' && current.current.kind === 'snapshot'
-          ? current.current
-          : undefined;
-  if (
-    snapshot === undefined ||
-    snapshot.allocation.state !== 'active' ||
-    snapshot.allocation.objectKind !== 'actor' ||
-    snapshot.allocation.stableType !== stableType
-  ) {
-    return undefined;
+function requireGetOrCreate(actorId: string, createOnly: boolean): void {
+  if (createOnly) {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.ActorAlreadyExists,
+      `Actor '${actorId}' already exists.`
+    );
   }
-  const identity = decodeActorAuthorityIdentity(snapshot.payload, snapshot.objectGeneration);
-  return identity?.actor.actorId === actorId
-    ? withActorAuthorityFence(identity.actor, snapshot)
-    : undefined;
 }
 
 function withActorAuthorityFence(actor: ActorRef, authority: ZLinkAuthoritySnapshot): ActorRef {

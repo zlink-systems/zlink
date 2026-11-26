@@ -166,9 +166,9 @@ public final class Town implements ZLinkSpot<Player> {
     }
 
     private CompletionStage<Void> rejectRunMismatch(PartyRun party) {
-        if (party == null || party.members.isEmpty()) return CompletableFuture.completedFuture(null);
-        return actors.sendToActor(
-                        party.members.getFirst(), new ActionRejected(Rules.RUN_MISMATCH))
+        if (party == null || party.members.isEmpty())
+            return CompletableFuture.completedFuture(null);
+        return actors.sendToActor(party.members.getFirst(), new ActionRejected(Rules.RUN_MISMATCH))
                 .submit();
     }
 }

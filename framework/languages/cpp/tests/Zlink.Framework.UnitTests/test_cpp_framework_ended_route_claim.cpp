@@ -238,6 +238,7 @@ TEST_F (EndedRouteClaim, ReplacementRequiresAdmission)
     EXPECT_NE (generation, ended_generation);
     send_order (replacement);
     EXPECT_EQ (receive (), mesh::raw_mesh_pump_result_t::infrastructure);
+    EXPECT_EQ (node.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application), 0u);
     send_admission (replacement, wire::command::hello);
     EXPECT_EQ (receive (), mesh::raw_mesh_pump_result_t::infrastructure);
     const auto pending = node.topology ().peer (remote.node_routing_id);
@@ -245,19 +246,23 @@ TEST_F (EndedRouteClaim, ReplacementRequiresAdmission)
     EXPECT_FALSE (pending->ready);
     EXPECT_TRUE (ended_is_claimable ());
 
+    const auto claim_replacement_order = [&] {
+        auto claim = framework::test::claim_mailbox (
+          node.mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
+        ASSERT_TRUE (claim);
+        EXPECT_EQ (claim->records.front ()->route_generation (), generation);
+        EXPECT_TRUE (node.mailbox ().release (*claim));
+    };
+
     send_order (replacement);
-    EXPECT_EQ (receive (), mesh::raw_mesh_pump_result_t::infrastructure);
-    EXPECT_EQ (node.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application), 0u);
+    EXPECT_EQ (receive (), mesh::raw_mesh_pump_result_t::application);
+    ASSERT_NO_FATAL_FAILURE (claim_replacement_order ());
 
     ASSERT_NO_FATAL_FAILURE (admit (replacement));
     EXPECT_FALSE (ended_is_claimable ());
     send_order (replacement);
     EXPECT_EQ (receive (), mesh::raw_mesh_pump_result_t::application);
-    auto claim = framework::test::claim_mailbox (
-      node.mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
-    ASSERT_TRUE (claim);
-    EXPECT_EQ (claim->records.front ()->route_generation (), generation);
-    EXPECT_TRUE (node.mailbox ().release (*claim));
+    ASSERT_NO_FATAL_FAILURE (claim_replacement_order ());
     EXPECT_EQ (node.receive_next (node.begin_receive_turn (), now ()),
                mesh::raw_mesh_pump_result_t::no_data);
 }

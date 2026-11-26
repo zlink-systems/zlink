@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 
 public final class Scenarios {
     private Scenarios() {}
+
     private static final double WALL_CENTER_Y = (Rules.WALL_MIN_Y + Rules.WALL_MAX_Y) / 2;
 
     static void run(Scenario scenario, Nodes nodes) throws Exception {
@@ -71,7 +72,8 @@ public final class Scenarios {
                 case WALL -> wallScenario(a, b);
                 case INPUT -> inputScenario(a, b);
                 case RECONNECT -> reconnectScenario(a, b, identityB, nodes.endpoint);
-                case UPDATE -> updateScenario(a, b, nodes, assignment.roomId(), identityA, identityB);
+                case UPDATE ->
+                        updateScenario(a, b, nodes, assignment.roomId(), identityA, identityB);
                 default -> throw new IllegalStateException("Unexpected scenario");
             }
             if (scenario != Scenario.RECONNECT) connected(a, b);
@@ -99,8 +101,7 @@ public final class Scenarios {
                         "after-restart-b-" + newSuffix,
                         false);
         Structure.require(!next.roomId().equals(roomId), "Lobby restart reused the Room ID");
-        try (var nextA =
-                        new Client(nodes.endpoint, "after-restart-a-" + newSuffix, next.roomId());
+        try (var nextA = new Client(nodes.endpoint, "after-restart-a-" + newSuffix, next.roomId());
                 var nextB =
                         new Client(nodes.endpoint, "after-restart-b-" + newSuffix, next.roomId())) {
             nextA.connect();
@@ -141,24 +142,29 @@ public final class Scenarios {
         rejectShot(b, a, player(before, b.playerId).lastSequence() + 1, Rules.BLOCKED, a.playerId);
         var after = view(a);
         sameState(before, after);
-        Structure.require(player(after, b.playerId).hp() == targetBefore.hp(),
+        Structure.require(
+                player(after, b.playerId).hp() == targetBefore.hp(),
                 "Wall-blocked shots changed HP");
 
         moveTo(a, b, a, Rules.SPAWN_AX, Rules.SPAWN_AY);
         moveTo(a, b, b, Rules.SPAWN_BX, Rules.SPAWN_BY);
         var expectedHp = player(view(a), b.playerId).hp() - Rules.DAMAGE;
         var clearShot = hit(a, b, player(view(a), a.playerId).lastSequence() + 1, expectedHp);
-        Structure.require(player(clearShot, b.playerId).hp() == expectedHp,
+        Structure.require(
+                player(clearShot, b.playerId).hp() == expectedHp,
                 "Clear shot behind the wall was rejected");
     }
 
     private static void inputScenario(Client p1, Client p2) throws Exception {
         var beforeMove = view(p1);
-        var firstSpawn = beforeMove.players().stream()
-                .filter(candidate -> candidate.x() == Rules.SPAWN_AX
-                        && candidate.y() == Rules.SPAWN_AY)
-                .findFirst()
-                .orElseThrow();
+        var firstSpawn =
+                beforeMove.players().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.x() == Rules.SPAWN_AX
+                                                && candidate.y() == Rules.SPAWN_AY)
+                        .findFirst()
+                        .orElseThrow();
         var mover = firstSpawn.playerId().equals(p1.playerId) ? p1 : p2;
         var other = mover == p1 ? p2 : p1;
         var source = player(beforeMove, mover.playerId);
@@ -167,7 +173,8 @@ public final class Scenarios {
         var moveSequence = source.lastSequence() + 1;
         move(p1, p2, mover, moveDelta, 0, moveSequence);
         var afterMove = move(p1, p2, mover, moveDelta, 0, moveSequence + 1);
-        Structure.require(player(afterMove, mover.playerId).lastSequence() == moveSequence + 1
+        Structure.require(
+                player(afterMove, mover.playerId).lastSequence() == moveSequence + 1
                         && player(afterMove, other.playerId).hp() == target.hp(),
                 "Movement changed sequence or player HP");
         rejectAction(mover, new MoveRequest(moveDelta, 0, moveSequence + 1), Rules.STALE_SEQUENCE);
@@ -176,7 +183,8 @@ public final class Scenarios {
         var shotTarget = player(beforeShot, p2.playerId);
         var shotSequence = player(beforeShot, p1.playerId).lastSequence() + 1;
         var afterShot = hit(p1, p2, shotSequence, shotTarget.hp() - Rules.DAMAGE);
-        Structure.require(player(afterShot, p1.playerId).lastSequence() == shotSequence,
+        Structure.require(
+                player(afterShot, p1.playerId).lastSequence() == shotSequence,
                 "Shots lost sequence");
         rejectAction(p1, new ShootRequest(p2.playerId, shotSequence), Rules.STALE_SEQUENCE);
 
@@ -184,30 +192,37 @@ public final class Scenarios {
         rejectAction(mover, new MoveRequest(0, 0, staleSequence), Rules.STALE_SEQUENCE);
         rejectAction(mover, new MoveRequest(0, 0, moveSequence), Rules.STALE_SEQUENCE);
         var stepTooLargeSequence = staleSequence + 1;
-        rejectAction(mover,
+        rejectAction(
+                mover,
                 new MoveRequest(Rules.MAX_STEP + 0.01, 0, stepTooLargeSequence),
                 Rules.STEP_TOO_LARGE);
-        rejectAction(mover,
+        rejectAction(
+                mover,
                 new MoveRequest(0, 0, Rules.MAX_SAFE_INTEGER + 1),
                 Rules.INTEGER_OUT_OF_RANGE);
 
         var outsideStart = moveTo(p1, p2, mover, 1, Rules.SPAWN_AY);
         var outsideSequence = player(outsideStart, mover.playerId).lastSequence() + 1;
-        rejectAction(mover, new MoveRequest(-Rules.MAX_STEP, 0, outsideSequence), Rules.OUTSIDE_MAP);
+        rejectAction(
+                mover, new MoveRequest(-Rules.MAX_STEP, 0, outsideSequence), Rules.OUTSIDE_MAP);
         var beforeWall = moveTo(p1, p2, mover, Rules.WALL_X - Rules.MAX_STEP, WALL_CENTER_Y);
         var wallSequence = player(beforeWall, mover.playerId).lastSequence() + 1;
-        rejectAction(mover, new MoveRequest(Rules.MAX_STEP, 0, wallSequence), Rules.MOVE_BLOCKED_BY_WALL);
+        rejectAction(
+                mover,
+                new MoveRequest(Rules.MAX_STEP, 0, wallSequence),
+                Rules.MOVE_BLOCKED_BY_WALL);
         move(p1, p2, mover, -0.1, 0, Rules.MAX_SAFE_INTEGER);
-        Structure.require(player(view(mover), mover.playerId).lastSequence() == Rules.MAX_SAFE_INTEGER,
+        Structure.require(
+                player(view(mover), mover.playerId).lastSequence() == Rules.MAX_SAFE_INTEGER,
                 "Maximum safe sequence was not accepted");
-        rejectAction(mover,
+        rejectAction(
+                mover,
                 new MoveRequest(0, 0, Rules.MAX_SAFE_INTEGER + 1),
                 Rules.INTEGER_OUT_OF_RANGE);
     }
 
     private static void reconnectScenario(
-            Client a, Client b, SessionInfo identityB, String endpoint)
-            throws Exception {
+            Client a, Client b, SessionInfo identityB, String endpoint) throws Exception {
         var beforeReconnect = hit(a, b, 1, Rules.INITIAL_HP - Rules.DAMAGE);
         b.close();
         try (var again = new Client(endpoint, b.playerId, b.roomId)) {
@@ -287,8 +302,8 @@ public final class Scenarios {
                 "Replacement changed game state or Session binding");
     }
 
-    private static MatchResponse match(String endpoint, String first, String second, boolean omitMode)
-            throws Exception {
+    private static MatchResponse match(
+            String endpoint, String first, String second, boolean omitMode) throws Exception {
         try (var http = HttpClient.newHttpClient()) {
             var a = post(http, endpoint, first, omitMode);
             var b = post(http, endpoint, second, omitMode);
@@ -303,7 +318,9 @@ public final class Scenarios {
             HttpClient http, String endpoint, String player, boolean omitMode) throws Exception {
         String body =
                 Json.MAPPER.writeValueAsString(
-                        omitMode ? Map.of("playerId", player) : new MatchRequest(player, Names.DEFAULT_MODE));
+                        omitMode
+                                ? Map.of("playerId", player)
+                                : new MatchRequest(player, Names.DEFAULT_MODE));
         var request =
                 HttpRequest.newBuilder(URI.create(endpoint + Names.MATCH_PATH))
                         .timeout(Duration.ofSeconds(Client.MESSAGE_SECONDS))
@@ -337,8 +354,14 @@ public final class Scenarios {
                 var b = new Client(nodes.endpoint, pb, assignment.roomId())) {
             a.beginJoin();
             b.beginJoin();
-            var firstView = a.next(RoomView.class, candidate -> candidate.players().size() == Rules.PLAYERS);
-            var view = b.next(RoomView.class, candidate -> candidate.players().size() == Rules.PLAYERS);
+            var firstView =
+                    a.next(
+                            RoomView.class,
+                            candidate -> candidate.players().size() == Rules.PLAYERS);
+            var view =
+                    b.next(
+                            RoomView.class,
+                            candidate -> candidate.players().size() == Rules.PLAYERS);
             Structure.require(
                     firstView.equals(view)
                             && view.roomId().equals(assignment.roomId())
@@ -349,34 +372,38 @@ public final class Scenarios {
         }
     }
 
-    private static RoomView moveTo(
-            Client a, Client b, Client mover, double targetX, double targetY) throws Exception {
+    private static RoomView moveTo(Client a, Client b, Client mover, double targetX, double targetY)
+            throws Exception {
         var current = view(mover);
         while (player(current, mover.playerId).x() != targetX) {
             var p = player(current, mover.playerId);
-            double amount = Math.copySign(Math.min(Rules.MAX_STEP, Math.abs(targetX - p.x())), targetX - p.x());
+            double amount =
+                    Math.copySign(
+                            Math.min(Rules.MAX_STEP, Math.abs(targetX - p.x())), targetX - p.x());
             current = move(a, b, mover, amount, 0, p.lastSequence() + 1);
         }
         while (player(current, mover.playerId).y() != targetY) {
             var p = player(current, mover.playerId);
-            double amount = Math.copySign(Math.min(Rules.MAX_STEP, Math.abs(targetY - p.y())), targetY - p.y());
+            double amount =
+                    Math.copySign(
+                            Math.min(Rules.MAX_STEP, Math.abs(targetY - p.y())), targetY - p.y());
             current = move(a, b, mover, 0, amount, p.lastSequence() + 1);
         }
         return current;
     }
 
     private static RoomView move(
-            Client a, Client b, Client mover, double dx, double dy, long sequence) throws Exception {
+            Client a, Client b, Client mover, double dx, double dy, long sequence)
+            throws Exception {
         var before = view(mover);
         a.clear();
         b.clear();
-        for (;;) {
+        for (; ; ) {
             mover.send(new MoveRequest(dx, dy, sequence));
             Object result = mover.nextAny(ActionRejected.class, RoomView.class);
             if (result instanceof ActionRejected rejected) {
                 Structure.require(
-                        rejected.reason().equals(Rules.MOVE_BUDGET)
-                                && rejected.retryAfterMs() > 0,
+                        rejected.reason().equals(Rules.MOVE_BUDGET) && rejected.retryAfterMs() > 0,
                         "Unexpected movement rejection: " + rejected);
                 sameState(before, view(mover));
                 TimeUnit.MILLISECONDS.sleep(rejected.retryAfterMs());
@@ -389,9 +416,14 @@ public final class Scenarios {
                             && player(moved, mover.playerId).y() == expected.y() + dy,
                     "Server movement result differs");
             var other = mover == a ? b : a;
-            Structure.require(moved.equals(other.next(RoomView.class, view ->
-                    player(view, mover.playerId).x() == expected.x() + dx
-                            && player(view, mover.playerId).y() == expected.y() + dy)),
+            Structure.require(
+                    moved.equals(
+                            other.next(
+                                    RoomView.class,
+                                    view ->
+                                            player(view, mover.playerId).x() == expected.x() + dx
+                                                    && player(view, mover.playerId).y()
+                                                            == expected.y() + dy)),
                     "Room views differ after movement");
             return moved;
         }
@@ -401,7 +433,7 @@ public final class Scenarios {
         var before = view(b);
         a.clear();
         b.clear();
-        for (;;) {
+        for (; ; ) {
             a.send(new ShootRequest(b.playerId, sequence));
             Object result = a.nextAny(ActionRejected.class, RoomView.class);
             if (result instanceof ActionRejected rejected) {
@@ -414,10 +446,7 @@ public final class Scenarios {
                 continue;
             }
             var viewA = (RoomView) result;
-            var viewB =
-                    b.next(
-                            RoomView.class,
-                            view -> player(view, b.playerId).hp() == hp);
+            var viewB = b.next(RoomView.class, view -> player(view, b.playerId).hp() == hp);
             Structure.require(
                     viewA.equals(viewB) && player(viewA, b.playerId).hp() == hp,
                     "Room views differ after shot");
@@ -468,12 +497,15 @@ public final class Scenarios {
                         && b.disconnects.get() == 0,
                 "Client disconnected");
     }
-    private static ActionRejected rejectAction(
-            Client player, Object request, String reason) throws Exception {
+
+    private static ActionRejected rejectAction(Client player, Object request, String reason)
+            throws Exception {
         var before = view(player);
         player.send(request);
         var response = player.next(ActionRejected.class);
-        Structure.require(response.reason().equals(reason), "Expected " + reason + "; received " + response.reason());
+        Structure.require(
+                response.reason().equals(reason),
+                "Expected " + reason + "; received " + response.reason());
         var timeLimited = reason.equals(Rules.MOVE_BUDGET) || reason.equals(Rules.FIRE_TOO_SOON);
         Structure.require(
                 timeLimited ? response.retryAfterMs() > 0 : response.retryAfterMs() == 0,
@@ -481,5 +513,4 @@ public final class Scenarios {
         sameState(before, view(player));
         return response;
     }
-
 }

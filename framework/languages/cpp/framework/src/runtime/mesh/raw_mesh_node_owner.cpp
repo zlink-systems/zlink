@@ -3881,6 +3881,7 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
                                               now);
         }
         const bool application = is_application_record (header.kind);
+        // Only application records can claim an ended admission for their route generation.
         const auto admitted = _topology.claim_ingress_peer (
           {source_rid.data (), source_rid.size ()}, route_generation, application);
         if (!admitted) {

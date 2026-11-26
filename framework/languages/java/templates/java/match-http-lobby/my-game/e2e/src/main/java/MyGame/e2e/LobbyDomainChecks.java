@@ -17,7 +17,10 @@ final class LobbyDomainChecks {
     static void run() throws Exception {
         int[] checks = {0};
         var roster = new RoomRoster();
-        check(checks, !roster.canAdmit("a") && !roster.canAdmit("outsider"), "unprepared Room rejects admission");
+        check(
+                checks,
+                !roster.canAdmit("a") && !roster.canAdmit("outsider"),
+                "unprepared Room rejects admission");
         check(
                 checks,
                 rejects(() -> roster.prepare("room", new PrepareRoom("other", List.of("a", "b")))),
@@ -34,7 +37,8 @@ final class LobbyDomainChecks {
         var members = new ArrayList<>(List.of("a", "b"));
         check(
                 checks,
-                roster.prepare("room", new PrepareRoom("room", members)).equals(new RoomPrepared("room")),
+                roster.prepare("room", new PrepareRoom("room", members))
+                        .equals(new RoomPrepared("room")),
                 "preparation acknowledges identity");
         members.set(0, "outsider");
         check(
@@ -47,7 +51,11 @@ final class LobbyDomainChecks {
         check(checks, rosterSnapshot.equals(roster.capture()), "same preparation is idempotent");
         check(
                 checks,
-                rejects(() -> roster.prepare("room", new PrepareRoom("room", List.of("a", "outsider"))))
+                rejects(
+                                () ->
+                                        roster.prepare(
+                                                "room",
+                                                new PrepareRoom("room", List.of("a", "outsider"))))
                         && rosterSnapshot.equals(roster.capture()),
                 "prepared roster cannot be replaced");
 
@@ -80,18 +88,30 @@ final class LobbyDomainChecks {
                 "relocation envelope retains roster, state and sequence");
         check(
                 checks,
-                rejects(() -> restoredRoster.prepare("room", new PrepareRoom("room", List.of("a", "outsider")))),
+                rejects(
+                        () ->
+                                restoredRoster.prepare(
+                                        "room", new PrepareRoom("room", List.of("a", "outsider")))),
                 "relocated roster cannot be replaced");
         check(
                 checks,
-                rejects(() -> new RoomRoster().restore(new RoomRoster.RosterSnapshot(null, List.of("a")))),
+                rejects(
+                        () ->
+                                new RoomRoster()
+                                        .restore(
+                                                new RoomRoster.RosterSnapshot(null, List.of("a")))),
                 "unprepared snapshot with members");
 
         var provisioner = new RecordingProvisioner();
         try (var matches = new Matchmaker(provisioner)) {
             var defaultA = matches.match(new MatchRequest("default-a", null)).toCompletableFuture();
-            var defaultB = matches.match(new MatchRequest("default-b", Names.DEFAULT_MODE)).toCompletableFuture();
-            check(checks, defaultA.join().equals(defaultB.join()), "omitted HTTP mode defaults to duel");
+            var defaultB =
+                    matches.match(new MatchRequest("default-b", Names.DEFAULT_MODE))
+                            .toCompletableFuture();
+            check(
+                    checks,
+                    defaultA.join().equals(defaultB.join()),
+                    "omitted HTTP mode defaults to duel");
 
             var rankedA = matches.match(new MatchRequest("ra", "ranked")).toCompletableFuture();
             var casualA = matches.match(new MatchRequest("ca", "casual")).toCompletableFuture();
@@ -129,7 +149,8 @@ final class LobbyDomainChecks {
         }
         check(
                 checks,
-                provisioner.calls.stream().allMatch(call -> call.roomId().matches("room-[0-9a-f]{32}")),
+                provisioner.calls.stream()
+                        .allMatch(call -> call.roomId().matches("room-[0-9a-f]{32}")),
                 "Room ID uses prefix and lowercase UUID");
 
         var pending = new RecordingProvisioner();
@@ -143,10 +164,15 @@ final class LobbyDomainChecks {
                     "HTTP assignments wait for RoomPrepared");
             var call = pending.calls.getFirst();
             pending.completion.complete(new MatchResponse(call.roomId(), "ws://127.0.0.1:1"));
-            check(checks, waitingA.join().equals(waitingB.join()), "preparation releases both HTTP responses");
+            check(
+                    checks,
+                    waitingA.join().equals(waitingB.join()),
+                    "preparation releases both HTTP responses");
         }
 
-        if (checks[0] != 19) throw new IllegalStateException("Expected 19 HTTP domain boundaries, received " + checks[0]);
+        if (checks[0] != 19)
+            throw new IllegalStateException(
+                    "Expected 19 HTTP domain boundaries, received " + checks[0]);
         System.out.println("HTTP domain boundaries: " + checks[0] + "/" + checks[0] + " passed");
     }
 
@@ -172,12 +198,14 @@ final class LobbyDomainChecks {
         public CompletionStage<MatchResponse> prepare(String roomId, List<String> members) {
             calls.add(new Call(roomId, List.copyOf(members)));
             if (completion != null) return completion;
-            return CompletableFuture.completedFuture(new MatchResponse(roomId, "tcp://localhost:1"));
+            return CompletableFuture.completedFuture(
+                    new MatchResponse(roomId, "tcp://localhost:1"));
         }
 
         private boolean hasMembers(List<String> expected) {
             var expectedSet = new HashSet<>(expected);
-            return calls.stream().anyMatch(call -> new HashSet<>(call.members()).equals(expectedSet));
+            return calls.stream()
+                    .anyMatch(call -> new HashSet<>(call.members()).equals(expectedSet));
         }
     }
 

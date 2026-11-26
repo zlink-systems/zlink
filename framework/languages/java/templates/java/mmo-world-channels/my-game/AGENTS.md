@@ -2,7 +2,11 @@
 
 ## Client connection
 
-Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. TCP listeners cannot serve browser, WebGL or Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. Use the published WebSocket endpoint for browser, WebGL and Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+
+## Use this template as a reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
 
 ## Rules for AI
 
@@ -25,6 +29,14 @@ Every server process in this project is a stateful ZLink node. Before writing co
 
 Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/java/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
+## Local server and E2E
+
+Run one scenario with `./run-e2e.sh --scenario worlds`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
+Start the server with `./run-server.sh` or `.\run-server.cmd` on Windows. Use its reported `ws://` endpoint and press Ctrl+C in its terminal to stop the nodes and Redis.
+
+Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner attaches using `.logs/server.json` while the server is running and otherwise starts an isolated Docker stack. The [README](README.md#local-server) describes the checks that require isolation. Use `.logs/run-<id>/` for stdout, stderr, Framework message-flow logs and failure details. Docker build and cleanup output is under `.logs/docker-*/`.
+
 ## Project overview
 
 This Java 25 project is a traditional MMORPG example with independent worlds and switchable channels. An accounts service lists the worlds over HTTP; each world has its own Session node, play nodes (channel), and Redis database; a player's gold is application data in that world's database. `build.gradle.kts` pins the ZLink Framework to `0.34.2` and the binding to `1.26.0`.
@@ -38,10 +50,10 @@ The project layout below describes where to add gameplay, and "Developing from t
 Default builds and e2e run nodes and the client in Docker, so they need Docker with Compose v2 and no host JDK. Run these commands from this directory.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario worlds,channel,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario worlds,channel,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 Bash provides the same workflow:
@@ -117,6 +129,10 @@ Requests in the example game follow this path. Reading the code along this path 
 6. To replace a node, the `drain` control in `Hosting.run` requests relocation. Framework takes the game state from `capture` in `PlayerTransfer` and `ZoneTransfer` and calls `restore` on another node.
 
 ## Extend this template's domain
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Mark a nullable record component with `@Nullable`. Use `@ZLinkJsonOptional` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/java/guide/server/20-channel-messaging/#12-message-value-rules)
 
 Extend this template's domain to build an MMO world-and-channel server. Keep one owner for each game decision.
 

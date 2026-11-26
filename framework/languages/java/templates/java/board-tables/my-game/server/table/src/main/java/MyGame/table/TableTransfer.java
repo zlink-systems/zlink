@@ -22,6 +22,10 @@ public final class TableTransfer implements ZLinkSpotRelocationAdapter<Table> {
         Transfer.check(cancellation);
         try {
             entity.state = Json.MAPPER.readValue(state, TableState.class);
+            entity.log(
+                    entity.state.inHand
+                            ? "moved in (hand " + entity.state.handNumber + " in progress)"
+                            : "moved in");
             return CompletableFuture.completedFuture(null);
         } catch (Exception error) {
             return CompletableFuture.failedFuture(error);

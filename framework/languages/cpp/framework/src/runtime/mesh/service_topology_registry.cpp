@@ -595,7 +595,7 @@ service_topology_registry_t::claim_ingress_peer (std::span<const std::uint8_t> n
 {
     auto topology = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
     const auto current = topology->peers.find (node_routing_id);
-    if (current != topology->peers.end () && (!application || current->second.ready)
+    if (current != topology->peers.end ()
         && detail::backend::is_route_connection (current->second.connection_id, route_generation))
         return {std::move (topology), &current->second};
     if (application) {

@@ -33,14 +33,28 @@ public final class Entry implements ZLinkEntrySpot<Player> {
                     .boundSession()
                     .send(new ActionRejected(Rules.INVALID_PARTY))
                     .submit();
-        if (!create) return spots.find(partyId).thenCompose(found -> {
-            if (found.isEmpty()) return actor.context().boundSession().send(new ActionRejected(Rules.INVALID_PARTY)).submit();
-            actor.context().joinSpot(partyId, new PartyJoin(partyId, false)).defer();
-            return CompletableFuture.completedFuture(null);
-        });
-        return spots.getOrCreate(partyId, Names.PARTY).inMesh(Names.MESH).submit().thenAccept(result -> {
-            if (result.state() == ZLinkSpotCreateState.REJECTED) throw new IllegalStateException("Party creation rejected");
-            actor.context().joinSpot(partyId, new PartyJoin(partyId, true)).defer();
-        });
+        if (!create)
+            return spots.find(partyId)
+                    .thenCompose(
+                            found -> {
+                                if (found.isEmpty())
+                                    return actor.context()
+                                            .boundSession()
+                                            .send(new ActionRejected(Rules.INVALID_PARTY))
+                                            .submit();
+                                actor.context()
+                                        .joinSpot(partyId, new PartyJoin(partyId, false))
+                                        .defer();
+                                return CompletableFuture.completedFuture(null);
+                            });
+        return spots.getOrCreate(partyId, Names.PARTY)
+                .inMesh(Names.MESH)
+                .submit()
+                .thenAccept(
+                        result -> {
+                            if (result.state() == ZLinkSpotCreateState.REJECTED)
+                                throw new IllegalStateException("Party creation rejected");
+                            actor.context().joinSpot(partyId, new PartyJoin(partyId, true)).defer();
+                        });
     }
 }

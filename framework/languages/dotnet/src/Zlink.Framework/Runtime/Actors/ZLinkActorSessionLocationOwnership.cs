@@ -252,183 +252,144 @@ internal sealed partial class ZLinkActorSessionManager
         ZLinkActorRuntimeState state,
         ZLinkBackendActorRef nativeActor,
         ZLinkActorTeardownOperation transaction,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool publishClosing = false
     )
     {
-        if (!transaction.OwnsExecution)
+        var authority = publishClosing ? LocationLifecycle?.ActorOwnership : null;
+        if (transaction.OwnsExecution)
         {
-            var sharedFailure = await transaction
-                .Completion.WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
-            if (sharedFailure is not null)
-                System
-                    .Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(sharedFailure)
-                    .Throw();
-            return;
-        }
-
-        if (state.OwnsCurrentDispatch)
-        {
-            var terminal = state.BeginHandlerActivationAsyncCompletion(() =>
-                CompleteActorTeardownAfterCurrentDispatchAsync(
-                    state,
-                    nativeActor,
-                    transaction,
-                    cancellationToken
-                )
-            );
-            _ = ObserveDeferredActorTeardownAsync(state, nativeActor, terminal.Completion);
-            return;
-        }
-
-        var nativeDestroyed = transaction.NativeAlreadyDestroyed;
-        var terminalStateCommitted = false;
-        try
-        {
-            if (!nativeDestroyed)
+            bool closingPublished;
+            try
             {
-                var node =
-                    getActorSpotNode()
-                    ?? throw new InvalidOperationException(
-                        $"Actor '{state.ActorId}' teardown cannot confirm native destruction without a SpotNode."
-                    );
-                await DestroyNativeActorAttemptAsync(node, nativeActor, cancellationToken)
-                    .ConfigureAwait(false);
-
+                closingPublished =
+                    authority is not null
+                    && await authority
+                        .PublishClosingAsync(state, nativeActor)
+                        .ConfigureAwait(false);
+            }
+            catch (Exception failure)
+            {
                 await state
                     .ExecuteLockedAsync(
-                        () => state.MarkNativeDestroyed(transaction),
+                        () =>
+                            state.FailTeardownAttempt(
+                                transaction,
+                                transaction.NativeAlreadyDestroyed,
+                                failure
+                            ),
                         CancellationToken.None
                     )
                     .ConfigureAwait(false);
-                nativeDestroyed = true;
+                throw;
             }
 
-            if (LocationLifecycle is { } lifecycle)
-                await lifecycle
-                    .ActorOwnership.ReleaseActorAsync(state.RuntimeActorId, cancellationToken)
-                    .ConfigureAwait(false);
+            var teardown = state.BeginHandlerActivationAsyncCompletion(async () =>
+            {
+                var nativeDestroyed = transaction.NativeAlreadyDestroyed;
+                try
+                {
+                    if (!nativeDestroyed)
+                    {
+                        var node =
+                            getActorSpotNode()
+                            ?? throw new InvalidOperationException(
+                                $"Actor '{state.ActorId}' teardown cannot confirm native destruction without a SpotNode."
+                            );
+                        await DestroyNativeActorAttemptAsync(node, nativeActor, cancellationToken)
+                            .ConfigureAwait(false);
+                        await state
+                            .ExecuteLockedAsync(
+                                () => state.MarkNativeDestroyed(transaction),
+                                CancellationToken.None
+                            )
+                            .ConfigureAwait(false);
+                        nativeDestroyed = true;
+                    }
 
-            var terminal = state.BeginHandlerActivationCompletion(() =>
-            {
-                var result = state.CompleteTeardownAttemptOnLane(transaction);
-                terminalStateCommitted = true;
-                return result;
+                    await state.DisposeHandlerActivationAsync().ConfigureAwait(false);
+
+                    if (state.TryGetBoundSession(out var session))
+                        runtime.RemoveActorSessionBinding(state.ActorId, session.BindingToken);
+
+                    if (LocationLifecycle is { } lifecycle)
+                        await lifecycle
+                            .ActorOwnership.ReleaseActorAsync(
+                                state.RuntimeActorId,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false);
+
+                    await state
+                        .ExecuteLockedAsync(
+                            () =>
+                            {
+                                _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
+                                state.CompleteTeardownAttemptOnLane(transaction);
+                            },
+                            CancellationToken.None
+                        )
+                        .ConfigureAwait(false);
+                }
+                catch (Exception failure)
+                {
+                    await state
+                        .ExecuteLockedAsync(
+                            () =>
+                                state.FailTeardownAttempt(
+                                    transaction,
+                                    nativeDestroyed,
+                                    failure,
+                                    keepTerminal: closingPublished
+                                ),
+                            CancellationToken.None
+                        )
+                        .ConfigureAwait(false);
+                    return failure;
+                }
+                return null;
             });
-            if (terminal.RequiresDispatchRelease)
+
+            if (teardown.RequiresDispatchRelease)
             {
-                _ = CompleteDeferredActorTeardownAsync(
+                _ = ObserveDeferredActorTeardownAsync(
                     state,
                     nativeActor,
-                    transaction,
-                    nativeDestroyed,
-                    terminal.Completion
+                    teardown.Completion,
+                    !closingPublished
                 );
                 return;
             }
 
-            var boundSession = await terminal.Completion.ConfigureAwait(false);
-            if (boundSession is { } session)
-                runtime.RemoveActorSessionBinding(state.ActorId, session.BindingToken);
-            _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
+            await teardown.Completion.ConfigureAwait(false);
         }
-        catch (Exception failure)
+
+        if (state.OwnsCurrentDispatch && !transaction.Completion.IsCompleted)
         {
-            if (terminalStateCommitted)
-            {
-                _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
-                throw;
-            }
-            await state
-                .ExecuteLockedAsync(
-                    () => state.FailTeardownAttempt(transaction, nativeDestroyed, failure),
-                    CancellationToken.None
-                )
-                .ConfigureAwait(false);
-            throw;
+            if (authority is not null)
+                await authority.PublishClosingAsync(state, nativeActor).ConfigureAwait(false);
+            return;
         }
-    }
 
-    private async ValueTask<ZLinkActorBoundSession?> CompleteActorTeardownAfterCurrentDispatchAsync(
-        ZLinkActorRuntimeState state,
-        ZLinkBackendActorRef nativeActor,
-        ZLinkActorTeardownOperation transaction,
-        CancellationToken cancellationToken
-    )
-    {
-        var nativeDestroyed = transaction.NativeAlreadyDestroyed;
-        var terminalStateCommitted = false;
-        try
-        {
-            if (!nativeDestroyed)
-            {
-                var node =
-                    getActorSpotNode()
-                    ?? throw new InvalidOperationException(
-                        $"Actor '{state.ActorId}' teardown cannot confirm native destruction without a SpotNode."
-                    );
-                await DestroyNativeActorAttemptAsync(node, nativeActor, cancellationToken)
-                    .ConfigureAwait(false);
-
-                await state
-                    .ExecuteLockedAsync(
-                        () => state.MarkNativeDestroyed(transaction),
-                        CancellationToken.None
-                    )
-                    .ConfigureAwait(false);
-                nativeDestroyed = true;
-            }
-
-            if (LocationLifecycle is { } lifecycle)
-                await lifecycle
-                    .ActorOwnership.ReleaseActorAsync(state.RuntimeActorId, cancellationToken)
-                    .ConfigureAwait(false);
-
-            return await state
-                .ExecuteLockedAsync(
-                    () =>
-                    {
-                        var result = state.CompleteTeardownAttemptOnLane(transaction);
-                        terminalStateCommitted = true;
-                        return result;
-                    },
-                    CancellationToken.None
-                )
-                .ConfigureAwait(false);
-        }
-        catch (Exception failure)
-        {
-            if (terminalStateCommitted)
-                throw;
-            await state
-                .ExecuteLockedAsync(
-                    () => state.FailTeardownAttempt(transaction, nativeDestroyed, failure),
-                    CancellationToken.None
-                )
-                .ConfigureAwait(false);
-            throw;
-        }
+        var sharedFailure = await transaction
+            .Completion.WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (sharedFailure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(sharedFailure).Throw();
     }
 
     private async Task ObserveDeferredActorTeardownAsync(
         ZLinkActorRuntimeState state,
         ZLinkBackendActorRef nativeActor,
-        Task<ZLinkActorBoundSession?> completion
+        Task<Exception?> completion,
+        bool reconcile
     )
     {
-        try
+        if (await completion.ConfigureAwait(false) is { } failure)
         {
-            var boundSession = await completion.ConfigureAwait(false);
-            if (boundSession is { } session)
-                runtime.RemoveActorSessionBinding(state.ActorId, session.BindingToken);
-            _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
-        }
-        catch (Exception failure)
-        {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"deferred actor teardown failed for '{state.ActorId}': {failure.Message}"
-            );
-            StartActorTeardownReconciliation(state, nativeActor, SelfTeardownOperationName);
+            runtime.ErrorSink.ReportRuntimeTaskException(SelfTeardownOperationName, failure);
+            if (reconcile)
+                StartActorTeardownReconciliation(state, nativeActor, SelfTeardownOperationName);
         }
     }
 
@@ -451,55 +412,6 @@ internal sealed partial class ZLinkActorSessionManager
                 $"actor-source-handoff-cleanup:{state.ActorId}",
                 failures.Count == 1 ? failures[0] : new AggregateException(failures)
             );
-    }
-
-    private async Task CompleteDeferredActorTeardownAsync(
-        ZLinkActorRuntimeState state,
-        ZLinkBackendActorRef nativeActor,
-        ZLinkActorTeardownOperation transaction,
-        bool nativeDestroyed,
-        Task<ZLinkActorBoundSession?> completion
-    )
-    {
-        try
-        {
-            var boundSession = await completion.ConfigureAwait(false);
-            if (boundSession is { } session)
-                runtime.RemoveActorSessionBinding(state.ActorId, session.BindingToken);
-            _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
-        }
-        catch (Exception failure)
-        {
-            if (
-                transaction.Completion.IsCompletedSuccessfully
-                && transaction.Completion.Result is null
-            )
-            {
-                _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"deferred actor teardown disposal failed for '{state.ActorId}': {failure.Message}"
-                );
-                return;
-            }
-
-            try
-            {
-                await state
-                    .ExecuteLockedAsync(
-                        () => state.FailTeardownAttempt(transaction, nativeDestroyed, failure),
-                        CancellationToken.None
-                    )
-                    .ConfigureAwait(false);
-            }
-            catch (Exception reconciliationFailure)
-            {
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"deferred actor teardown state reconciliation failed for '{state.ActorId}': {reconciliationFailure.Message}"
-                );
-            }
-
-            StartActorTeardownReconciliation(state, nativeActor, SelfTeardownOperationName);
-        }
     }
 
     private void StartActorTeardownReconciliation(

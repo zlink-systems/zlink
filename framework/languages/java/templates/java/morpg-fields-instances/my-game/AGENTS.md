@@ -2,7 +2,11 @@
 
 ## Client connection
 
-Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. TCP listeners cannot serve browser, WebGL or Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. Use the published WebSocket endpoint for browser, WebGL and Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+
+## Use this template as a reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
 
 ## Rules for AI
 
@@ -25,6 +29,14 @@ Every server process in this project is a stateful ZLink node. Before writing co
 
 Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/java/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
+## Local server and E2E
+
+Run one scenario with `./run-e2e.sh --scenario field`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
+Start the server with `./run-server.sh` or `.\run-server.cmd` on Windows. Use its reported `ws://` endpoint and press Ctrl+C in its terminal to stop the nodes and Redis.
+
+Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner attaches using `.logs/server.json` while the server is running and otherwise starts an isolated Docker stack. The [README](README.md#local-server) describes the checks that require isolation. Use `.logs/run-<id>/` for stdout, stderr, Framework message-flow logs and failure details. Docker build and cleanup output is under `.logs/docker-*/`.
+
 ## Project overview
 
 This Java 25 project is a MORPG example in which shared Fields are split across nodes like a seamless world and parties move from a Field into a private dungeon. It runs a Session node for connections, play nodes A and B (field) (four Fields, two per host), play nodes A and B (dungeon) that create Dungeons on demand, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.34.2` and the binding to `1.26.0`.
@@ -38,10 +50,10 @@ The project layout below describes where to add gameplay, and "Developing from t
 Default builds and e2e run nodes and the client in Docker, so they need Docker with Compose v2 and no host JDK. Run these commands from this directory.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario field,dungeon,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 Bash provides the same workflow:
@@ -71,6 +83,8 @@ An Actor is a game state object addressed by ID; `Player` in `server/shared/src/
 ### Dungeons
 
 `server/instance/src/main/java/MyGame/instance/Program.java` registers the Dungeon factory (`dungeonCapacity` from `server/config/instanceA.json`) and the Entry Spot. `Dungeon` is an application-created User Spot, distinct from the Framework Instance Spot; `DungeonRun` stores the owner Party Spot ID, Run ID, admitted members, phase, and stage. Dungeon IDs derive from server-issued `run-` IDs. `Prepare.prepare` handles idempotent preparation. After all members arrive, Dungeon sends `RunStarted` to the owner Party Spot; completion sends `RunCompleted` to the same Party ID. In a Dungeon, `EnterDungeonRequest` returns the current state, while town-only Party requests are rejected with `run-in-progress`.
+
+`LeaveDungeonRequest` runs in the Dungeon Actor handler. The Dungeon reports `remainingPlayers` from its joined players after the public membership leave. Only when the count is zero does the Session ask the public Spot manager to close the same Spot generation from outside the Dungeon turn. The Session then replies with `DungeonLeft`. Disconnect preserves Dungeon membership for reconnect.
 
 ### Shared contracts and hosting
 
@@ -124,6 +138,10 @@ Requests in the example game follow this path. Reading the code along this path 
 8. To replace a node, `drain` requests relocation. `FieldTransfer` saves visibility and `FieldPositionDomain` snapshots with remaining milliseconds; `PartyTransfer`, `DungeonTransfer`, and `PlayerTransfer` preserve their owned state. Framework restores the workload on another node.
 
 ## Extending the template domain
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Mark a nullable record component with `@Nullable`. Use `@ZLinkJsonOptional` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/java/guide/server/20-channel-messaging/#12-message-value-rules)
 
 Extend this template's domain to build a MORPG server. Run the README build and e2e commands before adding features.
 

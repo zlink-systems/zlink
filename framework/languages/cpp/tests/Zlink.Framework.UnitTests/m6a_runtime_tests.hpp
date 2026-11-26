@@ -41,6 +41,7 @@ void verify_manual_object_client_pair_ends_not_required ();
 void verify_signed_weight_contract ();
 void verify_durable_attempt_waits_for_admit (protocol::command kind);
 void verify_topology_ready_is_remote_admit_on_current_route ();
+void verify_application_ingress_after_local_admit ();
 void verify_unadmitted_route (bool repeat_hello);
 void verify_envelope_body_retains_native_storage ();
 void verify_application_owner_drain_transitions ();

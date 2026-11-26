@@ -167,11 +167,14 @@ internal sealed class ZLinkActorRuntimeState(
         return RunState(() =>
         {
             CloseHandlerActivationCore();
-            var barrier = _dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier();
+            var previous = _terminalLifecycleCompletion;
+            var barrier = previous is null
+                ? _dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier()
+                : null;
             Task<T> completion;
             using (ExecutionContext.SuppressFlow())
                 completion = Task.Run(() =>
-                    CompleteHandlerActivationAsyncCoreAsync(barrier, terminalTransition)
+                    CompleteHandlerActivationAsyncCoreAsync(barrier, previous, terminalTransition)
                 );
             _terminalLifecycleCompletion = completion;
             return new ZLinkActorHandlerTerminalCompletion<T>(completion, requiresDispatchRelease);
@@ -211,7 +214,8 @@ internal sealed class ZLinkActorRuntimeState(
     }
 
     private async Task<T> CompleteHandlerActivationAsyncCoreAsync<T>(
-        ZLinkActorSerialExecutor.BarrierReservation barrier,
+        ZLinkActorSerialExecutor.BarrierReservation? barrier,
+        Task? previous,
         Func<ValueTask<T>> terminalTransition
     )
     {
@@ -220,15 +224,21 @@ internal sealed class ZLinkActorRuntimeState(
         // must not run while the managed Actor mailbox turn remains claimed.
         try
         {
-            using (await barrier.ClaimAsync().ConfigureAwait(false)) { }
-            await barrier.Completion.ConfigureAwait(false);
+            if (barrier is not null)
+            {
+                using (await barrier.ClaimAsync().ConfigureAwait(false)) { }
+                await barrier.Completion.ConfigureAwait(false);
+            }
+            else
+                await previous!.ConfigureAwait(false);
             var result = await terminalTransition().ConfigureAwait(false);
             await DisposeHandlerActivationAsync().ConfigureAwait(false);
             return result;
         }
         finally
         {
-            await _dispatchMailbox.ReleaseExecutionPlacementAsync().ConfigureAwait(false);
+            if (barrier is not null)
+                await _dispatchMailbox.ReleaseExecutionPlacementAsync().ConfigureAwait(false);
         }
     }
 
@@ -1463,6 +1473,26 @@ internal sealed class ZLinkActorRuntimeState(
             RetiredLocalActorRef = null;
     }
 
+    internal async ValueTask WaitForPriorDestroyAsync(
+        ulong generation,
+        CancellationToken cancellationToken
+    )
+    {
+        var terminal = await ExecuteLockedAsync(
+                () =>
+                    NativeActorRef is { } current && current.Generation != generation
+                        ? _teardownAttempt?.Task
+                        : null,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        if (
+            terminal is not null
+            && await terminal.WaitAsync(cancellationToken).ConfigureAwait(false) is { } failure
+        )
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
     internal ZLinkActorTeardownOperation BeginOrJoinTeardownAttemptOnLane(
         ZLinkBackendActorRef nativeActor
     )
@@ -1515,7 +1545,8 @@ internal sealed class ZLinkActorRuntimeState(
     public void FailTeardownAttempt(
         ZLinkActorTeardownOperation operation,
         bool nativeDestroyed,
-        Exception failure
+        Exception failure,
+        bool keepTerminal = false
     )
     {
         EnsureCurrentTeardownAttempt(operation);
@@ -1524,7 +1555,8 @@ internal sealed class ZLinkActorRuntimeState(
         else
             _destroyPhase = ZLinkActorDestroyPhase.DestroyingNative;
         var completion = _teardownAttempt!;
-        _teardownAttempt = null;
+        if (!keepTerminal)
+            _teardownAttempt = null;
         completion.TrySetResult(failure);
     }
 

@@ -1,5 +1,15 @@
 # MyGame development guide
 
+## Template reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+## Local execution
+
+Start the local deployment with `./run-server.sh` or `.\run-server.cmd`. From another terminal run `./run-e2e.sh` or `.\run-e2e.cmd`. The e2e runner attaches when the server is ready and otherwise starts an isolated Docker deployment. The `lobby` and `update` scenarios start or replace nodes and require an isolated run. Use `--isolated` or `-Isolated` to force isolation. Stop the local server with Ctrl+C.
+
+Node stdout, stderr, message flow and scenario failure details are under `.logs/run-<id>/`. Follow the paths printed by both commands when diagnosing an attached run.
+
 ## Rules for AI
 
 `server/lobby` is an API node that holds no game state; the session node manages client connections, and the play nodes host the game Spots. Before writing code, decide which kind you are editing.
@@ -33,13 +43,15 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
+Run one scenario with `./run-e2e.sh --scenario lobby`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Default builds and e2e run nodes and the client in Docker without a host JDK. Run these commands from this directory.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario lobby,hit,wall,input,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 Bash provides the same workflow:
@@ -121,6 +133,10 @@ Requests in the example game follow this path. Reading the code along this path 
 
 ## Extend this template's domain
 
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use a nullable Kotlin type such as `String?` in a DTO. A Java record used from Kotlin declares nullability with `@Nullable`. To allow omission in a Kotlin DTO, declare a primary-constructor default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
+
 Extend this template's domain to build a two-dimensional action server. Keep each decision in the object that owns the state it changes.
 
 - Add game state and its decision rules in `server/match/src/main/kotlin/MyGame/match/domain/RoomState.kt`. Add matched membership and admission rules in `RoomRoster.kt` in the same domain package.
@@ -171,7 +187,7 @@ options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
 ### Message flow investigation
 
-Framework logs, including message flow, go to stderr (`server/shared/src/main/resources/logback.xml` configures the appender), so inspect message flow in the `<node>-stderr.log` files; the template creates no separate flow file. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. Flow records contain `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
+The runner saves Framework message flow to each node’s `*-message-flow.log` and other diagnostics to `*-stderr.log`. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. Flow records contain `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
 
 Read the failure fields and preceding stage together without filtering categories out. Flow IDs differ between runs, so compare passing and failing runs by logical operation, Actor ID, and stage order to find the first missing or failed stage. If startup fails before message flow recording, preserve the startup exception and stack.
 

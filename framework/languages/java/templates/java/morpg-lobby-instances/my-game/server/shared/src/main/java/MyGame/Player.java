@@ -1,16 +1,18 @@
 package MyGame;
 
-import MyGame.*;
 import systems.zlink.framework.actors.*;
 
 import java.util.concurrent.*;
 
 public final class Player implements ZLinkActor {
-    public CompletionStage<Void> deliver(Object message) { return deliver(message, true); }
+    public CompletionStage<Void> deliver(Object message) {
+        return deliver(message, true);
+    }
 
     public CompletionStage<Void> deliver(Object message, boolean visible) {
         String sourceSpotId = message instanceof DungeonView value ? value.dungeonId() : null;
-        if (sourceSpotId != null && (!sourceSpotId.equals(context.spotId().orElse(null)) || !visible))
+        if (sourceSpotId != null
+                && (!sourceSpotId.equals(context.spotId().orElse(null)) || !visible))
             return CompletableFuture.completedFuture(null);
         return context.boundSession().send(message).submit();
     }

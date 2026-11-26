@@ -38,6 +38,7 @@ class Room(
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {
+        println("EVENT Room joined: ${context.spotId()}")
         clients.kotlin().sendToActor(actor.context.actorId(), MatchFound(context.spotId())).await()
         broadcast(view())
     }
@@ -46,7 +47,8 @@ class Room(
 
     fun prepare(request: PrepareRoom): RoomPrepared = roster.prepare(context.spotId(), request)
 
-    private fun view() = RoomView(context.spotId(), config.id, state.view(), state.phase, state.winner)
+    private fun view() =
+        RoomView(context.spotId(), config.id, state.view(), state.phase, state.winner)
 
     suspend fun current(actor: Player) {
         reply(actor, view())
@@ -71,7 +73,10 @@ class Room(
         }
         reply(actor, requireNotNull(decision.result))
         broadcast(view())
-        state.winner?.let { broadcast(MatchEnded(it)) }
+        state.winner?.let {
+            println("EVENT Match completed: ${context.spotId()}")
+            broadcast(MatchEnded(it))
+        }
     }
 
     private suspend fun broadcast(message: Any) {
@@ -92,7 +97,9 @@ class RoomTransfer : ZLinkSpotRelocationAdapter<Room> {
     ): CompletionStage<ByteArray> {
         cancellation.ensureActive()
         return CompletableFuture.completedFuture(
-            Json.mapper.writeValueAsBytes(HttpRoomSnapshot(entity.state.capture(), entity.roster.capture()))
+            Json.mapper.writeValueAsBytes(
+                HttpRoomSnapshot(entity.state.capture(), entity.roster.capture())
+            )
         )
     }
 

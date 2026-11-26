@@ -10,6 +10,8 @@ import java.util.*;
 public final class Structure {
     private Structure() {}
 
+    private record Channel(String name, String owner, String kind, String role) {}
+
     private record Edge(String from, String to, String label, String semantic) {}
 
     static void require(boolean value, String message) {
@@ -93,23 +95,58 @@ public final class Structure {
                 require(node.path("config").isNull(), "External config must be null");
             else {
                 var file = configPath(root, text(node, "config"));
-                if (!role.equals("location-store"))
+                if (!role.equals("location-store")) {
+                    var config = Json.MAPPER.readTree(file.toFile());
                     require(
-                            Json.MAPPER.readTree(file.toFile()).path("id").asText().equals(id),
+                            config.path("id").asText().equals(id),
                             "Configuration Id mismatch: " + file);
+                    if (role.equals("api")) text(config, "apiEndpoint");
+                }
             }
         }
-        var channels = array(s, "channels");
-        unique(channels.stream().map(c -> List.of(text(c, "name"), owner(c, roles))).toList());
-        require(channels.isEmpty(), "Server registers no channels");
+        require("api".equals(roles.get("api")), "Missing API node");
+        require(
+                roles.values().stream().filter("api"::equals).count() == 1,
+                "Expected one API node");
+        var channels =
+                array(s, "channels").stream()
+                        .map(
+                                c ->
+                                        new Channel(
+                                                text(c, "name"),
+                                                owner(c, roles),
+                                                text(c, "kind"),
+                                                text(c, "role")))
+                        .toList();
+        unique(channels.stream().map(c -> List.of(c.name(), c.owner())).toList());
+        var expectedChannels = new HashSet<Channel>();
+        expectedChannels.add(new Channel(Names.API, "api", "client-server", "server"));
+        for (var entry : roles.entrySet()) {
+            if (entry.getValue().equals("table"))
+                expectedChannels.add(
+                        new Channel(Names.API, entry.getKey(), "client-server", "client"));
+        }
+        require(Set.copyOf(channels).equals(expectedChannels), "Invalid API channel declarations");
         var spots = array(s, "spots");
         unique(spots.stream().map(p -> text(p, "id")).toList());
         var logical = new ArrayList<String>();
         boolean dynamic = false;
+        int pools = 0;
+        int provisioners = 0;
         for (var spot : spots) {
-            require(
-                    roles.get(owner(spot, roles)).equals("table"),
-                    "Table Spot owner must be a play node (table)");
+            String role = roles.get(owner(spot, roles));
+            if (spot.path("type").asText().equals(Names.POOL)) {
+                require(
+                        role.equals("matchmaker")
+                                && text(spot, "kind").equals("instance")
+                                && text(spot, "logicalId").equals(Names.POOL_KEY)
+                                && !spot.has("dynamic"),
+                        "Invalid Pool spot declaration");
+                logical.add(Names.POOL_KEY);
+                pools++;
+                continue;
+            }
+            require(role.equals("table"), "Table Spot owner must be a table node");
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(
@@ -117,6 +154,15 @@ public final class Structure {
                                         && !spot.has("logicalId")
                                         && !spot.has("dynamic"),
                                 "Invalid Entry Spot declaration");
+                case "instance" -> {
+                    require(
+                            text(spot, "type").equals(Names.ROOM_PROVISIONER)
+                                    && text(spot, "logicalId").equals(Names.ROOM_PROVISIONER_KEY)
+                                    && !spot.has("dynamic"),
+                            "Invalid RoomProvisioner Spot declaration");
+                    logical.add(Names.ROOM_PROVISIONER_KEY);
+                    provisioners++;
+                }
                 case "user" -> {
                     require(text(spot, "type").equals(Names.TABLE), "Unregistered stable type");
                     if (spot.has("dynamic"))
@@ -130,6 +176,8 @@ public final class Structure {
             }
         }
         unique(logical);
+        require(pools == 1, "Matchmaker must declare exactly one Pool Spot");
+        require(provisioners == 1, "Declare exactly one RoomProvisioner Spot");
         require(dynamic, "Missing dynamic Table family");
         for (var node : nodes)
             if (roles.get(text(node, "id")).equals("table"))
@@ -145,7 +193,7 @@ public final class Structure {
                                                                         .equals("entry"))
                                         .count()
                                 == 1,
-                        "play node (table) must declare exactly one application Entry Spot");
+                        "Table node must declare exactly one application Entry Spot");
         var declaredEdges = new HashSet<Edge>();
         for (var edge : array(s, "edges")) {
             require(
@@ -161,8 +209,13 @@ public final class Structure {
         for (var required :
                 Set.of(
                         new Edge("players", "session", "STREAM", ""),
-                        new Edge("session", "tableA", "relay", ""),
-                        new Edge("tableA", "location", "Location / lease", "location-authority")))
+                        new Edge("session", "playA", "relay", ""),
+                        new Edge("playA", "matchmaker", "match requests", ""),
+                        new Edge("playA", "api", "loadPlayer / commitRound", ""),
+                        new Edge("playB", "api", "loadPlayer / commitRound", ""),
+                        new Edge("api", "location", "Player records / round results", ""),
+                        new Edge("matchmaker", "playA", "room preparation", ""),
+                        new Edge("playA", "location", "Location / lease", "location-authority")))
             require(declaredEdges.contains(required), "Missing required edge: " + required);
         System.out.println("Structure: valid");
     }

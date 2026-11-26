@@ -1694,15 +1694,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private void signalStateChanged(RoutingId target) {
+        publishStateChanged(
+                observer -> observer.target() == null || observer.target().equals(target));
+    }
+
+    private void publishStateChanged(Predicate<StateObserver> matches) {
         if (stateListeners.isEmpty()) return;
         deliverStateSignal(
-                () ->
-                        stateListeners.forEach(
-                                observer -> {
-                                    if (observer.target() == null
-                                            || observer.target().equals(target))
-                                        notifyStateChanged(observer);
-                                }));
+                () -> stateListeners.stream().filter(matches).forEach(this::notifyStateChanged));
     }
 
     ZLinkStateLane descriptorStateLaneForTest() {
@@ -8840,23 +8839,19 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
      * starts the service handshake on that route (transport-liveness §5, §6).
      */
     void observeTransportState(int readiness) {
+        boolean connectionsChanged =
+                (readiness & ZLinkJavaSocketReceivePoller.CONNECTION_CHANGED) != 0;
         var changes =
                 port.inStateLane(
                         () -> {
-                            boolean connectionsChanged =
-                                    (readiness & ZLinkJavaSocketReceivePoller.CONNECTION_CHANGED)
-                                            != 0;
                             if (connectionsChanged)
                                 connectionAttempts =
                                         List.copyOf(requireStarted().connectionAttemptsSnapshot());
-                            var targets =
-                                    (readiness & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0
-                                            ? observeSelectedRoutesOnLane()
-                                            : List.<RoutingId>of();
-                            if (connectionsChanged)
-                                stateListeners.forEach(observer -> notifyStateChanged(observer));
-                            return targets;
+                            return (readiness & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0
+                                    ? observeSelectedRoutesOnLane()
+                                    : List.<RoutingId>of();
                         });
+        if (connectionsChanged) publishStateChanged(observer -> true);
         finishSelectedRouteObservation(changes);
     }
 
