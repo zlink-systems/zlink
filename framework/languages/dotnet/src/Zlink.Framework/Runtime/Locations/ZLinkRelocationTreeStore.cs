@@ -89,86 +89,110 @@ internal static partial class ZLinkRelocationTreeStore
                 input.Position = 0;
             }
 
-            var logicalLength = input.Length;
-            if (logicalLength <= 0 || (ulong)logicalLength > MaxLogicalBytes)
-                throw new InvalidOperationException(
-                    $"Relocation logical stream exceeds its {MaxLogicalBytes} byte bound."
-                );
-            var chunkCount = CalculateChunkCount(checked((ulong)logicalLength));
-
-            var chunks = new ChunkEntry[chunkCount];
-            var logicalCrcState = uint.MaxValue;
-            for (var firstOrder = 0; firstOrder < chunkCount; )
-            {
-                var batch = new List<EncodedChunk>(MaxConcurrentComponentIo);
-                long batchBytes = 0;
-                while (
-                    firstOrder + batch.Count < chunkCount && batch.Count < MaxConcurrentComponentIo
+            return await PutStreamAsync(
+                    store,
+                    input,
+                    envelope.InventoryDigest,
+                    retention,
+                    cancellationToken
                 )
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var order = firstOrder + batch.Count;
-                    var dataLength = checked(
-                        (int)Math.Min(ChunkBytes, logicalLength - input.Position)
-                    );
-                    var encodedLength = checked(
-                        FrameHeaderBytes + ChunkBodyPrefixBytes + dataLength + FrameChecksumBytes
-                    );
-                    if (batch.Count != 0 && batchBytes > MaxComponentIoBytes - encodedLength)
-                        break;
-                    var data = new byte[dataLength];
-                    await input.ReadExactlyAsync(data, cancellationToken).ConfigureAwait(false);
-                    var dataChecksum = ZLinkCrc32C.Compute(data);
-                    ZLinkCrc32C.Append(ref logicalCrcState, data);
-                    var encoded = ServiceWirePilotCodec.EncodeRelocationDataChunkV1(
-                        new(checked((uint)order), data)
-                    );
-                    batch.Add(new EncodedChunk(order, dataLength, dataChecksum, encoded));
-                    batchBytes = checked(batchBytes + encoded.LongLength);
-                }
-
-                var storedBatch = await Task.WhenAll(
-                        batch.Select(chunk =>
-                            PutVerifiedAsync(store, chunk.Encoded, retention, cancellationToken)
-                                .AsTask()
-                        )
-                    )
-                    .ConfigureAwait(false);
-                for (var index = 0; index < batch.Count; index++)
-                {
-                    var chunk = batch[index];
-                    var stored = storedBatch[index];
-                    chunks[chunk.Order] = new ChunkEntry(
-                        checked((uint)chunk.Order),
-                        stored.Reference,
-                        checked((ulong)chunk.DataLength),
-                        chunk.DataChecksumCrc32c
-                    );
-                }
-                firstOrder += batch.Count;
-            }
-
-            var logicalChecksum = ~logicalCrcState;
-            var manifest = EncodeManifest(
-                checked((ulong)logicalLength),
-                logicalChecksum,
-                envelope.InventoryDigest.Span,
-                chunks
-            );
-            var root = await PutVerifiedAsync(store, manifest, retention, cancellationToken)
                 .ConfigureAwait(false);
-            return new ZLinkRelocationTreeStored(
-                root,
-                logicalLength,
-                logicalChecksum,
-                chunks.Length
-            );
         }
         finally
         {
             if (path is not null)
                 File.Delete(path);
         }
+    }
+
+    private static async ValueTask<ZLinkRelocationTreeStored> PutStreamAsync(
+        IZLinkRelocationRepository store,
+        Stream input,
+        ReadOnlyMemory<byte> inventoryDigest,
+        TimeSpan retention,
+        CancellationToken cancellationToken,
+        string? completionReference = null
+    )
+    {
+        var logicalLength = input.Length;
+        if (logicalLength <= 0 || (ulong)logicalLength > MaxLogicalBytes)
+            throw new InvalidOperationException(
+                $"Relocation logical stream exceeds its {MaxLogicalBytes} byte bound."
+            );
+        var chunkCount = CalculateChunkCount(checked((ulong)logicalLength));
+
+        var chunks = new ChunkEntry[chunkCount];
+        var logicalCrcState = uint.MaxValue;
+        for (var firstOrder = 0; firstOrder < chunkCount; )
+        {
+            var batch = new List<EncodedChunk>(MaxConcurrentComponentIo);
+            long batchBytes = 0;
+            while (firstOrder + batch.Count < chunkCount && batch.Count < MaxConcurrentComponentIo)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var order = firstOrder + batch.Count;
+                var dataLength = checked((int)Math.Min(ChunkBytes, logicalLength - input.Position));
+                var encodedLength = checked(
+                    FrameHeaderBytes + ChunkBodyPrefixBytes + dataLength + FrameChecksumBytes
+                );
+                if (batch.Count != 0 && batchBytes > MaxComponentIoBytes - encodedLength)
+                    break;
+                var data = new byte[dataLength];
+                await input.ReadExactlyAsync(data, cancellationToken).ConfigureAwait(false);
+                var dataChecksum = ZLinkCrc32C.Compute(data);
+                ZLinkCrc32C.Append(ref logicalCrcState, data);
+                var encoded = ServiceWirePilotCodec.EncodeRelocationDataChunkV1(
+                    new(checked((uint)order), data)
+                );
+                batch.Add(new EncodedChunk(order, dataLength, dataChecksum, encoded));
+                batchBytes = checked(batchBytes + encoded.LongLength);
+            }
+
+            var storedBatch = await Task.WhenAll(
+                    batch.Select(chunk =>
+                        PutVerifiedAsync(
+                                store,
+                                chunk.Encoded,
+                                retention,
+                                cancellationToken,
+                                completionReference is null
+                                    ? null
+                                    : CompletionChunkReference(completionReference, chunk.Order)
+                            )
+                            .AsTask()
+                    )
+                )
+                .ConfigureAwait(false);
+            for (var index = 0; index < batch.Count; index++)
+            {
+                var chunk = batch[index];
+                var stored = storedBatch[index];
+                chunks[chunk.Order] = new ChunkEntry(
+                    checked((uint)chunk.Order),
+                    stored.Reference,
+                    checked((ulong)chunk.DataLength),
+                    chunk.DataChecksumCrc32c
+                );
+            }
+            firstOrder += batch.Count;
+        }
+
+        var logicalChecksum = ~logicalCrcState;
+        var manifest = EncodeManifest(
+            checked((ulong)logicalLength),
+            logicalChecksum,
+            inventoryDigest.Span,
+            chunks
+        );
+        var root = await PutVerifiedAsync(
+                store,
+                manifest,
+                retention,
+                cancellationToken,
+                completionReference
+            )
+            .ConfigureAwait(false);
+        return new ZLinkRelocationTreeStored(root, logicalLength, logicalChecksum, chunks.Length);
     }
 
     internal static int CalculateChunkCount(ulong logicalLength)
@@ -410,12 +434,19 @@ internal static partial class ZLinkRelocationTreeStore
         IZLinkRelocationRepository store,
         ReadOnlyMemory<byte> encoded,
         TimeSpan retention,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        string? reference = null
     )
     {
-        var stored = await store
-            .PutRelocationAsync(encoded, retention, cancellationToken)
-            .ConfigureAwait(false);
+        var stored = reference is null
+            ? await store
+                .PutRelocationAsync(encoded, retention, cancellationToken)
+                .ConfigureAwait(false)
+            : await store
+                .PutRelocationAtAsync(reference, encoded, retention, cancellationToken)
+                .ConfigureAwait(false);
+        if (reference is not null && !StringComparer.Ordinal.Equals(stored.Reference, reference))
+            throw new IOException("Relocation completion reference conflicted.");
         var checksum = ZLinkCrc32C.Compute(encoded.Span);
         if (
             string.IsNullOrWhiteSpace(stored.Reference)
@@ -476,7 +507,8 @@ internal static partial class ZLinkRelocationTreeStore
     private static async ValueTask<DecodedChunk> ReadChunkAsync(
         IZLinkRelocationRepository store,
         ChunkEntry entry,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        TimeSpan? renewRetention = null
     )
     {
         var read = await store
@@ -484,7 +516,11 @@ internal static partial class ZLinkRelocationTreeStore
             .ConfigureAwait(false);
         if (read is not ZLinkRelocationReadResult.Found chunk)
             throw DataLost($"Relocation chunk '{entry.Reference}' is unavailable.");
-        return DecodeChunk(chunk.Payload, entry);
+        var decoded = DecodeChunk(chunk.Payload, entry);
+        if (renewRetention is { } retention && chunk.ExpiresAt - chunk.StoreNow <= RenewThreshold)
+            await RenewComponentAsync(store, entry.Reference, retention, cancellationToken)
+                .ConfigureAwait(false);
+        return decoded;
     }
 
     private static byte[] EncodeManifest(

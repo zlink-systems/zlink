@@ -6,19 +6,21 @@
   "run": {
     "commands": {
       "sh": [
+        "./run-server.sh",
         "./run-e2e.sh --build-only",
         "./run-e2e.sh",
-        "./run-e2e.sh --scenario region,movement,dungeon,reconnect,update",
+        "./run-e2e.sh --scenario connect,region,movement,dungeon,reconnect,update",
         "./run-e2e.sh --check-domain"
       ],
       "powershell": [
-        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
-        "pwsh -NoProfile -File ./run-e2e.ps1",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,movement,dungeon,reconnect,update",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain"
+        ".\\run-server.cmd",
+        ".\\run-e2e.cmd -BuildOnly",
+        ".\\run-e2e.cmd",
+        ".\\run-e2e.cmd -Scenario connect,region,movement,dungeon,reconnect,update",
+        ".\\run-e2e.cmd -CheckDomain"
       ]
     },
-    "scenarios": ["region", "movement", "dungeon", "reconnect", "update"]
+    "scenarios": ["connect", "region", "movement", "dungeon", "reconnect", "update"]
   },
   "nodes": [
     {

@@ -1,7 +1,7 @@
-using Zlink.Framework.Contracts.Handlers;
 using System.Text.Json;
 using MyGame.Shared;
 using Zlink.Framework.Contracts.Actors;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 
@@ -19,8 +19,12 @@ public sealed class TownSpot(
 
     public void Configure()
     {
-        Context.Handlers.AddActorPacket<TownSpotDungeonViewNotification, PlayerActor>(nameof(DungeonView));
-        Context.Handlers.AddActorPacket<TownSpotActionRejectedNotification, PlayerActor>(nameof(ActionRejected));
+        Context.Handlers.AddActorPacket<TownSpotDungeonViewNotification, PlayerActor>(
+            nameof(DungeonView)
+        );
+        Context.Handlers.AddActorPacket<TownSpotActionRejectedNotification, PlayerActor>(
+            nameof(ActionRejected)
+        );
         Context.Handlers.AddActorPacket<TownReconnect, PlayerActor>(nameof(JoinTownRequest));
         Context.Handlers.AddActorPacket<ChangeChannel, PlayerActor>(nameof(ChangeChannelRequest));
         Context.Handlers.AddActorPacket<CreateParty, PlayerActor>(nameof(CreatePartyRequest));
@@ -38,7 +42,11 @@ public sealed class TownSpot(
     )
     {
         var join = request.Decode<JoinTownRequest>();
-        if (join.PlayerId != actorId || ChannelRules.Validate(join.Channel) is not null || GameNames.TownId(join.Channel) != Context.SpotId)
+        if (
+            join.PlayerId != actorId
+            || ChannelRules.Validate(join.Channel) is not null
+            || GameNames.TownId(join.Channel) != Context.SpotId
+        )
             return ValueTask.FromResult(ZLinkSpotActorJoinResult.Reject());
         state.Players.Add(actorId);
         return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
@@ -69,10 +77,7 @@ public sealed class TownSpot(
             Context.SpotId,
             settings.Id,
             state.Players.Order().ToArray(),
-            state
-                .Parties.OrderBy(pair => pair.Key)
-                .Select(pair => pair.Value.View())
-                .ToArray()
+            state.Parties.OrderBy(pair => pair.Key).Select(pair => pair.Value.View()).ToArray()
         );
 
     public ValueTask ShowAsync(PlayerActor actor) =>
@@ -97,12 +102,23 @@ public sealed class TownSpot(
     )
     {
         var id = actor.Context.ActorId;
-        if (!state.Players.Contains(id)
+        if (
+            !state.Players.Contains(id)
             || state.Parties.Values.Any(party => party.Members.Contains(id))
-            || (!create && (partyId is null || !state.Parties.TryGetValue(partyId, out var existing)
-                || existing.Phase != RunPhase.Forming || existing.Members.Count >= GameNames.MaximumPartyMembers)))
+            || (
+                !create
+                && (
+                    partyId is null
+                    || !state.Parties.TryGetValue(partyId, out var existing)
+                    || existing.Phase != RunPhase.Forming
+                    || existing.Members.Count >= GameNames.MaximumPartyMembers
+                )
+            )
+        )
         {
-            await actor.Context.BoundSession.Send(new ActionRejected(Rejection.InvalidParty)).Async();
+            await actor
+                .Context.BoundSession.Send(new ActionRejected(Rejection.InvalidParty))
+                .Async();
             return;
         }
         if (create)
@@ -110,32 +126,51 @@ public sealed class TownSpot(
             var party = new PartyRun { Members = [id] };
             state.Parties.Add(party.PartyId, party);
         }
-        else state.Parties[partyId!].Members.Add(id);
+        else
+            state.Parties[partyId!].Members.Add(id);
         await BroadcastAsync(ct);
     }
 
     public async ValueTask EnterAsync(PlayerActor actor, CancellationToken ct)
     {
-        var party = state.Parties.Values.FirstOrDefault(item => item.Members.Contains(actor.Context.ActorId));
-        var reason = party?.Enter(actor.Context.ActorId) ?? (party is null ? Rejection.NotLeader : null);
+        var party = state.Parties.Values.FirstOrDefault(item =>
+            item.Members.Contains(actor.Context.ActorId)
+        );
+        var reason =
+            party?.Enter(actor.Context.ActorId) ?? (party is null ? Rejection.NotLeader : null);
         if (reason is not null)
         {
             await actor.Context.BoundSession.Send(new ActionRejected(reason)).Async();
             return;
         }
-        if (party!.Phase == RunPhase.Active) { await ShowAsync(actor); return; }
+        if (party!.Phase == RunPhase.Active)
+        {
+            await ShowAsync(actor);
+            return;
+        }
         var runId = party.RunId!;
         var dungeonId = GameNames.DungeonId(runId);
-        var created = await spots.GetOrCreate(dungeonId, GameNames.DungeonType)
-            .InMesh(GameNames.WorldMesh).Async(ct);
+        var created = await spots
+            .GetOrCreate(dungeonId, GameNames.DungeonType)
+            .InMesh(GameNames.WorldMesh)
+            .Async(ct);
         if (created.State == ZLinkSpotCreateState.Rejected)
             throw new InvalidOperationException("Dungeon creation rejected.");
-        var prepared = await Context.Outbound.RequestToSpot(dungeonId,
-            new PrepareDungeon(runId, party.PartyId, Context.SpotId, party.Members.ToArray()))
+        var prepared = await Context
+            .Outbound.RequestToSpot(
+                dungeonId,
+                new PrepareDungeon(runId, party.PartyId, Context.SpotId, party.Members.ToArray())
+            )
             .Async<DungeonPrepared>(ct);
-        if (prepared.Reason is not null || prepared.DungeonId != dungeonId || party.Prepared(prepared.RunId) is not null)
+        if (
+            prepared.Reason is not null
+            || prepared.DungeonId != dungeonId
+            || party.Prepared(prepared.RunId) is not null
+        )
         {
-            await actor.Context.BoundSession.Send(new ActionRejected(Rejection.RunMismatch)).Async();
+            await actor
+                .Context.BoundSession.Send(new ActionRejected(Rejection.RunMismatch))
+                .Async();
             return;
         }
         foreach (var id in party.Members.Where(state.Players.Contains))
@@ -144,10 +179,21 @@ public sealed class TownSpot(
 
     public ValueTask ChangeChannelAsync(PlayerActor actor, long channel)
     {
-        var reason = ChannelRules.Validate(channel)
-            ?? state.Parties.Values.FirstOrDefault(party => party.Members.Contains(actor.Context.ActorId))?.ChangeChannel();
-        if (reason is not null) return actor.Context.BoundSession.Send(new ActionRejected(reason)).Async();
-        actor.Context.JoinSpot(GameNames.TownId(channel), new JoinTownRequest(actor.Context.ActorId, channel)).Defer();
+        var reason =
+            ChannelRules.Validate(channel)
+            ?? state
+                .Parties.Values.FirstOrDefault(party =>
+                    party.Members.Contains(actor.Context.ActorId)
+                )
+                ?.ChangeChannel();
+        if (reason is not null)
+            return actor.Context.BoundSession.Send(new ActionRejected(reason)).Async();
+        actor
+            .Context.JoinSpot(
+                GameNames.TownId(channel),
+                new JoinTownRequest(actor.Context.ActorId, channel)
+            )
+            .Defer();
         return ValueTask.CompletedTask;
     }
 
@@ -171,7 +217,8 @@ public sealed class TownSpot(
 
     private async ValueTask RejectRunMismatchAsync(PartyRun? party)
     {
-        if (party?.Members.FirstOrDefault() is not { } leader) return;
+        if (party?.Members.FirstOrDefault() is not { } leader)
+            return;
         await actors.SendToActor(leader, new ActionRejected(Rejection.RunMismatch)).Async();
     }
 
@@ -206,15 +253,27 @@ public sealed class TownRelocation : IZLinkSpotRelocationAdapter<TownSpot>
 }
 
 [ZLinkSpotActorSendHandler(nameof(DungeonView))]
-public sealed class TownSpotDungeonViewNotification : IZLinkSpotActorSendHandler<TownSpot, PlayerActor, DungeonView>
+public sealed class TownSpotDungeonViewNotification
+    : IZLinkSpotActorSendHandler<TownSpot, PlayerActor, DungeonView>
 {
-    public ValueTask HandleAsync(TownSpot spot, PlayerActor actor, IZLinkMessageContext context,
-        DungeonView message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        TownSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        DungeonView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }
 
 [ZLinkSpotActorSendHandler(nameof(ActionRejected))]
-public sealed class TownSpotActionRejectedNotification : IZLinkSpotActorSendHandler<TownSpot, PlayerActor, ActionRejected>
+public sealed class TownSpotActionRejectedNotification
+    : IZLinkSpotActorSendHandler<TownSpot, PlayerActor, ActionRejected>
 {
-    public ValueTask HandleAsync(TownSpot spot, PlayerActor actor, IZLinkMessageContext context,
-        ActionRejected message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        TownSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        ActionRejected message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }

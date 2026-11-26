@@ -28,8 +28,16 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
         CancellationToken cancellationToken
     )
     {
-        if (dispatch.PacketName is not (nameof(QueueRequest) or nameof(RoomViewRequest)
-            or nameof(MoveRequest) or nameof(ShootRequest) or nameof(SessionInfoRequest)))
+        if (
+            dispatch.PacketName
+            is not (
+                nameof(QueueRequest)
+                or nameof(RoomViewRequest)
+                or nameof(MoveRequest)
+                or nameof(ShootRequest)
+                or nameof(SessionInfoRequest)
+            )
+        )
         {
             await Context.Client.Send(new ActionRejected(Rejection.PacketNotAllowed)).Async();
             return;

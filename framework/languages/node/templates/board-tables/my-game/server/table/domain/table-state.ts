@@ -39,10 +39,10 @@ export class TableState {
     return this.snapshot.seats.findIndex((s) => s.playerId === playerId);
   }
   // Seats the player at admission; a seated player is admitted again without a new seat.
-  admit(playerId: string): boolean {
+  admit(playerId: string, chips: bigint): boolean {
     if (this.seatOf(playerId) >= 0) return true;
     if (this.snapshot.seats.length === Game.seats) return false;
-    this.snapshot.seats.push({ playerId, chips: Game.initialChips, cards: [], acted: false });
+    this.snapshot.seats.push({ playerId, chips, cards: [], acted: false });
     return true;
   }
   start(playerId: string): string | undefined {
@@ -128,13 +128,7 @@ export class TableState {
     s.turnSeat = Game.noSeat;
     s.pot = 0n;
     for (const candidate of s.seats) candidate.cards = [];
-    return new HandResult(
-      s.handNumber,
-      nextPot,
-      winners,
-      hands,
-      this.seatViews()
-    );
+    return new HandResult(s.handNumber, nextPot, winners, hands, this.seatViews());
   }
   seatViews(): SeatView[] {
     return this.snapshot.seats.map((s, seat) => ({
