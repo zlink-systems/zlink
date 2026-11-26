@@ -1681,7 +1681,36 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     TIMEOUT 10)
 
   add_executable(test_cpp_framework_m6c_runtime
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_runtime.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_actor_leave.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_aggregate_relocation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_application_backlog.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_boundary_reply.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_completion_lifetime.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_entry_relocation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_execution_barriers.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_network_cutover.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_payload_dispatch.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_ready_boundary.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_recovery_codec.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_relocation_wire.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_request_registry.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_restore_publication.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_runtime.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_session_relocation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_source_metrics.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_source_settlement.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_source_settlement_chain.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_spot_readiness.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_spot_restore.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_store_adapters.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_target_cutover.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_target_shutdown.cpp
+    tests/support/m6c_memory_authority_fixture.cpp
+    tests/support/m6c_public_authority_fixture.cpp
+    tests/support/m6c_relocation_store_fixture.cpp
+    tests/support/m6c_spot_turn.cpp
+    tests/support/m6c_stateful_fixture.cpp
+    tests/support/m6c_task.cpp)
   target_compile_features(test_cpp_framework_m6c_runtime PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_m6c_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
@@ -1931,6 +1960,28 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_spot_admission_rejection)
   target_include_directories(test_cpp_framework_spot_admission_rejection PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+
+  add_zlink_framework_test(test_cpp_framework_spotwide_target_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spotwide_target_admission.cpp
+    "framework-unit;relocation;admission" unit)
+  target_use_zlink_gtest_main(test_cpp_framework_spotwide_target_admission)
+  target_include_directories(test_cpp_framework_spotwide_target_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+
+  add_zlink_framework_test(test_cpp_framework_actor_join_relocation_policy
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_join_relocation_policy.cpp
+    "framework-unit;framework-contract;actor;relocation" contract)
+  target_use_zlink_gtest_main(test_cpp_framework_actor_join_relocation_policy)
+  target_sources(test_cpp_framework_actor_join_relocation_policy PRIVATE
+    tests/support/actor_maintenance_join_actors.cpp
+    tests/support/actor_maintenance_join_host_fixture.cpp
+    tests/support/actor_maintenance_join_placement.cpp)
+  target_include_directories(test_cpp_framework_actor_join_relocation_policy PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  set_property(TEST test_cpp_framework_actor_join_relocation_policy APPEND PROPERTY
+    ENVIRONMENT "ZLINK_CPP_MESH_TRACE=1")
+  set_tests_properties(test_cpp_framework_actor_join_relocation_policy PROPERTIES
+    RESOURCE_LOCK zlink_cpp_heavy_runtime)
 
   add_zlink_framework_test(test_cpp_framework_actor_late_result
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
@@ -3420,6 +3471,25 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-contract;stream;liveness"
     unit)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_stream_liveness)
+  add_executable(test_cpp_framework_stream_liveness_under_ingress_pressure
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_liveness_under_ingress_pressure.cpp)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_stream_liveness_under_ingress_pressure)
+  target_include_directories(test_cpp_framework_stream_liveness_under_ingress_pressure PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_stream_liveness_under_ingress_pressure PRIVATE
+    zlink::framework opentelemetry-cpp::metrics)
+  foreach(_liveness_transport IN ITEMS tcp websocket core)
+    foreach(_liveness_case IN ITEMS
+        unsaturated below_timeout at_timeout above_timeout silent_after_release idle_after_release)
+      zlink_framework_cpp_add_test(
+        NAME test_cpp_framework_stream_liveness_under_ingress_pressure_${_liveness_transport}_${_liveness_case}
+        COMMAND test_cpp_framework_stream_liveness_under_ingress_pressure ${_liveness_transport} ${_liveness_case}
+        LABELS "framework-unit;framework-regression;stream;liveness"
+        TIER contract
+        TIMEOUT 30)
+    endforeach()
+  endforeach()
   add_zlink_framework_test(
     test_cpp_framework_poll_interval_wait
     tests/Zlink.Framework.UnitTests/test_cpp_framework_poll_interval_wait.cpp
@@ -3570,6 +3640,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       "LINKER:--wrap=_ZNK5zlink9message_t5cloneEv"
       "LINKER:--wrap=_ZN5zlink9framework7runtime4mesh21raw_mesh_node_owner_t5replyENS2_28service_mailbox_reply_view_tERKNS1_8protocol21application_payload_tE")
   endif()
+  add_zlink_framework_test(
+    test_cpp_framework_ended_route_claim
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_ended_route_claim.cpp
+    "framework-unit;framework-regression;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_ended_route_claim)
+  target_include_directories(test_cpp_framework_ended_route_claim PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_receive_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_allocations.cpp

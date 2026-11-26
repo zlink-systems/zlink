@@ -10,7 +10,7 @@ import java.util.List;
 /** Retains authority and capacity records while an owner closes without retaining its lease. */
 final class ZLinkEndedOwnerStoreFixture {
     static final String AUTHORITY_PREFIX = "authority\0";
-    private static final String CAPACITY_PREFIX = "zlink:v11:capacity:";
+    private static final String CAPACITY_PREFIX = "zlink:v12:capacity\0";
     private static final int SCAN_PAGE_SIZE = 100;
 
     private ZLinkEndedOwnerStoreFixture() {}

@@ -450,6 +450,7 @@ internal static class ZLinkTraceFormat
         {
             ZLinkDispatchErrorReason.HandlerMissing => "no_handler",
             ZLinkDispatchErrorReason.PayloadDecodeFailed => "decode_error",
+            ZLinkDispatchErrorReason.PayloadEncodeFailed => "encode_error",
             ZLinkDispatchErrorReason.HandlerException => "handler_exception",
             ZLinkDispatchErrorReason.InvalidFrame => "invalid_frame",
             ZLinkDispatchErrorReason.ReplyPathMissing => "reply_path_missing",

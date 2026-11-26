@@ -9631,102 +9631,45 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
     return result;
 }
 
-task_t<result_t<spot_node_runtime_t::remote_actor_transfer_t>>
-spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref,
-                                         std::string transfer_id,
-                                         bool capture_state)
+task_t<result_t<std::string>> spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref,
+                                                                       std::string transfer_id)
 {
-    struct transfer_plan_t
-    {
-        std::string key;
-        spot_id_t source_spot;
-        std::shared_ptr<void> actor;
-        spot_node_builder_state_t::actor_factory_registration_t factory;
-    };
-    auto plan =
+    const auto key = actor_key (actor_ref);
+    auto content_type =
       _state->lane
-        .run ([&] () -> result_t<transfer_plan_t> {
-            const auto key = actor_key (actor_ref);
-            const auto factory = _state->actor_factories.find (
-              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
+        .run ([&] () -> result_t<std::string> {
             const auto actor = _state->actor_instances.find (key);
-            const auto source_spot = _state->actor_spot_ids.find (key);
             if (actor == _state->actor_instances.end () || !actor->second
-                || source_spot == _state->actor_spot_ids.end ()) {
-                return result_t<transfer_plan_t>::failure (
+                || !_state->actor_spot_ids.contains (key)) {
+                return result_t<std::string>::failure (
                   framework_error_kind_t::not_found, "source actor is not joined to a local spot");
             }
+            const auto factory = _state->actor_factories.find (
+              std::string (detail::actor_ref_access_t::actor_type (actor_ref)));
             if (factory == _state->actor_factories.end ()) {
-                return result_t<transfer_plan_t>::failure (
-                  framework_error_kind_t::not_found, "source actor factory is not registered");
+                return result_t<std::string>::failure (framework_error_kind_t::not_found,
+                                                       "source actor factory is not registered");
             }
-            if (factory->second.relocation.kind == detail::factory_relocation_kind_t::disabled) {
-                return result_t<transfer_plan_t>::failure (framework_error_kind_t::not_configured,
-                                                           "Actor relocation is disabled");
-            }
-            if (transfer_id.empty ()) {
-                transfer_id = key;
-            }
-            return result_t<transfer_plan_t>::success (
-              transfer_plan_t{key, source_spot->second, actor->second, factory->second});
+            const auto type =
+              factory->second.relocation.kind == detail::factory_relocation_kind_t::preserve_state
+                ? runtime::protocol::actor_join_snapshot_content_type
+                : runtime::protocol::actor_join_recreate_content_type;
+            return result_t<std::string>::success (std::string (type));
         })
         .get ();
-    if (!plan) {
-        co_return detail::propagate_failure<remote_actor_transfer_t> (plan,
-                                                                      "actor transfer-out failed");
-    }
-    auto prepared = std::move (plan.value ());
+    if (!content_type)
+        co_return content_type;
+
     try {
-        co_await seal_actor_application_suffix (actor_ref, [state = _state, key = prepared.key,
-                                                            transfer_id] {
+        co_await seal_actor_application_suffix (actor_ref, [state = _state, key, transfer_id] {
             state->actor_transfer_coordinator->try_begin_source_remote (key, transfer_id).value ();
         });
     }
     catch (const framework_exception_t &error) {
         replay_actor_handoff_until_move_closed (actor_ref);
-        co_return detail::result_access_t::failure<remote_actor_transfer_t> (error);
+        co_return detail::result_access_t::failure<std::string> (error);
     }
-    if (!capture_state) {
-        co_return result_t<remote_actor_transfer_t>::success (remote_actor_transfer_t{
-          prepared.source_spot, zlink::message_t{},
-          prepared.factory.relocation.kind == detail::factory_relocation_kind_t::preserve_state
-            ? std::string (runtime::protocol::actor_join_snapshot_content_type)
-            : std::string (runtime::protocol::actor_join_recreate_content_type)});
-    }
-    if (prepared.factory.relocation.kind != detail::factory_relocation_kind_t::preserve_state) {
-        co_return result_t<remote_actor_transfer_t>::success (remote_actor_transfer_t{
-          prepared.source_spot, zlink::message_t{},
-          std::string (runtime::protocol::actor_join_recreate_content_type)});
-    }
-    try {
-        auto state = prepared.factory.capture (prepared.actor.get (), {}).result ();
-        if (!state) {
-            replay_actor_handoff_until_move_closed (actor_ref);
-            co_return detail::propagate_failure<remote_actor_transfer_t> (
-              state, "actor transfer-out failed");
-        }
-        std::string payload;
-        payload.resize (state.value ().size ());
-        std::transform (state.value ().begin (), state.value ().end (), payload.begin (),
-                        [] (std::byte value) { return static_cast<char> (value); });
-        co_return result_t<remote_actor_transfer_t>::success (remote_actor_transfer_t{
-          prepared.source_spot, zlink::message_t::from (payload),
-          std::string (runtime::protocol::actor_join_snapshot_content_type)});
-    }
-    catch (const framework_exception_t &error) {
-        replay_actor_handoff_until_move_closed (actor_ref);
-        co_return detail::result_access_t::failure<remote_actor_transfer_t> (error);
-    }
-    catch (const std::exception &error) {
-        replay_actor_handoff_until_move_closed (actor_ref);
-        co_return result_t<remote_actor_transfer_t>::failure (
-          framework_error_kind_t::internal_failure, error.what ());
-    }
-    catch (...) {
-        replay_actor_handoff_until_move_closed (actor_ref);
-        co_return result_t<remote_actor_transfer_t>::failure (
-          framework_error_kind_t::internal_failure, "actor transfer-out failed");
-    }
+    co_return content_type;
 }
 
 std::string spot_node_runtime_t::next_actor_transfer_id ()

@@ -103,10 +103,13 @@ internal sealed class GameClient(
     public Task SendAsync<T>(T message, CancellationToken ct) =>
         Connector.Send(message).Async(ct).AsTask();
 
-    public async Task<TableView> JoinAsync(string tableId, CancellationToken ct)
+    public Task SendJoinAsync(string tableId, bool reconnect, CancellationToken ct) =>
+        SendAsync(new JoinTableRequest(PlayerId, tableId, reconnect), ct);
+
+    public async Task<TableView> JoinAsync(string tableId, CancellationToken ct, bool reconnect = false)
     {
         var view = WaitAsync<TableView>(view => view.TableId == tableId, ct);
-        await SendAsync(new JoinTableRequest(PlayerId, tableId), ct);
+        await SendJoinAsync(tableId, reconnect, ct);
         return await view;
     }
 

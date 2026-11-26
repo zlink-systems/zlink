@@ -1,7 +1,18 @@
 import { Injectable } from '@nestjs/common';
-import type { ZLinkActor, ZLinkActorContext, ZLinkActorFactory, ZLinkActorJoinCompletion } from '@zlink-systems/framework';
+import type {
+  ZLinkActor,
+  ZLinkActorContext,
+  ZLinkActorFactory,
+  ZLinkActorJoinCompletion
+} from '@zlink-systems/framework';
 import { zoneId } from '../shared/constants';
-import { restoreNotification, type Notification, ActionRejected, type EnterZone, WorldState } from '../shared/messages';
+import {
+  restoreNotification,
+  type Notification,
+  ActionRejected,
+  type EnterZone,
+  WorldState
+} from '../shared/messages';
 export class Player implements ZLinkActor {
   async deliver(packetName: string, payload: Notification, visible = true): Promise<void> {
     const message = restoreNotification(packetName, payload);
@@ -18,7 +29,8 @@ export class Player implements ZLinkActor {
       await this.context.boundSession.send(completion.reply.decode(WorldState)).submit();
     else if (completion.status === 'rejected' && completion.reply !== undefined)
       await this.context.boundSession.send(completion.reply.decode(ActionRejected)).submit();
-    else if (completion.status !== 'accepted') throw new Error(`Zone join failed: ${completion.status}`);
+    else if (completion.status !== 'accepted')
+      throw new Error(`Zone join failed: ${completion.status}`);
   }
 }
 @Injectable()

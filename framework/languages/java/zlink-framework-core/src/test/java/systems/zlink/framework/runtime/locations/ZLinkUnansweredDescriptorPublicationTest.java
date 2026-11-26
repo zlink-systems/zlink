@@ -241,7 +241,9 @@ final class ZLinkUnansweredDescriptorPublicationTest {
         @Override
         public CompletionStage<ZLinkStoreWriteResult> write(
                 ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
-            if (claimRequest == null) {
+            if (claimRequest == null
+                    && request.mutations().getFirst() instanceof ZLinkStorePut put
+                    && put.key().value().startsWith("owner-lease\0")) {
                 claimRequest = request;
                 claimRequested.complete(null);
                 return claim;

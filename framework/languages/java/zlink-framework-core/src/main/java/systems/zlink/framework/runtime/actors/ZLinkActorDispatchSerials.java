@@ -8,6 +8,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
+import systems.zlink.framework.runtime.internal.execution.ZLinkConfirmedReplay;
 import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
@@ -448,7 +449,8 @@ final class ZLinkActorDispatchSerials {
             CompletableFuture<Void> requestAdmission,
             ZLinkBackendActorReceived header,
             Message payload) {
-        Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
+        Supplier<CompletionStage<Void>> turnOperation =
+                ZLinkConfirmedReplay.wrap(operation, replay -> () -> runTurn(turn, replay));
         CompletableFuture<Void> admission =
                 requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
         return enqueueAfterAdmission(

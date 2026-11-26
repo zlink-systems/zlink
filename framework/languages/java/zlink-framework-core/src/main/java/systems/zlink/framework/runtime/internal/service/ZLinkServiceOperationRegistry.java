@@ -242,14 +242,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         if (!owner.isOnLane())
             throw new IllegalStateException("registration requires its owner turn");
         long deadline = nanoTime.getAsLong() + timeoutNanos(timeout);
-        UUID id = ZLinkServiceOperationIds.next();
-        Operation<T> operation =
-                REQUEST_DEADLINE_DIAGNOSTICS
-                        ? new ObservedOperation<>(
-                                id,
-                                new ZLinkServiceRequestProgress.Recording(
-                                        meshName, target, correlation, generation, local))
-                        : new Operation<>(true, id);
+        Operation<T> operation = prepareRequestOperation(ZLinkServiceOperationIds.next());
+        operation.requestProgress().routeSelected(meshName, target, correlation, generation, local);
         return registerOnOwner(deadline, Kind.REQUEST, operation);
     }
 
@@ -383,8 +377,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                                 return false;
                             }
                             Entry<T> entry =
-                                    this.<T>registerEntry(
-                                            deadline, id, Kind.REQUEST, completion, discardValue);
+                                    registerEntry(deadline, Kind.REQUEST, completion, discardValue);
                             if (!completion.finishRegistration(this)) {
                                 abandonRegistration(entry);
                                 return false;
@@ -403,7 +396,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     private void postRegistrationFailure(Operation<?> completion, Throwable failure) {
-        Entry<Object> entry = new Entry<>(completion.id(), completion, null);
+        Entry<Object> entry = completion.newEntry(null);
         completions.register(entry);
         entry.completeWithFailure(failure);
         completions.post(entry);
@@ -747,9 +740,14 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private <T> Operation<T> registerOnOwner(
             long deadlineNanos, Kind kind, Operation<T> operation) {
         operation.beginRegistration();
-        Entry<T> entry = registerEntry(deadlineNanos, operation.id(), kind, operation.newEntry());
+        Entry<T> entry = registerEntry(deadlineNanos, kind, operation, null);
         if (!operation.finishRegistration(this)) abandonRegistration(entry);
         return operation;
+    }
+
+    private <T> Entry<T> registerEntry(
+            long deadline, Kind kind, Operation<?> completion, Consumer<? super T> discardValue) {
+        return registerEntry(deadline, completion.id(), kind, completion.newEntry(discardValue));
     }
 
     private <T> Entry<T> registerEntry(
@@ -803,18 +801,53 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     /** Prepares the final receiver; owner registration accepts it before physical submission. */
     public static <T> Operation<T> prepareOperation(UUID id) {
-        return new Operation<>(true, Objects.requireNonNull(id, "id"));
+        return prepareOperation(id, null);
+    }
+
+    private static <T> Operation<T> prepareOperation(
+            UUID id, BiConsumer<CompletableFuture<T>, Throwable> observer) {
+        return new Operation<>(true, Objects.requireNonNull(id, "id"), observer);
+    }
+
+    /** Selects the request receiver used by both direct and asynchronous owner registration. */
+    public static <T> Operation<T> prepareRequestOperation(UUID id) {
+        return prepareRequestOperation(id, null);
+    }
+
+    private static <T> Operation<T> prepareRequestOperation(
+            UUID id, BiConsumer<CompletableFuture<T>, Throwable> observer) {
+        return REQUEST_DEADLINE_DIAGNOSTICS
+                ? new ObservedOperation<>(Objects.requireNonNull(id, "id"), observer)
+                : prepareOperation(id, observer);
     }
 
     /** Prepares the public receiver and its value conversion before transport submission. */
-    @SuppressWarnings("unchecked")
     public static <V, R> Operation<R> prepareOperation(
             UUID id,
             Function<V, R> receiver,
             Consumer<? super R> discardResult,
             Function<Throwable, Throwable> failureMapper,
             BiConsumer<CompletableFuture<R>, Throwable> observer) {
-        Operation<R> result = new Operation<>(true, Objects.requireNonNull(id, "id"), observer);
+        return prepareReceiver(
+                prepareOperation(id, observer), receiver, discardResult, failureMapper);
+    }
+
+    public static <V, R> Operation<R> prepareRequestOperation(
+            UUID id,
+            Function<V, R> receiver,
+            Consumer<? super R> discardResult,
+            Function<Throwable, Throwable> failureMapper,
+            BiConsumer<CompletableFuture<R>, Throwable> observer) {
+        return prepareReceiver(
+                prepareRequestOperation(id, observer), receiver, discardResult, failureMapper);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <V, R> Operation<R> prepareReceiver(
+            Operation<R> result,
+            Function<V, R> receiver,
+            Consumer<? super R> discardResult,
+            Function<Throwable, Throwable> failureMapper) {
         Objects.requireNonNull(receiver, "receiver");
         result.flow = ZLinkFlowContext.current();
         result.receiver = (Function<Object, R>) receiver;
@@ -876,8 +909,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             observeTerminal(failure);
         }
 
-        Entry<T> newEntry() {
-            return new Entry<>(id, this, null);
+        <V> Entry<V> newEntry(Consumer<? super V> discardValue) {
+            return new Entry<>(id, this, discardValue);
         }
 
         public ZLinkServiceRequestProgress requestProgress() {
@@ -970,16 +1003,16 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     private static final class ObservedOperation<T> extends Operation<T> {
-        private final ZLinkServiceRequestProgress.Recording progress;
+        private final ZLinkServiceRequestProgress.Recording progress =
+                new ZLinkServiceRequestProgress.Recording();
 
-        private ObservedOperation(UUID id, ZLinkServiceRequestProgress.Recording progress) {
-            super(true, id);
-            this.progress = progress;
+        private ObservedOperation(UUID id, BiConsumer<CompletableFuture<T>, Throwable> observer) {
+            super(true, id, observer);
         }
 
         @Override
-        Entry<T> newEntry() {
-            return new ObservedEntry<>(id(), this, progress);
+        <V> Entry<V> newEntry(Consumer<? super V> discardValue) {
+            return new ObservedEntry<>(id(), this, discardValue, progress);
         }
 
         @Override
@@ -1092,8 +1125,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private long expired;
 
         private ObservedEntry(
-                UUID id, Operation<T> operation, ZLinkServiceRequestProgress.Recording progress) {
-            super(id, operation, null);
+                UUID id,
+                Operation<?> operation,
+                Consumer<? super T> discardValue,
+                ZLinkServiceRequestProgress.Recording progress) {
+            super(id, operation, discardValue);
             this.progress = progress;
         }
 

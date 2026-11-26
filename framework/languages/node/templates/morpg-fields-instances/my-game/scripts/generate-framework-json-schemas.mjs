@@ -74,10 +74,17 @@ for (const packetName of [...packetNames].sort()) {
     const declaration = payloadSymbol?.declarations?.find(ts.isClassDeclaration);
     if (declaration !== undefined) {
       const sourcePath = declaration.getSourceFile().fileName;
-      const relativeSource = path.relative(config.options.rootDir ?? path.dirname(projectPath), sourcePath);
-      const compiledPath = path.resolve(config.options.outDir ?? path.dirname(projectPath),
-        relativeSource.replace(/\.[cm]?tsx?$/u, '.js'));
-      let modulePath = path.relative(path.dirname(path.resolve(options.out)), compiledPath).replaceAll('\\', '/');
+      const relativeSource = path.relative(
+        config.options.rootDir ?? path.dirname(projectPath),
+        sourcePath
+      );
+      const compiledPath = path.resolve(
+        config.options.outDir ?? path.dirname(projectPath),
+        relativeSource.replace(/\.[cm]?tsx?$/u, '.js')
+      );
+      let modulePath = path
+        .relative(path.dirname(path.resolve(options.out)), compiledPath)
+        .replaceAll('\\', '/');
       if (!modulePath.startsWith('.')) modulePath = './' + modulePath;
       runtimePackets.set(packetName, { modulePath, exportName: payloadSymbol.getName() });
     }

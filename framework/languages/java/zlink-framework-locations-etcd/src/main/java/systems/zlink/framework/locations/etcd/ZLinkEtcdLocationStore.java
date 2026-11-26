@@ -166,23 +166,6 @@ public final class ZLinkEtcdLocationStore implements ZLinkLocationStore, AutoClo
                 });
     }
 
-    private static ZLinkStoreKey conditionKey(ZLinkStoreCondition condition) {
-        return switch (condition) {
-            case ZLinkStoreMissingCondition item -> item.key();
-            case ZLinkStoreVersionCondition item -> item.key();
-            case ZLinkStoreValueCondition item -> item.key();
-            case null -> throw new IllegalArgumentException("A Store condition is required.");
-        };
-    }
-
-    private static ZLinkStoreKey mutationKey(ZLinkStoreMutation mutation) {
-        return switch (mutation) {
-            case ZLinkStorePut item -> item.key();
-            case ZLinkStoreDelete item -> item.key();
-            case null -> throw new IllegalArgumentException("A Store mutation is required.");
-        };
-    }
-
     private static ByteString keyBytes(ZLinkStoreKey key) {
         return EtcdEncoding.validateKey(key == null ? null : key.value(), false);
     }
@@ -192,10 +175,14 @@ public final class ZLinkEtcdLocationStore implements ZLinkLocationStore, AutoClo
         Set<ZLinkStoreKey> conditions = new HashSet<>(), mutations = new HashSet<>();
         long size = 0;
         for (var condition : request.conditions()) {
-            var key = conditionKey(condition);
-            size += keyBytes(key).size();
-            if (!conditions.add(key))
-                throw new IllegalArgumentException("Duplicate condition key.");
+            for (var key : condition.keys()) {
+                size += keyBytes(key).size();
+                if (!conditions.add(key))
+                    throw new IllegalArgumentException("Duplicate condition key.");
+            }
+            if (condition instanceof ZLinkStoreSumAtMostCondition sum) {
+                size += Long.toString(sum.delta()).length() + Long.toString(sum.limit()).length();
+            }
             if (condition instanceof ZLinkStoreVersionCondition version) {
                 ByteString bytes =
                         EtcdEncoding.utf8(
@@ -211,7 +198,7 @@ public final class ZLinkEtcdLocationStore implements ZLinkLocationStore, AutoClo
             }
         }
         for (var mutation : request.mutations()) {
-            var key = mutationKey(mutation);
+            var key = mutation.key();
             size += keyBytes(key).size();
             if (!mutations.add(key)) throw new IllegalArgumentException("Duplicate mutation key.");
             if (mutation instanceof ZLinkStorePut put) {
@@ -220,6 +207,8 @@ public final class ZLinkEtcdLocationStore implements ZLinkLocationStore, AutoClo
                     throw new IllegalArgumentException("Invalid Store value length.");
                 EtcdEncoding.retention(put.retention());
                 size += bytes.length;
+            } else if (mutation instanceof ZLinkStoreAdd add) {
+                size += Long.toString(add.delta()).length();
             }
         }
         conditions.addAll(mutations);
@@ -247,14 +236,20 @@ public final class ZLinkEtcdLocationStore implements ZLinkLocationStore, AutoClo
                 });
     }
 
-    private record Decision(
-            long now,
-            long cluster,
-            long revision,
-            KeyValue[] metadata,
-            EtcdEncoding.Metadata[] info) {}
+    private record ObservedKey(KeyValue metadata, EtcdEncoding.Metadata info) {}
 
-    private record Evaluation(boolean matches, long minimumExpiry) {}
+    private record Decision(
+            long now, long cluster, long revision, Map<ZLinkStoreKey, ObservedKey> observations) {
+        boolean live(ZLinkStoreKey key) {
+            var info = observations.get(key).info();
+            return info != null && !info.expired(now);
+        }
+    }
+
+    private record Evaluation(
+            ZLinkStoreWriteResult failure,
+            long minimumExpiry,
+            List<ZLinkStoreMutation> mutations) {}
 
     private CompletableFuture<ZLinkStoreWriteResult> writeAttempt(
             ZLinkStoreWriteRequest request, EtcdClient.Operation operation) {
@@ -265,48 +260,60 @@ public final class ZLinkEtcdLocationStore implements ZLinkLocationStore, AutoClo
 
     private CompletableFuture<Decision> decide(
             ZLinkStoreWriteRequest request, EtcdClient.Operation operation) {
+        Set<ZLinkStoreKey> keys = new LinkedHashSet<>();
+        for (var condition : request.conditions()) keys.addAll(condition.keys());
+        for (var mutation : request.mutations())
+            if (mutation instanceof ZLinkStoreAdd add) keys.add(add.key());
+
         TxnRequest.Builder decision = TxnRequest.newBuilder().addSuccess(readKey(clock, 0));
-        for (var condition : request.conditions())
-            decision.addSuccess(readKey(metadataKey(keyBytes(conditionKey(condition))), 0));
+        for (var key : keys) decision.addSuccess(readKey(metadataKey(keyBytes(key)), 0));
         return client.txn(decision.build(), operation)
                 .thenApply(
                         observed -> {
                             long now = storeNow(observed);
-                            KeyValue[] metadata = new KeyValue[request.conditions().size()];
-                            EtcdEncoding.Metadata[] info =
-                                    new EtcdEncoding.Metadata[metadata.length];
-                            for (int i = 0; i < metadata.length; i++) {
-                                metadata[i] = one(observed.getResponses(i + 1).getResponseRange());
-                                info[i] =
-                                        metadata[i] == null
+                            Map<ZLinkStoreKey, ObservedKey> observations = new LinkedHashMap<>();
+                            int i = 1;
+                            for (var key : keys) {
+                                var metadata = one(observed.getResponses(i++).getResponseRange());
+                                var info =
+                                        metadata == null
                                                 ? null
-                                                : EtcdEncoding.decodeMetadata(
-                                                        metadata[i].getValue());
+                                                : EtcdEncoding.decodeMetadata(metadata.getValue());
+                                observations.put(key, new ObservedKey(metadata, info));
                             }
                             return new Decision(
                                     now,
                                     observed.getHeader().getClusterId(),
                                     observed.getHeader().getRevision(),
-                                    metadata,
-                                    info);
+                                    observations);
                         });
     }
 
     private CompletableFuture<ZLinkStoreWriteResult> readPayloads(
             ZLinkStoreWriteRequest request, Decision decision, EtcdClient.Operation operation) {
-        TxnRequest.Builder payloadRequest = TxnRequest.newBuilder();
-        List<Integer> positions = new ArrayList<>();
-        for (int i = 0; i < decision.metadata().length; i++) {
-            if (request.conditions().get(i) instanceof ZLinkStoreValueCondition condition
-                    && decision.info()[i] != null
-                    && decision.info()[i].payloadLength() == condition.expected().length) {
-                positions.add(i);
-                payloadRequest.addSuccess(
-                        readKey(payloadKey(keyBytes(condition.key())), decision.revision()));
-            }
+        Set<ZLinkStoreKey> counters = new LinkedHashSet<>();
+        Set<ZLinkStoreKey> keys = new LinkedHashSet<>();
+        for (var condition : request.conditions()) {
+            if (condition instanceof ZLinkStoreSumAtMostCondition sum) counters.addAll(sum.keys());
+            if (condition instanceof ZLinkStoreValueCondition value
+                    && decision.live(value.key())
+                    && decision.observations().get(value.key()).info().payloadLength()
+                            == value.expected().length) keys.add(value.key());
         }
+        for (var mutation : request.mutations())
+            if (mutation instanceof ZLinkStoreAdd add) counters.add(add.key());
+
+        // Only a canonical Int64 can be a counter. Oversize opaque payloads need no fetch.
+        for (var key : counters)
+            if (decision.live(key) && decision.observations().get(key).info().payloadLength() <= 19)
+                keys.add(key);
+
+        var payloadRequest = TxnRequest.newBuilder();
+        for (var key : keys)
+            payloadRequest.addSuccess(readKey(payloadKey(keyBytes(key)), decision.revision()));
+
         CompletableFuture<TxnResponse> payloads =
-                positions.isEmpty()
+                keys.isEmpty()
                         ? CompletableFuture.completedFuture(null)
                         : client.txn(payloadRequest.build(), operation);
         return payloads.handle(
@@ -319,28 +326,29 @@ public final class ZLinkEtcdLocationStore implements ZLinkLocationStore, AutoClo
                                 return CompletableFuture.<ZLinkStoreWriteResult>failedFuture(
                                         EtcdClient.unwrap(error));
                             }
-                            Map<Integer, KeyValue> values = new HashMap<>();
-                            for (int j = 0; j < positions.size(); j++) {
-                                int i = positions.get(j);
-                                KeyValue payload = one(response.getResponses(j).getResponseRange());
-                                record(decision.metadata()[i], payload);
-                                values.put(i, payload);
+                            Map<ZLinkStoreKey, byte[]> values = new HashMap<>();
+                            int i = 0;
+                            for (var key : keys) {
+                                KeyValue payload =
+                                        one(response.getResponses(i++).getResponseRange());
+                                record(decision.observations().get(key).metadata(), payload);
+                                values.put(key, payload.getValue().toByteArray());
                             }
                             Evaluation evaluation = evaluate(request, decision, values);
-                            if (!evaluation.matches())
-                                return CompletableFuture.<ZLinkStoreWriteResult>completedFuture(
-                                        new ZLinkStoreWriteConflict(
-                                                Instant.ofEpochMilli(decision.now())));
+                            if (evaluation.failure() != null)
+                                return CompletableFuture.completedFuture(evaluation.failure());
                             return client.txn(
                                             applyRequest(
-                                                    request, decision, evaluation.minimumExpiry()),
+                                                    evaluation.mutations(),
+                                                    decision,
+                                                    evaluation.minimumExpiry()),
                                             operation)
                                     .thenCompose(
                                             responseApplied ->
                                                     responseApplied.getSucceeded()
                                                             ? CompletableFuture.completedFuture(
                                                                     applied(
-                                                                            request,
+                                                                            evaluation.mutations(),
                                                                             decision.now(),
                                                                             responseApplied))
                                                             : writeAttempt(request, operation));
@@ -349,40 +357,59 @@ public final class ZLinkEtcdLocationStore implements ZLinkLocationStore, AutoClo
     }
 
     private static Evaluation evaluate(
-            ZLinkStoreWriteRequest request, Decision decision, Map<Integer, KeyValue> values) {
-        long minimumExpiry = Long.MAX_VALUE;
-        for (int i = 0; i < decision.metadata().length; i++) {
-            var info = decision.info()[i];
-            boolean live = info != null && !info.expired(decision.now());
-            boolean matches =
-                    switch (request.conditions().get(i)) {
-                        case ZLinkStoreMissingCondition ignored -> !live;
-                        case ZLinkStoreVersionCondition condition ->
-                                live
-                                        && Objects.equals(
-                                                EtcdEncoding.decodeVersion(
-                                                        condition.expected().value()),
-                                                new EtcdEncoding.Version(
-                                                        decision.cluster(),
-                                                        decision.metadata()[i].getModRevision()));
-                        case ZLinkStoreValueCondition condition ->
-                                live
-                                        && values.containsKey(i)
-                                        && Arrays.equals(
-                                                values.get(i).getValue().toByteArray(),
-                                                condition.expected());
-                    };
-            if (!matches) return new Evaluation(false, minimumExpiry);
-            if (live
-                    && info.hasExpiry()
-                    && !(request.conditions().get(i) instanceof ZLinkStoreMissingCondition))
-                minimumExpiry = Math.min(minimumExpiry, info.expiresAt());
+            ZLinkStoreWriteRequest request, Decision decision, Map<ZLinkStoreKey, byte[]> values) {
+        Instant now = Instant.ofEpochMilli(decision.now());
+        Function<ZLinkStoreKey, byte[]> counter =
+                key -> {
+                    if (!decision.live(key)) return null;
+                    byte[] bytes = values.get(key);
+                    if (bytes == null)
+                        throw new ArithmeticException("Invalid Location Store counter");
+                    return bytes;
+                };
+        try {
+            for (var condition : request.conditions()) {
+                boolean matches =
+                        switch (condition) {
+                            case ZLinkStoreMissingCondition missing ->
+                                    !decision.live(missing.key());
+                            case ZLinkStoreVersionCondition version ->
+                                    decision.live(version.key())
+                                            && Objects.equals(
+                                                    EtcdEncoding.decodeVersion(
+                                                            version.expected().value()),
+                                                    new EtcdEncoding.Version(
+                                                            decision.cluster(),
+                                                            decision.observations()
+                                                                    .get(version.key())
+                                                                    .metadata()
+                                                                    .getModRevision()));
+                            case ZLinkStoreValueCondition value ->
+                                    Arrays.equals(values.get(value.key()), value.expected());
+                            case ZLinkStoreSumAtMostCondition sum -> sum.matches(counter);
+                        };
+                if (!matches) return new Evaluation(new ZLinkStoreWriteConflict(now), 0, List.of());
+            }
+            long minimumExpiry = Long.MAX_VALUE;
+            for (var observation : decision.observations().values()) {
+                var info = observation.info();
+                if (info != null && info.hasExpiry() && !info.expired(decision.now()))
+                    minimumExpiry = Math.min(minimumExpiry, info.expiresAt());
+            }
+            List<ZLinkStoreMutation> mutations = new ArrayList<>(request.mutations().size());
+            for (var mutation : request.mutations())
+                mutations.add(
+                        mutation instanceof ZLinkStoreAdd add
+                                ? add.resolve(counter.apply(add.key()))
+                                : mutation);
+            return new Evaluation(null, minimumExpiry, mutations);
+        } catch (ArithmeticException corrupt) {
+            return new Evaluation(new ZLinkStoreWriteCorrupt(now), 0, List.of());
         }
-        return new Evaluation(true, minimumExpiry);
     }
 
     private TxnRequest applyRequest(
-            ZLinkStoreWriteRequest request, Decision decision, long minimumExpiry) {
+            List<ZLinkStoreMutation> mutations, Decision decision, long minimumExpiry) {
         TxnRequest.Builder apply = TxnRequest.newBuilder().addCompare(exists(clock, true));
         if (minimumExpiry != Long.MAX_VALUE)
             apply.addCompare(
@@ -391,20 +418,21 @@ public final class ZLinkEtcdLocationStore implements ZLinkLocationStore, AutoClo
                             .setTarget(Compare.CompareTarget.VALUE)
                             .setResult(Compare.CompareResult.LESS)
                             .setValue(EtcdEncoding.clock(minimumExpiry)));
-        for (int i = 0; i < decision.metadata().length; i++) {
-            ByteString key = metadataKey(keyBytes(conditionKey(request.conditions().get(i))));
+        for (var entry : decision.observations().entrySet()) {
+            ByteString key = metadataKey(keyBytes(entry.getKey()));
+            KeyValue metadata = entry.getValue().metadata();
             apply.addCompare(
-                    decision.metadata()[i] == null
+                    metadata == null
                             ? exists(key, false)
                             : Compare.newBuilder()
                                     .setKey(key)
                                     .setTarget(Compare.CompareTarget.MOD)
                                     .setResult(Compare.CompareResult.EQUAL)
-                                    .setModRevision(decision.metadata()[i].getModRevision())
+                                    .setModRevision(metadata.getModRevision())
                                     .build());
         }
-        for (var mutation : request.mutations()) {
-            ByteString key = keyBytes(mutationKey(mutation));
+        for (var mutation : mutations) {
+            ByteString key = keyBytes(mutation.key());
             if (mutation instanceof ZLinkStorePut put) {
                 byte[] bytes = put.bytes();
                 long expires =
@@ -444,9 +472,9 @@ public final class ZLinkEtcdLocationStore implements ZLinkLocationStore, AutoClo
     }
 
     private static ZLinkStoreWriteResult applied(
-            ZLinkStoreWriteRequest request, long now, TxnResponse response) {
+            List<ZLinkStoreMutation> mutations, long now, TxnResponse response) {
         Map<ZLinkStoreKey, ZLinkStoreVersion> versions = new LinkedHashMap<>();
-        for (var mutation : request.mutations())
+        for (var mutation : mutations)
             if (mutation instanceof ZLinkStorePut put)
                 versions.put(
                         put.key(),

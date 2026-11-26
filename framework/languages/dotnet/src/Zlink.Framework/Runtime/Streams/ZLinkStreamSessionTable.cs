@@ -16,7 +16,8 @@ internal sealed class ZLinkStreamSessionTable(
     TimeProvider timeProvider,
     bool actorDispatchEnabled,
     IZLinkRuntimeFailureReporter errorSink,
-    ZLinkStreamNodeRegistration? livenessOptions = null
+    ZLinkStreamNodeRegistration? livenessOptions = null,
+    ZLinkStreamSessionLiveness.Reader? readerLiveness = null
 )
 {
     private const int RejectedCreationLimit = 4096;
@@ -123,7 +124,8 @@ internal sealed class ZLinkStreamSessionTable(
                     timeProvider,
                     actorDispatchEnabled,
                     requireConnectionReady: true,
-                    livenessOptions: livenessOptions
+                    livenessOptions: livenessOptions,
+                    readerLiveness: readerLiveness
                 )
                 .ConfigureAwait(false);
         }

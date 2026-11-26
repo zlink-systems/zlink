@@ -37,12 +37,12 @@ inline bool same_town (const TownView &a, const TownView &b)
 
 inline void channel (const std::string &endpoint)
 {
-    Client player (endpoint, Deployment::leader_id);
+    Client player (endpoint, std::string (Deployment::leader_id) + "-" + unique_id ());
     const auto before = player.join (1);
     require (before.townId == Names::town_id (1) && before.nodeId == Deployment::town_a,
              "Incorrect initial town");
     const auto identity = player.info ();
-    Client observer (endpoint, "channel-observer");
+    Client observer (endpoint, "channel-observer-" + unique_id ());
     observer.join (1);
     const auto forming = player.exchange<TownView> (CreatePartyRequest{}, [&] (const auto &view) {
         return std::any_of (view.parties.begin (), view.parties.end (), [&] (const auto &party) {
@@ -160,8 +160,10 @@ class PartyRun
   public:
     explicit PartyRun (const std::string &endpoint) : endpoint_ (endpoint)
     {
-        leader_ = std::make_unique<Client> (endpoint, Deployment::leader_id);
-        member_ = std::make_unique<Client> (endpoint, Deployment::member_id);
+        leader_ = std::make_unique<Client> (endpoint, std::string (Deployment::leader_id) + "-"
+                                                        + unique_id ());
+        member_ = std::make_unique<Client> (endpoint, std::string (Deployment::member_id) + "-"
+                                                        + unique_id ());
         leader_->join (2);
         member_->join (2);
         const auto identity1 = leader_->info (), identity2 = member_->info ();
@@ -179,7 +181,7 @@ class PartyRun
               member_from, [stage] (const auto &view) { return view.stage == stage; });
             same_dungeon (advanced_, other);
         }
-        Client town_observer (endpoint_, "dungeon-town-observer");
+        Client town_observer (endpoint_, "dungeon-town-observer-" + unique_id ());
         town_observer.join (2);
         require (advanced_.phase == RunPhase::Completed, "Final stage did not complete run");
         const auto completed_party =
