@@ -11,8 +11,10 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
@@ -34,6 +36,10 @@ import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
+import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
+import systems.zlink.framework.spots.ZLinkSpotActorRequestHandler;
+import systems.zlink.framework.spots.ZLinkSpotContext;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
@@ -41,6 +47,7 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -50,6 +57,8 @@ final class ZLinkActorDestroyContractTest {
     private static final String ACTOR_ID = "destroy-player";
     private static final String ACTOR_TYPE = "player";
     private static final String MESH = "destroy-mesh";
+    private static final String ROOM = "destroy-room";
+    private static volatile CompletableFuture<ZLinkActorJoinCompletion> roomJoin;
     private static CompletableFuture<Void> accepted;
     private static CompletableFuture<Void> release;
 
@@ -161,6 +170,41 @@ final class ZLinkActorDestroyContractTest {
                         assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
                 assertEquals(current, await(owner.actorManager().find(ACTOR_ID)).orElseThrow());
             }
+        }
+    }
+
+    @Test
+    void destroyRejectedInUserSpotAllowsRequestsAndDestroyAfterLeave() throws Exception {
+        var joined = new CompletableFuture<ZLinkActorJoinCompletion>();
+        roomJoin = joined;
+        try (var runtime = start(new ZLinkInMemoryLocationStore())) {
+            await(runtime.spotManager().getOrCreate(ROOM, "room").submit());
+            var actor = create(runtime);
+            var client = runtime.actorClient();
+            var manager = runtime.actorManager();
+            await(client.sendToActor(ACTOR_ID, new JoinRoom()).submit());
+            assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, await(joined));
+
+            var failure =
+                    assertThrows(ExecutionException.class, () -> await(manager.destroy(actor)));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            assertEquals(
+                    actor.objectGeneration(),
+                    await(
+                            client.requestToActor(ACTOR_ID, new ReadRoomGeneration())
+                                    .submit(Long.class)));
+            assertTrue(
+                    await(client.requestToActor(ACTOR_ID, new LeaveRoom()).submit(Boolean.class)));
+            assertEquals(
+                    actor.objectGeneration(),
+                    await(
+                            client.requestToActor(ACTOR_ID, new ReadGeneration())
+                                    .submit(Long.class)));
+            assertTrue(await(manager.destroy(actor)));
+        } finally {
+            roomJoin = null;
         }
     }
 
@@ -356,6 +400,7 @@ final class ZLinkActorDestroyContractTest {
         if (peerEndpoint == null) {
             var objects = node.objects().server();
             objects.addEntrySpot(Lobby.class);
+            objects.addSpotFactory("room", Room.class, factory -> factory.disableRelocation());
             objects.addActorFactory(
                     ACTOR_TYPE,
                     Player.class,
@@ -396,7 +441,22 @@ final class ZLinkActorDestroyContractTest {
 
     public record ReadGeneration() {}
 
-    public record Player(ZLinkActorContext context) implements ZLinkActor {}
+    public record JoinRoom() {}
+
+    public record ReadRoomGeneration() {}
+
+    public record LeaveRoom() {}
+
+    public record Player(ZLinkActorContext context) implements ZLinkActor {
+        @Override
+        public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
+            var joined = roomJoin;
+            if (joined != null) {
+                joined.complete(completion);
+            }
+            return CompletableFuture.completedFuture(null);
+        }
+    }
 
     public static final class Factory implements ZLinkActorFactory {
         @Override
@@ -421,6 +481,7 @@ final class ZLinkActorDestroyContractTest {
         public void configure() {
             context.handlers().addHandler(DestroyHandler.class);
             context.handlers().addHandler(ReadGenerationHandler.class);
+            context.handlers().addHandler(JoinRoomHandler.class);
         }
 
         @Override
@@ -431,6 +492,58 @@ final class ZLinkActorDestroyContractTest {
         @Override
         public CompletionStage<Void> onLeaveActor(Player actor) {
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public record Room(ZLinkSpotContext context) implements ZLinkSpot<Player> {
+        @Override
+        public void configure() {
+            context.handlers().addHandler(ReadRoomGenerationHandler.class);
+            context.handlers().addHandler(LeaveRoomHandler.class);
+        }
+
+        @Override
+        public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
+                String actorId, ZLinkMessage request) {
+            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(Player actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(Player actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class JoinRoomHandler
+            implements ZLinkEntrySpotActorSendHandler<Lobby, Player, JoinRoom> {
+        @Override
+        public CompletionStage<Void> handle(
+                Lobby spot, Player actor, ZLinkMessageContext context, JoinRoom message) {
+            actor.context().joinSpot(ROOM).defer();
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class ReadRoomGenerationHandler
+            implements ZLinkSpotActorRequestHandler<Room, Player, ReadRoomGeneration, Long> {
+        @Override
+        public CompletionStage<Long> handle(
+                Room spot, Player actor, ZLinkMessageContext context, ReadRoomGeneration message) {
+            return CompletableFuture.completedFuture(actor.context().objectGeneration());
+        }
+    }
+
+    public static final class LeaveRoomHandler
+            implements ZLinkSpotActorRequestHandler<Room, Player, LeaveRoom, Boolean> {
+        @Override
+        public CompletionStage<Boolean> handle(
+                Room spot, Player actor, ZLinkMessageContext context, LeaveRoom message) {
+            return spot.context().leaveActor(actor).thenApply(ignored -> true);
         }
     }
 

@@ -766,8 +766,19 @@ final class ZLinkActorDispatchSerials {
             Supplier<CompletionStage<Void>> cleanup) {
         var lane = claimed.activation().relocationLane();
         var attempt = registered.terminal();
-        closeAdmission.accept(
-                () -> ZLinkSpotCloseCallAccess.sealActorDestroyAdmission(lane, attempt));
+        try {
+            closeAdmission.accept(
+                    () -> ZLinkSpotCloseCallAccess.sealActorDestroyAdmission(lane, attempt));
+        } catch (RuntimeException failure) {
+            // Admission was refused before this attempt sealed anything; return the claimed turn.
+            rejectDestroy(
+                    actorId,
+                    registered,
+                    failure,
+                    COMPLETED,
+                    () -> actorTargets.compute(actorId, (id, turn) -> previousTurn));
+            return COMPLETED;
+        }
         var previous = registered.activation();
         if (previous != null && previous.relocationLane() != lane) {
             ZLinkSpotCloseCallAccess.sealActorDestroyAdmission(previous.relocationLane(), attempt);
