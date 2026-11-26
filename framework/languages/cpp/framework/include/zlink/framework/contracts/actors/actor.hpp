@@ -161,6 +161,12 @@ actor_join_completion_from_erased (actor_join_completion_outcome_t outcome,
     }
     return actor_join_failed_t{operation_id_high, operation_id_low, error_kind};
 }
+
+template <typename TActor>
+task_t<void> invoke_actor_join_completed (TActor *actor, actor_join_completion_t completion)
+{
+    co_await actor->on_join_completed (completion);
+}
 } // namespace detail
 
 class actor_t
@@ -1014,9 +1020,10 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory (
           std::uint64_t operation_id_high, std::uint64_t operation_id_low,
           const actor_ref_t *committed, const std::optional<message_t> &reply,
           framework_error_kind_t error_kind, bool) {
-          const auto completion = detail::actor_join_completion_from_erased (
-            outcome, operation_id_high, operation_id_low, committed, reply, error_kind);
-          return static_cast<TActor *> (actor)->on_join_completed (completion);
+          return detail::invoke_actor_join_completed (
+            static_cast<TActor *> (actor),
+            detail::actor_join_completion_from_erased (
+              outcome, operation_id_high, operation_id_low, committed, reply, error_kind));
       },
       relocation, std::move (capture), std::move (restore),
       std::is_same_v<decltype (&TActor::on_duplicate_bind), decltype (&actor_t::on_duplicate_bind)>,

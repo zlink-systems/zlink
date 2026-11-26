@@ -1406,6 +1406,19 @@ concept user_spot_type =
 template <typename T>
 concept entry_spot_type = requires { typename T::actor_type; }
                           && std::derived_from<T, entry_spot_t<typename T::actor_type>>;
+
+template <typename TSpot>
+task_t<spot_create_response_t> invoke_spot_create (TSpot *spot, message_t request)
+{
+    co_return co_await spot->on_create (request);
+}
+
+template <typename TSpot, typename TActor>
+task_t<actor_create_response_t>
+invoke_spot_create_actor (TSpot *spot, TActor *actor, message_t request)
+{
+    co_return co_await spot->on_create_actor (*actor, request);
+}
 } // namespace detail
 
 struct spot_create_result_t
@@ -1631,8 +1644,9 @@ class spot_handler_registry_t
         callbacks.on_create_actor = [] (void *spot, void *actor, const zlink::message_t &request,
                                         serializer_registry_t &serializers) {
             if constexpr (detail::entry_spot_type<TSpot>) {
-                return static_cast<TSpot *> (spot)->on_create_actor (
-                  *static_cast<TActor *> (actor), message_t::from_raw (request, &serializers));
+                return detail::invoke_spot_create_actor (
+                  static_cast<TSpot *> (spot), static_cast<TActor *> (actor),
+                  message_t::from_raw (request, &serializers));
             } else {
                 return task_t<actor_create_response_t> (
                   result_t<actor_create_response_t>::success (actor_create_response_t::accept ()));
@@ -2208,8 +2222,8 @@ class spot_node_builder_t
         if constexpr (detail::user_spot_type<TSpot>) {
             callbacks.on_create = [] (void *spot, const zlink::message_t &request,
                                       serializer_registry_t &serializers) {
-                return static_cast<TSpot *> (spot)->on_create (
-                  message_t::from_raw (request, &serializers));
+                return detail::invoke_spot_create (
+                  static_cast<TSpot *> (spot), message_t::from_raw (request, &serializers));
             };
         }
         callbacks.on_initialize = [] (void *spot) {
