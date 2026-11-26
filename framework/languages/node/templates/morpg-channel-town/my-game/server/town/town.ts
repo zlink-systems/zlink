@@ -70,9 +70,7 @@ export class Town implements ZLinkSpot<Player> {
       String(this.context.spotId),
       this.config.id,
       [...this.players].sort(),
-      [...this.parties]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([, party]) => party.view())
+      [...this.parties].sort(([a], [b]) => a.localeCompare(b)).map(([, party]) => party.view())
     );
   }
   async show(actor: Player): Promise<void> {
@@ -154,10 +152,7 @@ export class Town implements ZLinkSpot<Player> {
       return;
     }
     actor.context
-      .joinSpot(
-        townId(channel),
-        new JoinTownRequest(actor.context.actorId, channel)
-      )
+      .joinSpot(townId(channel), new JoinTownRequest(actor.context.actorId, channel))
       .defer();
   }
   async runStarted(message: RunStarted): Promise<void> {
@@ -181,7 +176,8 @@ export class Town implements ZLinkSpot<Player> {
   }
   private async rejectRunMismatch(party?: PartyRun): Promise<void> {
     const leader = party?.members[0];
-    if (leader) await this.actors.sendToActor(leader, new ActionRejected(Rejection.runMismatch)).submit();
+    if (leader)
+      await this.actors.sendToActor(leader, new ActionRejected(Rejection.runMismatch)).submit();
   }
   capture(): TownState {
     return {

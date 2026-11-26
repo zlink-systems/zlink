@@ -25,16 +25,38 @@ Build the node and runner images from this directory.
 The build command removes its image tags after checking the build; Docker retains reusable build layers. PowerShell provides the same command.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 Both commands compile the TypeScript server and e2e runner.
+
+## Run the server and e2e
+
+Install Node.js 22 or later, npm and Docker Compose v2 for local hosting. From this directory, leave the first command running and execute the second in another terminal.
+
+```bash
+./run-server.sh
+./run-e2e.sh
+```
+
+```powershell
+.\run-server.cmd
+.\run-e2e.cmd
+```
+
+The Windows wrappers start PowerShell 7 with UTF-8 output and a process-scoped execution policy. The equivalent PowerShell scripts are `run-server.ps1` and `run-e2e.ps1`.
+
+`run-server` runs `npm ci`, builds the project, starts Redis and the local nodes, and prints the WebSocket address next to `Server ready`. When present, HTTP API addresses are printed separately. Use Ctrl+C to stop the nodes and Redis. A second server start is rejected while the first server is starting or running.
+
+`run-e2e` detects a ready server through `.logs/server.json` and runs the compatible scenarios against it. The isolated `connect` scenario also checks drain and shutdown. Stop the server before running the full Docker e2e. Use `--local` or `-Local` to request a separate local run with Redis in Docker.
+
+`.logs/run-<id>/` contains generated node settings, separate `*.out.log`, `*.err.log` and `*.flow.log` files, and failure details. Attached runs keep their client results in a new run directory and print the path. The running server continues writing node logs to its own run directory. Docker build and cleanup logs are in `.logs/docker-<project>/`.
 
 ## Client connection
 
 ### Endpoint and connection handshake
 
-The Session `players` STREAM listener uses `streamEndpoint` in `server/config/session.json`, defaulting to `ws://127.0.0.1:0`: loopback WebSocket, OS-assigned port, root path `/`. Use the actual `endpoint` from Session `READY` JSON, as `e2e/runner.ts` does. Mesh and Redis addresses are internal endpoints.
+The Session `players` STREAM listener uses `streamEndpoint` in `server/config/session.json`, defaulting to `ws://127.0.0.1:0`: loopback WebSocket, OS-assigned port, root path `/`. Use the address printed by `run-server` or the actual `endpoint` from Session `READY` JSON, as `e2e/runner.ts` does. Mesh and Redis addresses are internal endpoints.
 
 This starter registers no game packet handler, Actor, Spot, or authentication. `e2e/client.mts` only connects with the public connector and closes it. The connector performs the STREAM protocol handshake; there is no application login/join packet or game response to await. Add typed DTOs, server handlers, and an e2e scenario before sending game messages. A raw WebSocket JSON message is not the STREAM handshake.
 
@@ -94,12 +116,12 @@ Run the default Docker scenario from this directory.
 ./run-e2e.sh --scenario connect
 ```
 
-The `connect` scenario waits for node READY, connects and disposes one public STREAM connector, then checks drain markers and successful shutdown. PowerShell selects the same scenario.
+The isolated `connect` scenario waits for node READY, connects and disposes one public STREAM connector, then checks drain markers and successful shutdown. PowerShell selects the same scenario.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario connect
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario connect
+.\run-e2e.cmd -CheckStructure
 ```
 
 A successful run prints `✓ connect` and `Scenarios: 1/1 passed`. Cleanup failures return a nonzero exit code.

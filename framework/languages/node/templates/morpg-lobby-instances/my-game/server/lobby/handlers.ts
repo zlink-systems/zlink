@@ -120,22 +120,49 @@ export class Delivery {
 
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => Party, packetName: PacketNames.runStarted })
-export class Started { async handle(spot: Party, request: RunStarted): Promise<void> { spot.started(request.runId); } }
+export class Started {
+  async handle(spot: Party, request: RunStarted): Promise<void> {
+    spot.started(request.runId);
+  }
+}
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => Party, packetName: PacketNames.runCompleted })
-export class Completed { async handle(spot: Party, request: RunCompleted): Promise<void> { spot.completed(request.runId); } }
+export class Completed {
+  async handle(spot: Party, request: RunCompleted): Promise<void> {
+    spot.completed(request.runId);
+  }
+}
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => Party, packetName: PacketNames.enterPartyRun })
-export class EnterRun { async handle(spot: Party, request: EnterPartyRun): Promise<void> { await spot.enterPlayer(request.playerId); } }
+export class EnterRun {
+  async handle(spot: Party, request: EnterPartyRun): Promise<void> {
+    await spot.enterPlayer(request.playerId);
+  }
+}
 @Injectable()
-@zlinkSpotActorSendHandler({ spot: () => Party, actor: () => Player, packetName: PacketNames.actionRejected })
-export class RejectDelivery { async handle(_spot: Party, actor: Player, context: ZLinkMessageContext, request: ActionRejected): Promise<void> {
-  await actor.deliver(context.packetName, request);
-} }
+@zlinkSpotActorSendHandler({
+  spot: () => Party,
+  actor: () => Player,
+  packetName: PacketNames.actionRejected
+})
+export class RejectDelivery {
+  async handle(
+    _spot: Party,
+    actor: Player,
+    context: ZLinkMessageContext,
+    request: ActionRejected
+  ): Promise<void> {
+    await actor.deliver(context.packetName, request);
+  }
+}
 
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => Party, packetName: PacketNames.dungeonMemberEntered })
-export class Arrived { async handle(spot: Party, request: DungeonMemberEntered): Promise<void> { spot.arrived(request.runId, request.playerId); } }
+export class Arrived {
+  async handle(spot: Party, request: DungeonMemberEntered): Promise<void> {
+    spot.arrived(request.runId, request.playerId);
+  }
+}
 
 @Injectable()
 @zlinkSpotActorSendHandler({
