@@ -25,6 +25,14 @@ class actor_destroy_store_t final : public fw::location_store_t
     fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
     {
         const auto authority = authority_key.load ();
+        if (reject_next_authority_put && authority
+            && std::ranges::any_of (request.mutations,
+                                    [&] (const auto &mutation) {
+                                        const auto *put = std::get_if<fw::store_put_t> (&mutation);
+                                        return put && put->key.value == authority->value;
+                                    })
+            && reject_next_authority_put.exchange (false))
+            co_return fw::store_write_corrupt_t{};
         if (authority && std::ranges::any_of (request.mutations, [&] (const auto &mutation) {
                 const auto *remove = std::get_if<fw::store_delete_t> (&mutation);
                 return remove && remove->key.value == authority->value;
@@ -45,6 +53,7 @@ class actor_destroy_store_t final : public fw::location_store_t
     std::shared_ptr<fw::location_store_t> inner =
       std::make_shared<fw::runtime::in_memory_location_store_t> ();
     std::atomic<std::shared_ptr<const fw::store_key_t>> authority_key;
+    std::atomic<bool> reject_next_authority_put{false};
     std::atomic<bool> reject_delete{false};
     fw::task_completion_source_t<void> deleting;
     fw::task_completion_source_t<void> proceed;
@@ -147,6 +156,37 @@ TEST_F (ActorDestroyContract, FindOmitsClosingAuthority)
     EXPECT_FALSE (found->value ().has_value ());
     store->proceed.complete (fw::result_t<void>::success ());
     const auto destroyed = destroying.result_for (wait_budget);
+    ASSERT_TRUE (destroyed && *destroyed && destroyed->value ());
+}
+
+TEST_F (ActorDestroyContract, ClosingCasFailureRestoresActorAndAllowsDestroy)
+{
+    release_destroy_t release{store->proceed};
+    // After Entry handoff, the first Put on this authority is the Closing CAS.
+    store->reject_next_authority_put = true;
+    const auto failed = manager.destroy (actor ()).result_for (wait_budget);
+    ASSERT_TRUE (failed && !*failed);
+    ASSERT_FALSE (store->reject_next_authority_put.load ());
+
+    const auto authority = services->get_required<fw::location_repository_t> ()
+                             .read_authority (fw::runtime::actor_authority_key (actor_id))
+                             .result_for (wait_budget);
+    ASSERT_TRUE (authority && *authority);
+    const auto *ready = std::get_if<fw::authority_snapshot_t> (&authority->value ());
+    ASSERT_NE (ready, nullptr);
+    const auto payload = fw::runtime::decode_canonical_authority_payload (ready->payload);
+    ASSERT_TRUE (payload && !payload->body.empty ());
+    EXPECT_EQ (payload->body.front (), std::byte{0});
+    EXPECT_EQ (ready->store_version, before_destroy.store_version);
+
+    const auto probe = services->get_required<fw::actor_client_t> ()
+                         .request (actor ().actor_id (), probe_t{23})
+                         .async<probe_t> ()
+                         .result_for (wait_budget);
+    EXPECT_TRUE (probe && *probe && probe->value ().value == 23);
+
+    store->proceed.complete (fw::result_t<void>::success ());
+    const auto destroyed = manager.destroy (actor ()).result_for (wait_budget);
     ASSERT_TRUE (destroyed && *destroyed && destroyed->value ());
 }
 
