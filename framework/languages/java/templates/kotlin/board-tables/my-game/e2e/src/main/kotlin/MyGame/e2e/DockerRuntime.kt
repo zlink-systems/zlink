@@ -19,7 +19,8 @@ internal object DockerRuntime {
         check(process.waitFor() == 0) { "Docker ${arguments.first()} failed: $output" }
     }
 
-    // SIGQUIT makes HotSpot print a thread dump to stdout; failures here must not hide the real error.
+    // SIGQUIT makes HotSpot print a thread dump to stdout; failures here must not hide the real
+    // error.
     fun threadDump(process: Process) {
         try {
             if (enabled) {

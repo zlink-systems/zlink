@@ -353,7 +353,7 @@ public sealed partial class StreamSessionForcedCleanupTests
         }
 
         TestStreamSocket CreateSocket() =>
-            new() { BeforeRecvPacket = () => jobs.GetStatus().ReservedSupplyPermits > 0 };
+            new() { BeforeRecvPacket = () => jobs.GetStatus().ReservedSupplyPermits == 1 };
 
         ZLinkStreamNodeRuntime StartNode()
         {

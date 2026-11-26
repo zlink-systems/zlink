@@ -1825,11 +1825,11 @@ public sealed class ContractSurfaceCoverage
                     nullableContextOptions: NullableContextOptions.Enable
                 )
             );
-            var resolvers = trees.Values.ToDictionary(
-                tree => tree,
-                tree => new SemanticTypeIdentityResolver(
-                    compilation.GetSemanticModel(tree, true),
-                    materialized[0].ExactInterface ? materialized[0].Document : null
+            var resolvers = materialized.ToDictionary(
+                document => trees[document.Ordinal],
+                document => new SemanticTypeIdentityResolver(
+                    compilation.GetSemanticModel(trees[document.Ordinal], true),
+                    document.ExactInterface ? document.Document : null
                 )
             );
             return new SemanticBindingContext(trees, resolvers);

@@ -69,13 +69,15 @@ class Room(
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {
+        println("EVENT Room joined: ${context.spotId()}")
         actors.kotlin().sendToActor(actor.context.actorId(), MatchFound(context.spotId())).await()
         broadcast(view())
     }
 
     override suspend fun onLeaveActorSuspending(actor: Player) {}
 
-    private fun view() = RoomView(context.spotId(), config.id, state.phase, state.winner, state.view())
+    private fun view() =
+        RoomView(context.spotId(), config.id, state.phase, state.winner, state.view())
 
     suspend fun sendView(actor: Player) = actor.context.boundSession().kotlin().send(view()).await()
 
@@ -90,8 +92,11 @@ class Room(
             return
         }
         val player = state.view().single { it.playerId == actor.context.actorId() }
-        actor.context.boundSession().kotlin()
-            .send(MoveResult(player.x, player.y, request.sequence)).await()
+        actor.context
+            .boundSession()
+            .kotlin()
+            .send(MoveResult(player.x, player.y, request.sequence))
+            .await()
         broadcast(view())
     }
 
@@ -101,10 +106,16 @@ class Room(
             actor.context.boundSession().kotlin().send(rejection).await()
             return
         }
-        actor.context.boundSession().kotlin()
-            .send(ShotResult("hit", request.targetId, request.sequence)).await()
+        actor.context
+            .boundSession()
+            .kotlin()
+            .send(ShotResult("hit", request.targetId, request.sequence))
+            .await()
         broadcast(view())
-        state.winner?.let { broadcast(MatchEnded(it)) }
+        state.winner?.let {
+            println("EVENT Match completed: ${context.spotId()}")
+            broadcast(MatchEnded(it))
+        }
     }
 }
 

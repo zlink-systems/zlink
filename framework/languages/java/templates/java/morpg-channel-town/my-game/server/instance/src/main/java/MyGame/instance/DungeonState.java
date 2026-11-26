@@ -30,7 +30,8 @@ public final class DungeonState {
                 || request.members().isEmpty()
                 || request.members().size() > Rules.MAX_MEMBERS
                 || new HashSet<>(request.members()).size() != request.members().size()
-                || request.members().stream().anyMatch(member -> member == null || member.isBlank()))
+                || request.members().stream()
+                        .anyMatch(member -> member == null || member.isBlank()))
             return Rules.RUN_MISMATCH;
         runId = request.runId();
         partyId = request.partyId();

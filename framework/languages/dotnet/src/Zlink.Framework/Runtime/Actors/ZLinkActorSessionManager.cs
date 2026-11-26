@@ -66,7 +66,10 @@ internal sealed partial class ZLinkActorSessionManager(
             ? ValueTask.CompletedTask
             : DiscardLocationExecutionAsync(state);
 
-    internal ValueTask DiscardLocationExecutionAsync(ZLinkActorRuntimeState state)
+    internal ValueTask DiscardLocationExecutionAsync(
+        ZLinkActorRuntimeState state,
+        CancellationToken generationShutdown = default
+    )
     {
         state.FenceRuntimeGeneration();
         var bound = state.TryGetBoundSession(out var session);
@@ -86,8 +89,19 @@ internal sealed partial class ZLinkActorSessionManager(
                 if (bound)
                     runtime.RemoveActorSessionBinding(state.ActorId, session.BindingToken);
                 if (nativeActor is { } native && getActorSpotNode() is { } node)
-                    await DestroyNativeActorAttemptAsync(node, native, CancellationToken.None)
-                        .ConfigureAwait(false);
+                {
+                    try
+                    {
+                        await DestroyNativeActorAttemptAsync(node, native, CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                    catch (ZLinkFrameworkException error)
+                        when (ZLinkLocationRuntime.IsExpectedDiscardTransportShutdown(
+                                error,
+                                generationShutdown
+                            )
+                        ) { }
+                }
                 _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
             }
         );
@@ -185,7 +199,17 @@ internal sealed partial class ZLinkActorSessionManager(
         CancellationToken cancellationToken
     )
     {
-        var state = _actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        var id = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
+        var state = _actorSessions.GetOrCreate(id);
+        // A new reservation can reach this owner after the Closing Delete
+        // commits and before its destroy removes the old registry entry.
+        if (state.IsTeardownPending || state.ContextInvalidated)
+        {
+            await state
+                .WaitForPriorDestroyAsync(objectGeneration, cancellationToken)
+                .ConfigureAwait(false);
+            state = _actorSessions.GetOrCreate(id);
+        }
         // A source that completed a handoff keeps its retired native ref and
         // closed activation until the next local materialization. A new
         // durable object generation on this node must retire that old source

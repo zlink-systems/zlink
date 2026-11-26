@@ -89,16 +89,15 @@ public class MatchmakerTest {
             }
             try (var first = request(uri, "a", true);
                     var second = request(uri, "b", false)) {
-                var a =
-                        new String(first.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-                var b =
-                        new String(second.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                var a = new String(first.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                var b = new String(second.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
                 assertTrue(a.startsWith("HTTP/1.1 200"), a);
                 assertTrue(b.startsWith("HTTP/1.1 200"), b);
                 var responseA = Json.MAPPER.readTree(a.substring(a.indexOf("\r\n\r\n") + 4));
                 var responseB = Json.MAPPER.readTree(b.substring(b.indexOf("\r\n\r\n") + 4));
                 assertEquals(responseA, responseB);
-                assertTrue(responseA.path("roomId").asText().matches(ROOM_ID), responseA.toString());
+                assertTrue(
+                        responseA.path("roomId").asText().matches(ROOM_ID), responseA.toString());
             }
         }
     }
@@ -110,7 +109,8 @@ public class MatchmakerTest {
         byte[] body =
                 omitMode
                         ? Json.MAPPER.writeValueAsBytes(java.util.Map.of("playerId", player))
-                        : Json.MAPPER.writeValueAsBytes(new MatchRequest(player, Names.DEFAULT_MODE));
+                        : Json.MAPPER.writeValueAsBytes(
+                                new MatchRequest(player, Names.DEFAULT_MODE));
         var headers =
                 "POST "
                         + Names.MATCH_PATH

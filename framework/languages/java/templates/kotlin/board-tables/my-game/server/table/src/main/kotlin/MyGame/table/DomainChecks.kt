@@ -36,7 +36,9 @@ internal fun runDomainChecks(): Int {
 
 private fun shuffledDeckContainsEveryCardOnce() {
     val table = table(secureRandomIndex())
-    check(table.admit("p1") && table.admit("p2")) { "Could not prepare shuffled deck" }
+    check(table.admit("p1", Rules.INITIAL_CHIPS) && table.admit("p2", Rules.INITIAL_CHIPS)) {
+        "Could not prepare shuffled deck"
+    }
     check(table.startDomain("p1") == null) { "Deck shuffle failed" }
 
     val cards = table.state.deck + table.state.seats.flatMap { it.cards }
@@ -47,7 +49,9 @@ private fun shuffledDeckContainsEveryCardOnce() {
 
 private fun injectedRandomProducesDeterministicOrder() {
     val table = table { bound -> bound - 1 }
-    check(table.admit("p1") && table.admit("p2")) { "Could not prepare deterministic shuffle" }
+    check(table.admit("p1", Rules.INITIAL_CHIPS) && table.admit("p2", Rules.INITIAL_CHIPS)) {
+        "Could not prepare deterministic shuffle"
+    }
     check(table.startDomain("p1") == null) { "Injected random source failed" }
     check(
         table.state.deck == (0 until 48).toList() &&
@@ -60,7 +64,9 @@ private fun injectedRandomProducesDeterministicOrder() {
 
 private fun settlementClearsAllPrivateHands() {
     val table = table { bound -> bound - 1 }
-    repeat(Rules.SEATS) { check(table.admit("p$it")) { "Could not prepare settlement cards" } }
+    repeat(Rules.SEATS) {
+        check(table.admit("p$it", Rules.INITIAL_CHIPS)) { "Could not prepare settlement cards" }
+    }
     check(table.startDomain("p0") == null) { "Could not start settlement hand" }
 
     var result: HandResult? = null
@@ -133,7 +139,9 @@ private fun payoutOverflowRejectionIsAtomic() {
 
 private fun handNumberOverflowRejectionIsAtomic() {
     val table = table(secureRandomIndex())
-    check(table.admit("p1") && table.admit("p2")) { "Could not prepare hand-number boundary" }
+    check(table.admit("p1", Rules.INITIAL_CHIPS) && table.admit("p2", Rules.INITIAL_CHIPS)) {
+        "Could not prepare hand-number boundary"
+    }
     table.state.handNumber = Rules.MAX_CONTRACT_INTEGER
     val before = snapshot(table)
     check(table.startDomain("p1") == Rules.INTEGER_OUT_OF_RANGE) {
@@ -144,7 +152,9 @@ private fun handNumberOverflowRejectionIsAtomic() {
 
 private fun playingTable(): Table {
     val table = table(secureRandomIndex())
-    check(table.admit("p1") && table.admit("p2")) { "Could not prepare bet boundary" }
+    check(table.admit("p1", Rules.INITIAL_CHIPS) && table.admit("p2", Rules.INITIAL_CHIPS)) {
+        "Could not prepare bet boundary"
+    }
     table.state.seats[0].cards = listOf(11, 24)
     table.state.seats[1].cards = listOf(0, 13)
     table.state.handNumber = 1L

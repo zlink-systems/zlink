@@ -36,8 +36,7 @@ public final class Matchmaker implements AutoCloseable {
             if (partner == null) {
                 waiting.put(mode, current);
                 roomId = null;
-            }
-            else roomId = Names.ROOM_PREFIX + UUID.randomUUID().toString().replace("-", "");
+            } else roomId = Names.ROOM_PREFIX + UUID.randomUUID().toString().replace("-", "");
         }
         result.whenComplete(
                 (value, error) -> {
@@ -80,8 +79,9 @@ public final class Matchmaker implements AutoCloseable {
             MatchRequest request, CompletableFuture<MatchResponse> result) {
         if (request == null || request.playerId() == null || result == null) return false;
         var pending = participants.get(request.playerId());
-        if (pending == null || pending.result() != result || !waiting.remove(pending.mode(), pending))
-            return false;
+        if (pending == null
+                || pending.result() != result
+                || !waiting.remove(pending.mode(), pending)) return false;
         result.cancel(false);
         return true;
     }

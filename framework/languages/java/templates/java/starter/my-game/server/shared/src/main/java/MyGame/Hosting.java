@@ -22,15 +22,15 @@ public final class Hosting {
             ZLinkRedisLocationStore locations,
             ZLinkRedisRelocationStore relocations) {
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        if (System.getProperty("MyGame.flowFile") != null)
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         options.configureLocations().setMessageFollowDuration(Control.MESSAGE_FOLLOW);
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
     }
 
     private static <T> Flow.Subscription observe(
-            Flow.Publisher<T> publisher,
-            CompletableFuture<Void> ready,
-            Consumer<T> action) {
+            Flow.Publisher<T> publisher, CompletableFuture<Void> ready, Consumer<T> action) {
         var subscribed = new CompletableFuture<Flow.Subscription>();
         publisher.subscribe(
                 new Flow.Subscriber<>() {
@@ -50,7 +50,8 @@ public final class Hosting {
 
                     public void onComplete() {
                         ready.completeExceptionally(
-                                new IllegalStateException("Runtime observation ended before Serving"));
+                                new IllegalStateException(
+                                        "Runtime observation ended before Serving"));
                     }
                 });
         return subscribed.join();
@@ -89,12 +90,14 @@ public final class Hosting {
                                                     + status.terminationResult());
                                 }
                                 if (observed.loss().discardedTerminalCount() != 0)
-                                    ready.completeExceptionally(new IllegalStateException("Startup observation lost"));
+                                    ready.completeExceptionally(
+                                            new IllegalStateException("Startup observation lost"));
                                 else if (status.state() == ZLinkFrameworkRuntimeState.SERVING)
                                     ready.complete(null);
                                 else if (status.state() != ZLinkFrameworkRuntimeState.PREPARING)
                                     ready.completeExceptionally(
-                                            new IllegalStateException("Runtime startup failed: " + status.state()));
+                                            new IllegalStateException(
+                                                    "Runtime startup failed: " + status.state()));
                                 if (status.state() == ZLinkFrameworkRuntimeState.RELOCATED
                                         && status.safeToShutdown()) safe.complete(null);
                             });

@@ -95,6 +95,14 @@ public final class Client implements AutoCloseable {
         return next(DungeonView.class, view -> !view.nodeId().equals(previousHost));
     }
 
+    DungeonLeft leaveDungeon() {
+        return connector
+                .request(new LeaveDungeonRequest())
+                .submit(DungeonLeft.class)
+                .toCompletableFuture()
+                .join();
+    }
+
     SessionInfo sessionInfo() {
         return connector
                 .request(new SessionInfoRequest())
@@ -123,8 +131,7 @@ public final class Client implements AutoCloseable {
                 throw new IllegalStateException(
                         "Timed out waiting for " + type.getSimpleName() + ", received=" + history);
             if (event instanceof Exception error) throw error;
-            if (type.isInstance(event) && predicate.test(type.cast(event)))
-                return type.cast(event);
+            if (type.isInstance(event) && predicate.test(type.cast(event))) return type.cast(event);
             if (event instanceof ActionRejected rejected)
                 throw new IllegalStateException("Action rejected: " + rejected.reason());
             pending.add(event);

@@ -45,6 +45,7 @@ internal static class TestHostScenarioConfigurator
             case "user-spot-source":
                 ConfigureUserSpotSource(services, options);
                 return;
+            case "login-admission-server":
             case "stream-raw":
                 ConfigureStreamRawNode(services, options);
                 return;
@@ -576,7 +577,21 @@ internal static class TestHostScenarioConfigurator
                             "STREAM raw mode requires --stream-endpoint."
                         )
                 );
-                stream.AddSession<TestHostRawStreamSession>();
+                if (options.Mode == "login-admission-server")
+                {
+                    stream.AddSession<LoginAdmissionSession>();
+                    stream.AuthenticationPacketName = LoginAdmission.Setting("ZLINK_LOGIN_PACKET");
+                    stream.MaxConcurrentAuthentications = LoginAdmission.Number(
+                        "ZLINK_LOGIN_LIMIT"
+                    );
+                    stream.AuthenticationRetryDelay = TimeSpan.FromMilliseconds(
+                        LoginAdmission.Number("ZLINK_LOGIN_RETRY_MS")
+                    );
+                }
+                else
+                {
+                    stream.AddSession<TestHostRawStreamSession>();
+                }
             }
         });
     }

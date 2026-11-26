@@ -447,7 +447,7 @@ export class ZLinkInMemoryAuthorityStore {
           (creation !== undefined &&
             creation.key.kind === current.snapshot.allocation.objectKind &&
             creation.intent.stableType === current.snapshot.allocation.stableType &&
-            (spot !== undefined || actor?.state === 'ready')));
+            (spot !== undefined || actor?.state === 'ready' || actor?.state === 'closing')));
       const ownerLive = this.validation.isOwnerLive(owner);
       if (ownerLive) return false;
       if (!releaseCandidate && discarded !== undefined) return false;
@@ -456,7 +456,7 @@ export class ZLinkInMemoryAuthorityStore {
           ZLinkFrameworkErrorKind.Unavailable,
           'Object owner lease is unavailable.'
         );
-      if (creation !== undefined) {
+      if (creation !== undefined && actor?.state !== 'closing') {
         factoryKey = { meshName: creation.target.meshName, rid: creation.target.nodeRid };
         factoryDescriptor = this.validation.readMeshNode?.(factoryKey);
         requireDisabledCreationPolicy(

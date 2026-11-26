@@ -2629,13 +2629,8 @@ final class ZLinkStreamRuntimeIngressTest {
 
     @Test
     void concurrentAbsentSealsRejectChangedFieldsBeforePublishingTheFirstReply() throws Exception {
-        var pending = new java.util.concurrent.ConcurrentLinkedQueue<Runnable>();
-        var executor =
-                new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Executor>(
-                        pending::add);
-        var stateLane =
-                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(
-                        work -> executor.get().execute(work));
+        var executor = new HandoffExecutor();
+        var stateLane = new ZLinkStateLane(executor);
         ReplacementFixture fixture = startReplacement(new FakeStream(), stateLane);
         runtimes.add(fixture.runtime());
         var actor = new ZLinkBackendActorRef(RoutingId.from("actor-node"), "absent-actor", 7);
@@ -2653,9 +2648,7 @@ final class ZLinkStreamRuntimeIngressTest {
                         .handleSessionRelocationSeal(
                                 actor.nodeRid(), codec.encodeSessionRelocationSeal(changed))
                         .toCompletableFuture();
-        executor.set(Runnable::run);
-        Runnable work;
-        while ((work = pending.poll()) != null) work.run();
+        executor.runPendingAndInline();
 
         assertEquals(
                 ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
@@ -2672,6 +2665,32 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(
                 ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
                 sealResult(fixture.runtime(), actor, first));
+    }
+
+    private static final class HandoffExecutor implements java.util.concurrent.Executor {
+        private final List<Runnable> pending = new ArrayList<>();
+        private boolean inline;
+
+        @Override
+        public void execute(Runnable work) {
+            synchronized (this) {
+                if (!inline) {
+                    pending.add(work);
+                    return;
+                }
+            }
+            work.run();
+        }
+
+        void runPendingAndInline() {
+            List<Runnable> ready;
+            synchronized (this) {
+                inline = true;
+                ready = new ArrayList<>(pending);
+                pending.clear();
+            }
+            ready.forEach(Runnable::run);
+        }
     }
 
     @org.junit.jupiter.api.RepeatedTest(100)

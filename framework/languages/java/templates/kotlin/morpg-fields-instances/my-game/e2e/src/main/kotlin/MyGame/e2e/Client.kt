@@ -89,6 +89,9 @@ class Client(endpoint: String, val playerId: String) {
         return next<DungeonView> { it.nodeId != previousHost }
     }
 
+    suspend fun leaveDungeon(): DungeonLeft =
+        connector.kotlin().request<DungeonLeft>(LeaveDungeonRequest()).await()
+
     suspend fun sessionInfo(): SessionInfo =
         connector.kotlin().request<SessionInfo>(SessionInfoRequest()).await()
 

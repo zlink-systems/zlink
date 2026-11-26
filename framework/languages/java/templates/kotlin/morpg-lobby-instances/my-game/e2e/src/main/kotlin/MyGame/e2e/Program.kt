@@ -9,35 +9,51 @@ fun main(args: Array<String>) = runBlocking {
     val root = Path.of("").toAbsolutePath().normalize()
     checkStructure(root)
     if (args.contentEquals(arrayOf("--check-structure"))) return@runBlocking
-    require(args.isEmpty() || (args.size == 2 && args[0] == "--scenario"))
-    val selected = if (args.isEmpty()) Names.SCENARIOS else args[1].split(',')
-    require(
-        selected.isNotEmpty() &&
-            selected.distinct() == selected &&
-            selected.all { it in Names.SCENARIOS }
-    )
-    var passed = 0
-    for (id in Names.SCENARIOS.filter { it in selected }) {
-        var success = false
-        val nodes = Nodes(root)
-        try {
-            println("Logs: ${nodes.logs}")
-            nodes.start()
-            scenario(Scenario.entries.single { it.id == id }, nodes)
-            success = true
-        } catch (failure: Exception) {
-            failure.printStackTrace(System.err)
-        } finally {
-            try {
-                nodes.close()
-            } catch (failure: Exception) {
-                failure.printStackTrace(System.err)
-                success = false
+
+    val attach = args.firstOrNull() == "--attach"
+    val options = args.drop(if (attach) 1 else 0)
+    require(options.isEmpty() || (options.size == 2 && options[0] == "--scenario")) {
+        "Use --scenario a,b"
+    }
+    val requested =
+        if (options.isEmpty()) Names.SCENARIOS else options[1].split(',').map { it.trim() }
+    require(requested.distinct() == requested && requested.all { it in Names.SCENARIOS }) {
+        "Invalid scenarios: $requested"
+    }
+    val server =
+        if (attach)
+            checkNotNull(runningServer(root)) { "The running server stopped before attachment" }
+        else null
+    val isolated = mapOf("update" to "replaces a play node")
+    if (server != null) {
+        println("Using the running server: ${server.streams.values.joinToString()}")
+    }
+    val selected =
+        (Names.SCENARIOS.filter { it in requested }).filter { id ->
+            val reason = if (server != null) isolated[id] else null
+            if (reason != null) println("Skipping $id: requires an isolated server ($reason)")
+            reason == null
+        }
+    val results = ScenarioResults(root, selected)
+
+    try {
+        for (id in selected) {
+            results.run(id) {
+                if (server != null) {
+                    val target = ScenarioTarget(server)
+                    scenario(Scenario.entries.single { it.id == id }, target)
+                } else {
+                    Nodes(root, logDirectory = results.logs.resolve(id)).use { nodes ->
+                        println("Logs: ${nodes.logs}")
+                        nodes.start()
+                        val target = nodes.target()
+                        scenario(Scenario.entries.single { it.id == id }, target)
+                    }
+                }
             }
         }
-        if (success) passed++
-        println(if (success) "✓ $id" else "✗ $id")
+    } catch (failure: Exception) {
+        results.abort(failure)
     }
-    println("Scenarios: $passed/${selected.size} passed")
-    exitProcess(if (passed == selected.size) 0 else 1)
+    exitProcess(if (results.finish()) 0 else 1)
 }

@@ -35,7 +35,6 @@ public final class ZLinkChannelEnvelope {
     public static final int KIND_PUBLISH = 4;
     public static final int KIND_ERROR = 5;
     public static final String DEFAULT_CONTENT_TYPE = "application/json";
-    private static final int MAX_METADATA_BYTES = 1024;
     // Native header parts are direct buffers. protobuf-java parses those by duplicating the
     // buffer into a fresh byte[] per call when its Unsafe decoder is unavailable, so the decoder
     // copies the header once into this per-thread array instead. Headers within the fixed fields
@@ -357,13 +356,13 @@ public final class ZLinkChannelEnvelope {
                                 .setKey(entry.getKey())
                                 .setValue(entry.getValue())
                                 .build();
-                metadataBytes += CodedOutputStream.computeMessageSize(13, metadata);
+                metadataBytes +=
+                        ZLinkApplicationMetadata.entrySize(entry.getKey(), entry.getValue());
                 builder.addMetadata(metadata);
             }
         }
         ChannelHeader encoded = builder.build();
-        if (metadataBytes > MAX_METADATA_BYTES)
-            throw protocolError("ZLink envelope metadata exceeds 1024 encoded bytes", null);
+        validateMetadataSize(metadataBytes);
         return encoded;
     }
 
@@ -442,7 +441,9 @@ public final class ZLinkChannelEnvelope {
 
     private static Header fromProto(ChannelHeader proto, boolean captureFlow) {
         Map<String, String> metadata = new HashMap<>();
+        int metadataBytes = 0;
         for (MetadataEntry entry : proto.getMetadataList()) {
+            metadataBytes += ZLinkApplicationMetadata.entrySize(entry.getKey(), entry.getValue());
             if (metadata.putIfAbsent(entry.getKey(), entry.getValue()) != null)
                 throw protocolError("duplicate envelope metadata key", null);
         }
@@ -466,7 +467,7 @@ public final class ZLinkChannelEnvelope {
                         metadata,
                         flowId,
                         origin);
-        validateHeader(header, captureFlow, hasFlowId, hasFlowOrigin, metadataSize(proto));
+        validateHeader(header, captureFlow, hasFlowId, hasFlowOrigin, metadataBytes);
         return header;
     }
 
@@ -475,7 +476,7 @@ public final class ZLinkChannelEnvelope {
             boolean captureFlow,
             boolean hasFlowId,
             boolean hasFlowOrigin,
-            int encodedMetadataBytes) {
+            int metadataBytes) {
         if (header.kind() < KIND_REQUEST || header.kind() > KIND_ERROR)
             throw protocolError("ZLink envelope kind is invalid", null);
         requireString("channelName", header.channelName());
@@ -490,9 +491,20 @@ public final class ZLinkChannelEnvelope {
         if (header.correlationId() != null && !header.canCorrelateReply())
             throw protocolError("ZLink envelope correlationId must be 1..64 byte ASCII", null);
         validateMetadata(header.metadata());
-        if (encodedMetadataBytes > MAX_METADATA_BYTES)
-            throw protocolError("ZLink envelope metadata exceeds 1024 encoded bytes", null);
+        validateMetadataSize(metadataBytes);
         if (captureFlow) validateFlow(header, hasFlowId, hasFlowOrigin);
+    }
+
+    private static void validateMetadataSize(int metadataBytes) {
+        try {
+            ZLinkApplicationMetadata.validateSize(metadataBytes);
+        } catch (IllegalArgumentException error) {
+            throw protocolError(
+                    "ZLink envelope metadata exceeds "
+                            + ZLinkApplicationMetadata.MAX_ENCODED_SIZE
+                            + " encoded bytes",
+                    error);
+        }
     }
 
     private static void validateMetadata(Map<String, String> metadata) {
@@ -562,13 +574,6 @@ public final class ZLinkChannelEnvelope {
         if (value == null) return;
         if (value.indexOf('\0') >= 0)
             throw protocolError("ZLink envelope " + field + " must not contain NUL", null);
-    }
-
-    private static int metadataSize(ChannelHeader header) {
-        int size = 0;
-        for (MetadataEntry entry : header.getMetadataList())
-            size += CodedOutputStream.computeMessageSize(13, entry);
-        return size;
     }
 
     /** Best-effort parse for reply paths that may also receive an unwrapped error body. */

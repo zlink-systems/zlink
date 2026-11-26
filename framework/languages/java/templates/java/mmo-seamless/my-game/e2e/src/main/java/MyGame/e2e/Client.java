@@ -101,8 +101,12 @@ public final class Client implements AutoCloseable {
 
     private Object moveResult(double delta, long sequence) throws Exception {
         send(new MoveRequest(delta, sequence));
-        return next(Object.class, value -> value instanceof ActionRejected
-                || value instanceof WorldState state && state.sequence() == sequence);
+        return next(
+                Object.class,
+                value ->
+                        value instanceof ActionRejected
+                                || value instanceof WorldState state
+                                        && state.sequence() == sequence);
     }
 
     WorldState state() throws Exception {

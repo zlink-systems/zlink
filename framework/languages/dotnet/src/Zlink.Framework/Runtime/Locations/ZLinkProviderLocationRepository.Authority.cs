@@ -759,7 +759,8 @@ internal sealed partial class ZLinkProviderLocationRepository
     )
     {
         var active = current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active;
-        if (active && creationTarget is null && !discarded)
+        var actorClosing = ZLinkActorAuthorityPayloadCodec.IsClosing(current.Snapshot);
+        if (active && creationTarget is null && !discarded && !actorClosing)
             return StaleAuthorityReclaimResult.NotReclaimable;
 
         // Relocation authority retains its own recovery protocol.
@@ -807,7 +808,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             ? DecodeDescriptor<ZLinkMeshNodeDescriptor>(descriptorFound.Value.Bytes).Descriptor
             : null;
         ZLinkStoreCondition.Version? targetDescriptorCondition = null;
-        if (active && !discarded && creationTarget is { } target)
+        if (active && !discarded && !actorClosing && creationTarget is { } target)
         {
             var targetKey = MeshKey(target.TargetDescriptor.MeshName, target.TargetDescriptor.Rid);
             var targetDescriptor = sourceDescriptor;
@@ -837,7 +838,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
         IReadOnlyList<StoredAuthority> members = [];
         var endedUserSpotId = active
-            ? ZLinkAuthorityCleanup.RequireSteadyReady(current.Snapshot)
+            ? ZLinkAuthorityCleanup.RequireReclaimableAuthority(current.Snapshot)
             : null;
         if (active && !ownerLive)
             _ownerLeaseReleaseWait.Observe(currentOwner);

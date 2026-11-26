@@ -591,13 +591,8 @@ class client_server_channel_builder_t
     void connect_client (std::string endpoint)
     {
         detail::require_non_blank (endpoint, "client/server client endpoint is required");
-        client_connections ().connect (std::move (endpoint));
+        _options->client_endpoint_connections[_channel_name].connect (std::move (endpoint));
         apply_channel ();
-    }
-
-    endpoint_connections_t client_connections ()
-    {
-        return _options->client_endpoint_connections[_channel_name];
     }
 
     void add_server_handler_group (std::string group_name)
@@ -617,8 +612,11 @@ class client_server_channel_builder_t
         const auto server_bind_host_override = _server_bind_host_override;
         const auto server_weight = _server_weight;
         const auto client_enabled = _client_enabled;
-        const auto client_endpoints =
-          _options->client_endpoint_connections[_channel_name].list_connections ();
+        const auto &connections = options->client_endpoint_connections;
+        const auto endpoints = connections.find (channel_name);
+        const auto client_endpoints = endpoints == connections.end ()
+                                        ? std::vector<std::string>{}
+                                        : endpoints->second.list_connections ();
         if (server_port) {
             _options->client_server_server_actions[channel_name] =
               [options, server_port, server_bind_host_override,
@@ -922,7 +920,7 @@ class fanout_channel_builder_t
 
     endpoint_connections_t subscriber_connections ()
     {
-        return _options->subscriber_endpoint_connections[_channel_name];
+        return _options->subscriber_endpoint_connections.try_emplace (_channel_name).first->second;
     }
 
     fanout_channel_builder_t &use_handler_group (std::string group_name)
@@ -951,8 +949,11 @@ class fanout_channel_builder_t
         const auto no_drop = _no_drop;
         const auto send_timeout = _send_timeout.value_or (detail::default_fanout_send_timeout);
         const auto subscriber_enabled = _subscriber_enabled;
-        const auto subscriber_endpoints =
-          _options->subscriber_endpoint_connections[_channel_name].list_connections ();
+        const auto &connections = options->subscriber_endpoint_connections;
+        const auto endpoints = connections.find (channel_name);
+        const auto subscriber_endpoints = endpoints == connections.end ()
+                                            ? std::vector<std::string>{}
+                                            : endpoints->second.list_connections ();
         const auto subscriber_uses_discovery =
           _options->fanout_channels_with_automatic_subscriber.contains (channel_name);
         const auto subscription_topics = [&] {

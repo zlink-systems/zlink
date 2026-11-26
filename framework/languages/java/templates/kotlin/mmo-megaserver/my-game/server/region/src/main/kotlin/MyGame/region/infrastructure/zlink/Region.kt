@@ -33,6 +33,7 @@ class Region(
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {
+        println("EVENT Region joined: ${context.spotId()}")
         broadcast(view())
     }
 

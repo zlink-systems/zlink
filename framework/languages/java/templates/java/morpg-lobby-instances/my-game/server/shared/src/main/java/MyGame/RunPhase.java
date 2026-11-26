@@ -1,2 +1,9 @@
 package MyGame;
-public enum RunPhase { Forming, Preparing, Entering, Active, Completed }
+
+public enum RunPhase {
+    Forming,
+    Preparing,
+    Entering,
+    Active,
+    Completed
+}
