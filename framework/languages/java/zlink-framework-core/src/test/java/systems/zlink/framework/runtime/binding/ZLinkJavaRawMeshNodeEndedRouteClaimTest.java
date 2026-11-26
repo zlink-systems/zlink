@@ -69,7 +69,8 @@ final class ZLinkJavaRawMeshNodeEndedRouteClaimTest {
                 fixture.sendChannel(replacement, "after ADMIT");
                 fixture.dispatch(selected);
                 assertEquals(
-                        List.of("before ADMIT", "buffered", "after ADMIT"), fixture.channelPayloads);
+                        List.of("before ADMIT", "buffered", "after ADMIT"),
+                        fixture.channelPayloads);
             }
         }
     }
