@@ -60,6 +60,10 @@ public final class ZLinkSerialExecutionQueue {
                         queue.requireExecution(application);
                     }
 
+                    public boolean sealActorDestroyAdmission(ZLinkSerialExecutionQueue queue) {
+                        return queue.trySealClosingAdmission();
+                    }
+
                     public CompletionStage<Void> enqueueActorWithPayloadBytes(
                             ZLinkSerialExecutionQueue queue,
                             long payloadBytes,
@@ -526,9 +530,15 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     public synchronized void sealClosingAdmission() {
-        if (relocation == null) {
-            closingAdmissionSealed = true;
+        trySealClosingAdmission();
+    }
+
+    private synchronized boolean trySealClosingAdmission() {
+        if (relocation != null || relocated) {
+            return false;
         }
+        closingAdmissionSealed = true;
+        return true;
     }
 
     /**
@@ -2546,6 +2556,9 @@ public final class ZLinkSerialExecutionQueue {
     private Optional<RelocationSeal> sealNowLocked(Entry owner) {
         // Admission and the publication tail are cut by this producer boundary.
         // The shared gate owns the detached prefix and its capture.
+        if (closingAdmissionSealed) {
+            return Optional.empty();
+        }
         materializePublished();
         if (suspendedApplicationContinuations != 0
                 || (suspendedLifecycleContinuations != 0

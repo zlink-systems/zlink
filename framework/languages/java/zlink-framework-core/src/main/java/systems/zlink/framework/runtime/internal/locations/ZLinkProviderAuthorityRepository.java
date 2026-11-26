@@ -1079,8 +1079,10 @@ final class ZLinkProviderAuthorityRepository {
             String discardedKey) {
         boolean discarded = discardedOwner != null;
         boolean active = current.allocation().state() == ZLinkPlacementAllocationState.ACTIVE;
+        boolean actorClosing =
+                ZLinkAuthoritySnapshot.actorClosing(current.payload(), current.allocation());
         if ((active
-                        ? request == null && !discarded
+                        ? request == null && !discarded && !actorClosing
                         : discarded || current.pendingCreation().isEmpty())
                 || (!active
                         && (current.aggregate() != null
@@ -1173,7 +1175,8 @@ final class ZLinkProviderAuthorityRepository {
                                                             }
                                                             return creationPolicyCondition(
                                                                             active,
-                                                                            discarded,
+                                                                            discarded
+                                                                                    || actorClosing,
                                                                             request,
                                                                             sourceKey,
                                                                             descriptor,
@@ -1264,12 +1267,12 @@ final class ZLinkProviderAuthorityRepository {
 
     private CompletionStage<ZLinkStoreCondition> creationPolicyCondition(
             boolean active,
-            boolean discarded,
+            boolean policyExempt,
             ZLinkObjectReservationRequest request,
             ZLinkStoreKey sourceKey,
             ZLinkStoreReadResult source,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        if (!active || discarded) return completed(null);
+        if (!active || policyExempt) return completed(null);
         var target = request.targetDescriptor();
         var targetKey = ZLinkProviderDescriptorRepository.meshKey(target.meshName(), target.rid());
         var sameKey = targetKey.equals(sourceKey);

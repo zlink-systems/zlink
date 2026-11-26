@@ -25,6 +25,8 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -277,6 +279,7 @@ final class ZLinkActorDispatchSerials {
                             teardowns.put(
                                     actorId,
                                     new TeardownSetup(
+                                            null,
                                             terminal,
                                             null,
                                             terminal,
@@ -500,6 +503,28 @@ final class ZLinkActorDispatchSerials {
             Object incarnation,
             Supplier<CompletionStage<Void>> beforeStart,
             Supplier<CompletionStage<Void>> cleanup) {
+        return registerTeardown(actorId, incarnation, beforeStart, cleanup, null, false);
+    }
+
+    CompletionStage<Void> destroy(
+            String actorId,
+            Object incarnation,
+            boolean ownTurn,
+            Supplier<CompletionStage<Void>> publishClosing,
+            Consumer<BooleanSupplier> closeAdmission,
+            Supplier<CompletionStage<Void>> cleanup) {
+        return registerTeardown(
+                        actorId, incarnation, publishClosing, cleanup, closeAdmission, ownTurn)
+                .thenCompose(terminal -> terminal);
+    }
+
+    private CompletionStage<CompletionStage<Void>> registerTeardown(
+            String actorId,
+            Object incarnation,
+            Supplier<CompletionStage<Void>> beforeStart,
+            Supplier<CompletionStage<Void>> cleanup,
+            Consumer<BooleanSupplier> closeAdmission,
+            boolean ownTurn) {
         return onRegistry(
                         () -> {
                             TeardownSetup existing = teardowns.get(actorId);
@@ -511,16 +536,27 @@ final class ZLinkActorDispatchSerials {
                             requireSameIncarnation(incarnation, current);
                             if (existing != null) {
                                 return new TeardownSetup(
-                                        existing.teardown(), null, null, current, null, null);
+                                        existing.accepted(),
+                                        existing.teardown(),
+                                        null,
+                                        null,
+                                        current,
+                                        null,
+                                        null);
                             }
                             CompletableFuture<Void> terminal = new CompletableFuture<>();
                             TeardownSetup setup =
                                     new TeardownSetup(
+                                            closeAdmission == null
+                                                    ? null
+                                                    : new CompletableFuture<>(),
                                             terminal,
                                             tracked == null ? null : tracked.target(),
                                             terminal,
                                             current,
-                                            lifecycleBarriers.remove(actorId),
+                                            closeAdmission == null
+                                                    ? lifecycleBarriers.remove(actorId)
+                                                    : lifecycleBarriers.get(actorId),
                                             tracked == null ? null : tracked.activation());
                             // Reserve the operation before consulting another registry or claiming
                             // a queue.
@@ -532,8 +568,11 @@ final class ZLinkActorDispatchSerials {
                 .thenCompose(
                         setup -> {
                             if (setup.terminal() == null)
-                                return CompletableFuture.completedFuture(setup.teardown());
-                            if (setup.barrier() != null) setup.barrier().complete(null);
+                                return CompletableFuture.completedFuture(
+                                        teardownResult(setup, ownTurn));
+                            if (closeAdmission == null && setup.barrier() != null) {
+                                setup.barrier().complete(null);
+                            }
                             CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>
                                     resolution =
                                             ZLinkHandlerStages.fromStageSupplier(
@@ -554,6 +593,7 @@ final class ZLinkActorDispatchSerials {
                                                                 return current == null
                                                                         ? null
                                                                         : new TeardownSetup(
+                                                                                setup.accepted(),
                                                                                 setup.teardown(),
                                                                                 snapshot.target()
                                                                                                 == null
@@ -568,6 +608,11 @@ final class ZLinkActorDispatchSerials {
                                     .thenCompose(
                                             resolved -> {
                                                 if (resolved == null) {
+                                                    if (setup.accepted() != null) {
+                                                        throw ZLinkFrameworkErrorOrigin.framework(
+                                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                                "Actor disappeared before destroy");
+                                                    }
                                                     completeTeardown(actorId, setup, null, null);
                                                     return CompletableFuture.<Void>completedFuture(
                                                             null);
@@ -584,6 +629,7 @@ final class ZLinkActorDispatchSerials {
                                                         accepted -> {
                                                             TeardownSetup claimed =
                                                                     new TeardownSetup(
+                                                                            resolved.accepted(),
                                                                             resolved.teardown(),
                                                                             resolved.target(),
                                                                             resolved.terminal(),
@@ -605,38 +651,107 @@ final class ZLinkActorDispatchSerials {
                                                                             })
                                                                     .thenCompose(
                                                                             ignored ->
-                                                                                    ZLinkHandlerStages
-                                                                                            .fromStageSupplier(
-                                                                                                    beforeStart))
-                                                                    .handle(
-                                                                            (ignored, failure) -> {
-                                                                                startTeardown(
-                                                                                        actorId,
-                                                                                        claimed,
-                                                                                        setup,
-                                                                                        failure
-                                                                                                        == null
-                                                                                                ? cleanup
-                                                                                                : () ->
-                                                                                                        ZLinkHandlerStages
-                                                                                                                .completeAll(
-                                                                                                                        List
-                                                                                                                                .of(
-                                                                                                                                        () ->
-                                                                                                                                                CompletableFuture
-                                                                                                                                                        .failedFuture(
-                                                                                                                                                                failure),
-                                                                                                                                        cleanup)));
-                                                                                return (Void) null;
-                                                                            });
+                                                                                    closeAdmission
+                                                                                                    != null
+                                                                                            ? publishDestroy(
+                                                                                                    actorId,
+                                                                                                    claimed,
+                                                                                                    setup,
+                                                                                                    beforeStart,
+                                                                                                    closeAdmission,
+                                                                                                    cleanup)
+                                                                                            : startRegisteredTeardown(
+                                                                                                    actorId,
+                                                                                                    claimed,
+                                                                                                    setup,
+                                                                                                    beforeStart,
+                                                                                                    cleanup));
                                                         });
                                             })
                                     .handle(
                                             (ignored, failure) -> {
-                                                if (failure != null)
-                                                    completeTeardown(actorId, setup, null, failure);
-                                                return setup.teardown();
+                                                if (failure != null) {
+                                                    if (setup.accepted() == null) {
+                                                        completeTeardown(
+                                                                actorId, setup, null, failure);
+                                                    } else {
+                                                        rejectDestroy(actorId, setup, failure);
+                                                    }
+                                                }
+                                                return teardownResult(setup, ownTurn);
                                             });
+                        });
+    }
+
+    private static CompletionStage<Void> teardownResult(TeardownSetup setup, boolean ownTurn) {
+        return ownTurn && setup.accepted() != null ? setup.accepted() : setup.teardown();
+    }
+
+    private void rejectDestroy(String actorId, TeardownSetup setup, Throwable failure) {
+        onRegistry(() -> teardowns.remove(actorId, setup))
+                .whenComplete(
+                        (removed, error) -> {
+                            if (error != null && error != failure) {
+                                failure.addSuppressed(error);
+                            }
+                            setup.accepted().completeExceptionally(failure);
+                            setup.terminal().completeExceptionally(failure);
+                        });
+    }
+
+    private CompletionStage<Void> startRegisteredTeardown(
+            String actorId,
+            TeardownSetup claimed,
+            TeardownSetup registered,
+            Supplier<CompletionStage<Void>> beforeStart,
+            Supplier<CompletionStage<Void>> cleanup) {
+        return ZLinkHandlerStages.fromStageSupplier(beforeStart)
+                .handle(
+                        (ignored, failure) -> {
+                            var teardown =
+                                    failure == null
+                                            ? cleanup
+                                            : (Supplier<CompletionStage<Void>>)
+                                                    () ->
+                                                            ZLinkHandlerStages.completeAll(
+                                                                    List.of(
+                                                                            () ->
+                                                                                    CompletableFuture
+                                                                                            .failedFuture(
+                                                                                                    failure),
+                                                                            cleanup));
+                            startTeardown(actorId, claimed, registered, teardown);
+                            return null;
+                        });
+    }
+
+    private CompletionStage<Void> publishDestroy(
+            String actorId,
+            TeardownSetup claimed,
+            TeardownSetup registered,
+            Supplier<CompletionStage<Void>> publishClosing,
+            Consumer<BooleanSupplier> closeAdmission,
+            Supplier<CompletionStage<Void>> cleanup) {
+        var lane = claimed.activation().relocationLane();
+        closeAdmission.accept(() -> ZLinkSpotCloseCallAccess.sealActorDestroyAdmission(lane));
+        var previous = registered.activation();
+        if (previous != null && previous.relocationLane() != lane) {
+            previous.relocationLane().sealClosingAdmission();
+        }
+        return ZLinkHandlerStages.fromStageSupplier(publishClosing)
+                .handle(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                claimed.accepted().completeExceptionally(failure);
+                                claimed.terminal().completeExceptionally(failure);
+                            } else {
+                                if (registered.barrier() != null) {
+                                    registered.barrier().complete(null);
+                                }
+                                startTeardown(actorId, claimed, registered, cleanup);
+                                claimed.accepted().complete(null);
+                            }
+                            return null;
                         });
     }
 
@@ -810,19 +925,25 @@ final class ZLinkActorDispatchSerials {
         return closed;
     }
 
+    private static List<ZLinkSerialExecutionQueue> closingLanes(
+            TeardownSetup setup, TeardownSetup previous) {
+        return Stream.of(previous.activation(), setup.activation())
+                .filter(Objects::nonNull)
+                .map(ZLinkActorSerialExecutor::relocationLane)
+                .distinct()
+                .toList();
+    }
+
     private void startTeardown(
             String actorId,
             TeardownSetup setup,
             TeardownSetup previous,
             Supplier<CompletionStage<Void>> cleanup) {
         try {
-            var lanes =
-                    Stream.of(previous.activation(), setup.activation())
-                            .filter(Objects::nonNull)
-                            .map(ZLinkActorSerialExecutor::relocationLane)
-                            .distinct()
-                            .toList();
-            lanes.forEach(ZLinkSerialExecutionQueue::sealClosingAdmission);
+            var lanes = closingLanes(setup, previous);
+            if (setup.accepted() == null) {
+                lanes.forEach(ZLinkSerialExecutionQueue::sealClosingAdmission);
+            }
             ZLinkHandlerStages.completeAll(
                             lanes.stream()
                                     .<Supplier<? extends CompletionStage<Void>>>map(
@@ -883,6 +1004,11 @@ final class ZLinkActorDispatchSerials {
                                                     actorId,
                                                     (id, current) ->
                                                             current.terminal() == setup.terminal()
+                                                                            && (setup.accepted()
+                                                                                            == null
+                                                                                    || error == null
+                                                                                            && removalFailure
+                                                                                                    == null)
                                                                     ? null
                                                                     : current);
                                             if (removalFailure == null) {
@@ -923,6 +1049,7 @@ final class ZLinkActorDispatchSerials {
     }
 
     private record TeardownSetup(
+            CompletableFuture<Void> accepted,
             CompletionStage<Void> teardown,
             ZLinkActorDispatchTarget target,
             CompletableFuture<Void> terminal,

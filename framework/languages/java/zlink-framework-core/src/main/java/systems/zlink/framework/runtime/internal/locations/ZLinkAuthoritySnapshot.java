@@ -85,8 +85,26 @@ public record ZLinkAuthoritySnapshot(
                         == other.allocation.descriptorLifecycleGeneration();
     }
 
+    public boolean relocationInProgress() {
+        return relocation != null
+                || aggregateGeneration != 0
+                || ZLinkCanonicalRelocationAuthorityStateCodec.decode(payload) != null;
+    }
+
     public boolean steadyReady() {
         return pendingCreation.isEmpty() && relocation == null && steadyReady(payload, allocation);
+    }
+
+    public static boolean actorClosing(byte[] payload, ZLinkPlacementAllocation allocation) {
+        return allocation.objectKind() == ZLinkPlacementObjectKind.ACTOR
+                && allocation.state() == ZLinkPlacementAllocationState.ACTIVE
+                && new ZLinkActorAuthorityPayloadCodec()
+                        .decode(payload)
+                        .filter(
+                                actor ->
+                                        actor.state()
+                                                == ZLinkActorAuthorityPayloadCodec.State.CLOSING)
+                        .isPresent();
     }
 
     public static boolean steadyReady(byte[] payload, ZLinkPlacementAllocation allocation) {

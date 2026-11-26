@@ -374,7 +374,9 @@ final class ZLinkInMemoryAuthorityStore {
             ZLinkLocationOwnerToken discardedOwner) {
         boolean discarded = discardedOwner != null;
         boolean active = current.allocation.state() == ZLinkPlacementAllocationState.ACTIVE;
-        if ((active && request == null && !discarded)
+        boolean actorClosing =
+                ZLinkAuthoritySnapshot.actorClosing(current.payload, current.allocation);
+        if ((active && request == null && !discarded && !actorClosing)
                 || (!active && discarded)
                 || (!active
                         && (current.relocation != null
@@ -413,7 +415,7 @@ final class ZLinkInMemoryAuthorityStore {
                 throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "Ended authority requires relocation recovery");
-            if (!discarded) {
+            if (!discarded && !actorClosing) {
                 var target = request.targetDescriptor();
                 var targetDescriptor =
                         target.equals(current.allocation.descriptor())

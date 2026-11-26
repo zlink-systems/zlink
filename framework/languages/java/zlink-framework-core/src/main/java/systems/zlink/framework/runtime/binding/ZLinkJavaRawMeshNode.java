@@ -332,6 +332,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private boolean deferServiceReadyPublication;
     volatile java.util.function.BooleanSupplier peerAdmissionSealed = () -> false;
     private volatile ZLinkInternalMeshNode.UserSpotOperationHandler userSpotOperationHandler;
+    private volatile Function<ZLinkServiceM6BWireCodec.ActorRouteFence, CompletionStage<Void>>
+            actorDestroyHandler;
     private volatile ZLinkInternalMeshNode.ActorCreateOperationHandler actorCreateOperationHandler;
     private volatile ZLinkInternalMeshNode.CanonicalActorJoinHandler canonicalActorJoinHandler;
     private volatile ZLinkInternalMeshNode.PeerAuthorityResolver peerAuthorityResolver;
@@ -4101,6 +4103,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
+    public void setActorDestroyHandler(
+            Function<ZLinkServiceM6BWireCodec.ActorRouteFence, CompletionStage<Void>> handler) {
+        actorDestroyHandler = Objects.requireNonNull(handler, "handler");
+    }
+
+    @Override
+    public CompletionStage<Void> sendActorDestroy(ZLinkServiceM6BWireCodec.ActorRouteFence actor) {
+        return port.send(
+                requireStarted(),
+                actor.actor().nodeRid(),
+                List.of(statefulWire.encodeActorDestroy(allocateCorrelation(), actor)));
+    }
+
+    @Override
     public void setActorCreateOperationHandler(
             ZLinkInternalMeshNode.ActorCreateOperationHandler handler) {
         actorCreateOperationHandler = Objects.requireNonNull(handler, "handler");
@@ -6348,6 +6364,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 handedOff = dispatchActor(inbound, flags, actorHeader, sourceLifecycle);
                 return;
             }
+            if (command == ServiceWireConstants.COMMAND_ACTOR_DESTROY) {
+                dispatchActorDestroy(inbound);
+                return;
+            }
             if (command == ServiceWireConstants.COMMAND_ACTOR_JOIN) {
                 dispatchCanonicalActorJoin(inbound);
                 return;
@@ -6787,6 +6807,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             // Invalid or rejected maintenance records never enter an
             // application mailbox and have no request/reply terminal.
         }
+    }
+
+    private void dispatchActorDestroy(ZLinkJavaRawServicePort.Inbound inbound) {
+        var handler = actorDestroyHandler;
+        if (handler == null || inbound.requestSequence() != null || inbound.frames().size() != 1) {
+            return;
+        }
+        var actor = statefulWire.decodeActorDestroy(inbound.frames().getFirst());
+        if (!actor.actor().nodeRid().equals(routingId)
+                || actor.targetNodeGeneration() != status().lifecycleGeneration()) {
+            return;
+        }
+        handler.apply(actor)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                LOGGER.log(
+                                        Level.WARNING,
+                                        "Actor destroy command failed",
+                                        unwrap(failure));
+                            }
+                        });
     }
 
     private void dispatchActorLeft(ZLinkJavaRawServicePort.Inbound inbound) {
