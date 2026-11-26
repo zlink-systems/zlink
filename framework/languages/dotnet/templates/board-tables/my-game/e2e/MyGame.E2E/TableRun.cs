@@ -39,6 +39,14 @@ internal sealed class TableRun(
         {
             redisEndpoint = persistenceSource.Redis;
         }
+        else if (
+            dockerProject is null
+            && Environment.GetEnvironmentVariable("ZLINK_REDIS_TEST_ENDPOINT")
+                is { Length: > 0 } endpoint
+        )
+        {
+            redisEndpoint = endpoint;
+        }
         else if (dockerProject is null)
         {
             composeStarted = true;

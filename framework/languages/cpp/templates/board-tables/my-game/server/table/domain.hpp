@@ -27,6 +27,14 @@ struct Seat
     std::vector<int> cards;
     bool acted = false;
 };
+enum class RoomPhase
+{
+    fixed,
+    prepared,
+    committed,
+    withdrawn
+};
+
 class TableState
 {
   public:
@@ -73,6 +81,8 @@ class TableState
 
   public:
     std::vector<Seat> seats;
+    std::vector<std::string> matchMembers;
+    RoomPhase roomPhase = RoomPhase::fixed;
     std::vector<int> deck;
     std::int64_t handNumber = 0, pot = 0;
     int turnSeat = Rules::no_seat;
@@ -94,13 +104,13 @@ class TableState
         return Rules::no_seat;
     }
     // Seats the player at admission; a seated player is admitted again without a new seat.
-    bool admit (std::string_view id)
+    bool admit (std::string_view id, std::int64_t chips = Rules::initial_chips)
     {
         if (seat_of (id) != Rules::no_seat)
             return true;
         if (seats.size () == Rules::seats)
             return false;
-        seats.push_back (Seat{std::string (id), Rules::initial_chips, {}, false});
+        seats.push_back (Seat{std::string (id), chips, {}, false});
         return true;
     }
     std::vector<SeatView> views () const
@@ -221,43 +231,59 @@ class TableState
                 return {Rules::integer_out_of_range, {}};
             winner_balances.push_back (balance);
         }
-        seat.chips -= request.amount;
-        pot = next_pot;
-        seat.acted = true;
+        result.seats = views ();
+        result.seats[index].chips -= request.amount;
+        result.seats[index].acted = true;
+        for (std::size_t i = 0; i < result.winners.size (); ++i)
+            result.seats[result.winners[i]].chips = winner_balances[i];
+        for (auto &player : result.seats)
+            player.cardCount = 0;
+        return {{}, std::move (result)};
+    }
+
+    void apply_settlement (const HandResult &result)
+    {
         inHand = false;
         turnSeat = Rules::no_seat;
         pot = 0;
-        for (std::size_t i = 0; i < result.winners.size (); ++i)
-            seats[result.winners[i]].chips = winner_balances[i];
-        for (auto &player : seats)
-            player.cards.clear ();
-        result.seats = views ();
-        return {{}, std::move (result)};
+        for (std::size_t i = 0; i < seats.size (); ++i) {
+            seats[i].chips = result.seats[i].chips;
+            seats[i].acted = result.seats[i].acted;
+            seats[i].cards.clear ();
+        }
     }
 };
 }
 
 namespace zlink::json
 {
+template <> struct enum_traits<::MyGame::RoomPhase>
+{
+    using Phase = ::MyGame::RoomPhase;
+    static constexpr auto values = std::array{
+      enum_value (Phase::fixed, "fixed"), enum_value (Phase::prepared, "prepared"),
+      enum_value (Phase::committed, "committed"), enum_value (Phase::withdrawn, "withdrawn")};
+};
 template <> struct dto_traits<::MyGame::Seat>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("playerId", &::MyGame::Seat::playerId),
-      zlink::json::field ("chips", &::MyGame::Seat::chips),
-      zlink::json::field ("cards", &::MyGame::Seat::cards),
-      zlink::json::field ("acted", &::MyGame::Seat::acted)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("playerId", &::MyGame::Seat::playerId),
+                 zlink::json::field ("chips", &::MyGame::Seat::chips),
+                 zlink::json::field ("cards", &::MyGame::Seat::cards),
+                 zlink::json::field ("acted", &::MyGame::Seat::acted)};
 };
 
 template <> struct dto_traits<::MyGame::TableState>
 {
     static constexpr auto fields = std::tuple{
       zlink::json::field ("seats", &::MyGame::TableState::seats),
+      zlink::json::field (
+        "matchMembers", &::MyGame::TableState::matchMembers, zlink::json::defaulted),
+      zlink::json::field ("roomPhase", &::MyGame::TableState::roomPhase, zlink::json::defaulted),
       zlink::json::field ("deck", &::MyGame::TableState::deck),
       zlink::json::field ("handNumber", &::MyGame::TableState::handNumber),
       zlink::json::field ("pot", &::MyGame::TableState::pot),
       zlink::json::field ("turnSeat", &::MyGame::TableState::turnSeat),
-      zlink::json::field ("inHand", &::MyGame::TableState::inHand)
-    };
+      zlink::json::field ("inHand", &::MyGame::TableState::inHand)};
 };
 } // namespace zlink::json

@@ -1,5 +1,7 @@
 #pragma once
 #include "server/shared/config.hpp"
+#include "server/shared/match_contracts.hpp"
+#include "server/shared/player_records.hpp"
 #include <algorithm>
 #include <set>
 #include <tuple>
@@ -11,16 +13,24 @@ enum class Scenario
 {
     table,
     reconnect,
-    update
+    update,
+    match,
+    match_cancel,
+    persist
 };
 struct ScenarioDefinition
 {
     Scenario id;
     const char *name;
 };
-inline constexpr std::array scenario_order{ScenarioDefinition{Scenario::table, "table"},
-                                           ScenarioDefinition{Scenario::reconnect, "reconnect"},
-                                           ScenarioDefinition{Scenario::update, "update"}};
+// Update's placement check needs the other selected scenarios' tables to exist before drain.
+inline constexpr std::array scenario_order{
+  ScenarioDefinition{Scenario::table, "table"},
+  ScenarioDefinition{Scenario::reconnect, "reconnect"},
+  ScenarioDefinition{Scenario::match, "match"},
+  ScenarioDefinition{Scenario::match_cancel, "match-cancel"},
+  ScenarioDefinition{Scenario::persist, "persist"},
+  ScenarioDefinition{Scenario::update, "update"}};
 inline std::vector<std::string> scenario_names ()
 {
     std::vector<std::string> result;
@@ -66,10 +76,10 @@ inline void check_structure (const std::filesystem::path &root)
     require (run.at ("scenarios").get<std::vector<std::string>> () == scenario_names (),
              "Scenario order mismatch");
     const auto &commands = run.at ("commands");
-    require (commands.is_object () && commands.size () == 2 && commands.contains ("sh")
-               && commands.contains ("powershell"),
+    require (commands.is_object () && commands.size () == 3 && commands.contains ("sh")
+               && commands.contains ("powershell") && commands.contains ("cmd"),
              "Invalid run commands");
-    for (const auto *shell : {"sh", "powershell"}) {
+    for (const auto *shell : {"sh", "powershell", "cmd"}) {
         require (commands.at (shell).is_array () && !commands.at (shell).empty (),
                  "Empty command list");
         for (const auto &command : commands.at (shell))
@@ -98,7 +108,19 @@ inline void check_structure (const std::filesystem::path &root)
             }
         }
     }
-    require (j.at ("channels").empty (), "No named channels are registered by this server");
+    std::set<std::pair<std::string, std::string>> records_roles;
+    for (const auto &channel : j.at ("channels")) {
+        auto owner = nonempty (channel, "owner");
+        require (configurations.contains (owner)
+                   && (configurations.at (owner).contains ("ApiEndpoint") == (owner == "api"))
+                   && channel.at ("name") == player_records_channel
+                   && channel.at ("kind") == "client-server"
+                   && records_roles.emplace (std::move (owner), nonempty (channel, "role")).second,
+                 "Invalid player records channel declaration");
+    }
+    const decltype (records_roles) expected_channel{
+      {"api", "server"}, {"tableA", "client"}, {"tableB", "client"}};
+    require (records_roles == expected_channel, "Missing player records channel role");
     for (const auto &spot : j.at ("spots")) {
         require (spot_ids.insert (nonempty (spot, "id")).second, "Duplicate composition Spot ID");
         const auto owner = nonempty (spot, "owner"), kind = nonempty (spot, "kind");
@@ -110,9 +132,20 @@ inline void check_structure (const std::filesystem::path &root)
             require (roles.at (owner) == "table", "Entry owner must register Table Entry");
             continue;
         }
-        require (kind == "user", "Unknown application Spot kind");
         const auto type = nonempty (spot, "type");
-        require (type == Names::table, "Unknown stable type");
+        if (kind == "instance") {
+            const auto id = nonempty (spot, "logicalId");
+            require (!spot.value ("dynamic", false)
+                       && ((type == MatchNames::pool && roles.at (owner) == "matchmaker"
+                            && id == MatchNames::pool_key)
+                           || (type == MatchNames::provisioner && roles.at (owner) == "table"
+                               && id == MatchNames::provisioner_key)),
+                     "Invalid board Instance Spot");
+            require (logical_ids.insert (nonempty (spot, "logicalId")).second,
+                     "Duplicate logical Spot ID");
+            continue;
+        }
+        require (kind == "user" && type == Names::table, "Unknown application Spot kind or type");
         if (spot.contains ("dynamic"))
             require (spot.at ("dynamic").is_boolean (), "Dynamic must be boolean");
         if (spot.value ("dynamic", false))
@@ -123,6 +156,9 @@ inline void check_structure (const std::filesystem::path &root)
         }
         require (roles.at (owner) == "table", "Table owner cannot be a Session process");
     }
+    require (logical_ids.contains (MatchNames::pool_key)
+               && logical_ids.contains (MatchNames::provisioner_key),
+             "Missing Pool or RoomProvisioner");
     const auto &spots = j.at ("spots");
     require (std::any_of (spots.begin (), spots.end (),
                           [] (const auto &spot) {
@@ -150,6 +186,13 @@ inline void check_structure (const std::filesystem::path &root)
     const decltype (edges) required_edges{
       {"players", "session", "STREAM", ""},
       {"session", "tableA", "relay", ""},
+      {"tableA", "matchmaker", "MatchRequest / EnterReport", ""},
+      {"matchmaker", "tableA", "PrepareRoom / CommitRoom", ""},
+      {"tableA", "matchmaker", "RoomPrepared", ""},
+      {"tableA", "api", "loadPlayer / commitRound", ""},
+      {"tableB", "api", "loadPlayer / commitRound", ""},
+      {"api", "location", "Player records", ""},
+      {"matchmaker", "location", "Location / lease", "location-authority"},
       {"tableA", "location", "Location / lease", "location-authority"}};
     require (
       std::includes (edges.begin (), edges.end (), required_edges.begin (), required_edges.end ()),

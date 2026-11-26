@@ -1,5 +1,7 @@
 #pragma once
 #include "server/shared/config.hpp"
+#include "server/shared/identity.hpp"
+#include "server/shared/match_contracts.hpp"
 #include <zlink/framework.hpp>
 
 namespace MyGame
@@ -11,7 +13,8 @@ class Session final : public fx::packet_stream_session_t
 
     static bool is_client_packet (const std::string &packet_name)
     {
-        return packet_name == JoinTableRequest::packet_name
+        return packet_name == FindMatch::packet_name || packet_name == CancelMatch::packet_name
+               || packet_name == JoinTableRequest::packet_name
                || packet_name == TableViewRequest::packet_name
                || packet_name == StartHandRequest::packet_name
                || packet_name == BetRequest::packet_name
@@ -19,10 +22,7 @@ class Session final : public fx::packet_stream_session_t
     }
 
   public:
-    Session (fx::actor_manager_t &actors) :
-        actors_ (actors)
-    {
-    }
+    Session (fx::actor_manager_t &actors) : actors_ (actors) {}
     fx::task_t<void> on_connected (fx::stream_t &) override { co_return; }
     fx::task_t<void> on_disconnected (fx::stream_t &) override { co_return; }
     fx::task_t<void> on_error (fx::stream_t &, const fx::stream_error_t &error) override
@@ -43,11 +43,15 @@ class Session final : public fx::packet_stream_session_t
         }
         auto bound = stream.actors ().bound ();
         if (bound.empty ()) {
-            if (dispatch.packet_name != JoinTableRequest::packet_name)
-                throw std::invalid_argument ("JoinTableRequest must be first");
-            const auto request = payload.decode<JoinTableRequest> ();
+            std::string player;
+            if (dispatch.packet_name == JoinTableRequest::packet_name)
+                player = payload.decode<JoinTableRequest> ().playerId;
+            else if (dispatch.packet_name == FindMatch::packet_name)
+                player = new_id ("player-");
+            else
+                throw std::invalid_argument ("JoinTableRequest or FindMatch must be first");
             const auto ensured =
-              co_await actors_.get_or_create (fx::actor_id_t (request.playerId), Names::player)
+              co_await actors_.get_or_create (fx::actor_id_t (std::move (player)), Names::player)
                 .in_mesh (Names::mesh)
                 .async ();
             const auto ref = std::visit (

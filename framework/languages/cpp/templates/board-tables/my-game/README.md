@@ -1,29 +1,34 @@
 # MyGame board tables
 
-This C++ template hosts four-seat card tables on two play node (table) containers. The Session node binds each player to a persistent Player Actor and relays typed packets. Each Table User Spot owns its seats, chips, shuffled deck, private hands, turn and pot.
+This C++ template hosts four-seat card tables on two play nodes. The Session node binds each player to a stateful Player Actor and relays typed packets. Each Table User Spot owns its seats, chips, shuffled deck, private hands, turn and pot.
 
 ```mermaid
 flowchart LR
   Players -->|STREAM| Session["Session node"]
   Session -->|relay| Tables["Play node ×N (table)"]
-  Tables -->|"Location / lease"| Location["Location Store"]
+  Tables -->|"Location / lease"| Location["Redis"]
+  Tables -->|MatchRequest / EnterReport| Pool["Matchmaker node (Pool)"]
+  Pool -->|PrepareRoom| Tables
+  Tables -->|RoomPrepared| Pool
+  Tables -->|LoadPlayer / CommitRound| API["API node (Actor DB)"]
+  API -->|Player records| Location
 ```
 
 ## Prerequisites
 
 Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain and CMake; the host does not need them for the default run.
 
-Public Framework 0.34.1 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.34.1` GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
+The public Framework version is pinned in `bootstrap.cmake`. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the pinned GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
 
 ## Client connection
 
 ### Endpoint and first packet
 
-Connect to the Session `players` STREAM listener. `server/config/session.json` pins `StreamEndpoint` to `tcp://127.0.0.1:0`: loopback with an OS-assigned port. Read the Session stdout line `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}` and use its actual `streamEndpoint`, not port `0`. `server/shared/hosting.hpp` emits this value and `e2e/world.hpp` consumes it. Mesh and Redis addresses are internal endpoints.
+Connect to the Session `players` STREAM listener. `server/config/session.json` pins `StreamEndpoint` to `ws://127.0.0.1:0`, loopback with an OS-assigned port. Read the Session stdout line `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}` and use its actual `streamEndpoint`, not port `0`. `server/shared/hosting.hpp` emits this value and `e2e/world.hpp` consumes it. Mesh and Redis addresses are internal endpoints.
 
-The listener is reachable from its host/network namespace. Keep a deployment running separately from e2e, which owns and removes its nodes; configure a reachable `StreamEndpoint` interface and port and expose it from containers for external clients. This is a TCP endpoint with no HTTP/WebSocket path. Browsers, Unity WebGL and Cocos Creator web cannot connect to this default listener; those clients require a deployed WebSocket listener.
+The listener is reachable from its host/network namespace. Use the loopback WebSocket URL printed at startup. For external clients, configure a reachable `StreamEndpoint` interface and port and expose it from the deployment.
 
-Send `JoinTableRequest` (`playerId`, `tableId`) first. Successful seating publishes `TableView` with the table, seat, hand and public player state; `ActionRejected` reports rejected actions. Other game packets and `SessionInfoRequest` require joining first. These operations use `send(...).submit()` and server pushes, not a correlated connector `request` reply. This template does not authenticate player identity; validate it before binding in a production game.
+Send `JoinTableRequest` (`playerId`, `tableId`) to join a named table, or `FindMatch` to queue for a match. A matched player receives `MatchQueued`, then `MatchFound` and `TableView` once both players enter the room. Successful seating publishes `TableView` with the table, seat, hand and public player state; `ActionRejected` reports rejected actions. Other game packets and `SessionInfoRequest` require joining first. These operations use `send(...).submit()` and server pushes, not a correlated connector `request` reply. This template does not authenticate player identity; validate it before binding in a production game.
 
 Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to table selection. Omit `reconnect` or send `false` for first entry.
 
@@ -112,33 +117,48 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 
 `Dockerfile` defines the Ubuntu 24.04 build and runtime base once in `UBUNTU_IMAGE`. All node roles share the multi-stage image. The runner adds Docker CLI 28.5.1 to the same runtime. These base arguments can be replaced when the deployment base image becomes available.
 
+## Foreground server
+
+Install the local C++ toolchain described below. Start the server and wait for `Server ready`. In a second terminal, run e2e from the same template directory:
+
+| Shell | Start server | Run e2e |
+| --- | --- | --- |
+| Bash | `./run-server.sh` | `./run-e2e.sh` |
+| Windows | `.\run-server.cmd` | `.\run-e2e.cmd` |
+| PowerShell 7 | `pwsh -NoProfile -File ./run-server.ps1` | `pwsh -NoProfile -File ./run-e2e.ps1` |
+
+E2e attaches automatically to the running server. Select scenarios with `--scenario match,match-cancel,persist` or `-Scenario match,match-cancel,persist`. The `update` scenario runs in isolation because it replaces a play node. Stop the foreground server with Ctrl+C. Node readiness and control logs use `<node>.out.log`, and Framework message flow uses `<node>.err.log` in the printed `.logs/run-<id>/` directory.
+
 ## Docker e2e
 
 Linux:
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,persist,update
 ```
 
 Windows:
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,match,match-cancel,persist,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
-The runner and nodes execute in containers. The script checks structure before Redis startup, then uses a unique Compose network, project, container names and Redis key prefixes. Nodes share the runner's network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied into each node before attaching stdin and stdout; `drain`, `shutdown` and lifecycle output retain their existing protocol.
+When the foreground server is stopped, the default runner and nodes execute in containers. The script checks structure before Redis startup, then uses a unique Compose network, project, container names and Redis key prefixes. Nodes share the runner's network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied into each node before attaching stdin and stdout; `drain`, `shutdown` and lifecycle output retain their existing protocol.
 
 The runner removes its node containers. The script removes remaining containers carrying this run's label, its Compose resources and its image tags. Cleanup failures return exit code 1. Build and orchestration logs remain in `.logs/docker-<project>/`; node logs and generated configurations remain in `.logs/run-<id>/`. Unix runners use the caller UID and Docker socket group so those files remain caller-owned.
 
-The scripts and C++ runner validate actual structure files, start an isolated Redis Compose project with an ephemeral loopback port, start play node A (table), play node B (table) and Session, and run the selected scenarios in canonical order. Generated configurations and node logs, including message flow, remain in `.logs/run-<id>/`. Scenario and cleanup failures return exit code 1. Windows child processes have no console window.
+The scripts and C++ runner validate actual structure files, start an isolated Redis Compose project with an ephemeral loopback port, start API, Matchmaker, play nodes A and B (table), and Session, and run the selected scenarios in canonical order. Generated configurations and node logs, including message flow, remain in `.logs/run-<id>/`. Scenario and cleanup failures return exit code 1. Windows child processes have no console window.
 
 | Scenario | Assertions |
 | --- | --- |
 | `table` | Seats and chips, private cards, rejection of a server-originated packet, out-of-turn bets, over-limit values (`integer-out-of-range`) and insufficient chips. Each rejection has `retryAfterMs: 0` and leaves table state unchanged. Settlement reports every `cardCount` as zero; a private-hand query returns no cards. |
 | `reconnect` | Immediate connection replacement preserves Actor identity, generation, seat, chips, cards and turn while the other player stays connected. Settlement clears every hand, and a later private-hand query returns no cards. In isolation, a fresh deployment rejects reconnecting to the original table ID with `not-seated`. |
+| `match` | Two queue tickets receive assignments to the same room and distinct seats. The players finish a hand. |
+| `match-cancel` | A duplicate request retains the ticket. Cancelling returns that ticket, and the next two players can match and finish a hand. |
+| `persist` | A fresh API, play node and Session share the original player records with independent location state. A new Actor loads the balance committed by the first deployment. |
 | `update` | Drain the actual play node (table), observe relocation and SafeToShutdown, preserve both Session identities and game state, settle on the replacement with empty hands, stop and replace the host, then finish a fresh table. |
 
 `ActionRejected.retryAfterMs` is a signed 32-bit JSON integer serialized with the `retryAfterMs` property name. Chip balances, the pot and hand numbers use signed 64-bit integers.
@@ -157,7 +177,7 @@ Build and run local processes from this directory:
 ./run-e2e.sh --local
 ```
 
-The script runs `cmake -P bootstrap.cmake`, `cmake --preset default` and `cmake --build --preset default` before executing `build/bin/my-game-e2e`. Redis still runs in an isolated Compose project.
+The script runs `cmake -P bootstrap.cmake`, `cmake --preset default` and `cmake --build --preset default` before executing `build/bin/my-game-e2e`. The runner starts Redis in an isolated Compose project. Set `ZLINK_REDIS_TEST_ENDPOINT=host:port` to use an existing Redis instance in local or foreground mode. Runs use unique key prefixes.
 
 On Windows, run:
 
@@ -179,7 +199,7 @@ Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenar
 
 ## Known issues
 
-- This template has no `run-server` yet: use `run-e2e` (isolated Docker run). Matchmaking, the API node and the `run-server`/attach flow of the other templates are tracked in [#5647](https://github.com/zlink-systems/zlink/issues/5647).
+Framework 0.34.1 reports `ManualTopologyUnsupported` during `update` when a play node registers the automatically discovered player-records channel. The scenario reports this relocation failure.
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
@@ -191,12 +211,18 @@ This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Fram
 
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 
+## Matchmaking and player records
+
+`Pool` is an Instance Spot on the Matchmaker node. It sends `PrepareRoom` to the `RoomProvisioner` Instance Spot on a play node. The provisioner creates the Table and sends `RoomPrepared` to the Pool. After both joins complete, the Table confirms the match to both Actors.
+
+A Player Actor asks the API node for its balance once through `LoadPlayer`. It includes that balance at admission. At settlement, the Table sends one `CommitRound` for the round and publishes the result after acknowledgement. The API atomically stores the round marker and balances in Redis. Keep the player-record key prefix stable when replacing API nodes. Give a newly created table a fresh ID when its hand numbering starts over.
+
 ## Deployment sequence
 
-Start Redis, play node A (table), play node B (table), then the session node. Set deployment-specific Redis endpoints and a unique key prefix in all configurations. Both Table processes register Entry, Player and Table factories in `my-game-tables`; Session nodes only the `players` STREAM listener and mesh object client.
+Start Redis, the API node, Matchmaker, play nodes A and B, then the Session node. Configure the API listener endpoint in `api.json`. Play nodes discover the channel through the shared Location Store. Set deployment-specific Redis endpoints and a unique key prefix in all configurations. Both Table processes register Entry, Player and Table factories in `my-game-tables`; Session nodes only the `players` STREAM listener and mesh object client.
 
 For an update, write `drain` to the affected play node's standard input. Require `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and require `STOPPED` plus exit code zero. Restart with the same configuration. Existing Table identities remain under Location Store authority.
 
-Extend rules in `server/table/domain.hpp` and transport handlers in `server/table/table.hpp`. Player Actors hold no game-state copy. Request replies use the handler Actor's bound session. Other pushes use player IDs through the public Actor client and the Table's typed forwarding handler. Relocation adapters serialize application state only.
+Extend rules in `server/table/domain.hpp` and transport handlers in `server/table/table.hpp`. The Table owns the live game state. The Player Actor keeps its match ticket and the last committed balance in relocatable state. Request replies use the handler Actor's bound session. Other pushes use player IDs through the public Actor client and the Table's typed forwarding handler. Relocation adapters serialize application state only.
 
 The e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on play nodes (table) only; there are no fixed User Spots in this template.

@@ -6,7 +6,7 @@
 
 ## Rules for AI
 
-Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
+Identify the Session, Play, Matchmaker or API role before editing. The API node owns durable player records.
 
 - A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
@@ -27,7 +27,7 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/cpp
 
 ## Project overview
 
-This C++20 project is a four-seat betting card table server example. It runs a Session node for connections, play nodes A and B (table) that host Table Spots and Player Actors, and Redis for location and relocation state. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
+This C++20 project is a four-seat betting card table server example. It runs a Session node for connections, play nodes A and B (table) that host Table Spots and Player Actors, a Matchmaker node that hosts the Pool Instance Spot, an API node for player records, and Redis for location, relocation and persistent records. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -35,9 +35,9 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
-Run one scenario with `./run-e2e.sh --scenario reconnect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+Start a foreground server with `./run-server.sh` or `.\run-server.cmd`. Run `./run-e2e.sh` or `.\run-e2e.cmd` from the same directory in a second terminal after `Server ready` to attach automatically. Stop the server with Ctrl+C. Run one scenario with `./run-e2e.sh --scenario reconnect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
 
-Default builds and e2e run the nodes and the runner in Docker without a host toolchain. Run these commands from this directory.
+When no foreground server is running, the default e2e uses Docker without a host toolchain. Run these commands from this directory.
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
@@ -61,13 +61,17 @@ For host process debugging, install a C++20 compiler (GCC 13 or later, or Visual
 
 ### Session node
 
-`server/session/main.cpp` registers the STREAM listener and `Session`, and `server/session/session.hpp` handles connection callbacks and forwards incoming packets in `Session::on_packet`. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. Add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player. `Session` answers `SessionInfoRequest` with a `SessionInfo` push built from the bound Actor, because a C++ Session cannot yet send a typed reply that it creates (see Known issues in the README).
+`server/session/main.cpp` registers the STREAM listener and `Session`, and `server/session/session.hpp` handles connection callbacks and forwards incoming packets in `Session::on_packet`. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. Add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player. `Session` answers `SessionInfoRequest` with a `SessionInfo` push built from the bound Actor, as documented in the README.
 
 ### Tables and players
 
-An Actor is a game state object addressed by ID; `Player` in `server/table/table.hpp` is a stateless Actor that reports a rejected join to its Session. A Spot is a state object that accepts Actors and executes shared game rules; `Table` in the same file owns the table through `TableState` in `server/table/domain.hpp`, which holds the four seats, chips, the deck, the pot, the turn, and the hand rules. Per-player chips and cards therefore live in the Table, so apply player state changes to `TableState`.
+An Actor is a game state object addressed by ID; `Player` in `server/table/player.hpp` owns the live match ticket and last committed balance in relocatable state. A Spot is a state object that accepts Actors and executes shared game rules; `Table` in the same file owns the table through `TableState` in `server/table/domain.hpp`, which holds the four seats, chips, the deck, the pot, the turn, and the hand rules. Per-player chips and cards therefore live in the Table, so apply player state changes to `TableState`.
 
-`server/table/main.cpp` registers `Entry`, the `Player` factory, and the `Table` factory with the SpotWide execution mode and the optional `TableCapacity` stable type limit. `Entry` creates the Table Spot named by the first packet and requests the join. Add handlers that apply table rules in `Table::configure()` with `add_actor_send`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
+`server/table/main.cpp` registers `Entry`, the `Player` factory, `RoomProvisioner`, and the `Table` factory with the SpotWide execution mode and the optional `TableCapacity` stable type limit. `Entry` creates the Table Spot named by the first packet and requests the join. Add handlers that apply table rules in `Table::configure()` with `add_actor_send`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
+
+### Matchmaker and API nodes
+
+`server/matchmaker/pool.hpp` owns queue and assignment transitions. The Pool sends `PrepareRoom` to `RoomProvisioner`, which creates the Table with the typed creation request and returns `RoomPrepared`. Each Player Actor loads chips through `LoadPlayer` once and includes them at admission. Table commits the round through `CommitRound` before applying settlement and sending results. The API adapter in `server/api/` owns Redis access.
 
 ### Shared contracts and hosting
 
@@ -75,7 +79,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/table/table
 
 ### Build and e2e runner
 
-`CMakeLists.txt` builds one executable per role (`my-game-session`, `my-game-table`) from `server/<role>/main.cpp` and the `my-game-e2e` runner; add a node role to its `foreach(role ...)` list. `e2e/client.hpp` connects through the public stream connector, and `e2e/scenarios.hpp` checks results observable by the client. `e2e/world.hpp` starts the nodes and infrastructure through `e2e/process.hpp`, `e2e/main.cpp` selects and runs scenarios, and `e2e/structure.hpp` validates `zlink.structure.json` against `server/config/` and the names in `contracts.hpp`. Verify new gameplay through received client results; the project includes no separate unit-test target or formatter configuration.
+`CMakeLists.txt` builds one executable per role (`my-game-session`, `my-game-table`, `my-game-matchmaker`, `my-game-api`) from `server/<role>/main.cpp` and the `my-game-e2e` runner; add a node role to its `node_roles` list. `e2e/client.hpp` connects through the public stream connector, and `e2e/scenarios.hpp` checks results observable by the client. `e2e/world.hpp` starts the nodes and infrastructure through `e2e/process.hpp`, `e2e/main.cpp` selects and runs scenarios, and `e2e/structure.hpp` validates `zlink.structure.json` against `server/config/` and the names in `contracts.hpp`. Verify new gameplay through received client results; the project includes no separate unit-test target or formatter configuration.
 
 ## ZLink concepts in this project
 
@@ -85,7 +89,7 @@ A RouteMesh connects nodes that exchange messages between processes; this projec
 
 ### Spots and Actors
 
-`Entry` handles Actor entry and `Table` represents one table. The [Spot guide](https://docs.zlink.systems/cpp/guide/server/21-spot/) describes registration and calls for these objects. `Player` has no application state of its own, so a player's seat, chips, and cards stay in the Table when the Actor moves; the [Actor guide](https://docs.zlink.systems/cpp/guide/server/22-actor/) describes Actor creation and calls.
+`Entry` handles Actor entry and `Table` represents one table. The [Spot guide](https://docs.zlink.systems/cpp/guide/server/21-spot/) describes registration and calls for these objects. The Table owns seats, in-round chips and cards; the [Actor guide](https://docs.zlink.systems/cpp/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -111,7 +115,7 @@ Requests in the example game follow this path. Reading the code along this path 
 2. A new Actor starts in the Entry Spot `Entry`. `Entry::join` checks the identity. For first entry, it calls `get_or_create` for the Table Spot named by `tableId`, and requests `join_spot(...).defer()`. Entry rejects a reconnect with `not-seated`.
 3. `Table::on_actor_join` seats the player through `TableState::admit` or rejects when the table is full; a rejection reaches the client as `ActionRejected` from `Player::on_join_completed`. When a player joins, `Table::on_actor_joined` pushes a `TableView` to every seated player through the Actor client, and `Table::deliver` forwards it to the bound Session.
 4. Later packets from the same client are handled by the handlers of the Table that holds the Actor: `Table::start` deals a hand and pushes each player's `HandDealt`, and `Table::bet` applies a `BetRequest` and publishes the updated views and, at the end of a hand, the `HandResult`. `Table::inspect` answers `TableViewRequest` on demand.
-5. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the table state from `capture` in `TableRelocation` and calls `restore` on another node. `PlayerRelocation` carries no state.
+5. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the table state from `capture` in `TableRelocation` and calls `restore` on another node. `PlayerRelocation` carries the Player state.
 
 ## Extend this template's domain
 
@@ -132,13 +136,13 @@ Before adding a rule, run the build and e2e with the [Development commands](#dev
 
 Rejected actions leave table values, sequences, and cooldowns unchanged. `ActionRejected` has the JSON fields `reason` and `retryAfterMs`; current rejections use `retryAfterMs: 0`. Wait only for a positive delay supplied by the server. Do not use fixed waits or longer deadlines to make a check pass.
 
-Keep pushes to other players in `Table` through `actor_client_t`, and register one `deliver` forwarder for each pushed message type in `Table::configure()`. Keep application state in `TableState`; `Player` holds no game state. If `update` fails, inspect the message flow in [Debugging](#debugging) at the first failed transition.
+Keep pushes to other players in `Table` through `actor_client_t`, and register one `deliver` forwarder for each pushed message type in `Table::configure()`. Keep in-round state in `TableState` and preserve Actor state in `PlayerState`. If `update` fails, inspect the message flow in [Debugging](#debugging) at the first failed transition.
 
 ## Development considerations
 
 ### State and message contracts
 
-Use the public Framework prebuilt that `bootstrap.cmake` installs at the pinned version, and add no repository sources or local feeds to the project. Process typed messages with the default Framework JSON serializer so processes use the same contract: declare each message in `server/shared/contracts.hpp` with a `packet_name` and JSON conversion, and add no per-message codecs, manual encoding, or raw frame parsing. Limit direct serialization in relocation adapters to application state (`zlink::message_t::from_json` in `capture`, `parse_json` in `restore`), keeping management of Framework execution state separate from game state.
+Use the public Framework prebuilt that `bootstrap.cmake` installs at the pinned version, and add no repository sources or local feeds to the project. Process typed messages with the default Framework JSON serializer so processes use the same contract: declare each message in `server/shared/contracts.hpp` with a `packet_name` and JSON conversion, and add no per-message codecs, manual encoding, or raw frame parsing. Limit direct serialization in relocation adapters to application state through the Framework serializer, keeping management of Framework execution state separate from game state.
 
 Manage each game fact, such as a player's chips and cards, in the object responsible for changing it. Store player IDs and observational copies in Spots, and never retain Actor references: a Spot handler receives the Actor as an argument and reaches other players through `actor_client_t` by player ID. Sessions forward packets after authentication and binding; seating, betting, and hand results are decided by the Table that owns the state. Keep game rules in `server/table/domain.hpp`, and keep Framework callbacks in the Spot, Actor, and Session files.
 
@@ -162,7 +166,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains the effective settings that `e2e/world.hpp` writes at node startup and the logs for each node. All scenarios selected in one run share one `.logs/run-<id>/` directory.
 
-Settings files are `table-a.json`, `table-b.json`, and `session.json`; a replaced play node (table) uses its file name with the suffix `-replacement`. `e2e/process.hpp` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`, where `<node>` is the settings file name without `.json`. Helper commands (Compose and Docker CLI calls) write `command-<n>.out.log` and `command-<n>.err.log`. Local build output is in `.logs/build.log`. Docker build and outer cleanup logs are in `.logs/docker-<project>/`: `build.log`, `redis-start.log`, `redis.log`, `cleanup.log`, and `containers-stop.log` from the PowerShell runner.
+Settings files are `api.json`, `matchmaker.json`, `table-a.json`, `table-b.json`, and `session.json`; a replaced play node (table) uses its file name with the suffix `-replacement`. `e2e/process.hpp` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`, where `<node>` is the settings file name without `.json`. Helper commands (Compose and Docker CLI calls) write `command-<n>.out.log` and `command-<n>.err.log`. Local build output is in `.logs/build.log`. Docker build and outer cleanup logs are in `.logs/docker-<project>/`: `build.log`, `redis-start.log`, `redis.log`, `cleanup.log`, and `containers-stop.log` from the PowerShell runner.
 
 ### Diagnostic levels
 

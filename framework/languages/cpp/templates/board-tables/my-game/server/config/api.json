@@ -1,0 +1,6 @@
+{
+  "Id": "api",
+  "ApiEndpoint": "tcp://127.0.0.1:17411",
+  "KeyPrefix": "my-game:",
+  "RedisEndpoint": "127.0.0.1:6379"
+}

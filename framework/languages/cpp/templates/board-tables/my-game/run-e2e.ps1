@@ -3,30 +3,38 @@ param(
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [switch]$CheckStructure,
+    [switch]$Attach,
     [string]$Scenario,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
 )
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 Set-StrictMode -Version Latest
-if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
 $root = $PSScriptRoot
+. (Join-Path $root 'scripts/run-helpers.ps1')
+Initialize-Console
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+
+if (-not ($Attach -or $Local -or $BuildOnly -or $CheckStructure) -and (Test-RunningServer)) {
+    Write-Host 'Using the running server (.logs/server.json)'
+    $Attach = $true
+}
+if ($Attach) {
+    if ($BuildOnly -or $CheckStructure) { throw '-Attach requires a scenario run.' }
+    $runner = Get-Runner
+    if (-not (Test-Path $runner)) { throw 'Run run-server.ps1 to build and start the server before attaching.' }
+    & $runner --root $root --attach @RunnerArguments
+    exit $LASTEXITCODE
+}
 if ($Local) {
     if (-not $NoBuild) {
-        Push-Location $root
-        try {
-            & cmake -P bootstrap.cmake *> (Join-Path $root '.logs/build.log')
-            if ($LASTEXITCODE -ne 0) { throw 'Framework prebuilt install failed; see .logs/build.log.' }
-            & cmake --preset default *>> (Join-Path $root '.logs/build.log')
-            if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed; see .logs/build.log.' }
-            & cmake --build --preset default *>> (Join-Path $root '.logs/build.log')
-            if ($LASTEXITCODE -ne 0) { throw 'CMake build failed; see .logs/build.log.' }
-        } finally { Pop-Location }
+        Assert-NoRunningServer
+        Build-Local
     }
     if ($BuildOnly) { exit 0 }
-    & (Join-Path $root 'build/bin/my-game-e2e.exe') --root $root @RunnerArguments
+    & (Get-Runner) --root $root @RunnerArguments
     exit $LASTEXITCODE
 }
 if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer cache automatically.' }
