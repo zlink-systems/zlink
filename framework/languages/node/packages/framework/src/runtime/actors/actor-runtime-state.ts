@@ -162,6 +162,21 @@ export type ZLinkActorCreationAttemptResult =
       readonly error: unknown;
     };
 
+export interface ZLinkActorDestroyOperation {
+  readonly accepted: Promise<void>;
+  readonly terminal: Promise<void>;
+}
+
+export function startActorTeardown(
+  publishClosing: () => Promise<void>,
+  teardown: () => Promise<void>,
+  drained?: Promise<void>
+): ZLinkActorDestroyOperation {
+  const accepted = publishClosing();
+  const ready = drained === undefined ? accepted : Promise.all([accepted, drained]);
+  return { accepted, terminal: ready.then(teardown) };
+}
+
 export class ZLinkActorRuntimeState {
   private creationTask: Promise<ZLinkActorCreationAttemptResult> | undefined;
   private configured = false;
@@ -184,7 +199,7 @@ export class ZLinkActorRuntimeState {
   private locationGenerationValue: bigint | undefined;
   private movingValue = false;
   private deferredJoinPendingValue = false;
-  private destroyTask: Promise<void> | undefined;
+  private destroyTask: ZLinkActorDestroyOperation | undefined;
 
   constructor(
     readonly actorId: string,
@@ -303,12 +318,16 @@ export class ZLinkActorRuntimeState {
     return this.locationGenerationValue;
   }
 
+  get isDestroying(): boolean {
+    return this.destroyTask !== undefined;
+  }
+
   get isSteadyReady(): boolean {
     return (
       this.actorValue !== undefined &&
       this.ownsLocationValue &&
       !this.movingValue &&
-      this.destroyTask === undefined
+      !this.isDestroying
     );
   }
 
@@ -316,8 +335,12 @@ export class ZLinkActorRuntimeState {
     return this.movingValue;
   }
 
+  get hasPendingMembershipTransition(): boolean {
+    return this.movingValue || this.deferredJoinPendingValue;
+  }
+
   tryBeginDeferredJoin(): boolean {
-    if (this.movingValue || this.deferredJoinPendingValue) {
+    if (this.hasPendingMembershipTransition || this.isDestroying) {
       return false;
     }
     this.deferredJoinPendingValue = true;
@@ -333,10 +356,10 @@ export class ZLinkActorRuntimeState {
   }
 
   beginMove(): void {
-    if (this.deferredJoinPendingValue) {
+    if (this.deferredJoinPendingValue || this.isDestroying) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorMoving,
-        `Actor '${this.actorId}' has a pending membership transition.`,
+        `Actor '${this.actorId}' has a pending lifecycle operation.`,
         true
       );
     }
@@ -369,8 +392,8 @@ export class ZLinkActorRuntimeState {
 
   getOrStartDestroy(
     entryNodeRid: RoutingId,
-    destroy: (actorRef: ZLinkBackendActorRef | undefined) => Promise<void>
-  ): Promise<void> {
+    start: (actorRef: ZLinkBackendActorRef | undefined) => ZLinkActorDestroyOperation
+  ): ZLinkActorDestroyOperation {
     if (this.destroyTask !== undefined) {
       return this.destroyTask;
     }
@@ -385,18 +408,8 @@ export class ZLinkActorRuntimeState {
       );
     }
 
-    const task = Promise.resolve()
-      .then(() => destroy(this.nativeActorDestroyed ? undefined : actorRef))
-      .catch((error: unknown) => {
-        // A caller may start another attempt only after this attempt has failed.
-        if (this.destroyTask === task) {
-          this.destroyTask = undefined;
-          this.movingValue = false;
-        }
-        throw error;
-      });
-    this.destroyTask = task;
-    return task;
+    this.destroyTask = start(this.nativeActorDestroyed ? undefined : actorRef);
+    return this.destroyTask;
   }
 
   markNativeActorDestroyed(actorRef: ZLinkBackendActorRef): void {

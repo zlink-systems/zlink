@@ -1,3 +1,4 @@
+import { startActorTeardown } from '../actors/actor-runtime-state';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
 import { RequestRuntime } from '../foundation/request-runtime';
@@ -2915,12 +2916,15 @@ export class ZLinkFrameworkRuntimeHost
         this.spotNodeRuntime?.discardActorActivation(actor, error);
         this.spotManager?.discardActorActivation(actor, error);
       },
-      terminateActorActivation: (actor, terminal) => {
+      terminateActorActivation: (actor, publishClosing, terminal) => {
         const cleanup = async () => {
           await this.serviceRelocation.drainTargetActorRelocation(actor);
           await terminal();
         };
-        return this.spotNodeRuntime?.terminateActorActivation(actor, cleanup) ?? cleanup();
+        if (this.spotNodeRuntime !== undefined) {
+          return this.spotNodeRuntime.terminateActorActivation(actor, publishClosing, cleanup);
+        }
+        return startActorTeardown(publishClosing, cleanup);
       },
       registration: this.options.registration,
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,

@@ -5,6 +5,9 @@ const { NestFactory } = require('@nestjs/core');
 const nestjs = require('../../packages/nestjs/dist');
 const { ZLinkFrameworkErrorKind } = require('../../packages/framework/dist');
 const { ZLinkInMemoryProviderLocationStore } = require('../../packages/framework/dist/internal');
+const {
+  decodeActorAuthorityPayload
+} = require('../../packages/framework/dist/runtime/actors/actor-authority-payload-codec');
 
 function deferred() {
   let resolve;
@@ -18,6 +21,7 @@ async function startActorHost(t, fault) {
   const base = new ZLinkInMemoryProviderLocationStore();
   const storeError = new Error('Controlled Location Store delete failure');
   const deleteObserved = deferred();
+  const allowDelete = deferred();
   let remainingFaults = 0;
   let deleteCalls = 0;
   let conflicts = 0;
@@ -34,8 +38,13 @@ async function startActorHost(t, fault) {
       );
       if (deletion !== undefined) {
         deleteCalls++;
+        if (remainingFaults > 0 && fault === 'pause') {
+          deleteObserved.resolve();
+          await allowDelete.promise;
+        }
         if (remainingFaults > 0) {
           remainingFaults--;
+          if (fault === 'pause') return await base.write(request, signal);
           if (fault === 'throw') {
             deleteObserved.resolve();
             throw storeError;
@@ -83,7 +92,8 @@ async function startActorHost(t, fault) {
   class SelfDestroy {
     async handle() {
       assert.equal(await actors.destroy(actorRef), true);
-      return { started: true };
+      const authority = await readAuthority();
+      return { state: decodeActorAuthorityPayload(Buffer.from(authority.payload, 'base64')).state };
     }
   }
   nestjs.zlinkEntrySpotActorRequestHandler({
@@ -117,12 +127,19 @@ async function startActorHost(t, fault) {
   actorRef = created.actor;
   assert.ok(actorRef.objectGeneration > 1n);
   deleteCalls = 0;
+  async function readAuthority() {
+    const result = await base.read({ value: 'authority\0actor\0destroy-player' });
+    assert.equal(result.kind, 'found');
+    return JSON.parse(Buffer.from(result.value.bytes).toString('utf8'));
+  }
+
   return {
     actors,
     actorRef,
     create,
     storeError,
     deleteObserved: deleteObserved.promise,
+    allowDelete: allowDelete.resolve,
     get deleteCalls() {
       return deleteCalls;
     },
@@ -136,56 +153,43 @@ async function startActorHost(t, fault) {
       remainingFaults = fault === 'conflict' ? 2 : 1;
     },
     async selfDestroy() {
-      assert.deepEqual(
-        await app
-          .get(nestjs.ZLINK_ACTOR_CLIENT)
-          .requestToActor(actorRef.actorId, {})
-          .packetName('SelfDestroy')
-          .submit(),
-        { started: true }
-      );
+      return await app
+        .get(nestjs.ZLINK_ACTOR_CLIENT)
+        .requestToActor(actorRef.actorId, {})
+        .packetName('SelfDestroy')
+        .submit();
     },
-    async authority() {
-      const result = await base.read({ value: 'authority\0actor\0destroy-player' });
-      assert.equal(result.kind, 'found');
-      return JSON.parse(Buffer.from(result.value.bytes).toString('utf8'));
-    }
+    authority: readAuthority
   };
 }
 
 for (const self of [true, false]) {
   test(
-    `destroy retries Store cleanup with its exact incarnation (self=${self})`,
+    `destroy retains the failed terminal for its exact incarnation (self=${self})`,
     { timeout: 20000 },
     async (t) => {
       const host = await startActorHost(t, 'throw');
       host.arm();
       if (self) {
-        await host.selfDestroy();
+        assert.deepEqual(await host.selfDestroy(), { state: 'closing' });
         await host.deleteObserved;
-        // Let the detached terminal settle after the Store rejects its write.
-        await new Promise((resolve) => setImmediate(resolve));
-      } else {
-        await assert.rejects(
-          () => host.actors.destroy(host.actorRef),
-          (error) =>
-            error.kind === ZLinkFrameworkErrorKind.Unavailable && error.cause === host.storeError
-        );
       }
-      assert.deepEqual(await host.actors.find(host.actorRef.actorId), host.actorRef);
+      const error = await host.actors.destroy(host.actorRef).catch((error) => error);
+      assert.equal(error.kind, ZLinkFrameworkErrorKind.Unavailable);
+      assert.equal(error.cause, host.storeError);
+      await assert.rejects(
+        () => host.actors.destroy(host.actorRef),
+        (observed) => observed.kind === error.kind && observed.cause === host.storeError
+      );
+      assert.equal(await host.actors.find(host.actorRef.actorId), undefined);
       assert.equal(host.contextGeneration, host.actorRef.objectGeneration);
       assert.equal(host.deleteCalls, 1);
+      const authority = await host.authority();
+      assert.equal(authority.objectGeneration, String(host.actorRef.objectGeneration));
       assert.equal(
-        (await host.authority()).objectGeneration,
-        String(host.actorRef.objectGeneration)
+        decodeActorAuthorityPayload(Buffer.from(authority.payload, 'base64')).state,
+        'closing'
       );
-      assert.equal(await host.actors.destroy(host.actorRef), true);
-      assert.equal(host.deleteCalls, 2);
-      assert.equal(await host.actors.find(host.actorRef.actorId), undefined);
-      const next = await host.create();
-      assert.equal(next.status, 'created');
-      assert.ok(next.actor.objectGeneration > host.actorRef.objectGeneration);
-      assert.equal(await host.actors.destroy(next.actor), true);
     }
   );
 }
@@ -201,16 +205,18 @@ test(
       (error) => error.kind === ZLinkFrameworkErrorKind.Unavailable
     );
     assert.equal(host.conflicts, 2);
+    await assert.rejects(
+      () => host.actors.destroy(host.actorRef),
+      (error) => error.kind === ZLinkFrameworkErrorKind.Unavailable
+    );
     assert.equal(host.deleteCalls, 2);
-    assert.deepEqual(await host.actors.find(host.actorRef.actorId), host.actorRef);
-    assert.equal((await host.authority()).objectGeneration, String(host.actorRef.objectGeneration));
-    assert.equal(await host.actors.destroy(host.actorRef), true);
-    assert.equal(host.deleteCalls, 3);
     assert.equal(await host.actors.find(host.actorRef.actorId), undefined);
-    const next = await host.create();
-    assert.equal(next.status, 'created');
-    assert.ok(next.actor.objectGeneration > host.actorRef.objectGeneration);
-    assert.equal(await host.actors.destroy(next.actor), true);
+    const authority = await host.authority();
+    assert.equal(authority.objectGeneration, String(host.actorRef.objectGeneration));
+    assert.equal(
+      decodeActorAuthorityPayload(Buffer.from(authority.payload, 'base64')).state,
+      'closing'
+    );
   }
 );
 
@@ -227,3 +233,62 @@ test(
     assert.equal(await host.actors.destroy(next.actor), true);
   }
 );
+
+for (const operation of ['find', 'create', 'join', 'self', 'stale']) {
+  test(`Actor destroy lifecycle contract (${operation})`, { timeout: 20000 }, async (t) => {
+    const host = await startActorHost(t, 'pause');
+    const ready = await host.authority();
+    host.arm();
+    const destroy = operation === 'self' ? host.selfDestroy() : host.actors.destroy(host.actorRef);
+    const joined = [];
+    try {
+      await host.deleteObserved;
+      if (operation === 'find') {
+        assert.equal(await host.actors.find(host.actorRef.actorId), undefined);
+      } else if (operation === 'create') {
+        const next = host.create();
+        joined.push(next);
+        const observed = await Promise.race([
+          next,
+          new Promise((resolve) => setTimeout(resolve, 30, 'pending'))
+        ]);
+        assert.equal(observed, 'pending');
+      } else if (operation === 'join' || operation === 'self') {
+        if (operation === 'self') assert.deepEqual(await destroy, { state: 'closing' });
+        const closing = await host.authority();
+        for (const field of [
+          'objectGeneration',
+          'authorityOwnerGeneration',
+          'ownerId',
+          'ownerLeaseGeneration'
+        ]) {
+          assert.equal(closing[field], ready[field]);
+        }
+        const second = host.actors.destroy(host.actorRef);
+        joined.push(second);
+        const observed = await Promise.race([
+          second,
+          new Promise((resolve) => setImmediate(resolve, 'pending'))
+        ]);
+        assert.equal(observed, 'pending');
+      }
+    } finally {
+      host.allowDelete();
+      await destroy;
+      await Promise.allSettled(joined);
+    }
+    if (operation === 'join' || operation === 'self') assert.equal(await joined[0], true);
+    if (operation === 'create' || operation === 'stale') {
+      const next = await (joined[0] ?? host.create());
+      assert.equal(next.status, 'created');
+      assert.ok(next.actor.objectGeneration > host.actorRef.objectGeneration);
+      if (operation === 'stale') {
+        await assert.rejects(
+          () => host.actors.destroy(host.actorRef),
+          (error) => error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+        );
+        assert.deepEqual(await host.actors.find(next.actor.actorId), next.actor);
+      }
+    }
+  });
+}

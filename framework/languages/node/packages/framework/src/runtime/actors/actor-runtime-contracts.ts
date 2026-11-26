@@ -17,7 +17,11 @@ import type {
   ZLinkMeshCompletionTable
 } from '../backend';
 import type { ZLinkLocationLifecycle } from '../locations';
-import type { ZLinkActorRuntimeState, ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
+import type {
+  ZLinkActorDestroyOperation,
+  ZLinkActorRuntimeState,
+  ZLinkRemoteBoundSessionTarget
+} from './actor-runtime-state';
 import type { ZLinkActorTransferRegistry } from './actor-transfer-registry';
 import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { ZLinkActivationAdmission } from '../activation-admission';
@@ -59,11 +63,12 @@ export interface ZLinkActorManagerOptions {
     signal?: AbortSignal
   ) => Promise<ZLinkActorCreateResponse | undefined>;
   readonly discardActorActivation?: (actor: ZLinkActor, error: unknown) => void;
-  readonly actorDestroyedCleanup?: (actorId: string) => void;
+  readonly actorDestroyedCleanup?: (actorId: string) => void | Promise<void>;
   readonly terminateActorActivation?: (
     actor: ZLinkActor,
+    publishClosing: () => Promise<void>,
     terminal: () => Promise<void>
-  ) => Promise<void>;
+  ) => ZLinkActorDestroyOperation;
   readonly publishActorAuthority?: (
     actorType: string,
     actorRef: ActorRef,

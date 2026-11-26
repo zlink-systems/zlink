@@ -14,10 +14,8 @@ import type { ActorRef, RoutingId, ZLinkActorCreateResult } from '../../contract
 import { ZLinkSpotKind } from '../../contracts';
 import type {
   ZLinkAuthoritySnapshot,
-  ZLinkAuthorityReadResult,
   ZLinkCreationOperationIdentity,
-  ZLinkLocationOwnerToken,
-  ZLinkObjectReserveResult
+  ZLinkLocationOwnerToken
 } from '../locations/internal-location-contracts';
 import type {
   ZLinkAuthorityStore,
@@ -102,24 +100,31 @@ export class ZLinkActorPlacementCoordinator {
     const operationId = randomOperationId();
     try {
       for (;;) {
-        if (!createOnly) {
-          const current = await this.options.store.readAuthority(
-            encodeAuthorityKey('actor', actorId),
-            deadline.signal
-          );
-          const existing = existingActor(current, actorId, stableType);
+        const current = await this.options.store.readAuthority(
+          encodeAuthorityKey('actor', actorId),
+          deadline.signal
+        );
+        if (current.kind === 'snapshot' && current.allocation.state === 'active') {
+          const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
           if (
-            existing !== undefined &&
-            current.kind === 'snapshot' &&
+            identity?.actor.actorId === actorId &&
+            current.allocation.stableType === stableType &&
+            (identity.state === 'closing' || (!createOnly && identity.state === 'ready')) &&
             (await this.options.leaseTracker.isOwnerTokenLive(
-              {
-                ownerId: current.ownerId,
-                leaseGeneration: current.ownerLeaseGeneration
-              },
+              { ownerId: current.ownerId, leaseGeneration: current.ownerLeaseGeneration },
               deadline.signal
             ))
-          )
-            return { status: 'existing', actor: existing };
+          ) {
+            requireGetOrCreate(actorId, createOnly);
+            if (identity.state === 'ready') {
+              return {
+                status: 'existing',
+                actor: withActorAuthorityFence(identity.actor, current)
+              };
+            }
+            await waitForAuthorityChange(deadline.signal);
+            continue;
+          }
         }
         const target = await this.options.target(
           meshName,
@@ -166,16 +171,7 @@ export class ZLinkActorPlacementCoordinator {
           deadline.signal,
           BigInt(deadlineUnixMs)
         );
-        const existing = existingActor(reserved, actorId, stableType);
-        if (existing !== undefined) {
-          if (createOnly) {
-            throw createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.ActorAlreadyExists,
-              `Actor '${actorId}' already exists.`
-            );
-          }
-          return { status: 'existing', actor: existing };
-        }
+        if (reserved.kind === 'alreadyExists') requireGetOrCreate(actorId, createOnly);
         if (reserved.kind === 'typeMismatch') {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.ActorTypeMismatch,
@@ -344,10 +340,10 @@ export class ZLinkActorPlacementCoordinator {
     }
     if (current.allocation.state === 'active') {
       const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
-      if (identity === undefined) {
+      if (identity?.state !== 'ready') {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
-          `Actor '${record.actorId}' Ready authority is invalid.`
+          `Actor '${record.actorId}' authority is not Ready.`
         );
       }
       return actorResult('existing', identity.actor);
@@ -487,31 +483,13 @@ function creationTarget(snapshot: ZLinkAuthoritySnapshot) {
   };
 }
 
-function existingActor(
-  current: ZLinkObjectReserveResult | ZLinkAuthorityReadResult,
-  actorId: string,
-  stableType: string
-): ActorRef | undefined {
-  const snapshot =
-    current.kind === 'snapshot'
-      ? current
-      : current.kind === 'alreadyExists'
-        ? current.current
-        : current.kind === 'conflict' && current.current.kind === 'snapshot'
-          ? current.current
-          : undefined;
-  if (
-    snapshot === undefined ||
-    snapshot.allocation.state !== 'active' ||
-    snapshot.allocation.objectKind !== 'actor' ||
-    snapshot.allocation.stableType !== stableType
-  ) {
-    return undefined;
+function requireGetOrCreate(actorId: string, createOnly: boolean): void {
+  if (createOnly) {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.ActorAlreadyExists,
+      `Actor '${actorId}' already exists.`
+    );
   }
-  const identity = decodeActorAuthorityIdentity(snapshot.payload, snapshot.objectGeneration);
-  return identity?.actor.actorId === actorId
-    ? withActorAuthorityFence(identity.actor, snapshot)
-    : undefined;
 }
 
 function withActorAuthorityFence(actor: ActorRef, authority: ZLinkAuthoritySnapshot): ActorRef {

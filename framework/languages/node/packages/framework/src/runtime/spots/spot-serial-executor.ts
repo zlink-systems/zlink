@@ -1,3 +1,4 @@
+import { startActorTeardown } from '../actors/actor-runtime-state';
 import type { ZLinkExecutionPolicy } from '../admission';
 import { ZLinkUserSpotExecutionMode } from '../../contracts';
 import { ZLinkActorSerialExecutor } from '../actors';
@@ -260,12 +261,21 @@ export class ZLinkSpotSerialExecutor {
       executor.scheduler.discardPendingApplication(error);
   }
 
-  async terminateActor(actorId: string, terminal: () => Promise<void>): Promise<void> {
+  terminateActor(
+    actorId: string,
+    publishClosing: () => Promise<void>,
+    teardown: () => Promise<void>
+  ) {
     const executor = this.actorExecutor(actorId);
-    await executor.close();
-    await terminal();
-    if (this.actorExecutors.get(actorId) === executor) this.actorExecutors.delete(actorId);
-    this.actorSerials.delete(actorId);
+    return startActorTeardown(
+      publishClosing,
+      async () => {
+        await teardown();
+        if (this.actorExecutors.get(actorId) === executor) this.actorExecutors.delete(actorId);
+        this.actorSerials.delete(actorId);
+      },
+      executor.close()
+    );
   }
 
   /**
