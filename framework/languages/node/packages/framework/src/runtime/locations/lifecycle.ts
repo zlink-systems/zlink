@@ -193,6 +193,10 @@ export class ZLinkLocationLifecycle {
     );
   }
 
+  beginActorClosing(actorRef: ActorRef): Promise<void> {
+    return this.actorClaims.beginClosing(actorRef);
+  }
+
   async releaseActor(actorType: string, actorId: string, actorRef?: ActorRef): Promise<void> {
     await this.actorClaims.release(actorType, actorId, actorRef);
   }

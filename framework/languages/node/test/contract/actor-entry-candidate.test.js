@@ -283,7 +283,7 @@ test('GetOrCreate returns a Ready Actor when no new-creation target remains', as
       internalFrameworkErrorKind(error) ===
       ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
   );
-  assert.equal(authorityReads, 0);
+  assert.equal(authorityReads, 1);
 
   const result = await coordinator.create(
     actorId,
@@ -298,7 +298,29 @@ test('GetOrCreate returns a Ready Actor when no new-creation target remains', as
   assert.equal(String(result.actor.nodeRid), 'entry');
   assert.equal(result.actor.ownershipGeneration, 11n);
   assert.equal(result.actor.ownerLeaseGeneration, 5n);
-  assert.equal(authorityReads, 1);
+  assert.equal(authorityReads, 2);
+
+  current = {
+    ...authority,
+    payload: encodeActorAuthorityIdentity({
+      actorType: 'player',
+      actor: result.actor,
+      meshName: 'play',
+      ownerNodeGeneration: 7n,
+      owner: { ownerId: 'owner', leaseGeneration: 5n },
+      state: 'closing',
+      spotId: 'entry',
+      spotGeneration: 7n,
+      spotKind: 'entry'
+    })
+  };
+  await assert.rejects(
+    () =>
+      coordinator.create(actorId, 'player', true, 'play', Buffer.from('{}'), OPERATION_TIMEOUT_MS),
+    (error) =>
+      internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.ActorAlreadyExists
+  );
+  assert.equal(authorityReads, 3);
 
   current = { kind: 'missing', storeNow: new Date(0) };
   await assert.rejects(
@@ -308,7 +330,7 @@ test('GetOrCreate returns a Ready Actor when no new-creation target remains', as
       internalFrameworkErrorKind(error) ===
       ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
   );
-  assert.equal(authorityReads, 2);
+  assert.equal(authorityReads, 4);
 });
 
 test('the requester excludes a target that refuses with routeNotConnected and picks another candidate', async () => {
