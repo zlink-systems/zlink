@@ -23,7 +23,13 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
 
     void setMaxMessageSize(long value);
 
-    /** Enables Core STREAM connect/disconnect notifications before bind. */
+    /** Waits for a complete record or an explicit notification to the reader. */
+    default boolean waitForReceive() {
+        return waitForReadable(Duration.ofMillis(250));
+    }
+
+    /** Notifies an idle reader so it can finish the current receive round. */
+    default void wakeReceive() {}
 
     /** Receives one raw STREAM record, or {@code null} when no record is ready. */
     ZLinkBackendStreamReceived recv();
