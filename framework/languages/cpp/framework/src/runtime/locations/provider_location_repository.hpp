@@ -1591,7 +1591,10 @@ class provider_location_repository_t final : public location_repository_t
 
         const auto target = decode_aggregate_target (record);
         const auto descriptor = co_await read_target_descriptor_async (target);
-        if (!descriptor || !co_await owner_is_live_async (target.owner)) {
+        bool target_live = false;
+        if (descriptor)
+            target_live = co_await owner_is_live_async (target.owner);
+        if (!target_live) {
             (void) co_await abort_aggregate (fence, cancellation);
             co_return aggregate_prepare_conflict_t{};
         }
@@ -1729,7 +1732,10 @@ class provider_location_repository_t final : public location_repository_t
                 co_return aggregate_commit_result_t::stale;
             const auto target = decode_aggregate_target (record);
             const auto descriptor = co_await read_target_descriptor_async (target);
-            if (!descriptor || !co_await owner_is_live_async (target.owner))
+            bool target_live = false;
+            if (descriptor)
+                target_live = co_await owner_is_live_async (target.owner);
+            if (!target_live)
                 co_return aggregate_commit_result_t::stale;
             std::map<std::string, stored_target_t> descriptors;
             descriptors.emplace (descriptor->key.value, *descriptor);
