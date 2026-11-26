@@ -129,8 +129,8 @@ for (const executionMode of [
     const events = [];
     const manager = createActorManager({
       actorFactories: new Map([['player', { create: (context) => ({ context }) }]]),
-      terminateActorActivation: (actor, terminal) =>
-        serial.terminateActor(actor.context.actorId, terminal)
+      terminateActorActivation: (actor, publishClosing, terminal) =>
+        serial.terminateActor(actor.context.actorId, publishClosing, terminal)
     });
     const actor = await manager.getOrCreateActor('teardown', 'player');
     class Handler {
@@ -182,8 +182,8 @@ for (const executionMode of [
     );
     const manager = createActorManager({
       actorFactories: new Map([['player', { create: (context) => ({ context }) }]]),
-      terminateActorActivation: (actor, terminal) =>
-        serial.terminateActor(actor.context.actorId, terminal)
+      terminateActorActivation: (actor, publishClosing, terminal) =>
+        serial.terminateActor(actor.context.actorId, publishClosing, terminal)
     });
     const actor = await manager.getOrCreateActor('self-teardown', 'player');
     const events = [];
@@ -516,7 +516,7 @@ test('actor transfer registry uses custom state adapters and defaults missing ad
   assert.deepEqual(events, ['out:alice:41', 'in:alice:41']);
 });
 
-test('public Actor destroy completes terminal cleanup after route cleanup failure', async () => {
+test('public Actor destroy retains its terminal after route cleanup failure', async () => {
   const events = [];
   const changes = [];
   class Actor {
@@ -583,13 +583,14 @@ test('public Actor destroy completes terminal cleanup after route cleanup failur
   const reference = await manager.find('node-scope-terminal');
   await assert.rejects(manager.destroy(reference), /node-scope route failure/);
   assert.equal(await manager.find('node-scope-terminal'), undefined);
+  await assert.rejects(manager.destroy(reference), /node-scope route failure/);
   assert.deepEqual(events, ['native', 'route', 'handler']);
   const {
     METRIC_NAMES
   } = require('../../packages/framework/dist/runtime/diagnostics/runtime-metrics');
   assert.equal(
     changes.filter(([name, value]) => name === METRIC_NAMES.ActorCount && value === -1).length,
-    1
+    0
   );
 });
 
@@ -4078,7 +4079,7 @@ test('DefaultZLinkActorManager shares concurrent destroy completion', async () =
 });
 
 for (const self of [false, true]) {
-  test(`DefaultZLinkActorManager retries cleanup without destroying the native actor twice (self=${self})`, async (t) => {
+  test(`DefaultZLinkActorManager shares the failed cleanup terminal without destroying the native actor twice (self=${self})`, async (t) => {
     const {
       ZLinkSpotSerialExecutor
     } = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
@@ -4110,8 +4111,8 @@ for (const self of [false, true]) {
     const options = {
       actorFactories: new Map([['player', PlayerFactory]]),
       nativeActorNode: node,
-      terminateActorActivation: (actor, terminal) =>
-        serial.terminateActor(actor.context.actorId, terminal)
+      terminateActorActivation: (actor, publishClosing, terminal) =>
+        serial.terminateActor(actor.context.actorId, publishClosing, terminal)
     };
     const manager = createActorManager(options);
     const actor = await manager.getOrCreateActor('alice', 'player');
@@ -4119,13 +4120,16 @@ for (const self of [false, true]) {
     const nativeRef = state.nativeActorRef;
     state.markLocationOwned();
     options.locationLifecycle = {
+      async beginActorClosing(ref) {
+        assert.equal(ref.objectGeneration, 7n);
+      },
       forgetExecution(owner) {
         assert.strictEqual(owner, actor);
       },
       async releaseActor(_actorType, _actorId, releasedRef) {
         assert.equal(releasedRef.objectGeneration, 7n);
         releaseCalls += 1;
-        if (releaseCalls === 1) throw releaseError;
+        throw releaseError;
       }
     };
 
@@ -4150,12 +4154,13 @@ for (const self of [false, true]) {
     assert.strictEqual(state.nativeActorRef, nativeRef);
     assert.equal(nativeRef.generation, 7n);
     assert.equal(actor.context.objectGeneration, 7n);
-    assert.equal((await manager.find('alice')).objectGeneration, 7n);
-
-    await manager.destroyActor(node, zlink.RoutingId.from('node-a'), actor);
+    assert.equal(await manager.find('alice'), undefined);
+    await assert.rejects(
+      () => manager.destroyActor(node, zlink.RoutingId.from('node-a'), actor),
+      (error) => error === releaseError
+    );
     assert.equal(nativeDestroyCalls, 1);
-    assert.equal(releaseCalls, 2);
-    assert.equal(await manager.findActor('alice'), undefined);
+    assert.equal(releaseCalls, 1);
   });
 }
 

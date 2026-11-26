@@ -41,49 +41,55 @@ namespace zlink::framework::test::host_lifecycle
 {
 using zlink::framework::test::relocation_unit_spot_t;
 
-static bool verify_relocation_blocker (
-  std::string_view label,
-  std::function<void (zlink::framework::zlink_framework_options_t &)> configure,
-  zlink::framework::relocation_reason_t expected,
-  std::chrono::milliseconds relocation_deadline = std::chrono::seconds (1),
-  std::chrono::milliseconds minimum_wait = std::chrono::milliseconds::zero ())
+struct relocation_topology_event_handler_t
 {
-    auto app = zlink::framework::app_t::create ();
-    app.add_zlink_framework (std::move (configure));
-    auto service = std::make_unique<blocking_stop_service_t> ();
-    auto *service_view = service.get ();
-    app.add_hosted_service (std::move (service));
+    using event_type = std::string;
+    void handle (const event_type &) {}
+};
 
-    char program[] = "termination-topology-preflight";
+static bool verify_topology_relocation (std::string_view label,
+                                        std::function<void (zlink_framework_options_t &)> configure,
+                                        relocation_reason_t expected_reason)
+{
+    auto app = app_t::create ();
+    app.add_zlink_framework (std::move (configure));
+    auto ready_probe = std::make_unique<ready_host_probe_t> ();
+    auto *ready_view = ready_probe.get ();
+    app.add_hosted_service (std::move (ready_probe));
+
+    char program[] = "relocation-topology-preflight";
     char *arguments[] = {program, nullptr};
     int exit_code = -1;
     std::thread run_thread ([&] { exit_code = app.run (1, arguments); });
-    service_view->wait_started ();
-    const auto serving_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
-    while (!app.is_ready () && std::chrono::steady_clock::now () < serving_deadline)
-        std::this_thread::yield ();
-
-    const auto relocation_started_at = std::chrono::steady_clock::now ();
-    const auto result =
-      app
-        .relocate ({.mode = zlink::framework::relocation_mode_t::planned_maintenance,
-                    .deadline = relocation_deadline})
-        .result ()
-        .value ();
-    const auto relocation_elapsed = std::chrono::steady_clock::now () - relocation_started_at;
-    const bool matched = result.outcome == zlink::framework::relocation_outcome_t::blocked
-                         && result.reason == expected && app.is_ready ()
-                         && relocation_elapsed >= minimum_wait;
-    if (!matched)
-        std::cerr << label << " must block Relocate without changing Serving\n";
-
-    auto shutdown = app.shutdown (std::chrono::seconds (2));
-    service_view->wait_stop_entered ();
-    service_view->release ();
-    const auto stopped = shutdown.result ().value ();
+    const bool ready = ready_view->wait_ready ();
+    relocation_result_t result;
+    if (ready) {
+        result = app
+                   .relocate ({.mode = relocation_mode_t::planned_maintenance,
+                               .deadline = std::chrono::seconds (1)})
+                   .result ()
+                   .value ();
+    }
+    const auto state = app.runtime_state ();
+    const auto stopped = app.shutdown (std::chrono::seconds (2)).result ().value ();
     run_thread.join ();
-    return matched && stopped.outcome == zlink::framework::termination_outcome_t::stopped
-           && exit_code == 0;
+
+    const bool permits_relocation = expected_reason == relocation_reason_t::none;
+    const auto expected_outcome =
+      permits_relocation ? relocation_outcome_t::relocated : relocation_outcome_t::blocked;
+    const auto expected_state = permits_relocation ? framework_runtime_state_t::relocated
+                                                   : framework_runtime_state_t::serving;
+    const bool passed = ready && result.outcome == expected_outcome
+                        && result.reason == expected_reason && state == expected_state
+                        && stopped.outcome == termination_outcome_t::stopped && exit_code == 0;
+    std::cout << label << (passed ? " passed" : " failed") << " ready=" << ready
+              << " outcome=" << static_cast<int> (result.outcome)
+              << " reason=" << static_cast<int> (result.reason)
+              << " expected-reason=" << static_cast<int> (expected_reason)
+              << " state=" << static_cast<int> (state)
+              << " shutdown=" << static_cast<int> (stopped.outcome) << " exit=" << exit_code
+              << '\n';
+    return passed;
 }
 
 bool verify_degraded_host_blocks_and_resumes_relocation ()
@@ -624,31 +630,62 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
     return true;
 }
 
-int verify_manual_topology_relocation_blockers ()
+int verify_relocation_topology ()
 {
-    if (!verify_relocation_blocker (
-          "manual ClientServer topology",
-          [] (zlink::framework::zlink_framework_options_t &options) {
-              options.add_client_server_channel ("manual-orders")
-                .client ()
-                .connect ("tcp://127.0.0.1:29999");
-          },
-          zlink::framework::relocation_reason_t::manual_topology_unsupported)) {
-        return EXIT_FAILURE;
-    }
-    if (!verify_relocation_blocker (
-          "manual RouteMesh topology",
-          [] (zlink::framework::zlink_framework_options_t &options) {
-              auto node = options.add_route_mesh ("retire-manual-mesh");
-              node.set_object_role (zlink::framework::object_role_t::none);
-              node.channel_name ("retire-manual-channel").client ();
-              node.set_routing_id (zlink::routing_id_t::from ("retire-manual-node"))
-                .listen ("inproc://cpp-retire-manual-node");
-              node.peer_connections ().connect ("tcp://127.0.0.1:29998");
-          },
-          zlink::framework::relocation_reason_t::manual_topology_unsupported)) {
-        return EXIT_FAILURE;
-    }
-    return EXIT_SUCCESS;
+    const bool discovery_client = verify_topology_relocation (
+      "ClientServer client without endpoints",
+      [] (zlink_framework_options_t &options) {
+          options.add_location_store (std::make_shared<runtime::in_memory_location_store_t> ());
+          options.add_client_server_channel ("discovered-orders").client ();
+      },
+      relocation_reason_t::none);
+    const bool discovery_subscriber = verify_topology_relocation (
+      "Fanout subscriber without endpoints",
+      [] (zlink_framework_options_t &options) {
+          options.add_location_store (std::make_shared<runtime::in_memory_location_store_t> ());
+          options.handlers ().group ("events").add_publish<relocation_topology_event_handler_t> ();
+          options.add_fanout_channel ("discovered-events")
+            .enable_subscriber ()
+            .use_handler_group ("events");
+      },
+      relocation_reason_t::none);
+    const bool manual_client = verify_topology_relocation (
+      "manual ClientServer topology",
+      [] (zlink_framework_options_t &options) {
+          options.add_client_server_channel ("manual-orders")
+            .client ()
+            .connect ("tcp://127.0.0.1:29999");
+      },
+      relocation_reason_t::manual_topology_unsupported);
+    const bool manual_subscriber = verify_topology_relocation (
+      "manual Fanout subscriber topology",
+      [] (zlink_framework_options_t &options) {
+          options.handlers ().group ("events").add_publish<relocation_topology_event_handler_t> ();
+          options.add_fanout_channel ("manual-events")
+            .connect ("tcp://127.0.0.1:29997")
+            .use_handler_group ("events");
+      },
+      relocation_reason_t::manual_topology_unsupported);
+    const bool undiscoverable_publisher = verify_topology_relocation (
+      "Fanout publisher without descriptor discovery",
+      [] (zlink_framework_options_t &options) {
+          options.add_fanout_channel ("local-events").enable_publisher ("inproc://local-events");
+      },
+      relocation_reason_t::manual_topology_unsupported);
+    const bool manual_mesh = verify_topology_relocation (
+      "manual RouteMesh topology",
+      [] (zlink_framework_options_t &options) {
+          auto node = options.add_route_mesh ("retire-manual-mesh");
+          node.set_object_role (object_role_t::none);
+          node.channel_name ("retire-manual-channel").client ();
+          node.set_routing_id (zlink::routing_id_t::from ("retire-manual-node"))
+            .listen ("inproc://cpp-retire-manual-node");
+          node.peer_connections ().connect ("tcp://127.0.0.1:29998");
+      },
+      relocation_reason_t::manual_topology_unsupported);
+    return discovery_client && discovery_subscriber && manual_client && manual_subscriber
+               && undiscoverable_publisher && manual_mesh
+             ? EXIT_SUCCESS
+             : EXIT_FAILURE;
 }
 }
