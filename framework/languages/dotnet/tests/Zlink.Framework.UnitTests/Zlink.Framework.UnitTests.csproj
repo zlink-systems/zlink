@@ -313,6 +313,7 @@
         <Compile Include="Runtime/StreamSessionLivenessTests.cs"/>
         <Compile Include="Runtime/StreamPermitLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
+        <Compile Include="Runtime/StreamSessionForcedCleanupTests.ReaderLiveness.cs"/>
         <Compile Include="Runtime/StreamAuthenticationAdmissionTests.cs"/>
         <Compile Include="Runtime/StreamDisconnectProgressTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
@@ -364,6 +365,7 @@
         <Compile Include="Runtime/CanonicalActorAcceptedJournalTests.cs"/>
         <Compile Include="Runtime/CanonicalAuthorityAggregateGenerationTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.Publication.cs"/>
+        <Compile Include="Runtime/RelocationRuntimeTests.AbortedTargetReconciliation.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.StagedAuthority.cs"/>
         <Compile Include="Runtime/RouteCodecTests.cs"/>
         <Compile Include="Runtime/RouteMeshReceiveFlowTests.cs"/>

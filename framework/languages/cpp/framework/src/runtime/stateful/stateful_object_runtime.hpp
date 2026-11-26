@@ -700,7 +700,7 @@ class stateful_object_runtime_t
 
     mutable runtime::state_lane_t _lane;
     // Lane-owned waiters of a seal; empty unless a seal waits for active turns.
-    std::vector<std::shared_ptr<task_completion_source_t<void>>> _quiescence_waiters;
+    std::vector<std::shared_ptr<detail::lane_completion_waiter_t>> _quiescence_waiters;
     std::vector<placement_candidate_t> _candidates;
     using object_iterator_t = std::map<object_key_t, object_record_t>::iterator;
     void record_actor_population (const object_record_t &object, double delta)

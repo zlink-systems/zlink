@@ -670,7 +670,12 @@ internal sealed class ZLinkSpotRuntimeManager(
                 cancellationToken
             )
             .ConfigureAwait(false);
-        return ZLinkStoreLocationResolvers.ProjectReadyUserSpot(spotId, read);
+        return
+            read is ZLinkAuthorityReadResult.Found found
+            && ZLinkStoreLocationResolvers.ProjectCurrentUserSpot(spotId, found.Snapshot)
+                is { ReadyToFind: true } current
+            ? current.Address
+            : null;
     }
 
     public async ValueTask<IReadOnlyList<ZLinkSpotInfo>> ListAsync(
@@ -705,16 +710,15 @@ internal sealed class ZLinkSpotRuntimeManager(
                 var read = await _locationStore
                     .ReadAuthorityAsync(key, cancellationToken)
                     .ConfigureAwait(false);
-                if (read is not ZLinkAuthorityReadResult.Found found)
+                if (read is not ZLinkAuthorityReadResult.Found { Snapshot: var snapshot })
                     break;
                 if (
-                    found.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
-                    && found.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-                    && ZLinkStoreLocationResolvers.ProjectSpot(found)
-                        is { SpotKind: ZLinkSpotKind.User } authority
+                    ZLinkStoreLocationResolvers.ProjectCurrentUserSpot(spotId, snapshot) is
+                    { } current
                 )
                 {
-                    if (!string.Equals(authority.MeshName, spot.MeshName, StringComparison.Ordinal))
+                    var address = current.Address;
+                    if (!string.Equals(address.MeshName, spot.MeshName, StringComparison.Ordinal))
                         throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.Unavailable,
                             $"User Spot '{spotId}' mesh changed.",
@@ -723,25 +727,25 @@ internal sealed class ZLinkSpotRuntimeManager(
                     var source = state.SpotNodes.Values.FirstOrDefault(node =>
                         string.Equals(
                             node.Registration.SpotNodeName,
-                            authority.MeshName,
+                            address.MeshName,
                             StringComparison.Ordinal
                         )
                     );
-                    if (source is not null && authority.OwnerNodeRid != source.Node.RoutingId)
+                    if (source is not null && address.NodeRid != source.Node.RoutingId)
                     {
                         var remaining = deadlineAt - Stopwatch.GetElapsedTime(0);
                         if (remaining <= TimeSpan.Zero)
                             throw CloseDeadlineElapsed(spotId);
                         var closed = await source
                             .Node.CloseUserSpotAsync(
-                                authority.OwnerNodeRid,
+                                address.NodeRid,
                                 new UserSpotCloseFence(
                                     spotId,
                                     spot.ObjectGeneration,
-                                    authority.OwnerNodeRid,
-                                    authority.OwnerNodeGeneration,
-                                    authority.AuthorityOwnerGeneration,
-                                    authority.StoreVersion
+                                    address.NodeRid,
+                                    snapshot.Allocation.DescriptorLifecycleGeneration,
+                                    snapshot.AuthorityOwnerGeneration,
+                                    snapshot.StoreVersion
                                 ),
                                 deadlineUnixMs,
                                 remaining,
@@ -761,7 +765,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                 ZLinkSpotNodeCatalog.ThrowIfOtherIncarnation(
                     spotId,
                     spot.ObjectGeneration,
-                    found.Snapshot.ObjectGeneration
+                    snapshot.ObjectGeneration
                 );
                 if (Stopwatch.GetElapsedTime(0) >= deadlineAt)
                     throw CloseDeadlineElapsed(spotId);

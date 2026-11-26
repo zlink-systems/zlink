@@ -1633,11 +1633,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         if (entry is TargetStageTombstone terminal)
             return terminal.SourceNodeRid == sourceNodeRid
                 && terminal.Outcome == TargetStageTerminalOutcome.Completed;
-        if (
-            entry is not TargetStage stage
-            || stage.SourceNodeRid != sourceNodeRid
-            || stage.AbortState != TargetStageAbortState.Staged
-        )
+        if (entry is not TargetStage stage || stage.SourceNodeRid != sourceNodeRid)
             return false;
         return await ReconcileStageAuthorityAsync(stage, cancellationToken).ConfigureAwait(false);
     }
@@ -2280,8 +2276,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     // Published stages that are not yet steady-normalized stay
                     // in the loop so reconciliation can converge them within
                     // the final-root retention window.
-                    if (stage.AbortState != TargetStageAbortState.Staged)
-                        continue;
                     try
                     {
                         await ReconcileStageAuthorityAsync(stage, cancellationToken)
@@ -2338,6 +2332,10 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (stage.AbortState != TargetStageAbortState.Staged)
+                return false;
+            if (!await ConfirmStageAuthorityAsync(stage, cancellationToken).ConfigureAwait(false))
+                return false;
             return await CompleteInboundThenNormalizeCoreAsync(stage, cancellationToken)
                 .ConfigureAwait(false);
         }

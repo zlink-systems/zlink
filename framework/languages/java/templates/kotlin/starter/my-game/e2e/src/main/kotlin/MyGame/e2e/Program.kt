@@ -9,39 +9,47 @@ fun main(args: Array<String>) = runBlocking {
     val root = Path.of("").toAbsolutePath().normalize()
     checkStructure(root)
     if (args.contentEquals(arrayOf("--check-structure"))) return@runBlocking
-    require(args.isEmpty() || (args.size == 2 && args[0] == "--scenario")) { "Use --scenario a,b" }
+
+    val attach = args.firstOrNull() == "--attach"
+    val options = args.drop(if (attach) 1 else 0)
+    require(options.isEmpty() || (options.size == 2 && options[0] == "--scenario")) {
+        "Use --scenario a,b"
+    }
     val requested =
-        (if (args.isEmpty()) Names.SCENARIOS else args[1].split(',')).map {
-            Scenario.parse(it.trim())
+        if (options.isEmpty()) Names.SCENARIOS else options[1].split(',').map { it.trim() }
+    require(requested.distinct() == requested && requested.all { it in Names.SCENARIOS }) {
+        "Invalid scenarios: $requested"
+    }
+    val server =
+        if (attach)
+            checkNotNull(runningServer(root)) { "The running server stopped before attachment" }
+        else null
+    val isolated = emptyMap<String, String>()
+    if (server != null) {
+        println("Using the running server: ${server.streams.values.joinToString()}")
+    }
+    val selected =
+        (Names.SCENARIOS.filter { it in requested }).filter { id ->
+            val reason = if (server != null) isolated[id] else null
+            if (reason != null) println("Skipping $id: requires an isolated server ($reason)")
+            reason == null
         }
-    require(requested.isNotEmpty() && requested.distinct() == requested) { "Invalid scenarios" }
-    val selected = Scenario.entries.filter { it in requested }
-    var passed = 0
-    var cleanupFailure: Exception? = null
-    val nodes = Nodes(root)
+    val results = ScenarioResults(root, selected)
+    suspend fun run(target: ScenarioTarget) {
+        for (id in selected) results.run(id) { runScenario(Scenario.parse(id), target) }
+    }
     try {
-        println("Logs: ${nodes.logs}")
-        nodes.start()
-        for (scenario in selected) {
-            try {
-                runScenario(scenario, nodes)
-                passed++
-                println("✓ ${scenario.id}")
-            } catch (failure: Exception) {
-                println("✗ ${scenario.id}")
-                failure.printStackTrace(System.err)
+        if (server != null) {
+            run(ScenarioTarget(server))
+        } else {
+            Nodes(root, logDirectory = results.logs).use { nodes ->
+                println("Logs: ${nodes.logs}")
+                nodes.start()
+                run(nodes.target())
             }
         }
     } catch (failure: Exception) {
-        failure.printStackTrace(System.err)
-    } finally {
-        try {
-            nodes.close()
-        } catch (failure: Exception) {
-            failure.printStackTrace(System.err)
-            cleanupFailure = failure
-        }
+        results.abort(failure)
     }
-    println("Scenarios: $passed/${selected.size} passed")
-    exitProcess(if (passed == selected.size && cleanupFailure == null) 0 else 1)
+    exitProcess(if (results.finish()) 0 else 1)
 }

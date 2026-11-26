@@ -1,5 +1,7 @@
 # MyGame world and channel servers
 
+[한국어](README.ko.md)
+
 This Java template separates two MMORPG worlds into independent meshes and Redis stores. The accounts API node publishes the world list over HTTP. Session nodes relay typed STREAM messages to Player Actors. `GoldBalance` owns each player's gold and earn timing; each Zone owns the IDs of its connected players.
 
 ```mermaid
@@ -35,8 +37,28 @@ Bash:
 ```
 PowerShell:
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
+
+## Local server
+
+Install JDK 25 and keep Docker with Compose v2 running for Redis. Run the command from this project directory.
+
+```sh
+./run-server.sh
+```
+
+On Windows, install PowerShell 7 and run the CMD wrapper.
+
+```powershell
+.\run-server.cmd
+```
+
+The server builds the Java distributions, starts the nodes and Redis, and prints the WebSocket endpoint after `Server ready:`. Keep the terminal open. Press Ctrl+C to stop the nodes and Redis. A second server invocation is refused.
+
+Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal to use the running server. The runner detects `.logs/server.json` and prints `Using the running server`. With the server stopped, the default runner starts an isolated Docker stack. Attached runs skip `update` because it drains and replaces a play node.
+
+Each run keeps effective node settings, node stdout and stderr, Framework message-flow logs (`*.flow.log`), and any failure details in `.logs/run-<id>/`. Local build output is in `.logs/build.log` and isolated Docker build and cleanup output is in `.logs/docker-*/`.
 
 ## Client connection
 
@@ -114,11 +136,13 @@ public final class ConnectOnce {
 }
 ```
 
-## Docker e2e
+## End-to-end scenarios
+
+The following scenarios run in an isolated Docker stack when a local server is unavailable.
 
 Docker runs the Java e2e runner and every node role in containers. Nodes share the runner's network namespace and keep the existing stdin/stdout control protocol. Only the runner mounts the Docker socket. Each invocation removes its own containers, network and image tags; logs remain under `.logs/`.
 
-For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
+For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `.\run-e2e.cmd -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
 
 > **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.2+10 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
 
@@ -130,9 +154,9 @@ Bash:
 ```
 PowerShell:
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario worlds,channel,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario worlds,channel,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 The runner checks `zlink.structure.json`, starts its own two Redis containers and six application processes, and records logs under `.logs/run-<id>/`. Ports, Compose project names, and Redis key prefixes are unique per run. Cleanup failures fail the run. `--check-structure` (PowerShell `-CheckStructure`) validates files without starting infrastructure.
@@ -155,6 +179,8 @@ The runner checks `zlink.structure.json`, starts its own two Redis containers an
 - **READY and Serving** — The Framework host prints `READY` after observing runtime `Serving`; the Accounts process prints `READY` without a Framework runtime. [Guide](https://docs.zlink.systems/java/guide/server/12-operations/#wait-for-serving). [server/shared/src/main/java/MyGame/Hosting.java:105](server/shared/src/main/java/MyGame/Hosting.java); [server/shared/src/main/java/MyGame/Hosting.java:134](server/shared/src/main/java/MyGame/Hosting.java); [server/accounts/src/main/java/MyGame/accounts/Program.java:34](server/accounts/src/main/java/MyGame/accounts/Program.java); [server/accounts/src/main/java/MyGame/accounts/Program.java:37](server/accounts/src/main/java/MyGame/accounts/Program.java). The accounts HTTP process prints `READY` after its server starts, without observing Framework runtime `Serving`:  .
 
 ## Known issues
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
 Validated against the published Framework 0.34.2 packages.
 

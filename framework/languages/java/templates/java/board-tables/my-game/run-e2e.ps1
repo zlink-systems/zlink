@@ -1,37 +1,66 @@
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Local,
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [switch]$CheckStructure,
+    [switch]$Attach,
     [string]$Scenario,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
 )
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 Set-StrictMode -Version Latest
-if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
 $root = $PSScriptRoot
+. (Join-Path $root 'scripts/run-helpers.ps1')
+Assert-PowerShellVersion
 Set-Location $root
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+if ($RunnerArguments -ccontains '--attach') {
+    $Attach = $true
+    $RunnerArguments = @($RunnerArguments | Where-Object { $_ -cne '--attach' })
+}
+$checkingStructure = $RunnerArguments -ccontains '--check-structure'
+# A test run uses the server started by run-server.ps1 whenever one is running.
+if (-not $Attach -and -not $Local -and -not $BuildOnly -and -not $checkingStructure -and
+    (Test-RunningServer)) {
+    Write-Host 'Using the running server (.logs/server.json)'
+    $Attach = $true
+}
+if ($Attach) {
+    if ($BuildOnly -or $checkingStructure) { throw '-Attach requires a scenario run.' }
+    $java = Get-LocalJava
+    if (-not $java) { throw 'Run ./run-server.ps1 to build and start the server before attaching.' }
+    & $java --enable-native-access=ALL-UNNAMED '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' -cp "$e2eClasspath" MyGame.e2e.Program --attach @RunnerArguments
+    exit $LASTEXITCODE
+}
 if ($Local) {
     if (-not $NoBuild) {
-        & ./gradlew.bat --no-daemon installDist :e2e:javaHome *> (Join-Path $root '.logs/build.log')
-        if ($LASTEXITCODE -ne 0) {
-            Get-Content (Join-Path $root '.logs/build.log') -Tail 35 | Write-Host
-            exit 1
-        }
+        Assert-NoRunningServer
+        Build-Local
     }
     if ($BuildOnly) { exit 0 }
-    $javaHomePath = (Get-Content (Join-Path $root '.logs/java-home.txt') -Raw).Trim()
-    if ($RunnerArguments -notcontains '--check-structure') {
-        & "$javaHomePath/bin/java.exe" --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.Program --check-domain
+    $java = Get-LocalJava
+    if (-not $java) { throw 'Build with ./run-e2e.ps1 -Local -BuildOnly before using -NoBuild.' }
+    if (-not $checkingStructure) {
+        & $java --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.Program --check-domain
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
-    & "$javaHomePath/bin/java.exe" --enable-native-access=ALL-UNNAMED '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.Program @RunnerArguments
+    & $java --enable-native-access=ALL-UNNAMED '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' -cp "$e2eClasspath" MyGame.e2e.Program @RunnerArguments
     exit $LASTEXITCODE
 }
 if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer cache automatically.' }
+if (-not $IsWindows -and (Test-Path -LiteralPath '/var/run/docker.sock' -PathType Leaf)) {
+    $runnerUid = & id -u
+    $runnerGid = & id -g
+    $env:MY_GAME_RUNNER_USER = "${runnerUid}:${runnerGid}"
+    $dockerGid = & stat -c '%g' /var/run/docker.sock 2>$null
+    if ($LASTEXITCODE -ne 0) { $dockerGid = & stat -f '%g' /var/run/docker.sock }
+    if ($LASTEXITCODE -ne 0) { throw 'Could not read the Docker socket group.' }
+    $env:MY_GAME_DOCKER_GID = $dockerGid
+}
 $project = 'my-game-e2e-' + [guid]::NewGuid().ToString('N')
 $logs = Join-Path $root ".logs/docker-$project"
 New-Item -ItemType Directory $logs | Out-Null
@@ -55,7 +84,7 @@ try {
         $checkArguments = @(if ($CheckStructure) { $RunnerArguments } else { '--check-structure' })
         & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments
         if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
-        if ($RunnerArguments -contains '--check-structure') { $result = 0 }
+        if ($checkingStructure) { $result = 0 }
         else {
             & docker @compose run --rm --no-deps -T --entrypoint java --name "$project-domain" runner --enable-native-access=ALL-UNNAMED -cp '/app/table/lib/*' MyGame.table.Program --check-domain
             if ($LASTEXITCODE -ne 0) { throw 'Domain checks failed.' }

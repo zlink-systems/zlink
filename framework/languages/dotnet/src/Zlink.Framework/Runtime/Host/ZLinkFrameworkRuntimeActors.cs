@@ -516,7 +516,12 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken = default
     )
     {
-        return _actorSessionManager.DestroyActorAsync(entrySpotNodeRid, actor, cancellationToken);
+        return _actorSessionManager.DestroyActorAsync(
+            entrySpotNodeRid,
+            actor,
+            cancellationToken,
+            publishClosing: true
+        );
     }
 
     internal async ValueTask<ZLinkRemoteActorJoinReply> JoinRoutedActorAsync(

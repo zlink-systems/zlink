@@ -64,6 +64,13 @@ fun checkStructure(root: Path) {
                 check(Json.mapper.readTree(file.toFile())["id"]?.asText() == text(node, "id")) {
                     "Configuration Id mismatch: $file"
                 }
+            if (role == Names.API) {
+                val endpoint =
+                    java.net.URI.create(text(Json.mapper.readTree(file.toFile()), "apiEndpoint"))
+                check(
+                    endpoint.scheme == "tcp" && endpoint.host != null && endpoint.port in 0..65535
+                )
+            }
         }
     }
     fun owner(node: JsonNode): String {
@@ -72,28 +79,51 @@ fun checkStructure(root: Path) {
         return id
     }
     val channels = array("channels")
-    unique(channels.map { text(it, "name") to owner(it) })
-    check(channels.isEmpty()) { "Server registers no channels" }
+    check(roles.filterValues { it == Names.API }.keys == setOf(Names.API))
+    check(
+        channels.map { listOf(text(it, "name"), owner(it), text(it, "kind")) } ==
+            listOf(listOf(Names.PLAYER_DATA, Names.API, "client-server"))
+    ) {
+        "Player data channel must be hosted by the API node"
+    }
     val spots = array("spots")
     unique(spots.map { text(it, "id") })
     val logicalIds = mutableListOf<String>()
     for (spot in spots) {
-        check(roles[owner(spot)] == "table")
+        val role = roles[owner(spot)]
         when (text(spot, "kind")) {
             "entry" ->
                 check(
-                    spot["type"]?.isNull == true && !spot.has("logicalId") && !spot.has("dynamic")
+                    role == "table" &&
+                        spot["type"]?.isNull == true &&
+                        !spot.has("logicalId") &&
+                        !spot.has("dynamic")
                 )
             "user" -> {
-                check(text(spot, "type") == Names.TABLE)
+                check(role == "table" && text(spot, "type") == Names.TABLE)
                 if (spot["dynamic"]?.asBoolean() == true) check(!spot.has("logicalId"))
                 else logicalIds += text(spot, "logicalId")
                 if (spot.has("dynamic")) check(spot["dynamic"].isBoolean)
+            }
+            "instance" -> {
+                val logicalId = text(spot, "logicalId")
+                check(!spot.has("dynamic"))
+                when (text(spot, "type")) {
+                    Names.POOL -> check(role == Names.MATCHMAKER && logicalId == Names.POOL_KEY)
+                    Names.ROOM_PROVISIONER ->
+                        check(role == "table" && logicalId == Names.ROOM_PROVISIONER_KEY)
+                    else -> error("Unregistered Instance Spot type")
+                }
+                logicalIds += logicalId
             }
             else -> error("Unregistered Spot kind")
         }
     }
     unique(logicalIds)
+    check(roles.filterValues { it == Names.MATCHMAKER }.keys == setOf(Names.MATCHMAKER))
+    val instanceTypes =
+        spots.filter { it["kind"].asText() == "instance" }.map { it["type"].asText() }
+    check(instanceTypes.toSet() == setOf(Names.POOL, Names.ROOM_PROVISIONER))
     check(spots.any { it["kind"].asText() == "user" && it["dynamic"]?.asBoolean() == true })
     for (node in nodes.filter { roles[it["id"].asText()] == "table" }) check(
         spots.count {
@@ -104,6 +134,10 @@ fun checkStructure(root: Path) {
         setOf(
             listOf("players", "session", "STREAM", ""),
             listOf("session", "tableA", "relay", ""),
+            listOf("tableA", Names.MATCHMAKER, "queue / assignment", ""),
+            listOf(Names.MATCHMAKER, "tableA", "prepare / commit", ""),
+            listOf("tableA", Names.API, Names.PLAYER_DATA, ""),
+            listOf("tableB", Names.API, Names.PLAYER_DATA, ""),
             listOf("tableA", "location", "Location / lease", "location-authority"),
         )
     val declaredEdges =

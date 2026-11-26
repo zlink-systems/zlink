@@ -2258,15 +2258,13 @@ internal sealed class ZLinkSpotNodeCatalog(
                 && instance.State == ZLinkInstanceSpotAuthorityState.Closing
         )
             return false;
-        throw CloseMoving(spotId, "authority names an incarnation this owner does not host");
+        throw CloseMoving(
+            $"User Spot '{spotId}' authority names an incarnation this owner does not host."
+        );
     }
 
-    private static ZLinkFrameworkException CloseMoving(string spotId, string reason) =>
-        new(
-            ZLinkFrameworkErrorKind.Unavailable,
-            $"Spot '{spotId}' {reason}.",
-            ZLinkRetryAdvice.RetryAfterBackoff
-        )
+    private static ZLinkFrameworkException CloseMoving(string message) =>
+        new(ZLinkFrameworkErrorKind.Unavailable, message, ZLinkRetryAdvice.RetryAfterBackoff)
         {
             FrameworkFailureCode = (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving,
         };
@@ -2295,12 +2293,26 @@ internal sealed class ZLinkSpotNodeCatalog(
                 target.AttemptGeneration
             )
         )
-            throw CloseMoving(spotId, "authority is still settling relocation");
+            throw CloseMoving($"User Spot '{spotId}' authority is still settling relocation.");
 
         var userDecoded = ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
             snapshot.Payload.Span,
             out var authority
         );
+        if (
+            activation.PlacementKind == ZLinkPlacementObjectKind.UserSpot
+            && (
+                snapshot.Relocation is { Phase: not ServiceWireCodec.RelocationPhase.Aborted }
+                || snapshot.Relocation is null
+                    && !userDecoded
+                    && ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                        snapshot,
+                        out var canonical
+                    )
+                    && canonical.Phase < (byte)ServiceWireCodec.RelocationPhase.Aborted
+            )
+        )
+            throw CloseMoving($"User Spot '{spotId}' authority is moving.");
         var instanceDecoded = ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
             snapshot.Payload.Span,
             out var instance
