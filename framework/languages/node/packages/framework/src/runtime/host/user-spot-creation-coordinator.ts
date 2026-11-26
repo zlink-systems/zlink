@@ -1,4 +1,4 @@
-import { createObjectCreationDeadline } from './object-creation-deadline';
+import { createObjectOperationDeadline } from './object-operation-deadline';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { createHash } from 'node:crypto';
 import {
@@ -129,7 +129,11 @@ export class ZLinkUserSpotCreationCoordinator {
     const deadlineUnixMs = Date.now() + request.timeoutMs;
     const remainingMs = Math.max(0, deadlineUnixMs - Date.now());
     request.signal?.throwIfAborted();
-    const deadline = createObjectCreationDeadline(remainingMs, 'User Spot', request.signal);
+    const deadline = createObjectOperationDeadline(
+      remainingMs,
+      'User Spot creation',
+      request.signal
+    );
     const deadlineMs = performance.now() + remainingMs;
     const signal = deadline.signal;
     const sha256 = createHash('sha256').update(request.requestPayload).digest();
@@ -557,9 +561,9 @@ export class ZLinkUserSpotCreationCoordinator {
       const publicationCleanup = await Promise.allSettled([
         Promise.resolve().then(() => local?.publication?.abort())
       ]);
-      const cleanupDeadline = createObjectCreationDeadline(
+      const cleanupDeadline = createObjectOperationDeadline(
         this.options.cleanupTimeoutMs ?? DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS,
-        'User Spot'
+        'User Spot creation'
       );
       const cleanupSignal = cleanupDeadline.signal;
       const cleanup = await Promise.allSettled([

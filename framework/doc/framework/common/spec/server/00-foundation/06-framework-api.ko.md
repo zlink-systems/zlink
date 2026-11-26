@@ -408,7 +408,7 @@ request timeout budget은 [Submit과 완료 §9](../01-execution/01-submit-and-c
 않고 이미 완료되었거나 resolved된 언어별 awaitable을 반환한다.
 
 Metadata는 Framework가 검증한 immutable [snapshot](02-glossary.ko.md#snapshot)으로 handler에 전달한다. 같은 key를 여러 번 설정하면
-마지막 값이 사용된다. metadata 전체의 UTF-8 encoded 크기는 1024 bytes를 넘을 수 없다. reply는 request
+마지막 값이 사용된다. metadata 전체 크기는 1024 bytes를 넘을 수 없으며, 크기는 [Wire protocol §4](../02-channel-transport/06-wire-protocol.ko.md#decode-검증과-크기-상한)의 한 가지 계산(entry마다 `ChannelHeader` field 13 encoding 길이의 합)으로 잰다. reply는 request
 metadata를 자동 복사하지 않는다.
 
 ## 8. Logical Multicast 완료

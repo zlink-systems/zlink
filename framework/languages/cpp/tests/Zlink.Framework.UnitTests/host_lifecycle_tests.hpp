@@ -4,7 +4,7 @@
 
 namespace zlink::framework::test::host_lifecycle
 {
-int verify_manual_topology_relocation_blockers ();
+int verify_relocation_topology ();
 int verify_shutdown_termination ();
 bool verify_remote_actor_create_target_owns_completion ();
 bool verify_first_request_after_remote_actor_create (int iterations);
