@@ -7,6 +7,7 @@ import { RequestResult } from '../backend/runtime-values';
 import {
   decodeActorRequestCommand,
   decodeActorSendCommand,
+  decodeInstanceSpotFollowCommand,
   decodeMetadataFrame,
   decodeInstanceRouteV1,
   decodeSpotRequestCommand,
@@ -15,10 +16,12 @@ import {
   encodeActorSendCommand,
   encodeApplicationPayloadEnvelopeV1,
   encodeInstanceRouteV1,
+  encodeInstanceSpotFollowCommand,
   encodeSpotRequestCommand,
   encodeSpotSendCommand,
   type InstanceRouteV1,
-  type ServiceWireDecoderContext
+  type ServiceWireDecoderContext,
+  type SpotRouteFence
 } from '../protocol/service_wire_codec.generated';
 import {
   decodeActorJoin28,
@@ -1040,6 +1043,12 @@ export type ServiceBoundSessionTransition =
   | { readonly state: 'active'; readonly generation: bigint }
   | { readonly state: 'tombstone'; readonly retiredGeneration: bigint };
 
+export interface ServiceInstanceSpotFollowSource {
+  readonly sourceNodeGeneration: bigint;
+  readonly sourceNodeRid: string;
+  readonly sourceSpotId?: string;
+}
+
 export type ServiceStatefulWireRecord =
   | {
       readonly kind: 'spotSend' | 'spotRequest';
@@ -1128,6 +1137,11 @@ export type ServiceStatefulWireRecord =
       readonly deadlineUnixMs: bigint;
       readonly replyRouteId?: bigint;
     }
+  | (ServiceInstanceSpotFollowSource & {
+      readonly kind: 'instanceSpotFollow';
+      readonly target: ServiceSpotRouteFence;
+      readonly messageFollowHopCount: number;
+    })
   | ServiceUserSpotCreateRecord
   | ServiceUserSpotCloseRecord
   | ServiceActorCreateRecord
@@ -1199,6 +1213,48 @@ function generatedSpotFence(target: ServiceSpotRouteFence) {
     expectedAuthorityOwnerGeneration: target.authorityOwnerGeneration,
     expectedOwnerLeaseGeneration: target.ownerLeaseGeneration
   };
+}
+
+function fromGeneratedSpotFence(target: SpotRouteFence): ServiceSpotRouteFence {
+  return {
+    spot: { spotId: target.spot.spotId, generation: target.spot.objectGeneration },
+    targetNodeRid: fromGeneratedRoutingId(target.targetNodeRid, 'targetNodeRid'),
+    targetNodeGeneration: target.targetNodeGeneration,
+    authorityOwnerGeneration: target.expectedAuthorityOwnerGeneration,
+    ownerLeaseGeneration: target.expectedOwnerLeaseGeneration
+  };
+}
+
+export function encodeInstanceSpotFollow(
+  source: ServiceInstanceSpotFollowSource,
+  target: ServiceSpotRouteFence,
+  messageFollowHopCount: number,
+  payloadFrame: Buffer,
+  metadataFrame?: Buffer
+): readonly Uint8Array[] {
+  // As with the Spot headers, the generated encoder supplies the command frame.
+  // The forwarded application frames already belong to the received message.
+  const [header] = encodeInstanceSpotFollowCommand(
+    {
+      command: 'instanceSpotFollow',
+      flags: metadataFrame === undefined ? 0 : M6bServiceWireFlag.metadata,
+      operationHigh: 0n,
+      operationLow: 0n,
+      sourceNodeGeneration: source.sourceNodeGeneration,
+      sourceNodeRid: toGeneratedRoutingId(source.sourceNodeRid, 'sourceNodeRid'),
+      sourceSpotId: source.sourceSpotId ?? null,
+      messageFollowHopCount,
+      targetSpot: generatedSpotFence(target),
+      ...(metadataFrame === undefined
+        ? {}
+        : { metadata: decodeMetadataFrame(metadataFrame, STATEFUL_MESSAGE_CONTEXT) }),
+      payload: STATEFUL_HEADER_PAYLOAD
+    },
+    STATEFUL_MESSAGE_CONTEXT
+  );
+  return metadataFrame === undefined
+    ? [header!, payloadFrame]
+    : [header!, metadataFrame, payloadFrame];
 }
 
 function generatedActorFence(target: ServiceActorRouteFence) {
@@ -1553,6 +1609,30 @@ export function decodeStatefulHeader(
       return fromGeneratedUserSpotClose(decodeGeneratedUserSpotClose48(frame));
     case M6bServiceWireCommand.actorCreate:
       return fromGeneratedActorCreate(decodeGeneratedActorCreate49(frame));
+    case M6bServiceWireCommand.instanceSpotFollow: {
+      try {
+        const decoded = decodeInstanceSpotFollowCommand(
+          [
+            frame,
+            ...(metadataFrame === undefined ? [] : [metadataFrame]),
+            ...(payloadFrame === undefined ? [] : [payloadFrame])
+          ],
+          STATEFUL_MESSAGE_CONTEXT
+        );
+        return {
+          kind: decoded.command,
+          sourceNodeRid: fromGeneratedRoutingId(decoded.sourceNodeRid, 'sourceNodeRid'),
+          sourceNodeGeneration: decoded.sourceNodeGeneration,
+          ...(decoded.sourceSpotId === null ? {} : { sourceSpotId: decoded.sourceSpotId }),
+          messageFollowHopCount: decoded.messageFollowHopCount,
+          target: fromGeneratedSpotFence(decoded.targetSpot)
+        };
+      } catch (error) {
+        throw new ServiceWireProtocolError(
+          error instanceof Error ? error.message : 'Invalid Instance Spot Follow message.'
+        );
+      }
+    }
     case M6bServiceWireCommand.spotSend:
     case M6bServiceWireCommand.spotRequest:
     case M6bServiceWireCommand.actorSend:
@@ -1578,19 +1658,7 @@ export function decodeStatefulHeader(
             operation: decoded.operation,
             messageFollowHopCount: decoded.messageFollowHopCount,
             sourceSpotId: decoded.sourceSpotId,
-            target: {
-              spot: {
-                spotId: decoded.targetSpot.spot.spotId,
-                generation: decoded.targetSpot.spot.objectGeneration
-              },
-              targetNodeRid: fromGeneratedRoutingId(
-                decoded.targetSpot.targetNodeRid,
-                'targetNodeRid'
-              ),
-              targetNodeGeneration: decoded.targetSpot.targetNodeGeneration,
-              authorityOwnerGeneration: decoded.targetSpot.expectedAuthorityOwnerGeneration,
-              ownerLeaseGeneration: decoded.targetSpot.expectedOwnerLeaseGeneration
-            }
+            target: fromGeneratedSpotFence(decoded.targetSpot)
           };
         }
         const decoded =

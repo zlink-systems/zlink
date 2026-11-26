@@ -1,7 +1,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
-const { encodeAuthorityKey } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
+const {
+  encodeAuthorityKey
+} = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 
 // The target materializes a relocated Spot before the target-only CAS, so it
 // keeps the source authority fence (relocation-flow §4.3). A newOwner participant
@@ -13,11 +15,15 @@ for (const objectKind of ['instance_spot', 'user_spot']) {
   test(`relocated ${objectKind} publishes the committed authority onto its native Spot`, async () => {
     const spotId = 'order-runner-relocation-1';
     const native = new Map();
+    const intents = [];
     const node = {
       restoreSpotAuthority(id, kind, stableType, objectGeneration, authorityOwnerGeneration) {
         native.set(id, { kind, stableType, objectGeneration, authorityOwnerGeneration });
       },
-      rememberSpotRoute() {}
+      rememberSpotRoute() {},
+      registerInstanceIntent(stableType, route) {
+        intents.push({ stableType, route });
+      }
     };
     const activation = { meshName: 'mesh', spotId };
     const registration = { implementation: class Order {}, relocation: { kind: 'recreate' } };
@@ -36,8 +42,22 @@ for (const objectKind of ['instance_spot', 'user_spot']) {
       spotManager: () => ({
         // The production manager creates the native Spot from these values
         // through createNativeSpot -> restoreSpotAuthority.
-        async prepareRelocationSpot(_mesh, kind, stableType, _type, id, objectGeneration, authorityOwnerGeneration) {
-          node.restoreSpotAuthority(id, kind, stableType, objectGeneration, authorityOwnerGeneration);
+        async prepareRelocationSpot(
+          _mesh,
+          kind,
+          stableType,
+          _type,
+          id,
+          objectGeneration,
+          authorityOwnerGeneration
+        ) {
+          node.restoreSpotAuthority(
+            id,
+            kind,
+            stableType,
+            objectGeneration,
+            authorityOwnerGeneration
+          );
           return activation;
         },
         async publishRelocationSpot() {}
@@ -84,5 +104,25 @@ for (const objectKind of ['instance_spot', 'user_spot']) {
       objectGeneration: 13n,
       authorityOwnerGeneration: 18n
     });
+    assert.deepEqual(
+      intents,
+      objectKind === 'instance_spot'
+        ? [
+            {
+              stableType: 'Order',
+              route: {
+                targetSpotId: spotId,
+                objectGeneration: 13n,
+                targetNodeRid: 'target-node',
+                targetNodeGeneration: 7n,
+                ownerId: 'target-owner',
+                authorityOwnerGeneration: 18n,
+                leaseGeneration: 1n,
+                storeVersion: '171'
+              }
+            }
+          ]
+        : []
+    );
   });
 }

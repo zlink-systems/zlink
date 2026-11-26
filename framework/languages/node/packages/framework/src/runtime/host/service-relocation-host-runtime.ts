@@ -3373,26 +3373,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           const key = decodeAuthorityKey({ value: primaryKey(envelope) } as ZLinkAuthorityKey);
           if (preserved.allocation.objectKind !== 'actor') {
             const node = this.requireMeshNode(preserved.allocation.descriptor.meshName);
-            node.rememberSpotRoute?.({
-              spot: { spotId: key.globalId, generation: preserved.objectGeneration },
-              targetNodeRid: String(preserved.allocation.descriptor.rid),
-              targetNodeGeneration: preserved.allocation.descriptorLifecycleGeneration,
-              authorityOwnerGeneration: preserved.authorityOwnerGeneration,
-              ownerLeaseGeneration: preserved.ownerLeaseGeneration,
-              storeVersion: preserved.storeVersion.value
-            });
-            if (preserved.allocation.objectKind === 'instance_spot') {
-              node.registerInstanceIntent?.(preserved.allocation.stableType, {
-                targetSpotId: key.globalId,
-                objectGeneration: preserved.objectGeneration,
-                targetNodeRid: String(preserved.allocation.descriptor.rid),
-                targetNodeGeneration: preserved.allocation.descriptorLifecycleGeneration,
-                ownerId: preserved.ownerId,
-                authorityOwnerGeneration: preserved.authorityOwnerGeneration,
-                leaseGeneration: preserved.ownerLeaseGeneration,
-                storeVersion: preserved.storeVersion.value
-              });
-            }
+            publishRelocatedSpotRoutes(node, key.globalId, preserved);
           }
           return 'source';
         }
@@ -5590,6 +5571,42 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 }
 
+function publishRelocatedSpotRoutes(
+  node: ZLinkBackendMeshNode | undefined,
+  spotId: string,
+  authority: Pick<
+    ZLinkAuthoritySnapshot,
+    | 'allocation'
+    | 'objectGeneration'
+    | 'authorityOwnerGeneration'
+    | 'ownerId'
+    | 'ownerLeaseGeneration'
+    | 'storeVersion'
+  >
+): void {
+  const route = {
+    spot: { spotId, generation: authority.objectGeneration },
+    targetNodeRid: String(authority.allocation.descriptor.rid),
+    targetNodeGeneration: authority.allocation.descriptorLifecycleGeneration,
+    authorityOwnerGeneration: authority.authorityOwnerGeneration,
+    ownerLeaseGeneration: authority.ownerLeaseGeneration,
+    storeVersion: authority.storeVersion.value
+  };
+  node?.rememberSpotRoute?.(route);
+  if (authority.allocation.objectKind === 'instance_spot') {
+    node?.registerInstanceIntent?.(authority.allocation.stableType, {
+      targetSpotId: spotId,
+      objectGeneration: authority.objectGeneration,
+      targetNodeRid: route.targetNodeRid,
+      targetNodeGeneration: route.targetNodeGeneration,
+      ownerId: authority.ownerId,
+      authorityOwnerGeneration: route.authorityOwnerGeneration,
+      leaseGeneration: route.ownerLeaseGeneration,
+      storeVersion: route.storeVersion
+    });
+  }
+}
+
 function committedSpotRoute<TKind extends ZLinkSpotKind.User | ZLinkSpotKind.Instance>(
   meshName: string,
   spotId: RoutingId,
@@ -5896,17 +5913,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         hidden.activation,
         applicationSignaled ? () => hidden.activation!.notifyRelocatedBoundary() : undefined
       );
-      node?.rememberSpotRoute?.({
-        spot: {
-          spotId: String(hidden.activation.spotId),
-          generation: authority.objectGeneration
-        },
-        targetNodeRid: String(authority.allocation.descriptor.rid),
-        targetNodeGeneration: authority.allocation.descriptorLifecycleGeneration,
-        authorityOwnerGeneration: authority.authorityOwnerGeneration,
-        ownerLeaseGeneration: authority.ownerLeaseGeneration,
-        storeVersion: authority.storeVersion.value
-      });
+      publishRelocatedSpotRoutes(node, String(hidden.activation.spotId), authority);
       if (hidden.participant.objectKind === 'instance_spot') {
         this.options.trackInstanceSpot?.({
           meshName: this.meshName,

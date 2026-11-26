@@ -95,6 +95,7 @@ import {
   encodeBoundSessionReplacedHeader,
   encodeBoundSessionSendHeader,
   encodeInstanceSpotActivationHeader,
+  encodeInstanceSpotFollow,
   encodeInstanceSpotHeader,
   encodeLogicalMulticastHeader,
   encodeMessageFollowHeader,
@@ -110,6 +111,7 @@ import {
   type ServiceInstanceActivationTarget,
   type ServiceInstanceColdActivationTarget,
   type ServiceInstanceRouteFence,
+  type ServiceInstanceSpotFollowSource,
   type ServiceMessageFollowRoute,
   type ServiceRetiredBoundSessionRouteFence,
   type ServiceSpotRouteFence,
@@ -2545,8 +2547,13 @@ export class ServiceStatefulRuntime {
         'actorJoin',
         'boundSessionSend'
       ].includes(decoded.kind);
+      const instanceMessage =
+        decoded.kind === 'instanceSpot' || decoded.kind === 'instanceSpotFollow';
+      if (decoded.kind === 'instanceSpotFollow' && record.requestSequence !== undefined) {
+        return 'protocolError';
+      }
       const instanceMetadata =
-        decoded.kind === 'instanceSpot' && (record.flags & M6bServiceWireFlag.metadata) !== 0;
+        instanceMessage && (record.flags & M6bServiceWireFlag.metadata) !== 0;
       const statefulMetadata =
         (decoded.kind === 'spotSend' ||
           decoded.kind === 'spotRequest' ||
@@ -2566,7 +2573,7 @@ export class ServiceStatefulRuntime {
         (hasPayload &&
           decoded.kind !== 'actorJoin' &&
           record.parts.length !== ((record.flags & M6bServiceWireFlag.metadata) !== 0 ? 3 : 2)) ||
-        (decoded.kind === 'instanceSpot' && record.parts.length !== (instanceMetadata ? 3 : 2)) ||
+        (instanceMessage && record.parts.length !== (instanceMetadata ? 3 : 2)) ||
         (userSpotInfrastructure && record.parts.length !== 1)
       ) {
         return 'protocolError';
@@ -2627,21 +2634,22 @@ export class ServiceStatefulRuntime {
             kind === ZLinkFrameworkInternalErrorKind.SpotMoving ||
             kind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale
           ) {
-            const reporter = this.dispatchErrors;
-            if (decoded.kind === 'instanceSpot' && reporter?.captureEnabled() === true) {
-              reporter.report({
-                surface: ZLinkDispatchErrorSurface.InstanceSpot,
-                messageKind: ZLinkDispatchMessageKind.Send,
-                reason: ZLinkDispatchErrorReason.StaleTarget,
-                action: ZLinkDispatchErrorAction.Drop,
-                meshName: this.dispatchErrorMeshName,
-                sourceRid: decoded.sourceNodeRid,
-                spotId:
-                  decoded.activation === 'ready'
-                    ? decoded.route.targetSpotId
-                    : decoded.target.targetSpotId,
-                error
-              });
+            if (decoded.kind === 'instanceSpotFollow') {
+              return this.reportInstanceSpotDrop(decoded, decoded.target.spot.spotId, error);
+            }
+            if (decoded.kind === 'instanceSpot') {
+              const spotId =
+                decoded.activation === 'ready'
+                  ? decoded.route.targetSpotId
+                  : decoded.target.targetSpotId;
+              this.reportInstanceSpotDrop(decoded, spotId, error);
+              if (
+                decoded.activation === 'ready' &&
+                decoded.operationKind === 'send' &&
+                this.registry.isRetiredInstanceSpot(spotId)
+              ) {
+                return 'dropped';
+              }
             }
             return 'protocolError';
           }
@@ -2857,13 +2865,124 @@ export class ServiceStatefulRuntime {
         return this.handleBoundSessionReplaced(ingress, record);
       case 'boundSessionSend':
         return await this.deliverBoundSession(ingress, record, payloadFrame);
-      case 'instanceSpot':
+      case 'instanceSpot': {
+        if (
+          record.activation === 'ready' &&
+          record.operationKind === 'send' &&
+          this.spotMessageFollow.size > 0
+        ) {
+          const route = this.findSpotMessageFollow(
+            instanceRouteAsDirectRoute(record.route),
+            'instanceSpot'
+          );
+          if (route === null) {
+            return this.reportInstanceSpotDrop(
+              record,
+              record.route.targetSpotId,
+              instanceSpotFollowUnavailable(record.route.targetSpotId)
+            );
+          }
+          if (route?.target !== undefined) {
+            this.validateInstanceIngress(ingress, record);
+            return await this.relayInstanceSpotOneWay(
+              record,
+              route.target,
+              1,
+              payloadFrame!,
+              metadataFrame
+            );
+          }
+        }
         return this.enqueueInstanceSpot(ingress, record, payloadFrame!, metadataFrame);
+      }
+      case 'instanceSpotFollow': {
+        const route = this.readyInstanceFollowRoute(record.target);
+        if (route !== undefined) {
+          return this.enqueueInstanceSpot(
+            ingress,
+            {
+              kind: 'instanceSpot',
+              activation: 'ready',
+              instanceIntent: false,
+              operationKind: 'send',
+              operation: { high: 0n, low: 0n },
+              sourceNodeRid: record.sourceNodeRid,
+              sourceNodeGeneration: record.sourceNodeGeneration,
+              ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
+              route
+            },
+            payloadFrame!,
+            metadataFrame
+          );
+        }
+        const next = this.findSpotMessageFollow(record.target, 'instanceSpot')?.target;
+        if (next === undefined || record.messageFollowHopCount === 8) {
+          throw instanceSpotFollowUnavailable(record.target.spot.spotId);
+        }
+        return await this.relayInstanceSpotOneWay(
+          record,
+          next,
+          record.messageFollowHopCount + 1,
+          payloadFrame!,
+          metadataFrame
+        );
+      }
       case 'userSpotCreate':
       case 'userSpotClose':
       case 'actorCreate':
         return this.handleUserSpotOperation(ingress, record);
     }
+  }
+
+  private readyInstanceFollowRoute(
+    fence: ServiceSpotRouteFence
+  ): ServiceInstanceRouteFence | undefined {
+    const route = this.instanceIntents.get(fence.spot.spotId)?.route;
+    return route !== undefined &&
+      sameDirectSpotRouteIdentity(instanceRouteAsDirectRoute(route), fence)
+      ? route
+      : undefined;
+  }
+
+  private async relayInstanceSpotOneWay(
+    source: ServiceInstanceSpotFollowSource,
+    target: ServiceSpotRouteFence,
+    hop: number,
+    payloadFrame: Buffer,
+    metadataFrame?: Buffer
+  ): Promise<RawServicePumpResult> {
+    const parts = encodeInstanceSpotFollow(source, target, hop, payloadFrame, metadataFrame);
+    if (
+      !(await this.raw.sendApplication(target.targetNodeRid, parts, target.targetNodeGeneration))
+    ) {
+      return this.reportInstanceSpotDrop(
+        source,
+        target.spot.spotId,
+        instanceSpotFollowUnavailable(target.spot.spotId)
+      );
+    }
+    return 'infrastructure';
+  }
+
+  private reportInstanceSpotDrop(
+    source: ServiceInstanceSpotFollowSource,
+    spotId: string,
+    error: unknown
+  ): 'dropped' {
+    const reporter = this.dispatchErrors;
+    if (reporter?.captureEnabled() === true) {
+      reporter.report({
+        surface: ZLinkDispatchErrorSurface.InstanceSpot,
+        messageKind: ZLinkDispatchMessageKind.Send,
+        reason: ZLinkDispatchErrorReason.StaleTarget,
+        action: ZLinkDispatchErrorAction.Drop,
+        meshName: this.dispatchErrorMeshName,
+        sourceRid: source.sourceNodeRid,
+        spotId,
+        error
+      });
+    }
+    return 'dropped';
   }
 
   private enqueueInstanceSpot(
@@ -3089,7 +3208,13 @@ export class ServiceStatefulRuntime {
         route.objectGeneration
       );
       if (this.closed) return;
-      const latestRoute = this.instanceIntents.get(record.route.targetSpotId)?.route;
+      const followed = ingress.command === M6bServiceWireCommand.instanceSpotFollow;
+      const latestRoute = followed
+        ? this.readyInstanceFollowRoute(instanceRouteAsDirectRoute(record.route))
+        : this.instanceIntents.get(record.route.targetSpotId)?.route;
+      if (followed && latestRoute === undefined) {
+        throw instanceSpotFollowUnavailable(record.route.targetSpotId);
+      }
       const refreshedRecord =
         latestRoute !== undefined && sameInstanceApplicationOwner(latestRoute, record.route)
           ? { ...record, route: latestRoute }
@@ -3111,6 +3236,10 @@ export class ServiceStatefulRuntime {
         throw new Error('Rematerialized Instance message was not admitted to the local queue.');
       }
     } catch (error) {
+      if (ingress.command === M6bServiceWireCommand.instanceSpotFollow) {
+        this.reportInstanceSpotDrop(record, record.route.targetSpotId, error);
+        return;
+      }
       if (
         record.operationKind !== 'request' ||
         record.replyRouteId === undefined ||
@@ -3416,6 +3545,8 @@ export class ServiceStatefulRuntime {
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'instanceSpot' }>
   ): void {
+    // The raw MeshNode already validated the forwarding peer's current connection.
+    if (ingress.command === M6bServiceWireCommand.instanceSpotFollow) return;
     const expectedSourceGeneration = this.ingressSourceGeneration(ingress);
     if (
       record.sourceNodeRid !== ingress.sourceRoutingId ||
@@ -4512,7 +4643,7 @@ export class ServiceStatefulRuntime {
       owner,
       domain,
       parts: [ingress.parts[0]!, payloadFrame],
-      sourceRoutingId: ingress.sourceRoutingId,
+      sourceRoutingId: stateful.activationRecord?.sourceNodeRid ?? ingress.sourceRoutingId,
       ingress,
       get requestSource() {
         return ingress.requestSource;
@@ -6068,18 +6199,31 @@ export class ServiceStatefulRuntime {
     return spot;
   }
 
-  private holdOrRelaySpotMessage(
-    ingress: RawServiceIngressRecord,
-    wire: Extract<ServiceStatefulWireRecord, { readonly kind: 'spotSend' | 'spotRequest' }>
-  ): RawServicePumpResult | undefined {
-    const state = this.spotMessageFollow.get(spotKey(wire.target.spot));
-    if (state === undefined || !sameDirectSpotRouteIdentity(state.source, wire.target)) {
+  private findSpotMessageFollow(
+    source: ServiceSpotRouteFence,
+    objectKind?: ServiceSpotMessageFollowState['objectKind']
+  ): ServiceSpotMessageFollowState | null | undefined {
+    const state = this.spotMessageFollow.get(spotKey(source.spot));
+    if (
+      state === undefined ||
+      (objectKind !== undefined && state.objectKind !== objectKind) ||
+      !sameDirectSpotRouteIdentity(state.source, source)
+    ) {
       return undefined;
     }
     if (state.expiresAtMs !== undefined && state.expiresAtMs <= performance.now()) {
       this.failExpiredSpotMessageFollow(state);
-      return undefined;
+      return null;
     }
+    return state;
+  }
+
+  private holdOrRelaySpotMessage(
+    ingress: RawServiceIngressRecord,
+    wire: Extract<ServiceStatefulWireRecord, { readonly kind: 'spotSend' | 'spotRequest' }>
+  ): RawServicePumpResult | undefined {
+    const state = this.findSpotMessageFollow(wire.target);
+    if (state == null) return undefined;
     const bytes = ingress.parts.reduce((sum, part) => sum + part.byteLength, 0);
     state.queued.push({
       ingress: shareIngressOwnership(ingress),
@@ -6853,6 +6997,13 @@ function matchesExpectedDirectSpotRoute(
     : current !== undefined && sameDirectSpotRoute(current, expected);
 }
 
+function instanceSpotFollowUnavailable(spotId: string): ZLinkFrameworkException {
+  return createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.SpotMoving,
+    `Instance Spot '${spotId}' has no available Message Follow route.`
+  );
+}
+
 function instanceRouteAsDirectRoute(route: ServiceInstanceRouteFence): ServiceDirectSpotRouteFence {
   return {
     spot: {
@@ -7066,6 +7217,7 @@ function acceptsStatefulIngress(command: number): boolean {
       command !== M6bServiceWireCommand.userSpotClose &&
       command !== M6bServiceWireCommand.actorCreate &&
       command !== M6bServiceWireCommand.messageFollow &&
+      command !== M6bServiceWireCommand.instanceSpotFollow &&
       command !== M6bServiceWireCommand.boundSessionReplaced &&
       command !== M6bServiceWireCommand.boundSessionClose)
   ) {
