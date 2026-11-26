@@ -89,7 +89,7 @@ public final class Structure {
             var config = Json.MAPPER.readValue(file.toFile(), NodeConfig.class);
             require(config.id().equals(id), "Configuration Id mismatch: " + file);
             require(
-                    config.streamEndpoint() != null && !config.streamEndpoint().isBlank(),
+                    config.streamEndpoint() != null && config.streamEndpoint().startsWith("ws://"),
                     "Session requires streamEndpoint");
             sessions++;
         }

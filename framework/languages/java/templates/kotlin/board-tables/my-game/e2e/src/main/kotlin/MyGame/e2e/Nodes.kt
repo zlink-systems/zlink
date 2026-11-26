@@ -10,23 +10,39 @@ import kotlin.concurrent.thread
 
 private const val DOCKER_CLEANUP_SECONDS = 120L
 
-private class Node(val id: String, module: String, config: Path, root: Path, logs: Path) {
+private class Node(
+    val id: String,
+    module: String,
+    config: Path,
+    root: Path,
+    logs: Path,
+    foreground: Boolean,
+) {
     private val output = LinkedBlockingQueue<String>()
     private val process =
         DockerRuntime.process(
-                listOf(
-                    Path.of(
-                            System.getProperty("java.home"),
-                            "bin",
-                            if (isWindows()) "java.exe" else "java",
-                        )
-                        .toString(),
-                    "--enable-native-access=ALL-UNNAMED",
-                    "-cp",
-                    (root.resolve("server/$module/build/install/$module/lib").toString() + "/*"),
-                    "MyGame.$module.ProgramKt",
-                    config.toString(),
-                ),
+                (if (foreground && !isWindows())
+                    listOf("sh", "-c", "trap '' INT; exec \"$@\"", "node")
+                else emptyList()) +
+                    listOf(
+                        Path.of(
+                                System.getProperty("java.home"),
+                                "bin",
+                                if (isWindows()) "java.exe" else "java",
+                            )
+                            .toString(),
+                        "--enable-native-access=ALL-UNNAMED",
+                        "-Dstdout.encoding=UTF-8",
+                        "-Dstderr.encoding=UTF-8",
+                    ) +
+                    (if (foreground && isWindows()) listOf("-Xrs") else emptyList()) +
+                    listOf(
+                        "-cp",
+                        (root.resolve("server/$module/build/install/$module/lib").toString() +
+                            "/*"),
+                        "MyGame.$module.ProgramKt",
+                        config.toString(),
+                    ),
                 config,
             )
             .directory(root.toFile())
@@ -37,7 +53,7 @@ private class Node(val id: String, module: String, config: Path, root: Path, log
     init {
         thread(name = "$id-output", isDaemon = true) {
             logs.resolve("$id-stdout.log").toFile().bufferedWriter().use { writer ->
-                process.inputReader().useLines { lines ->
+                process.inputReader(Charsets.UTF_8).useLines { lines ->
                     lines.forEach {
                         writer.appendLine(it)
                         writer.flush()
@@ -102,7 +118,11 @@ private class Node(val id: String, module: String, config: Path, root: Path, log
 
 fun isWindows() = System.getProperty("os.name").startsWith("Windows")
 
-class Nodes(private val root: Path, private val tableCapacity: Int) : AutoCloseable {
+class Nodes(
+    private val root: Path,
+    private val tableCapacity: Int,
+    private val foreground: Boolean = false,
+) : AutoCloseable {
     private val runId = UUID.randomUUID().toString()
     val logs: Path = root.resolve(".logs/run-$runId").also { Files.createDirectories(it) }
     private val project = "my-game-$runId"
@@ -141,18 +161,19 @@ class Nodes(private val root: Path, private val tableCapacity: Int) : AutoClosea
     fun start() {
         if (!DockerRuntime.enabled) {
             composeStarted = true
-            compose("up", "-d", "--wait")
+            compose("up", "-d", "--wait", "redis")
         }
         val redis = if (DockerRuntime.enabled) "redis:6379" else compose("port", "redis", "6379")
-        for (id in listOf("tableA", "tableB", "session")) {
+        for (id in listOf(Names.API, "tableA", "tableB", Names.MATCHMAKER, "session")) {
             val config =
                 NodeConfig(
                     id,
                     redis,
                     "my-game:$runId:",
                     "tcp://127.0.0.1:0",
-                    if (id == "session") "tcp://127.0.0.1:0" else null,
+                    if (id == "session") "ws://127.0.0.1:0" else null,
                     tableCapacity,
+                    apiEndpoint = if (id == Names.API) "tcp://127.0.0.1:0" else null,
                 )
             val path = logs.resolve("$id.json")
             Json.mapper.writeValue(path.toFile(), config)
@@ -168,10 +189,16 @@ class Nodes(private val root: Path, private val tableCapacity: Int) : AutoClosea
         val node =
             Node(
                 id,
-                if (id == "session") "session" else "table",
+                when (id) {
+                    "session",
+                    Names.MATCHMAKER,
+                    Names.API -> id
+                    else -> "table"
+                },
                 requireNotNull(configs[id]),
                 root,
                 generationLogs,
+                foreground,
             )
         nodes[id] = node
         return Json.mapper.readTree(node.waitFor(Control.READY).removePrefix(Control.READY))
@@ -186,7 +213,7 @@ class Nodes(private val root: Path, private val tableCapacity: Int) : AutoClosea
     }
 
     fun replace(id: String) {
-        requireNotNull(nodes[id]).stop()
+        requireNotNull(nodes.remove(id)).cleanup()
         startNode(id)
     }
 
