@@ -225,8 +225,10 @@ internal sealed partial class ZLinkProviderLocationRepository
         while (old is ZLinkStoreReadResult.Found found)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // Zero-valued counters are not target keys: only Put keys are conditioned and counted.
             var counters = DecodeLegacyCapacity(oldKey, found.Value.Bytes)
-                .Counters.Select(counter =>
+                .Counters.Where(counter => counter.Value.Count != 0)
+                .Select(counter =>
                     (
                         Key: CapacityCounterKey(
                             mesh,
@@ -250,14 +252,13 @@ internal sealed partial class ZLinkProviderLocationRepository
             foreach (var counter in counters)
             {
                 conditions.Add(new ZLinkStoreCondition.Missing(counter.Key));
-                if (counter.Count != 0)
-                    mutations.Add(
-                        new ZLinkStoreMutation.Put(
-                            counter.Key,
-                            EncodeGenerationCounter((ulong)counter.Count),
-                            null
-                        )
-                    );
+                mutations.Add(
+                    new ZLinkStoreMutation.Put(
+                        counter.Key,
+                        EncodeGenerationCounter((ulong)counter.Count),
+                        null
+                    )
+                );
             }
             mutations.Add(new ZLinkStoreMutation.Delete(oldKey));
             if (

@@ -292,7 +292,7 @@ public sealed class LocationStoreFormatMigrationTests
         };
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         await using var runtime = Runtime(store);
-        if (scenario is "counter" or "counter-zero")
+        if (scenario is "counter")
         {
             await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
                 runtime.StartAsync(RoutingId.From("host"), deadline.Token).AsTask()
@@ -303,7 +303,17 @@ public sealed class LocationStoreFormatMigrationTests
         }
         await runtime.StartAsync(RoutingId.From("host"), deadline.Token);
         await AssertValueAsync(store, legacy, null);
-        await AssertValueAsync(store, counter, scenario == "changed" ? "2" : null);
+        // A zero-valued dimension is not a target key, so its existing counter is left as is.
+        await AssertValueAsync(
+            store,
+            counter,
+            scenario switch
+            {
+                "changed" => "2",
+                "counter-zero" => "7",
+                _ => null,
+            }
+        );
     }
 
     [Fact]
