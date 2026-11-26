@@ -140,6 +140,15 @@ final class ZLinkActorDestroyContractTest {
             var previous = create(owner);
             var endpoint = owner.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             try (var remote = start(locations, "destroy-caller", endpoint)) {
+                assertTimeoutPreemptively(
+                        Duration.ofSeconds(10),
+                        () -> {
+                            while (owner.routeMeshRuntime().snapshot(MESH).readyPeerCount() == 0
+                                    || remote.routeMeshRuntime().snapshot(MESH).readyPeerCount()
+                                            == 0) {
+                                Thread.sleep(10);
+                            }
+                        });
                 var manager = remote.actorManager();
                 assertTrue(await(manager.destroy(previous)));
                 var current = create(owner);

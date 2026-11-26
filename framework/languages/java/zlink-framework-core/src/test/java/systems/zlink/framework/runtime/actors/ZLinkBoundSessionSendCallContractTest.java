@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,8 +25,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLaneTestAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
@@ -38,11 +37,9 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 final class ZLinkBoundSessionSendCallContractTest {
@@ -50,8 +47,6 @@ final class ZLinkBoundSessionSendCallContractTest {
     void destroyCompletesWhenBindingRetiresBeforeTheQueuedClose() throws Exception {
         var available = new AtomicBoolean(true);
         var closeRequests = new AtomicInteger();
-        var destroyStarted = new CompletableFuture<Void>();
-        var destroyTerminal = new CompletableFuture<Void>();
         var node =
                 spotNode(
                         new AtomicInteger(),
@@ -60,9 +55,7 @@ final class ZLinkBoundSessionSendCallContractTest {
                         available,
                         closeRequests,
                         new CompletableFuture<>(),
-                        CompletableFuture.completedFuture(null),
-                        destroyStarted,
-                        destroyTerminal);
+                        CompletableFuture.completedFuture(null));
         var actors =
                 new ZLinkActorRuntime(
                         node,
@@ -84,68 +77,44 @@ final class ZLinkBoundSessionSendCallContractTest {
         actors.bindNativeSession(actor, node, ref, route.sessionOwnerNodeRid(), route.sessionRid())
                 .toCompletableFuture()
                 .join();
-        var owner = new AtomicReference<ZLinkStateLane>();
-        actors.applyRemoteSessionBinding(
-                        node,
-                        ref,
-                        transition -> {
-                            owner.set(ZLinkStateLane.current());
-                            return true;
-                        })
-                .toCompletableFuture()
-                .get(5, TimeUnit.SECONDS);
-        var destroyed = actors.destroyFromEntrySpot(ref.nodeRid(), actor).toCompletableFuture();
-        destroyStarted.get(5, TimeUnit.SECONDS);
-
-        var laneEntered = new CompletableFuture<Void>();
-        var releaseLane = new CountDownLatch(1);
-        var held =
-                owner.get()
-                        .runAsync(
-                                () -> {
-                                    laneEntered.complete(null);
-                                    assertTrue(await(releaseLane));
-                                    return null;
-                                });
+        var destroyAccepted = new CompletableFuture<Void>();
+        var releaseTurn = new CompletableFuture<Void>();
+        var turn =
+                actors.submitActorDispatch(
+                        ref.actorId(),
+                        () ->
+                                actors.destroyFromEntrySpot(ref.nodeRid(), actor)
+                                        .thenCompose(
+                                                ignored -> {
+                                                    destroyAccepted.complete(null);
+                                                    return releaseTurn;
+                                                }));
         try {
-            laneEntered.get(5, TimeUnit.SECONDS);
-            // The record retires first; its context facade intentionally remains attached.
-            var retired =
-                    actors.applyRemoteSessionBinding(
-                            node,
-                            ref,
-                            transition -> {
-                                available.set(false);
-                                return true;
-                            });
-            destroyTerminal.complete(null);
-            assertTimeoutPreemptively(
-                    Duration.ofSeconds(5),
-                    () -> {
-                        while (ZLinkStateLaneTestAccess.queuedTurnCount(owner.get()) != 2) {
-                            Thread.sleep(1);
-                        }
-                    });
-            assertTrue(available.get(), "the old context check still observes the live record");
+            destroyAccepted.get(5, TimeUnit.SECONDS);
+            var destroyed = actors.destroyFromEntrySpot(ref.nodeRid(), actor).toCompletableFuture();
             assertFalse(destroyed.isDone());
-            releaseLane.countDown();
-            retired.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(0, closeRequests.get(), "close must wait for the Actor turn to finish");
+
+            // Retire the owner's record while the Actor context still holds its session facade.
+            assertTrue(
+                    actors.applyRemoteSessionBinding(
+                                    node,
+                                    ref,
+                                    transition -> {
+                                        available.set(false);
+                                        return true;
+                                    })
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS));
+            assertTrue(actors.hasBoundSession(actor));
+            releaseTurn.complete(null);
+            turn.toCompletableFuture().get(5, TimeUnit.SECONDS);
             destroyed.get(5, TimeUnit.SECONDS);
-            assertFalse(available.get());
+
             assertEquals(0, closeRequests.get(), "no physical close exists after retirement");
             assertTrue(actors.localActor(ref.actorId()).isEmpty());
         } finally {
-            releaseLane.countDown();
-            held.toCompletableFuture().get(5, TimeUnit.SECONDS);
-        }
-    }
-
-    private static boolean await(CountDownLatch latch) {
-        try {
-            return latch.await(5, TimeUnit.SECONDS);
-        } catch (InterruptedException failure) {
-            Thread.currentThread().interrupt();
-            throw new AssertionError(failure);
+            releaseTurn.complete(null);
         }
     }
 
@@ -162,6 +131,7 @@ final class ZLinkBoundSessionSendCallContractTest {
         var closeRequests = new AtomicInteger();
         var closeStarted = new CompletableFuture<Void>();
         var closeTerminal = new CompletableFuture<Void>();
+        var destroyStarted = new CompletableFuture<Void>();
         var node =
                 spotNode(
                         new AtomicInteger(),
@@ -170,7 +140,8 @@ final class ZLinkBoundSessionSendCallContractTest {
                         available,
                         closeRequests,
                         closeStarted,
-                        closeTerminal);
+                        closeTerminal,
+                        destroyStarted);
         var actors =
                 new ZLinkActorRuntime(
                         node,
@@ -199,6 +170,7 @@ final class ZLinkBoundSessionSendCallContractTest {
         if (hasCurrentBinding) {
             closeStarted.get(5, TimeUnit.SECONDS);
             assertFalse(destroyed.isDone(), "destroy must await the current binding's close");
+            assertFalse(destroyStarted.isDone(), "native destroy must wait for binding close");
             assertEquals(1, closeRequests.get());
         } else {
             destroyed.get(5, TimeUnit.SECONDS);
@@ -210,12 +182,16 @@ final class ZLinkBoundSessionSendCallContractTest {
         if (closeFails) closeTerminal.completeExceptionally(failure);
         else closeTerminal.complete(null);
         if (hasCurrentBinding && closeFails) {
-            assertEquals(
+            assertSame(
                     failure, assertThrows(CompletionException.class, destroyed::join).getCause());
+            assertFalse(destroyStarted.isDone());
+            assertSame(actor, actors.localActor(ref.actorId()).orElseThrow());
+            assertTrue(actors.find(ref.actorId()).toCompletableFuture().join().isEmpty());
         } else {
             destroyed.join();
+            assertTrue(destroyStarted.isDone());
+            assertTrue(actors.localActor(ref.actorId()).isEmpty());
         }
-        assertTrue(actors.localActor("destroy-binding").isEmpty());
     }
 
     @Test
@@ -683,8 +659,7 @@ final class ZLinkBoundSessionSendCallContractTest {
                 closeRequests,
                 closeStarted,
                 closeTerminal,
-                new CompletableFuture<>(),
-                CompletableFuture.completedFuture(null));
+                new CompletableFuture<>());
     }
 
     private static ZLinkInternalSpotNode spotNode(
@@ -695,8 +670,7 @@ final class ZLinkBoundSessionSendCallContractTest {
             AtomicInteger closeRequests,
             CompletableFuture<Void> closeStarted,
             CompletionStage<Void> closeTerminal,
-            CompletableFuture<Void> destroyStarted,
-            CompletionStage<Void> destroyTerminal) {
+            CompletableFuture<Void> destroyStarted) {
         return (ZLinkInternalSpotNode)
                 Proxy.newProxyInstance(
                         ZLinkInternalSpotNode.class.getClassLoader(),
@@ -744,7 +718,7 @@ final class ZLinkBoundSessionSendCallContractTest {
                                                     : Optional.empty();
                                     case "destroyActor" -> {
                                         destroyStarted.complete(null);
-                                        yield destroyTerminal;
+                                        yield CompletableFuture.completedFuture(null);
                                     }
                                     case "closeActorBoundSessionAsync" -> {
                                         if (!hasBoundSessionRoute.get()) {

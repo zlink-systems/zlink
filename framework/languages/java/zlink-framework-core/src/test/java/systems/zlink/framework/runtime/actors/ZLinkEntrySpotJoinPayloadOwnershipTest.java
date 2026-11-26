@@ -37,6 +37,7 @@ import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkStoreSpotHandleResolver;
 
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -109,6 +110,10 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
                                     ZLinkInternalMeshNode.class.getClassLoader(),
                                     new Class<?>[] {ZLinkInternalMeshNode.class},
                                     (proxy, method, args) -> {
+                                        if (method.getName().equals("setActorDestroyHandler")) {
+                                            return InvocationHandler.invokeDefault(
+                                                    proxy, method, args);
+                                        }
                                         if (method.getName().equals("requestCanonicalActorJoin")) {
                                             var join =
                                                     (ZLinkInternalMeshNode
