@@ -1537,6 +1537,10 @@ lowercase canonical UUID(8-4-4-4-12)이고 `aggregateGeneration`과 `index`·`le
 | Participant의 새 authority payload | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:authorityPayload` |
 | Participant의 membership 변경 | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
 
+**Relocation의 key 값.** Relocation(§9.1의 `aggregate.relocation`)이 이 절의 record를 쓸 때
+`aggregateId`는 그 `relocationId`이고 `aggregateGeneration`은 `1`이다. Source는 target을 고르기 전 seal 때
+이 목록을 한 번 쓰고, target 시도(`target.attemptGeneration`)가 바뀌어도 같은 목록을 그대로 쓴다.
+
 **Participant 변경 bytes.** Participant의 새 authority payload record와 membership 변경 record는
 JSON이 아니라 bytes를 그대로 저장한다. 새 authority payload record는 commit 때 그 participant의
 authority `payload`가 될 application 정의 opaque bytes이고, membership 변경 record는 규범 schema의

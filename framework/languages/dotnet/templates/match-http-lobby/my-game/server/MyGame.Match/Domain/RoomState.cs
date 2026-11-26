@@ -7,11 +7,7 @@ public sealed class RoomState
 {
     private readonly record struct Wall(double X, double MinY, double MaxY);
 
-    private sealed record RoomSnapshot(
-        string Phase,
-        string? Winner,
-        CombatantSnapshot[] Players
-    );
+    private sealed record RoomSnapshot(string Phase, string? Winner, CombatantSnapshot[] Players);
 
     private sealed record CombatantSnapshot(
         string PlayerId,
@@ -50,9 +46,10 @@ public sealed class RoomState
         if (players.Count >= GameNames.PlayersPerRoom)
             return false;
 
-        var spawn = players.Count == 0
-            ? (GameNames.FirstSpawnX, GameNames.FirstSpawnY)
-            : (GameNames.SecondSpawnX, GameNames.SecondSpawnY);
+        var spawn =
+            players.Count == 0
+                ? (GameNames.FirstSpawnX, GameNames.FirstSpawnY)
+                : (GameNames.SecondSpawnX, GameNames.SecondSpawnY);
         players.Add(new Combatant(playerId, spawn.Item1, spawn.Item2));
         return true;
     }
@@ -126,7 +123,9 @@ public sealed class RoomState
         if (rejection is not null)
             return rejection;
 
-        var target = players.Find(player => player.PlayerId == shot.TargetId && player.PlayerId != id && player.Hp > 0);
+        var target = players.Find(player =>
+            player.PlayerId == shot.TargetId && player.PlayerId != id && player.Hp > 0
+        );
         if (target is null)
             return new ActionRejected(Rejection.NoTarget);
 
@@ -142,7 +141,10 @@ public sealed class RoomState
         {
             var retryAfterMs = GameNames.FireIntervalMs - ElapsedMilliseconds(lastShot, now);
             if (retryAfterMs > 0)
-                return new ActionRejected(Rejection.FireTooSoon, RetryAfterMilliseconds(retryAfterMs));
+                return new ActionRejected(
+                    Rejection.FireTooSoon,
+                    RetryAfterMilliseconds(retryAfterMs)
+                );
         }
 
         target.Hp = Math.Max(0, target.Hp - GameNames.ShotDamage);
@@ -168,9 +170,7 @@ public sealed class RoomState
     private static bool IntersectsWall(double ax, double ay, double bx, double by, Wall wall)
     {
         if (ax == bx)
-            return ax == wall.X
-                && Math.Max(ay, by) >= wall.MinY
-                && Math.Min(ay, by) <= wall.MaxY;
+            return ax == wall.X && Math.Max(ay, by) >= wall.MinY && Math.Min(ay, by) <= wall.MaxY;
 
         var t = (wall.X - ax) / (bx - ax);
         var y = ay + t * (by - ay);
@@ -178,7 +178,15 @@ public sealed class RoomState
     }
 
     public PlayerView[] View() =>
-        players.Select(player => new PlayerView(player.PlayerId, player.X, player.Y, player.Hp, player.LastSequence)).ToArray();
+        players
+            .Select(player => new PlayerView(
+                player.PlayerId,
+                player.X,
+                player.Y,
+                player.Hp,
+                player.LastSequence
+            ))
+            .ToArray();
 
     public byte[] Capture()
     {
@@ -186,28 +194,33 @@ public sealed class RoomState
         var snapshot = new RoomSnapshot(
             Phase,
             Winner,
-            players.Select(player => new CombatantSnapshot(
-                player.PlayerId,
-                player.X,
-                player.Y,
-                player.Hp,
-                player.LastSequence,
-                RemainingMilliseconds(player.LastMoveTimestamp, MoveBudgetDuration, now),
-                RemainingMilliseconds(
-                    player.LastShotTimestamp,
-                    TimeSpan.FromMilliseconds(GameNames.FireIntervalMs),
-                    now
-                )
-            )).ToArray()
+            players
+                .Select(player => new CombatantSnapshot(
+                    player.PlayerId,
+                    player.X,
+                    player.Y,
+                    player.Hp,
+                    player.LastSequence,
+                    RemainingMilliseconds(player.LastMoveTimestamp, MoveBudgetDuration, now),
+                    RemainingMilliseconds(
+                        player.LastShotTimestamp,
+                        TimeSpan.FromMilliseconds(GameNames.FireIntervalMs),
+                        now
+                    )
+                ))
+                .ToArray()
         );
         return JsonSerializer.SerializeToUtf8Bytes(snapshot);
     }
 
     public void Restore(ReadOnlyMemory<byte> payload)
     {
-        var snapshot = JsonSerializer.Deserialize<RoomSnapshot>(payload.Span)
+        var snapshot =
+            JsonSerializer.Deserialize<RoomSnapshot>(payload.Span)
             ?? throw new InvalidDataException("Missing room state.");
-        var expectedPhase = snapshot.Winner is null ? GameNames.PlayingPhase : GameNames.FinishedPhase;
+        var expectedPhase = snapshot.Winner is null
+            ? GameNames.PlayingPhase
+            : GameNames.FinishedPhase;
         if (snapshot.Phase != expectedPhase || snapshot.Players.Length > GameNames.PlayersPerRoom)
             throw new InvalidDataException("Invalid room state snapshot.");
 
@@ -215,21 +228,23 @@ public sealed class RoomState
         players.Clear();
         foreach (var player in snapshot.Players)
         {
-            players.Add(new Combatant(player.PlayerId, player.X, player.Y)
-            {
-                Hp = player.Hp,
-                LastSequence = player.LastSequence,
-                LastMoveTimestamp = RestoreTimestamp(
-                    player.MoveBudgetRemainingMs,
-                    MoveBudgetDuration,
-                    now
-                ),
-                LastShotTimestamp = RestoreTimestamp(
-                    player.FireCooldownRemainingMs,
-                    TimeSpan.FromMilliseconds(GameNames.FireIntervalMs),
-                    now
-                ),
-            });
+            players.Add(
+                new Combatant(player.PlayerId, player.X, player.Y)
+                {
+                    Hp = player.Hp,
+                    LastSequence = player.LastSequence,
+                    LastMoveTimestamp = RestoreTimestamp(
+                        player.MoveBudgetRemainingMs,
+                        MoveBudgetDuration,
+                        now
+                    ),
+                    LastShotTimestamp = RestoreTimestamp(
+                        player.FireCooldownRemainingMs,
+                        TimeSpan.FromMilliseconds(GameNames.FireIntervalMs),
+                        now
+                    ),
+                }
+            );
         }
         Winner = snapshot.Winner;
     }
@@ -250,7 +265,8 @@ public sealed class RoomState
             return null;
         var boundedRemaining = Math.Clamp(remaining, 0, (long)duration.TotalMilliseconds);
         var elapsedMilliseconds = duration.TotalMilliseconds - boundedRemaining;
-        var elapsedTimestamp = (long)Math.Ceiling(elapsedMilliseconds * clock.TimestampFrequency / 1000.0);
+        var elapsedTimestamp = (long)
+            Math.Ceiling(elapsedMilliseconds * clock.TimestampFrequency / 1000.0);
         return now - elapsedTimestamp;
     }
 }

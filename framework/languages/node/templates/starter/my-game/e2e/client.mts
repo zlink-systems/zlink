@@ -8,9 +8,7 @@ import { Limits, Scenario } from '../server/shared/constants.js';
 export async function scenario(
   name: string,
   endpoint: string,
-  drain: () => Promise<void>,
-  stop: () => Promise<void>,
-  cleanup: (release: () => Promise<void>) => Promise<void>
+  control?: { drain: () => Promise<void>; stop: () => Promise<void> }
 ): Promise<void> {
   assert.equal(name, Scenario.connect);
   const connector = zlinkStreamConnectorFactory.create({
@@ -23,9 +21,15 @@ export async function scenario(
   });
   try {
     await connector.connect();
-  } finally {
-    await cleanup(() => connector.close());
+  } catch (error) {
+    try {
+      await connector.close();
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], 'STREAM connection and cleanup failed');
+    }
+    throw error;
   }
-  await drain();
-  await stop();
+  await connector.close();
+  await control?.drain();
+  await control?.stop();
 }

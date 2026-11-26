@@ -1,4 +1,6 @@
 #pragma once
+#include <iostream>
+#include <syncstream>
 #include "player.hpp"
 #include "matchmaking.hpp"
 #include "server/shared/config.hpp"
@@ -20,6 +22,7 @@ class Matchmaking final : public fx::spot_t<Player>
         if (created.state == fx::spot_create_state_t::rejected)
             throw std::runtime_error ("Room creation rejected");
         state.remove (pair);
+        std::osyncstream (std::cout) << "GAME Room assigned " << room << std::endl;
         for (const auto &p : pair)
             co_await actors_.send (fx::actor_id_t (p.playerId), RoomAssignment{room}).async ();
     }
