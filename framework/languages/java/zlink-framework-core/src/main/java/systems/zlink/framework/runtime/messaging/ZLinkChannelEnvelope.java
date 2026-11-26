@@ -499,7 +499,11 @@ public final class ZLinkChannelEnvelope {
         try {
             ZLinkApplicationMetadata.validateSize(metadataBytes);
         } catch (IllegalArgumentException error) {
-            throw protocolError("ZLink envelope metadata exceeds 1024 encoded bytes", error);
+            throw protocolError(
+                    "ZLink envelope metadata exceeds "
+                            + ZLinkApplicationMetadata.MAX_ENCODED_SIZE
+                            + " encoded bytes",
+                    error);
         }
     }
 

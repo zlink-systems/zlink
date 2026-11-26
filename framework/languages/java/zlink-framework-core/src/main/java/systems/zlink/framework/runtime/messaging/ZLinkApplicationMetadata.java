@@ -18,7 +18,7 @@ public final class ZLinkApplicationMetadata {
     private static final int MAX_METADATA_KEY_BYTES = 255;
     private static final int MAX_METADATA_VALUE_BYTES = 65535;
     private static final int VERSION = 1;
-    private static final int MAX_ENCODED_SIZE = 1024;
+    static final int MAX_ENCODED_SIZE = 1024;
     private static final byte[] EMPTY_ENCODED = new byte[0];
     private static final ZLinkApplicationMetadata EMPTY = new ZLinkApplicationMetadata(Map.of());
 
