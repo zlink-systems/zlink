@@ -60,6 +60,21 @@ public final class ZLinkSerialExecutionQueue {
                         queue.requireExecution(application);
                     }
 
+                    public boolean sealActorDestroyAdmission(
+                            ZLinkSerialExecutionQueue queue, Object attempt) {
+                        return queue.trySealClosingAdmission(attempt);
+                    }
+
+                    public void reopenActorDestroyAdmission(
+                            ZLinkSerialExecutionQueue queue, Object attempt) {
+                        queue.reopenActorDestroyAdmission(attempt);
+                    }
+
+                    public void acceptActorDestroyAdmission(
+                            ZLinkSerialExecutionQueue queue, Object attempt) {
+                        queue.acceptActorDestroyAdmission(attempt);
+                    }
+
                     public CompletionStage<Void> enqueueActorWithPayloadBytes(
                             ZLinkSerialExecutionQueue queue,
                             long payloadBytes,
@@ -86,6 +101,7 @@ public final class ZLinkSerialExecutionQueue {
                 });
     }
 
+    private static final Object CLOSING_SEAL = new Object();
     private static final VarHandle OUTSTANDING;
     private static final VarHandle YIELD_ADMITTED;
 
@@ -150,7 +166,10 @@ public final class ZLinkSerialExecutionQueue {
     private volatile int suspendedLifecycleContinuations;
     private long turnClaimedAtNanos;
     volatile RelocationState relocation;
-    private volatile boolean closingAdmissionSealed;
+    // Null admits work. A destroy attempt may undo its seal until Closing is published.
+    private volatile Object closingAdmissionSeal;
+    // Whether the destroy attempt holding the seal published Closing.
+    private volatile boolean closingAdmissionAccepted;
     private boolean relocated;
     private final List<QuiescenceWaiter> quiescenceWaiters = new ArrayList<>();
 
@@ -526,9 +545,42 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     public synchronized void sealClosingAdmission() {
-        if (relocation == null) {
-            closingAdmissionSealed = true;
+        trySealClosingAdmission(CLOSING_SEAL);
+    }
+
+    private synchronized boolean trySealClosingAdmission(Object seal) {
+        if (relocation != null || relocated) {
+            return false;
         }
+        if (closingAdmissionSeal == null || seal == CLOSING_SEAL) {
+            closingAdmissionSeal = seal;
+            closingAdmissionAccepted = false;
+        }
+        return true;
+    }
+
+    private synchronized void reopenActorDestroyAdmission(Object attempt) {
+        if (closingAdmissionSeal == attempt) {
+            closingAdmissionSeal = null;
+            closingAdmissionAccepted = false;
+        }
+    }
+
+    private synchronized void acceptActorDestroyAdmission(Object attempt) {
+        if (closingAdmissionSeal == attempt) {
+            closingAdmissionAccepted = true;
+        }
+    }
+
+    /**
+     * Spec 03-spot-actor/04-actor-model §6.8: until the destroy attempt holding the seal publishes
+     * Closing, a failed CAS reopens admission and the Actor stays Ready, so a request in that
+     * window is retryable.
+     */
+    private boolean actorDestroyClosingPendingLocked() {
+        return closingAdmissionSeal != null
+                && closingAdmissionSeal != CLOSING_SEAL
+                && !closingAdmissionAccepted;
     }
 
     /**
@@ -582,8 +634,9 @@ public final class ZLinkSerialExecutionQueue {
             Object message, Predicate<Object> retains, ZLinkFrameworkErrorKind sealedKind) {
         LifecycleTransition transition = lifecycleTransitionLocked();
         boolean closing = transition != null && transition.committed.getAsBoolean();
-        boolean retainedMessage = (closingAdmissionSealed || closing) && retains.test(message);
-        if (closingAdmissionSealed || closing && !retainedMessage) {
+        boolean retainedMessage =
+                (closingAdmissionSeal != null || closing) && retains.test(message);
+        if (closingAdmissionSeal != null || closing && !retainedMessage) {
             if (lanePolicy instanceof ZLinkExecutionLanePolicy.Session) {
                 return CompletableFuture.failedFuture(sessionShutdownFailure());
             }
@@ -599,7 +652,11 @@ public final class ZLinkSerialExecutionQueue {
             }
             return CompletableFuture.failedFuture(
                     ZLinkFrameworkErrorOrigin.closingSpot(
-                            closing ? ZLinkFrameworkErrorKind.NOT_FOUND : sealedKind));
+                            closing
+                                    ? ZLinkFrameworkErrorKind.NOT_FOUND
+                                    : actorDestroyClosingPendingLocked()
+                                            ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                                            : sealedKind));
         }
         return relocated ? CompletableFuture.failedFuture(new RelocatedOwnerException()) : null;
     }
@@ -755,7 +812,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void failPendingApplications(Throwable failure) {
-        closingAdmissionSealed = true;
+        closingAdmissionSeal = CLOSING_SEAL;
         materializePublished();
         for (Entry entry : applicationPending) {
             entry.operation =
@@ -928,7 +985,9 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     public synchronized boolean steady() {
-        return relocation == null && !closingAdmissionSealed && lifecycleTransitionLocked() == null;
+        return relocation == null
+                && closingAdmissionSeal == null
+                && lifecycleTransitionLocked() == null;
     }
 
     private volatile ZLinkSpotCloseCallAccess.ExecutionPolicy executionPolicy;
@@ -970,7 +1029,7 @@ public final class ZLinkSerialExecutionQueue {
                     List<Entry> continuations;
                     boolean schedule;
                     synchronized (this) {
-                        closingAdmissionSealed = true;
+                        closingAdmissionSeal = CLOSING_SEAL;
                         materializePublished();
                         pending = new ArrayList<>(applicationPending);
                         continuations =
@@ -1000,7 +1059,7 @@ public final class ZLinkSerialExecutionQueue {
         List<Entry> discarded;
         List<CompletableFuture<Void>> quiescent;
         synchronized (this) {
-            closingAdmissionSealed = true;
+            closingAdmissionSeal = CLOSING_SEAL;
             discarded = new ArrayList<>(applicationPending);
             discarded.addAll(lifecyclePending);
             discarded.addAll(continuationPending);
@@ -1213,7 +1272,7 @@ public final class ZLinkSerialExecutionQueue {
         synchronized (this) {
             if (relocated) {
                 failure = new RelocatedOwnerException();
-            } else if (closingAdmissionSealed
+            } else if (closingAdmissionSeal != null
                     && lanePolicy instanceof ZLinkExecutionLanePolicy.Session) {
                 failure = sessionShutdownFailure();
             }
@@ -2546,6 +2605,9 @@ public final class ZLinkSerialExecutionQueue {
     private Optional<RelocationSeal> sealNowLocked(Entry owner) {
         // Admission and the publication tail are cut by this producer boundary.
         // The shared gate owns the detached prefix and its capture.
+        if (closingAdmissionSeal != null) {
+            return Optional.empty();
+        }
         materializePublished();
         if (suspendedApplicationContinuations != 0
                 || (suspendedLifecycleContinuations != 0

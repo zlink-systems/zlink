@@ -855,8 +855,11 @@ public final class ZLinkStoreLocationResolvers
             return CompletableFuture.completedFuture(null);
         }
         var authority = actorAuthorityCodec.decode(snapshot.payload()).orElse(null);
+        if (authority != null && authority.state() != ZLinkActorAuthorityPayloadCodec.State.READY) {
+            forget(cache, actorId);
+            return CompletableFuture.completedFuture(null);
+        }
         if (authority == null
-                || authority.state() != ZLinkActorAuthorityPayloadCodec.State.READY
                 || !authority.actorId().equals(actorId)
                 || !authority.ownerId().equals(snapshot.ownerId())
                 || authority.ownerLeaseGeneration() != snapshot.ownerLeaseGeneration()) {

@@ -9,6 +9,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDeleted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
@@ -433,61 +434,136 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
         return CompletableFuture.completedFuture(null);
     }
 
-    /**
-     * Removes the durable authority only when it still describes the supplied actor incarnation. A
-     * stale reference is rejected instead of deleting a newer actor with the same logical id.
-     */
-    public CompletionStage<Void> releaseActorExact(String actorType, ActorRef expected) {
-        String actorId = expected.actorId();
-        String actorKey = ZLinkAuthorityKeyCodec.actor(actorId);
-        return store.read(actorKey, NEVER_CANCEL)
+    public CompletionStage<ZLinkAuthorityReadResult> readActorDestroyAuthority(
+            String actorId, ZLinkStoreCancellation cancellation) {
+        return store.read(ZLinkAuthorityKeyCodec.actor(actorId), cancellation);
+    }
+
+    public CompletionStage<Boolean> releaseEndedActorClosing(
+            String actorId, ZLinkAuthoritySnapshot expected, ZLinkStoreCancellation cancellation) {
+        return store.releaseEndedReservation(
+                ZLinkAuthorityKeyCodec.actor(actorId), expected.storeVersion(), cancellation);
+    }
+
+    public CompletionStage<Void> publishActorClosing(
+            String actorType, ActorRef expected, long nodeGeneration) {
+        String key = ZLinkAuthorityKeyCodec.actor(expected.actorId());
+        return store.read(key, NEVER_CANCEL)
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                                actors.remove(actorId, expected);
-                                return CompletableFuture.completedFuture(null);
+                                // Local actors without a durable claim have no authority to update.
+                                if (!actors.containsKey(expected.actorId())) {
+                                    return CompletableFuture.completedFuture(null);
+                                }
+                                throw actorAuthorityChanged(expected);
                             }
                             var authority =
-                                    actorAuthorities
-                                            .decode(snapshot.payload())
-                                            .orElseThrow(
-                                                    () ->
-                                                            new IllegalStateException(
-                                                                    "Actor authority payload is"
-                                                                            + " invalid: "
-                                                                            + actorId));
-                            if (authority.state() != ZLinkActorAuthorityPayloadCodec.State.READY
-                                    || !authority.stableType().equals(actorType)
-                                    || !authority.actorId().equals(actorId)
-                                    || !authority.meshName().equals(expected.meshName())
-                                    || !authority.nodeRid().equals(expected.nodeRid())
-                                    || snapshot.objectGeneration() != expected.objectGeneration()) {
-                                return CompletableFuture.failedFuture(
-                                        new ZLinkFrameworkException(
-                                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                                "actor authority is not the requested incarnation: "
-                                                        + actorId));
+                                    requireDestroyAuthority(
+                                            snapshot,
+                                            actorType,
+                                            expected,
+                                            ZLinkActorAuthorityPayloadCodec.State.READY);
+                            if (authority.currentSpotKind() != 1) {
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                        "Actor must leave its current Spot before destroy: "
+                                                + expected.actorId());
                             }
+                            if (authority.nodeGeneration() != nodeGeneration) {
+                                throw actorAuthorityChanged(expected);
+                            }
+                            byte[] closing =
+                                    actorAuthorities.encode(
+                                            ZLinkActorAuthorityPayloadCodec.State.CLOSING,
+                                            authority.stableType(),
+                                            authority.actorId(),
+                                            authority.currentSpotId(),
+                                            authority.currentSpotGeneration(),
+                                            authority.currentSpotKind(),
+                                            authority.ownerId(),
+                                            authority.ownerLeaseGeneration(),
+                                            authority.meshName(),
+                                            authority.nodeRid(),
+                                            authority.nodeGeneration());
                             return store.compareExchange(
-                                            actorKey,
+                                            key,
+                                            new ZLinkAuthorityExpectFound(snapshot.storeVersion()),
+                                            new ZLinkAuthorityPut(closing),
+                                            NEVER_CANCEL)
+                                    .thenAccept(
+                                            result -> {
+                                                if (!(result instanceof ZLinkAuthorityStored)) {
+                                                    throw actorAuthorityChanged(expected);
+                                                }
+                                            });
+                        });
+    }
+
+    public CompletionStage<Void> releaseActorExact(String actorType, ActorRef expected) {
+        String key = ZLinkAuthorityKeyCodec.actor(expected.actorId());
+        return store.read(key, NEVER_CANCEL)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
+                                actors.remove(expected.actorId(), expected);
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            requireDestroyAuthority(
+                                    snapshot,
+                                    actorType,
+                                    expected,
+                                    ZLinkActorAuthorityPayloadCodec.State.CLOSING);
+                            return store.compareExchange(
+                                            key,
                                             new ZLinkAuthorityExpectFound(snapshot.storeVersion()),
                                             new ZLinkAuthorityDelete(),
                                             NEVER_CANCEL)
-                                    .thenCompose(
+                                    .thenAccept(
                                             result -> {
                                                 if (!(result instanceof ZLinkAuthorityDeleted)) {
-                                                    return CompletableFuture.failedFuture(
-                                                            new ZLinkFrameworkException(
-                                                                    ZLinkFrameworkErrorKind
-                                                                            .INVALID_OPERATION,
-                                                                    "actor authority changed before"
-                                                                            + " destroy: "
-                                                                            + actorId));
+                                                    throw actorAuthorityChanged(expected);
                                                 }
-                                                actors.remove(actorId, expected);
-                                                return CompletableFuture.completedFuture(null);
+                                                actors.remove(expected.actorId(), expected);
                                             });
                         });
+    }
+
+    private ZLinkActorAuthorityPayloadCodec.ActorAuthority requireDestroyAuthority(
+            ZLinkAuthoritySnapshot snapshot,
+            String actorType,
+            ActorRef expected,
+            ZLinkActorAuthorityPayloadCodec.State state) {
+        var authority =
+                actorAuthorities
+                        .decode(snapshot.payload())
+                        .orElseThrow(
+                                () ->
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                                                "Actor authority payload is invalid: "
+                                                        + expected.actorId()));
+        if (snapshot.objectGeneration() != expected.objectGeneration()
+                || !authority.actorId().equals(expected.actorId())
+                || !authority.stableType().equals(actorType)
+                || !authority.meshName().equals(expected.meshName())
+                || !authority.nodeRid().equals(expected.nodeRid())
+                || !authority.ownerId().equals(snapshot.ownerId())
+                || authority.ownerLeaseGeneration() != snapshot.ownerLeaseGeneration()) {
+            throw actorAuthorityChanged(expected);
+        }
+        if (authority.state() != state || snapshot.relocationInProgress()) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Actor authority is unavailable for destroy: " + expected.actorId());
+        }
+        return authority;
+    }
+
+    private static ZLinkFrameworkException actorAuthorityChanged(ActorRef expected) {
+        return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                "Actor authority is not the requested incarnation: " + expected.actorId());
     }
 
     public CompletionStage<Void> bindActorSessionRoute(
