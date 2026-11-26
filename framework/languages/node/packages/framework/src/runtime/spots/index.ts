@@ -3360,7 +3360,8 @@ export class DefaultZLinkSpotManager {
     actor: ZLinkActor,
     actorRef: ActorRef,
     submitSourceLeave: (sourceNodeRid: RoutingId) => Promise<void>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    beforeJoinCompletion?: () => Promise<void>
   ): Promise<boolean> {
     throwIfAborted(signal);
     const admission = this.formalRemoteActorAdmissions.get(relocationId);
@@ -3401,6 +3402,10 @@ export class DefaultZLinkSpotManager {
       `actor Join source leave ${actorId}`,
       () => sourceLeave
     );
+    if (beforeJoinCompletion !== undefined) {
+      await sourceLeave;
+      await beforeJoinCompletion();
+    }
     if (outcome.deferredJoinCompletion !== undefined) {
       await this.options.actorTransferRuntime?.deliverDeferredJoinCompletion(
         outcome.deferredJoinCompletion,
