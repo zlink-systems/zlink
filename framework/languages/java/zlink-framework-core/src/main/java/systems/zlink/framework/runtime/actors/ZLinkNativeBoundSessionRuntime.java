@@ -88,12 +88,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkSessionBoundSession {
                 metadataPolicy);
     }
 
-    CompletionStage<Void> sendFrame(byte[] frameBytes) {
-        ZLinkBackendActorRef currentActorRef = currentActorRef();
-        Message frame = Message.from(frameBytes);
-        return submitBoundSessionFrame(spotNode, currentActorRef, frame).thenApply(ignored -> null);
-    }
-
     @Override
     public CompletionStage<Void> disconnect() {
         return actorRuntime.closeNativeSessionBinding(actor, spotNode, timeout);
@@ -102,10 +96,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkSessionBoundSession {
     @Override
     public CompletionStage<Void> disconnectForDestroy() {
         return actorRuntime.closeNativeSessionBindingForDestroy(actor, spotNode, timeout);
-    }
-
-    private ZLinkBackendActorRef currentActorRef() {
-        return actorRuntime.actorRef(actor);
     }
 
     private record SendCall(
