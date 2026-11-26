@@ -1494,6 +1494,13 @@ User Spot membership을 바꾸지 않는 Actor 이동은 `NewOwner` CAS 한 번�
 같은 target process에서 준비를 다시 하면 target 시도 번호와 준비 정보만 교체한다. 다른
 target으로 교체하지 않는다. 이전 시도는 owner를 바꿀 수 없다.
 
+- **Target 시도 번호는 대표 authority 하나가 소유한다.** `Prepared` 뒤 같은 target의 새 시도는 대표
+  authority의 `target.attemptGeneration`을 그 `StoreVersion` 조건 CAS 한 번으로 바꾼다. Aggregate 기록은
+  준비 요청 내용이 같으므로 바꾸지 않고(`AlreadyPrepared`), participant record와 이동 대상 목록도 바꾸지 않는다.
+  Commit CAS는 대표 authority의 현재 시도 번호를 조건으로 하므로 이전 시도는 commit할 수 없다.
+- Target의 Restore는 대표가 `Captured`이거나, `Prepared`이고 기록된 target이 자기 자신인 경우를 받는다.
+  `Prepared`에 다른 target이 기록돼 있으면 `Conflict`다.
+
 | 이동 종류 | Location Store에서 함께 바꾸는 값 |
 |---|---|
 | Actor 하나의 host relocation | Actor owner와 `AuthorityOwnerGeneration`. Entry Spot member라면 source와 target Entry membership도 바꾼다. |
@@ -1546,6 +1553,11 @@ JSON이 아니라 bytes를 그대로 저장한다. 새 authority payload record�
 authority `payload`가 될 application 정의 opaque bytes이고, membership 변경 record는 규범 schema의
 `aggregate-participant-mutation-bytes` 본문 bytes다. 이 type의 u32 길이 prefix는 wire에서만 쓰며 record에는
 저장하지 않는다. 크기 제한과 SHA-256은 본문 bytes에 적용한다. 아래 본문 공통 규칙은 이 두 record에 적용하지 않는다.
+
+**Participant 변경 bytes에는 target에 따라 정해지는 값을 넣지 않는다.** 이 record는 target을 고르기 전 seal 때
+쓰고 target 시도가 바뀌어도 그대로 쓰기 때문이다. Target node·route·target 쪽 membership처럼 target 선택에
+따라 정해지는 값은 aggregate 기록의 target field(`targetDescriptor`, `targetDescriptorLifecycleGeneration`,
+`targetOwner`)와 Restore 요청(command 40)이 소유하고, commit은 그 값으로 target 쪽 변경을 만든다.
 
 **본문 공통 규칙.** Aggregate 기록, 목록 root와 page의 본문은 UTF-8 JSON object이며
 [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)(JSON Canonicalization Scheme, JCS)로
@@ -1625,6 +1637,11 @@ Page 분할은 저장 bytes만으로 정해서, 같은 목록은 어느 언어�
 `(aggregateId, aggregateGeneration)`의 record를 다른 내용으로 다시 쓰지 않으며, 다른 내용이 필요하면
 새 `aggregateGeneration`을 쓴다. Commit 또는 abort 뒤 이 record들의 정리는 §8.1의 진행 정보
 제거 변경이 맡는다.
+
+**정리는 page와 participant 변경 record를 먼저, 목록 root를 그다음, aggregate 기록을 마지막에 지운다.** Batch
+key 상한 때문에 여러 batch로 나눌 수 있다. 읽는 쪽은 aggregate 기록이 `committed`·`aborted`인데 목록 root가
+없으면 정리가 끝난 것으로 보고, aggregate 기록이 `preparing`·`prepared`인데 root나 page가 없으면 손상된
+record로 처리한다.
 
 ## 9. Restore·완료 기록과 Store의 관계
 

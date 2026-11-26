@@ -1683,6 +1683,15 @@ An Actor move that doesn't change User Spot membership changes owner with a sing
 number and prep info — it doesn't swap in a different target. A previous attempt can't
 change the owner.
 
+- **The representative authority alone owns the target attempt number.** After `Prepared`, a new
+  attempt on the same target changes the representative authority's `target.attemptGeneration` with one
+  CAS conditioned on its `StoreVersion`. The aggregate record isn't changed because the prepare request
+  content is the same (`AlreadyPrepared`), and the participant records and inventory aren't changed either.
+  The commit CAS is conditioned on the representative's current attempt number, so a previous attempt
+  can't commit.
+- A target's Restore accepts a representative that is `Captured`, or `Prepared` with itself recorded as
+  the target. `Prepared` with a different recorded target is `Conflict`.
+
 | Move kind | Values changed together in the Location Store |
 |---|---|
 | One Actor's host relocation | Actor owner and `AuthorityOwnerGeneration`. If it's an Entry Spot member, source and target Entry membership also change. |
@@ -1740,6 +1749,12 @@ the membership change record is the body bytes of the normative schema's
 `aggregate-participant-mutation-bytes`. The type's u32 length prefix is used only on the wire and isn't
 stored in the record. The size limits and SHA-256 apply to the body bytes. The common body rules below
 don't apply to these two records.
+
+**Participant change bytes don't contain values that depend on the target.** These records are written at
+seal before a target is chosen and are reused when the target attempt changes. Values that the target choice
+decides, such as the target node, route, and target-side membership, are owned by the aggregate record's
+target fields (`targetDescriptor`, `targetDescriptorLifecycleGeneration`, `targetOwner`) and the Restore
+request (command 40), and commit builds the target-side change from those values.
 
 **Common body rules.** The bodies of the aggregate record and the inventory root and pages are UTF-8
 JSON objects, stored exactly as the bytes produced by
@@ -1826,6 +1841,12 @@ The inventory root, pages, and participant change records aren't modified once w
 of the same `(aggregateId, aggregateGeneration)` aren't rewritten with different content; different
 content uses a new `aggregateGeneration`. Cleaning up these records after commit or abort is done
 by the progress-information removal change of §8.1.
+
+**Cleanup deletes the pages and participant change records first, the inventory root next, and the aggregate
+record last.** It can be split across batches because of the batch key limit. A reader that finds the
+aggregate record `committed` or `aborted` without an inventory root treats cleanup as finished, and one that
+finds the aggregate record `preparing` or `prepared` without its root or a page treats the records as
+corrupt.
 
 ## 9. Restore, Completion Records, and Their Relationship to the Store
 
