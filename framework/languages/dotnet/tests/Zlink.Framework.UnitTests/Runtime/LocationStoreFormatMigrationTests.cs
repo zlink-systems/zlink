@@ -244,6 +244,60 @@ public sealed class LocationStoreFormatMigrationTests
     }
 
     [Fact]
+    public async Task StartupConvertsZeroCapacityAfterLosingWriteResponse()
+    {
+        var store = new MigrationStore { LoseResponseAfterRecord = true };
+        var legacy = LegacyCapacity("node");
+        await SeedAsync(store, legacy.Value, Capacity(0, 0, 0));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await using var runtime = Runtime(store);
+
+        await runtime.StartAsync(RoutingId.From("host"), deadline.Token);
+
+        await AssertValueAsync(store, legacy, null);
+        await AssertValueAsync(store, Counter(RoutingId.From("node"), "actors", "active"), null);
+        Assert.Equal(1, store.ConvertedRecords);
+    }
+
+    [Theory]
+    [InlineData("counter")]
+    [InlineData("counter-zero")]
+    [InlineData("zero")]
+    [InlineData("removed")]
+    [InlineData("changed")]
+    public async Task StartupResolvesCapacityBatchConflict(string scenario)
+    {
+        var store = new MigrationStore();
+        var legacy = LegacyCapacity("node");
+        var counter = Counter(RoutingId.From("node"), "actors", "active");
+        var initial = Capacity(scenario is "zero" or "counter-zero" ? 0 : 1, 0, 0);
+        await SeedAsync(store, legacy.Value, initial);
+        store.BeforeFirstConversion = async () =>
+        {
+            ZLinkStoreMutation mutation = scenario switch
+            {
+                "counter" or "counter-zero" => new ZLinkStoreMutation.Put(counter, Encoding.UTF8.GetBytes("7"), null),
+                "removed" or "zero" => new ZLinkStoreMutation.Delete(legacy),
+                _ => new ZLinkStoreMutation.Put(legacy, Encoding.UTF8.GetBytes(Capacity(2, 0, 0)), null),
+            };
+            await store.Inner.WriteAsync(new ZLinkStoreWriteRequest([], [mutation]));
+        };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await using var runtime = Runtime(store);
+        if (scenario is "counter" or "counter-zero")
+        {
+            await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
+                runtime.StartAsync(RoutingId.From("host"), deadline.Token).AsTask());
+            await AssertValueAsync(store, legacy, initial);
+            await AssertValueAsync(store, counter, "7");
+            return;
+        }
+        await runtime.StartAsync(RoutingId.From("host"), deadline.Token);
+        await AssertValueAsync(store, legacy, null);
+        await AssertValueAsync(store, counter, scenario == "changed" ? "2" : null);
+    }
+
+    [Fact]
     public async Task StartupRejectsAmbiguousLegacyRid()
     {
         var store = new MigrationStore();
@@ -410,6 +464,7 @@ public sealed class LocationStoreFormatMigrationTests
         public ZLinkInMemoryProviderLocationStore Inner { get; } = new();
         public CancellationTokenSource? InterruptAfterRecord { get; set; }
         public bool LoseResponseAfterRecord { get; init; }
+        public Func<Task>? BeforeFirstConversion { get; set; }
         public int ConvertedRecords => Volatile.Read(ref _convertedRecords);
         public int WritesBeforeFormat => Volatile.Read(ref _earlyWrites);
 
@@ -455,6 +510,11 @@ public sealed class LocationStoreFormatMigrationTests
             )
                 Interlocked.Increment(ref _earlyWrites);
 
+            if (convertsRecord && BeforeFirstConversion is { } before)
+            {
+                BeforeFirstConversion = null;
+                await before();
+            }
             var result = await Inner.WriteAsync(request, cancellationToken);
             if (result is ZLinkStoreWriteResult.Applied && convertsRecord)
             {

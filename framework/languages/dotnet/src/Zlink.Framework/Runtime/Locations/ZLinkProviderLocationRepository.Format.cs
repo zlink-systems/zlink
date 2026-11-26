@@ -226,11 +226,9 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             cancellationToken.ThrowIfCancellationRequested();
             var counters = DecodeLegacyCapacity(oldKey, found.Value.Bytes)
-                .Counters.Where(counter => counter.Value.Count != 0)
-                .Select(counter => new ZLinkStoreMutation.Put(
-                    CapacityCounterKey(mesh, ridHex, counter.Key.Dimension, counter.Key.Pending),
-                    EncodeGenerationCounter((ulong)counter.Value.Count),
-                    null
+                .Counters.Select(counter => (
+                    Key: CapacityCounterKey(mesh, ridHex, counter.Key.Dimension, counter.Key.Pending),
+                    Count: counter.Value.Count
                 ))
                 .ToArray();
             if (counters.Length >= ZLinkLocationStoreLimits.MaximumUniqueKeys)
@@ -245,7 +243,8 @@ internal sealed partial class ZLinkProviderLocationRepository
             foreach (var counter in counters)
             {
                 conditions.Add(new ZLinkStoreCondition.Missing(counter.Key));
-                mutations.Add(counter);
+                if (counter.Count != 0)
+                    mutations.Add(new ZLinkStoreMutation.Put(counter.Key, EncodeGenerationCounter((ulong)counter.Count), null));
             }
             mutations.Add(new ZLinkStoreMutation.Delete(oldKey));
             if (
@@ -255,16 +254,16 @@ internal sealed partial class ZLinkProviderLocationRepository
                 return;
 
             old = await _provider.ReadAsync(oldKey, cancellationToken).ConfigureAwait(false);
-            if (old is ZLinkStoreReadResult.Missing)
+            if (old is ZLinkStoreReadResult.Found current && current.Value.Bytes.Span.SequenceEqual(found.Value.Bytes.Span))
             {
                 foreach (var counter in counters)
                     if (
                         await _provider
                             .ReadAsync(counter.Key, cancellationToken)
-                            .ConfigureAwait(false) is ZLinkStoreReadResult.Missing
+                            .ConfigureAwait(false) is ZLinkStoreReadResult.Found
                     )
                         throw new ZLinkConfigurationException(
-                            $"The migrated Location Store counter {counter.Key.Value} is missing."
+                            $"The Location Store counter {counter.Key.Value} already exists during conversion."
                         );
             }
         }
