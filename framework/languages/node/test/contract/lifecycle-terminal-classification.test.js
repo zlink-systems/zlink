@@ -117,7 +117,7 @@ test('wire decode failures surface as public ProtocolError (round-11)', () => {
   //  The wire codec throws ServiceWireProtocolError (a plain Error) when a
   //  remote lifecycle reply cannot be processed — malformed actorCreate tail,
   //  bad frame count, inconsistent payload. requestUserSpotOperation (User Spot
-  //  create/close + Actor create) and completeRemoteReply (destroy/join/...)
+  //  create/close + Actor create) and completeRemoteReply (join/...)
   //  translate it at the awaiting boundary so callers observe the public
   //  ProtocolError kind (spec 32-framework-error-model:58-60, 91-92).
   const {
