@@ -2470,6 +2470,11 @@ stage_cpp_source_dotnet_target_remote_actor_create
 stage_cpp_source_node_target_remote_actor_create
 stage_cpp_source_java_target_remote_actor_create
 stage_dotnet_source_java_target_remote_actor_create
+# Login admission (#4546): every server language against the raw wire probe and
+# every connector language. The stage fails the run when any cell fails.
+source "${SCRIPT_DIR}/login_admission.sh"
+stage_login_admission
+RESULTS+=("login admission: C++/.NET/Java/Node servers x (wire probe + four connectors)")
 
 for result in "${RESULTS[@]}"; do
   echo "ok - ${result}"
