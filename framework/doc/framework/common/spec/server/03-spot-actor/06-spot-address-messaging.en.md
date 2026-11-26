@@ -615,6 +615,13 @@ The close procedure proceeds in the following order.
    diagnostics. An already accepted message is not placed again
    ([Submit and Completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)).
 
+**When a Close work item for the same incarnation is already on the lifecycle lane, a later Close request
+creates no new Close work item and joins that Close's result.** Joining is decided when the request is accepted
+on that lane and isn't decided again while it waits on the steps of the Close in progress. If the joined caller's
+cancellation is observed before the shared result is settled, that call ends as cancelled and the Close in
+progress is unaffected. An internal reason a lifecycle turn couldn't resume (the Spot is closed) isn't the
+joined call's result; a joined call ends only with the shared result or its own cancellation.
+
 **A context Close requested before Ready starts after Ready.** Handlers and timer callbacks don't run
 before Ready ([Spot timer §1](10-spot-timer.en.md#1-timer-generation-and-cancel)), so such a request only comes from
 `Configure`, `OnCreateAsync` or `OnInitializeAsync`. The request enters the lifecycle lane as the single Close work
