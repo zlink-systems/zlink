@@ -374,6 +374,85 @@ final class ZLinkLocationStoreFormatStartupTest {
         assertEquals(0, oversized.prematureWrites.get());
     }
 
+    @Test
+    void conflictingCounterStopsWithoutChangingEitherRecord() throws Exception {
+        ProbeStore store = new ProbeStore();
+        String old = legacyUsage("{}", "{}", 2, 0);
+        var counter = capacity("61", "actors", "active");
+        put(store.inner, legacy("a"), old);
+        put(store.inner, counter, "7");
+        store.limitConversionAttempts = true;
+        try (var host = start(store)) {
+            var failure = startupFailure(host);
+            assertInstanceOf(ZLinkConfigurationException.class, failure);
+            assertTrue(failure.getMessage().contains("counter"), failure.toString());
+        }
+        assertEquals(old, value(store.inner, legacy("a")));
+        assertEquals("7", value(store.inner, counter));
+        assertEquals(1, store.conversionAttempts.get());
+    }
+
+    @Test
+    void conflictingCounterOfZeroValueStopsWithoutChangingEitherRecord() throws Exception {
+        ProbeStore store = new ProbeStore();
+        String old = legacyUsage("{}", "{}", 0, 0);
+        var counter = capacity("61", "actors", "active");
+        put(store.inner, legacy("a"), old);
+        put(store.inner, counter, "7");
+        store.limitConversionAttempts = true;
+        try (var host = start(store)) {
+            var failure = startupFailure(host);
+            assertInstanceOf(ZLinkConfigurationException.class, failure);
+            assertTrue(failure.getMessage().contains("counter"), failure.toString());
+        }
+        assertEquals(old, value(store.inner, legacy("a")));
+        assertEquals("7", value(store.inner, counter));
+        assertEquals(1, store.conversionAttempts.get());
+    }
+
+    @Test
+    void zeroCapacityWithLostResponseFinishes() throws Exception {
+        ProbeStore store = new ProbeStore();
+        put(store.inner, legacy("a"), legacyUsage("{}", "{}", 0, 0));
+        store.loseNextResponse = true;
+        try (var host = start(store)) { startup(host); }
+        assertNull(value(store.inner, legacy("a")));
+        assertEquals("converted", value(store.inner, FORMAT));
+    }
+
+    @Test
+    void missingOldRecordAfterConflictFinishesEvenWithoutCounter() throws Exception {
+        ProbeStore store = new ProbeStore();
+        put(store.inner, legacy("a"), legacyUsage("{}", "{}", 2, 0));
+        store.deleteBeforeConflict = true;
+        try (var host = start(store)) { startup(host); }
+        assertNull(value(store.inner, legacy("a")));
+        assertNull(value(store.inner, capacity("61", "actors", "active")));
+        assertEquals("converted", value(store.inner, FORMAT));
+    }
+
+    @Test
+    void unchangedOldRecordWithoutCountersIsRetried() throws Exception {
+        ProbeStore store = new ProbeStore();
+        put(store.inner, legacy("a"), legacyUsage("{}", "{}", 2, 0));
+        store.conflictOnce = true;
+        try (var host = start(store)) { startup(host); }
+        assertNull(value(store.inner, legacy("a")));
+        assertEquals("2", value(store.inner, capacity("61", "actors", "active")));
+        assertEquals(2, store.conversionAttempts.get());
+    }
+
+    @Test
+    void changedOldRecordIsRetriedWithNewBytes() throws Exception {
+        ProbeStore store = new ProbeStore();
+        put(store.inner, legacy("a"), legacyUsage("{}", "{}", 2, 0));
+        store.replaceBeforeConflict = true;
+        try (var host = start(store)) { startup(host); }
+        assertNull(value(store.inner, legacy("a")));
+        assertEquals("3", value(store.inner, capacity("61", "actors", "active")));
+        assertEquals(2, store.conversionAttempts.get());
+    }
+
     private static ZLinkFrameworkRuntime start(ZLinkLocationStore store) {
         return start(store, "mesh");
     }
@@ -545,6 +624,11 @@ final class ZLinkLocationStoreFormatStartupTest {
         private int concurrentStartups;
         private volatile boolean interruptAfterFirstRecord;
         private volatile boolean loseNextResponse;
+        private boolean limitConversionAttempts;
+        private boolean conflictOnce;
+        private boolean deleteBeforeConflict;
+        private boolean replaceBeforeConflict;
+        private final AtomicInteger conversionAttempts = new AtomicInteger();
 
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
@@ -563,6 +647,22 @@ final class ZLinkLocationStoreFormatStartupTest {
                                                     && delete.key()
                                                             .value()
                                                             .startsWith(LEGACY_PREFIX));
+            if (convertsRecord) {
+                int attempt = conversionAttempts.incrementAndGet();
+                if (limitConversionAttempts && attempt > 1)
+                    return CompletableFuture.failedFuture(
+                            new ZLinkConfigurationException("unexpected repeated conversion"));
+                if (attempt == 1 && (conflictOnce || deleteBeforeConflict || replaceBeforeConflict)) {
+                    if (deleteBeforeConflict) {
+                        inner.write(new ZLinkStoreWriteRequest(List.of(),
+                                List.of(new ZLinkStoreDelete(legacy("a")))), cancellation)
+                                .toCompletableFuture().join();
+                    } else if (replaceBeforeConflict) {
+                        put(inner, legacy("a"), legacyUsage("{}", "{}", 3, 0));
+                    }
+                    return CompletableFuture.completedFuture(new ZLinkStoreWriteConflict(Instant.now()));
+                }
+            }
             if (convertsRecord && interruptAfterFirstRecord && moved.get() > 0) {
                 return CompletableFuture.failedFuture(
                         new ZLinkConfigurationException("injected startup interruption"));

@@ -67,6 +67,16 @@ final class ZLinkLegacyCapacity {
         return puts;
     }
 
+    /** Every target counter key of this record, including the ones whose value is 0. */
+    List<ZLinkStoreKey> counterKeys(ZLinkMeshNodeDescriptorKey target) {
+        var keys = new ArrayList<ZLinkStoreKey>(active.size() + pending.size());
+        active.keySet()
+                .forEach(dimension -> keys.add(ZLinkCapacityCounters.key(target, dimension, "active")));
+        pending.keySet()
+                .forEach(dimension -> keys.add(ZLinkCapacityCounters.key(target, dimension, "pending")));
+        return keys;
+    }
+
     byte[] release(ZLinkPlacementCapacityBundle bundle) {
         subtract("actors", bundle.actorSlots());
         subtract("spots", bundle.spotSlots());

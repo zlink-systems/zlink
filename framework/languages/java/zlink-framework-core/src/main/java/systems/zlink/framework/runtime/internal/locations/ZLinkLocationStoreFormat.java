@@ -177,18 +177,19 @@ final class ZLinkLocationStoreFormat {
     private CompletionStage<Void> writeCapacity(
             ZLinkStoreKey oldKey, ZLinkMeshNodeDescriptorKey target, ZLinkStoreValue oldValue) {
         byte[] bytes = oldValue.bytes();
-        var counters = ZLinkLegacyCapacity.decode(oldKey, bytes).counterPuts(target);
-        if (counters.size() >= ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
+        var legacy = ZLinkLegacyCapacity.decode(oldKey, bytes);
+        // Every target counter key must be missing, including zero-valued ones that are not Put.
+        var counterKeys = legacy.counterKeys(target);
+        var counters = legacy.counterPuts(target);
+        if (counterKeys.size() >= ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
             throw new ZLinkConfigurationException(
                     "v11 capacity conversion exceeds the Location Store batch key limit for "
                             + oldKey.value());
-        var conditions = new ArrayList<ZLinkStoreCondition>(counters.size() + 1);
+        var conditions = new ArrayList<ZLinkStoreCondition>(counterKeys.size() + 1);
         var mutations = new ArrayList<ZLinkStoreMutation>(counters.size() + 1);
         conditions.add(new ZLinkStoreValueCondition(oldKey, bytes));
-        for (var counter : counters) {
-            conditions.add(new ZLinkStoreMissingCondition(counter.key()));
-            mutations.add(counter);
-        }
+        for (var key : counterKeys) conditions.add(new ZLinkStoreMissingCondition(key));
+        mutations.addAll(counters);
         mutations.add(new ZLinkStoreDelete(oldKey));
         return write(new ZLinkStoreWriteRequest(conditions, mutations))
                 .<CompletionStage<Void>>handle(
@@ -210,43 +211,37 @@ final class ZLinkLocationStoreFormat {
                                         new ZLinkConfigurationException(
                                                 "Location Store rejected v11 capacity conversion"));
                             }
-                            return confirmMove(oldKey, counters);
+                            return confirmMove(oldKey, bytes, counterKeys);
                         })
                 .thenCompose(stage -> stage);
     }
 
-    private CompletionStage<Void> confirmMove(ZLinkStoreKey oldKey, List<ZLinkStorePut> counters) {
+    private CompletionStage<Void> confirmMove(
+            ZLinkStoreKey oldKey, byte[] bytes, List<ZLinkStoreKey> counterKeys) {
         return read(oldKey)
                 .thenCompose(
                         old -> {
+                            if (!(old instanceof ZLinkStoreReadFound found))
+                                return CompletableFuture.completedFuture(null);
+                            if (!Arrays.equals(bytes, found.value().bytes()))
+                                return CompletableFuture.completedFuture(null)
+                                        .thenComposeAsync(ignored -> move(oldKey));
                             var destinations =
-                                    counters.stream()
-                                            .map(
-                                                    counter ->
-                                                            read(counter.key())
-                                                                    .toCompletableFuture())
+                                    counterKeys.stream()
+                                            .map(key -> read(key).toCompletableFuture())
                                             .toList();
                             return CompletableFuture.allOf(
                                             destinations.toArray(CompletableFuture<?>[]::new))
                                     .thenComposeAsync(
                                             ignored -> {
-                                                if (old instanceof ZLinkStoreReadFound)
-                                                    return move(oldKey);
                                                 if (destinations.stream()
-                                                        .allMatch(
-                                                                result ->
-                                                                        result.join()
-                                                                                instanceof
-                                                                                ZLinkStoreReadFound))
-                                                    return CompletableFuture.completedFuture(null);
-                                                // Counters are never deleted, so a missing row with
-                                                // a missing counter cannot become consistent by
-                                                // reading again.
-                                                return CompletableFuture.<Void>failedFuture(
-                                                        new ZLinkConfigurationException(
-                                                                "The migrated Location Store"
-                                                                        + " counter is missing for "
-                                                                        + oldKey.value()));
+                                                        .anyMatch(result -> result.join()
+                                                                instanceof ZLinkStoreReadFound))
+                                                    return CompletableFuture.<Void>failedFuture(
+                                                            new ZLinkConfigurationException(
+                                                                    "Existing Location Store counter for "
+                                                                            + oldKey.value()));
+                                                return move(oldKey);
                                             });
                         });
     }
