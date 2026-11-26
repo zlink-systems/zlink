@@ -582,47 +582,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         }
     }
 
-    final CompletionStage<Void> handleRoutedBoundSessionSendParts(List<Message> parts) {
-        List<Message> packetParts =
-                parts.size() == 2
-                        ? systems.zlink.framework.runtime.actors.ZLinkActorEntryTransferEnvelope
-                                .decode(parts.get(1))
-                        : parts;
-        boolean ownsPacketParts = packetParts != parts;
-        ZLinkActorSpotRoutePackets.BoundSessionSend send;
-        try {
-            send = ZLinkActorSpotRoutePackets.decodeBoundSessionSend(packetParts);
-        } finally {
-            if (ownsPacketParts) {
-                packetParts.forEach(Message::close);
-            }
-        }
-        byte[] frameBytes = send.frame().toByteArray();
-        CompletionStage<Void> sendStage =
-                host.actorSessions()
-                        .sendBoundSession(
-                                send.actorRef(),
-                                frameBytes,
-                                () ->
-                                        host.sendActorBoundSessionWithRetry(
-                                                host.primaryNode(),
-                                                send.actorRef(),
-                                                send.actorRef().actorId(),
-                                                frameBytes,
-                                                "routed actor bound session send failed"));
-        return sendStage.whenComplete((ignored, error) -> send.close());
-    }
-
-    final CompletionStage<List<Message>> handleRoutedBoundSessionSendRequestParts(
-            List<Message> parts) {
-        return handleRoutedBoundSessionSendParts(parts)
-                .thenApply(ignored -> List.of(Message.from(new byte[0])));
-    }
-
-    final CompletionStage<Optional<Message>> handleRoutedActorPacketParts(List<Message> parts) {
-        return handleRoutedActorPacketParts(parts, Instant.now());
-    }
-
     final CompletionStage<Optional<Message>> handleRoutedActorPacketParts(
             List<Message> parts, Instant receivedAt) {
         List<Message> packetParts =
