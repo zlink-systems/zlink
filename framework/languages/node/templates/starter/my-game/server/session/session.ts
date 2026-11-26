@@ -17,6 +17,7 @@ export class Session implements ZLinkSession {
 @Injectable()
 export class SessionFactory implements ZLinkSessionFactory<Session> {
   async create(context: ZLinkSessionContext): Promise<Session> {
+    console.log('STREAM client connected');
     return new Session(context);
   }
 }

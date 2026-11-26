@@ -35,11 +35,11 @@ public sealed class PlayerSession(
             dispatch.PacketName
             is not (
                 nameof(EnterWorldRequest)
-                    or nameof(ChangeChannelRequest)
-                    or nameof(EarnRequest)
-                    or nameof(ViewRequest)
-                    or nameof(ChannelViewRequest)
-                    or nameof(SessionInfoRequest)
+                or nameof(ChangeChannelRequest)
+                or nameof(EarnRequest)
+                or nameof(ViewRequest)
+                or nameof(ChannelViewRequest)
+                or nameof(SessionInfoRequest)
             )
         )
         {

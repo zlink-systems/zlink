@@ -19,6 +19,7 @@ public sealed class PlayerActor(IZLinkActorContext context) : IZLinkActor
             return ValueTask.CompletedTask;
         return Context.BoundSession.Send(message).Async();
     }
+
     public IZLinkActorContext Context { get; } = context;
 
     public void Move(string zoneId, EnterZone destination) =>
@@ -32,7 +33,8 @@ public sealed class PlayerActor(IZLinkActorContext context) : IZLinkActor
         cancellationToken.ThrowIfCancellationRequested();
         if (completion is not ZLinkActorJoinCompletion.Accepted accepted)
             throw new InvalidOperationException($"Zone join failed: {completion}.");
-        var reply = accepted.Reply
+        var reply =
+            accepted.Reply
             ?? throw new InvalidDataException("Accepted Zone join has no WorldState reply.");
         await Context.BoundSession.Send(reply.Decode<WorldState>()).Async();
     }

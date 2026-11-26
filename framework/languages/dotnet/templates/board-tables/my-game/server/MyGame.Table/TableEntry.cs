@@ -32,6 +32,11 @@ public sealed class EnterTableHandler(IZLinkSpotManager spots)
     {
         if (actor.Context.ActorId != request.PlayerId)
             throw new InvalidDataException("Player identity does not match the bound Actor.");
+        if (request.Reconnect)
+        {
+            await actor.Context.BoundSession.Send(new ActionRejected(Rejection.NotSeated, 0)).Async();
+            return;
+        }
         var created = await spots
             .GetOrCreate(request.TableId, GameNames.TableType)
             .InMesh(GameNames.WorldMesh)

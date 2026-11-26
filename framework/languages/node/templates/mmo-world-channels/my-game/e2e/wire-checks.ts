@@ -70,8 +70,7 @@ async function runWireChecks(): Promise<void> {
     const expected: Record<string, string> = {
       [PacketNames.playerView]:
         '{"worldId":"wire","channel":"9007199254740991","nodeId":"wire-check","gold":"9007199254740991"}',
-      [PacketNames.channelView]:
-        '{"channelId":"9007199254740991","playerIds":["wire-player"]}',
+      [PacketNames.channelView]: '{"channelId":"9007199254740991","playerIds":["wire-player"]}',
       [PacketNames.actionRejected]: '{"reason":"earn-too-soon","retryAfterMs":1}'
     };
     const received: Promise<void>[] = [];

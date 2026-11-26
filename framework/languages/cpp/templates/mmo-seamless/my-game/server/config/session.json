@@ -3,5 +3,5 @@
   "RedisEndpoint": "127.0.0.1:6379",
   "KeyPrefix": "my-game:",
   "MeshEndpoint": "tcp://127.0.0.1:0",
-  "StreamEndpoint": "tcp://127.0.0.1:0"
+  "StreamEndpoint": "ws://127.0.0.1:0"
 }
