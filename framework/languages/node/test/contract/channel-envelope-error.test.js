@@ -249,6 +249,32 @@ test('default payload decode rejects BOM and duplicate properties at every depth
   }
 });
 
+test('typed JSON failures identify the message, property path and wire representation', () => {
+  class DiagnosticPacket {}
+  framework.ZLinkPacket('DiagnosticPacket', {
+    payload: {
+      type: 'object',
+      properties: {
+        child: {
+          type: 'object',
+          properties: { sequence: { type: 'int64' } },
+          required: ['sequence']
+        }
+      },
+      required: ['child']
+    }
+  })(DiagnosticPacket);
+  const invalid = Message.from(Buffer.from('{"child":{"sequence":1}}'));
+  try {
+    assert.throws(
+      () => payloadCodec.decodeFrameworkPayloadMessage(invalid, undefined, DiagnosticPacket),
+      /DiagnosticPacket.*\$\.child\.sequence.*int64 decimal string/
+    );
+  } finally {
+    invalid.close();
+  }
+});
+
 test('typed decode reattaches a DTO prototype without invoking its constructor', () => {
   class RequiredDto {
     constructor(required) {

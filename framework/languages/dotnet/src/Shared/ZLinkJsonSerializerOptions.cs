@@ -19,6 +19,7 @@ internal static class ZLinkJsonSerializerOptions
     // payloads must use FrameworkPayload through ZLinkFrameworkJsonPayloadCodec.
 #if ZLINK_FRAMEWORK
     public static JsonSerializerOptions Default { get; } = CreateDefault();
+    internal static readonly object DiagnosticTokenOffset = new();
 #endif
 
     public static JsonSerializerOptions FrameworkPayload { get; } = CreateFrameworkPayload();
@@ -179,7 +180,7 @@ internal static class ZLinkJsonSerializerOptions
         )
         {
             if (reader.TokenType == JsonTokenType.Null)
-                throw new JsonException($"Property '{propertyName}' does not allow null.");
+                throw NullNotAllowed(reader.TokenStartIndex);
             return converter.Read(ref reader, typeToConvert, options);
         }
 
@@ -188,9 +189,29 @@ internal static class ZLinkJsonSerializerOptions
         public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
         {
             if (value is null)
-                throw new JsonException($"Property '{propertyName}' does not allow null.");
+                throw NullNotAllowed();
             converter.Write(writer, value, options);
         }
+
+        private JsonException NullNotAllowed(long? tokenOffset = null) =>
+#if ZLINK_FRAMEWORK
+            ReadFailure(
+                $"Property '{propertyName}' does not allow null. "
+                    + "Declare it nullable with '?' to allow null.",
+                tokenOffset
+            );
+#else
+            new($"Property '{propertyName}' does not allow null.");
+#endif
+    }
+
+    private static JsonException ReadFailure(string message, long? tokenOffset)
+    {
+        var error = new JsonException(message);
+#if ZLINK_FRAMEWORK
+        error.Data[DiagnosticTokenOffset] = tokenOffset ?? -1L;
+#endif
+        return error;
     }
 
 #if NETSTANDARD2_1
@@ -278,7 +299,10 @@ internal static class ZLinkJsonSerializerOptions
         )
         {
             if (reader.TokenType != JsonTokenType.String)
-                throw new JsonException("Signed 64-bit integers must be decimal strings.");
+                throw ReadFailure(
+                    "Signed 64-bit integers must be decimal strings.",
+                    reader.TokenStartIndex
+                );
             var encoded = reader.GetString();
             if (
                 !IsCanonicalDecimalInteger(encoded)
@@ -289,7 +313,10 @@ internal static class ZLinkJsonSerializerOptions
                     out var value
                 )
             )
-                throw new JsonException("Signed 64-bit integer string is not canonical.");
+                throw ReadFailure(
+                    "Signed 64-bit integer string is not canonical.",
+                    reader.TokenStartIndex
+                );
             return value;
         }
 
@@ -312,7 +339,10 @@ internal static class ZLinkJsonSerializerOptions
         )
         {
             if (reader.TokenType != JsonTokenType.String)
-                throw new JsonException("Unsigned 64-bit integers must be decimal strings.");
+                throw ReadFailure(
+                    "Unsigned 64-bit integers must be decimal strings.",
+                    reader.TokenStartIndex
+                );
             var encoded = reader.GetString();
             if (
                 !IsCanonicalDecimalInteger(encoded)
@@ -323,7 +353,10 @@ internal static class ZLinkJsonSerializerOptions
                     out var value
                 )
             )
-                throw new JsonException("Unsigned 64-bit integer string is not canonical.");
+                throw ReadFailure(
+                    "Unsigned 64-bit integer string is not canonical.",
+                    reader.TokenStartIndex
+                );
             return value;
         }
 

@@ -1,4 +1,6 @@
 #pragma once
+#include <iostream>
+#include <syncstream>
 #include "player.hpp"
 #include "server/region/domain/positions.hpp"
 namespace MyGame
@@ -54,7 +56,11 @@ class Region final : public fx::spot_t<Player>
         positions.add (std::string (id));
         co_return fx::spot_actor_join_result_t::accept ();
     }
-    fx::task_t<void> on_actor_joined (Player &) override { co_await broadcast (); }
+    fx::task_t<void> on_actor_joined (Player &) override
+    {
+        std::osyncstream (std::cout) << "GAME Player joined Region" << std::endl;
+        co_await broadcast ();
+    }
     fx::task_t<void> on_leave_actor (Player &actor) override
     {
         positions.remove (std::string (actor.context ().actor_id ().value ()));

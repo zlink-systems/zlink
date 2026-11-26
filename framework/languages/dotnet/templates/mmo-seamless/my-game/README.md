@@ -1,6 +1,6 @@
 # MyGame MMORPG seamless world
 
-This project runs a Session node, two play nodes (zone), a play node (dungeon), and a Redis Location Store. It includes a C# e2e client. Add server gameplay to the extension points in [AGENTS.md](AGENTS.md); no game engine project is included.
+This project runs a Session node, two play nodes (zone), a play node (dungeon), and a Redis Location Store. It includes a C# e2e client. Use the extension points in [AGENTS.md](AGENTS.md) when designing game server code in a new project.
 
 ```mermaid
 flowchart LR
@@ -19,6 +19,8 @@ flowchart LR
 
 The initial `zlink.structure.json` uses the landing page's `mmo-seamless` composition. The structure checker accepts additional or reordered nodes, Spots and edges when identifiers, references, configuration paths and IDs, configured Zone IDs, and declared channel and Spot types agree with the format and server contracts. Runtime relocation can change the owner recorded in Redis without changing the initial structure definition.
 
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
 ## Prerequisites
 
 - Docker Engine with Docker Compose v2, reachable from the current shell.
@@ -26,7 +28,7 @@ The initial `zlink.structure.json` uses the landing page's `mmo-seamless` compos
 - Bash for Linux, WSL, or macOS; PowerShell 7 for Windows.
 - Linux native assets supported by the published `Zlink` package. Local process debugging additionally requires the .NET 8 SDK and ASP.NET Core 8 runtime.
 
-Packages come from public NuGet only. `Directory.Packages.props` pins the Framework package family to `0.32.0`. This project has no dependency on a ZLink source checkout or local package feed.
+Packages come from public NuGet only. `Directory.Packages.props` pins the Framework package family to `0.34.1`. This project has no dependency on a ZLink source checkout or local package feed.
 
 ## Build
 
@@ -39,12 +41,26 @@ Run commands from this project root:
 PowerShell builds the same Dockerfile targets:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 `Dockerfile` owns fixed `SDK_IMAGE`, `RUNTIME_IMAGE`, and `DOCKER_CLI_IMAGE` defaults. Replace the appropriate base ARG when adopting a ZLink base image. Session, Zone, and Instance share the node image because their runtime dependencies match; each retains its own executable entry point. The ASP.NET Core runtime supplies shared hosting dependencies. The runner target adds Docker CLI and structure inputs without including the SDK.
 
 Scripts remove unique image tags after each invocation. Docker retains build layers for subsequent runs.
+
+## Local server
+
+Run from the template directory with the .NET 8 SDK and Docker Compose v2 available. The command builds the server and starts Redis in Docker and the game nodes as local processes.
+
+```bash
+./run-server.sh
+```
+
+```powershell
+.\run-server.cmd
+```
+
+Connect clients to the WebSocket address in the `Server ready` line. When the topology has an HTTP API, the runner also prints its address. Ctrl+C stops the nodes and Redis. A second start is rejected while the server is running.
 
 ## Client connection
 
@@ -119,23 +135,27 @@ Console.WriteLine(await received.Task.WaitAsync(ct));
 
 ## Local e2e
 
+Run `run-e2e` from another terminal to detect the running server through `.logs/server.json`, or run it with the server stopped to use an isolated Docker deployment. The attached run skips `update` because node replacement needs isolated processes.
+
+The runner prints each scenario result and the pass total. Find per-node stdout, stderr, and Framework message flow in `.logs/run-<id>/` as `<node>.out.log`, `<node>.err.log`, and `<node>.flow.log`. An isolated scenario with its own deployment keeps these files in a scenario subdirectory. Failures reference a `*-failure.log` file. Docker build and cleanup logs remain in `.logs/docker-<project>/`.
+
 ```sh
 ./run-e2e.sh
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
+.\run-e2e.cmd
 ```
 
-Both scripts build images and call the same C# orchestrator inside a runner container. A unique Compose project/network contains Redis and the runner. The runner checks structure before starting nodes. Nodes share its network namespace, preserving loopback listeners and OS-assigned ports without host port mappings. Redis publishes an ephemeral loopback port for local debugging.
+In isolated Docker mode, both scripts build images and call the same C# runner inside a container. A unique Compose project/network contains Redis and the runner. The runner checks structure before starting nodes. Nodes share its network namespace, preserving loopback listeners and OS-assigned ports without host port mappings. Redis publishes an ephemeral loopback port for local debugging.
 
 The runner creates each node with interactive stdin, copies its configuration with `docker cp`, and attaches through `docker start -a -i`. `ManagedProcess` retains readiness, drain, shutdown, and replacement controls. Only the runner mounts the Docker socket; use a trusted local daemon. Scripts remove their labeled containers, Compose project, and image tags. Cleanup failure returns exit code 1.
 
 Node stderr logs (`<node>.err.log`) include Framework message flow records because dispatch diagnostics use `Normal`. Inspect these logs from the first failing run.
 
-On Unix sockets, Bash runs the runner with the caller's UID/GID and the socket's group so retained logs remain writable by the caller. Windows uses Docker Desktop's filesystem mapping. Build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`; node settings and control logs are in `.logs/run-<id>/`.
+On Unix sockets, the script runs the runner with the caller's UID/GID and the socket's group so retained logs remain writable by the caller. Windows uses Docker Desktop's filesystem mapping. Build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`; node settings and control logs are in `.logs/run-<id>/`.
 
-The default runs all four scenarios. To select scenarios, use:
+The default isolated run executes all four scenarios. To select scenarios, use:
 
 ```sh
 ./run-e2e.sh --scenario cross,border,reconnect,update
@@ -144,9 +164,9 @@ The default runs all four scenarios. To select scenarios, use:
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
+.\run-e2e.cmd -Scenario cross,border,reconnect,update
+.\run-e2e.cmd -CheckStructure
+.\run-e2e.cmd -CheckDomain
 ```
 
 Selection retains the canonical scenario order. Unknown or duplicate names fail before node startup. Exit status includes cleanup failures even when all selected scenarios pass.
@@ -159,8 +179,8 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -Local
-pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
+.\run-e2e.cmd -Local
+.\run-e2e.cmd -Local -NoBuild
 ```
 
 | Scenario | Observable behavior |
@@ -194,7 +214,9 @@ Every e2e run validates the composition before starting nodes. `--check-structur
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
+
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

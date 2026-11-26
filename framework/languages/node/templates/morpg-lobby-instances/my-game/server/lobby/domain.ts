@@ -23,7 +23,8 @@ export class PartyState {
     return true;
   }
   markReady(id: string): void {
-    if (this.phase === RunPhase.Forming && this.members.includes(id) && !this.ready.includes(id)) this.ready.push(id);
+    if (this.phase === RunPhase.Forming && this.members.includes(id) && !this.ready.includes(id))
+      this.ready.push(id);
   }
   leave(id: string): void {
     if (this.phase !== RunPhase.Forming) return;
@@ -34,7 +35,9 @@ export class PartyState {
     return new PartyView(
       this.partyId,
       [...this.members],
-      this.members.map((id) => this.ready.includes(id)), this.phase, this.runId
+      this.members.map((id) => this.ready.includes(id)),
+      this.phase,
+      this.runId
     );
   }
   entryRejection(id: string): string | null {
@@ -45,27 +48,37 @@ export class PartyState {
         : null;
   }
   enter(id: string): string | null {
-    const reason = this.entryRejection(id); if (reason) return reason;
+    const reason = this.entryRejection(id);
+    if (reason) return reason;
     if (this.phase === RunPhase.Forming || this.phase === RunPhase.Completed) {
-      this.runId = newRunId(); this.phase = RunPhase.Preparing; this.entered = [];
+      this.runId = newRunId();
+      this.phase = RunPhase.Preparing;
+      this.entered = [];
     }
     return null;
   }
   arrived(runId: string, playerId: string): string | null {
-    if (this.runId !== runId || this.phase === RunPhase.Forming || !this.members.includes(playerId)) return Rejection.runMismatch;
-    if (!this.entered.includes(playerId)) this.entered.push(playerId); return null;
+    if (this.runId !== runId || this.phase === RunPhase.Forming || !this.members.includes(playerId))
+      return Rejection.runMismatch;
+    if (!this.entered.includes(playerId)) this.entered.push(playerId);
+    return null;
   }
   prepared(id: string): string | null {
-    if (this.runId !== id || ![RunPhase.Preparing, RunPhase.Entering].includes(this.phase)) return Rejection.runMismatch;
-    this.phase = RunPhase.Entering; return null;
+    if (this.runId !== id || ![RunPhase.Preparing, RunPhase.Entering].includes(this.phase))
+      return Rejection.runMismatch;
+    this.phase = RunPhase.Entering;
+    return null;
   }
   started(id: string): string | null {
-    if (this.runId !== id || ![RunPhase.Entering, RunPhase.Active].includes(this.phase)) return Rejection.runMismatch;
-    this.phase = RunPhase.Active; return null;
+    if (this.runId !== id || ![RunPhase.Entering, RunPhase.Active].includes(this.phase))
+      return Rejection.runMismatch;
+    this.phase = RunPhase.Active;
+    return null;
   }
   completed(id: string): string | null {
-    if (this.runId !== id || ![RunPhase.Active, RunPhase.Completed].includes(this.phase)) return Rejection.runMismatch;
-    this.phase = RunPhase.Completed; return null;
+    if (this.runId !== id || ![RunPhase.Active, RunPhase.Completed].includes(this.phase))
+      return Rejection.runMismatch;
+    this.phase = RunPhase.Completed;
+    return null;
   }
-
 }

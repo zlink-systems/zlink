@@ -2414,9 +2414,10 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_entry_
           std::move (bound_session_rid), "ZLinkFrameworkActorJoinRequest", "application/json"});
         state->source_spot = source;
         state->target_entry = true;
-        co_return co_await admit_remote_application_actor_join_via_wire (
-          std::move (state), {target.lifecycle_generation, target.lifecycle_generation,
-                              static_cast<std::uint64_t> (target.lease_generation)});
+        co_return co_await join_remote_application_actor_to_spot (
+          std::move (state),
+          observed_spot_authority_t{target.lifecycle_generation, target.lifecycle_generation,
+                                    static_cast<std::uint64_t> (target.lease_generation)});
     }
     auto joined = std::make_shared<task_completion_source_t<result_t<actor_join_reply_t>>> ();
     host::pending_operation_t operation;
@@ -2629,10 +2630,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
         && !state->has_incomplete_typed_application_payload ()
         && (state->has_typed_application_payload () || request.is_empty ())
         && has_admitted_peer (target.node_rid, observed->target_node_generation)) {
-        co_return co_await admit_remote_application_actor_join_via_wire (std::move (state),
-                                                                         *observed);
+        co_return co_await join_remote_application_actor_to_spot (std::move (state), observed);
     }
-    co_return co_await join_remote_application_actor_to_spot (std::move (state));
+    co_return co_await join_remote_application_actor_to_spot (std::move (state), std::nullopt);
 }
 
 task_t<result_t<void>>
@@ -2662,6 +2662,14 @@ mesh_node_runtime_t::deliver_actor_join (actor_ref_t actor,
       actor, actor_join_rejected_t{operation_high, operation_low, reply}, source_spot);
 }
 
+void mesh_node_runtime_t::assign_remote_actor_join_operation_id (remote_actor_join_state_t &s)
+{
+    s.completion_operation_id_low =
+      _state->next_join_completion_operation.fetch_add (1, std::memory_order_relaxed);
+    s.completion_operation_id_high =
+      static_cast<std::uint64_t> (std::hash<std::string>{}(_state->mesh_name)) | 1ULL;
+}
+
 task_t<actor_join_reply_t> mesh_node_runtime_t::fail_remote_actor_join (
   const remote_actor_join_state_t &s, const result_t<actor_join_reply_t> &r, std::string m)
 {
@@ -2677,8 +2685,24 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::fail_remote_actor_join (
 }
 
 task_t<actor_join_reply_t> mesh_node_runtime_t::join_remote_application_actor_to_spot (
-  std::shared_ptr<remote_actor_join_state_t> s)
+  std::shared_ptr<remote_actor_join_state_t> s, std::optional<observed_spot_authority_t> observed)
 {
+    // The source owns the policy in its immutable startup factory catalog.
+    const auto &factories = _state->spot_state->actor_factories;
+    const auto factory =
+      factories.find (std::string (detail::actor_ref_access_t::actor_type (s->actor)));
+    if (factory != factories.end ()
+        && factory->second.relocation.kind == detail::factory_relocation_kind_t::disabled) {
+        assign_remote_actor_join_operation_id (*s);
+        co_return co_await fail_remote_actor_join (
+          *s,
+          result_t<actor_join_reply_t>::failure (framework_error_kind_t::rejected,
+                                                 "Actor relocation is disabled"),
+          "Actor relocation is disabled");
+    }
+    if (observed) {
+        co_return co_await admit_remote_application_actor_join_via_wire (std::move (s), *observed);
+    }
     std::optional<result_t<actor_join_reply_t>> failure;
     try {
         co_return co_await admit_remote_application_actor_join (s);
@@ -2715,10 +2739,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     s->source_spot_generation = *source_spot_generation;
     auto reserved = spot.reserved_actor_transfer_id (s->actor);
     s->transfer_id = reserved ? std::move (*reserved) : spot.next_actor_transfer_id ();
-    s->completion_operation_id_low =
-      _state->next_join_completion_operation.fetch_add (1, std::memory_order_relaxed);
-    s->completion_operation_id_high =
-      static_cast<std::uint64_t> (std::hash<std::string>{}(_state->mesh_name)) | 1ULL;
+    assign_remote_actor_join_operation_id (*s);
     s->target_completion_operation_id_high = s->completion_operation_id_high;
     s->target_completion_operation_id_low = s->completion_operation_id_low;
     s->deadline = std::chrono::steady_clock::now () + s->timeout;
@@ -2946,10 +2967,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     // non-zero completion operation id, exactly like the JSON path's
     // admit_remote_application_actor_join sets before it can send its
     // request.
-    s->completion_operation_id_low =
-      _state->next_join_completion_operation.fetch_add (1, std::memory_order_relaxed);
-    s->completion_operation_id_high =
-      static_cast<std::uint64_t> (std::hash<std::string>{}(_state->mesh_name)) | 1ULL;
+    assign_remote_actor_join_operation_id (*s);
     const auto correlation = (s->completion_operation_id_low << 1) | 1ULL;
     s->target_completion_operation_id_high = local.lifecycle_generation ();
     s->target_completion_operation_id_low = correlation;
@@ -3248,14 +3266,14 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
     /* The canonical relocation unit captures the Actor while sealing its
      * immutable envelope.  Only start the source move here; capturing now
      * would create a stale, unused snapshot and invoke Capture twice. */
-    const auto prepared = co_await spot.transfer_actor_out (s->actor, s->transfer_id, false);
+    const auto prepared = co_await spot.transfer_actor_out (s->actor, s->transfer_id);
     if (!prepared) {
         const auto failed =
           detail::propagate_failure<actor_join_reply_t> (prepared, "Actor transfer-out failed");
         (void) co_await abort_remote_actor_join_seal (s);
         co_return co_await fail_remote_actor_join (*s, failed, "Actor transfer-out failed");
     }
-    s->relocation_content_type = prepared.value ().relocation_content_type;
+    s->relocation_content_type = prepared.value ();
     auto *maintenance = _node->maintenance ();
     if (!maintenance || !s->source_authority || !s->source_spot) {
         spot.fail_remote_actor_transfer (s->actor, false);

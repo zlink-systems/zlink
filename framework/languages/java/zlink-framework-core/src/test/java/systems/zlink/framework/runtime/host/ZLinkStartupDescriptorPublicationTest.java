@@ -976,7 +976,11 @@ final class ZLinkStartupDescriptorPublicationTest {
             return inner.write(request, cancellation)
                     .thenApply(
                             result -> {
-                                claimed.set(true);
+                                if (result instanceof ZLinkStoreWriteApplied
+                                        && request.mutations().getFirst()
+                                                instanceof ZLinkStorePut put
+                                        && put.key().value().startsWith("owner-lease\0"))
+                                    claimed.set(true);
                                 return result;
                             });
         }

@@ -92,10 +92,12 @@ public sealed class MessageFlowTracerTests
             [
                 "backpressure",
                 "decode_error",
+                "encode_error",
                 "handler_exception",
                 "invalid_frame",
                 "no_handler",
                 "reply_path_missing",
+                "session_creation_failed",
                 "shutdown",
                 "stale_target",
                 "unexpected_reply",

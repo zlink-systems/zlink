@@ -189,6 +189,7 @@ export enum ZLinkDispatchMessageKind {
 export type ZLinkDispatchErrorReason =
   | 'no_handler'
   | 'decode_error'
+  | 'encode_error'
   | 'handler_exception'
   | 'invalid_frame'
   | 'reply_path_missing'
@@ -197,6 +198,7 @@ export type ZLinkDispatchErrorReason =
   | 'target_closed'
   | 'location_unavailable'
   | 'stale_target'
+  | 'session_creation_failed'
   | 'shutdown';
 
 export type ZLinkDispatchErrorAction = 'reply_error' | 'fail_caller' | 'drop';
@@ -204,12 +206,14 @@ export type ZLinkDispatchErrorAction = 'reply_error' | 'fail_caller' | 'drop';
 export enum ZLinkRuntimeDispatchErrorReason {
   HandlerMissing = 'no_handler',
   PayloadDecodeFailed = 'decode_error',
+  PayloadEncodeFailed = 'encode_error',
   HandlerException = 'handler_exception',
   InvalidFrame = 'invalid_frame',
   ReplyPathMissing = 'reply_path_missing',
   UnexpectedReply = 'unexpected_reply',
   Backpressure = 'backpressure',
   StaleTarget = 'stale_target',
+  SessionCreationFailed = 'session_creation_failed',
   Shutdown = 'shutdown'
 }
 

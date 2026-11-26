@@ -162,6 +162,11 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
       import('../foundation/service-stateful-runtime').ZLinkActorJoinIngressRouter
     >
   ) => boolean;
+  readonly relocationRequestAdmission?: (
+    meshName: string,
+    request: import('../foundation/service-stateful-runtime').ServiceRelocationRequest
+  ) =>
+    import('../foundation/service-stateful-runtime').ServiceRelocationRequestAdmission | undefined;
   readonly messageFollowReceiver?: (record: ServiceMessageFollowRecord) => void;
   /** MeshNode §5.1 activation admission record; the descriptor projects it for placement. */
   readonly activationConcurrency?: (meshName: string) => ZLinkActivationConcurrency;
@@ -423,6 +428,9 @@ export class ZLinkSpotNodeRuntimeManager {
         node.start('preparing');
         node.setActorJoinIngressRouter?.(
           (...args) => this.options.routeActorJoinIngress?.(spotNodeName, ...args) === true
+        );
+        node.setRelocationRequestAdmission?.((request) =>
+          this.options.relocationRequestAdmission?.(spotNodeName, request)
         );
         node.setActorMessageFollowResolver?.(
           (fence) => this.options.actorHandoffRuntime?.acceptsDepartedRoute?.(fence) === true

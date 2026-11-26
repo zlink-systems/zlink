@@ -42,6 +42,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.execution.ZLinkConfirmedReplay;
 import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -98,6 +99,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
@@ -238,6 +240,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private final Map<String, Class<? extends ZLinkActorFactory>> factories;
+    private Predicate<String> actorRelocationDisabled = ignored -> false;
     private final ZLinkActorTransferRegistry actorTransfers;
     // This runtime is the owner of the registry, dispatch admission and actor
     // creation state.  Public synchronous queries retain their timing by
@@ -466,6 +469,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     "canonical Actor Join relocation is not installed");
         }
         port.admitCanonical(admission);
+    }
+
+    CompletionStage<Boolean> isActorRelocationDisabled(String actorId) {
+        return actorRegistry.actorTypeAsync(actorId).thenApply(actorRelocationDisabled::test);
     }
 
     CompletionStage<ZLinkDirectJoinRelocation.Manifest> prepareDeferredJoinRelocation(
@@ -4215,7 +4222,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                         records,
                                         (record, terminal) -> {
                                             var operation = replay.apply(record, terminal);
-                                            return () -> dispatches.runTurn(turn, operation);
+                                            return ZLinkConfirmedReplay.wrap(
+                                                    operation,
+                                                    next -> () -> dispatches.runTurn(turn, next));
                                         },
                                         jobs));
     }
@@ -4486,6 +4495,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     void setActorJoinTransferTransport(ZLinkActorSpotJoinCall.TransferTransport transferTransport) {
         actorJoinTransferTransport = transferTransport;
+    }
+
+    public void setActorRelocationPolicy(Predicate<String> relocationDisabled) {
+        this.actorRelocationDisabled = Objects.requireNonNull(relocationDisabled);
     }
 
     public void setActorJoinCanonicalMeshNode(ZLinkInternalMeshNode meshNode) {
@@ -4951,11 +4964,16 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
 
         String actorType(String actorId) {
-            return inStateLane(
-                    () -> {
-                        ActorEntry entry = byId.get(actorId);
-                        return entry == null ? null : entry.actorType();
-                    });
+            return inStateLane(() -> actorTypeOnLane(actorId));
+        }
+
+        CompletionStage<String> actorTypeAsync(String actorId) {
+            return stateLane.runNowOrQueue(() -> actorTypeOnLane(actorId));
+        }
+
+        private String actorTypeOnLane(String actorId) {
+            ActorEntry entry = byId.get(actorId);
+            return entry == null ? null : entry.actorType();
         }
 
         String actorTypeOrDefault(String actorId, String fallback) {
@@ -5346,7 +5364,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     routedTransport,
                     actorJoinTransferTransport,
                     actorJoinCanonicalMeshNode,
-                    actorRegistry::actorType,
                     serializer,
                     flow,
                     ZLinkActorRuntime.this,

@@ -450,6 +450,7 @@ internal static class ZLinkTraceFormat
         {
             ZLinkDispatchErrorReason.HandlerMissing => "no_handler",
             ZLinkDispatchErrorReason.PayloadDecodeFailed => "decode_error",
+            ZLinkDispatchErrorReason.PayloadEncodeFailed => "encode_error",
             ZLinkDispatchErrorReason.HandlerException => "handler_exception",
             ZLinkDispatchErrorReason.InvalidFrame => "invalid_frame",
             ZLinkDispatchErrorReason.ReplyPathMissing => "reply_path_missing",
@@ -457,6 +458,7 @@ internal static class ZLinkTraceFormat
             ZLinkDispatchErrorReason.Backpressure => "backpressure",
             ZLinkDispatchErrorReason.StaleTarget => "stale_target",
             ZLinkDispatchErrorReason.Shutdown => "shutdown",
+            ZLinkDispatchErrorReason.SessionCreationFailed => "session_creation_failed",
             _ => throw new ArgumentOutOfRangeException(nameof(reason)),
         };
 

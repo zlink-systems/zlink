@@ -550,7 +550,8 @@ public sealed partial class EntrySpotActorDispatchTests
                             }
                         )
                         .ToArray()
-            )
+            ),
+            actorRelocationEnabled: true
         );
         try
         {

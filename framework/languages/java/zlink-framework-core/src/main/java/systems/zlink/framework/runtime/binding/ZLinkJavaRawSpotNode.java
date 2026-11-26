@@ -843,6 +843,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return requestLocalActor(
                         (requestId, admission) ->
                                 dispatchLocalOrdinaryActor(target, retained, requestId, admission),
+                        target.targetNodeGeneration(),
                         timeout,
                         requestAdmission)
                 .whenComplete((reply, failure) -> Message.closeAll(retained));
@@ -871,6 +872,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     completion);
             return;
         }
+        owner.observeLocalActorRoute(completion, target.targetNodeGeneration());
         var retained = ZLinkJavaRawSpot.copy(parts);
         requestRegisteredLocalActor(
                         (requestId, admission) ->
@@ -901,6 +903,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return requestLocalActor(
                         (requestId, admission) ->
                                 dispatchLocalActor(actor, retained, requestId, 1, admission),
+                        owner.lifecycleGeneration(),
                         timeout,
                         requestAdmission)
                 .whenComplete((reply, failure) -> Message.closeAll(retained));
@@ -908,12 +911,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     private CompletionStage<List<Message>> requestLocalActor(
             BiFunction<Long, CompletableFuture<Void>, CompletionStage<Void>> dispatch,
+            long targetNodeGeneration,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
         var completion =
-                ZLinkServiceOperationRegistry.<List<Message>>prepareOperation(
+                ZLinkServiceOperationRegistry.<List<Message>>prepareRequestOperation(
                         systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
                                 .next());
+        owner.observeLocalActorRoute(completion, targetNodeGeneration);
         operationRegistry()
                 .<List<Message>>submitTerminal(
                         completion.id(),
@@ -940,6 +945,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             Consumer<T> discardReply,
             Function<Throwable, Throwable> mapFailure,
             ZLinkServiceOperationRegistry.Operation<T> completion) {
+        var decoder = completion.requestProgress().replyDecoder(decodeReply);
         return operationRegistry()
                 .<T>submitRegistered(
                         completion.id(),
@@ -953,7 +959,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                             terminal.accept(null, mapFailure.apply(failure));
                                         else {
                                             try {
-                                                terminal.accept(decodeReply.apply(messages), null);
+                                                terminal.accept(decoder.apply(messages), null);
                                             } catch (RuntimeException | Error error) {
                                                 terminal.accept(null, mapFailure.apply(error));
                                             }
@@ -973,7 +979,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         actorRequests.put(requestId, completion);
         CompletionStage<Void> dispatched;
         try {
-            dispatched = actorDispatchResult(dispatch.apply(requestId, requestAdmission));
+            dispatched =
+                    actorDispatchResult(
+                            dispatch.apply(
+                                    requestId,
+                                    logical.requestProgress().localAdmission(requestAdmission)));
         } catch (RuntimeException | Error failure) {
             actorRequests.remove(requestId, completion);
             throw failure;
@@ -2306,9 +2316,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         parts,
                         contentType,
                         reply,
-                        failure)) {
+                        failure,
+                        requestAdmission == null ? null : () -> requestAdmission.complete(null))) {
             if (terminalRelease != null) terminalRelease.run();
-            if (requestAdmission != null) requestAdmission.complete(null);
             return CompletableFuture.completedFuture(null);
         }
         ZLinkInternalSpotNode.MessageFollowRelayHandler relay = messageFollowRelayHandler;
@@ -4248,6 +4258,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 targetNodeRid,
                 targetSpotId,
                 targetGeneration,
+                targetNodeGeneration,
                 metadata,
                 parts,
                 timeout,
@@ -4287,6 +4298,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 targetNodeRid,
                 targetSpotId,
                 targetGeneration,
+                targetNodeGeneration,
                 metadata,
                 parts,
                 timeout,
@@ -4300,6 +4312,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             RoutingId targetNodeRid,
             String targetSpotId,
             long targetGeneration,
+            long targetNodeGeneration,
             byte[] metadata,
             List<Message> parts,
             Duration timeout,
@@ -4307,18 +4320,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             UUID operationId,
             CompletableFuture<Void> requestAdmission) {
         long sequence = nextRequestSequence.getAndIncrement();
+        var header =
+                owner.localSpotMessage(
+                        source.spotId(), targetSpotId, targetGeneration, metadata, sequence);
         byte[] acceptedRecord =
-                owner.encodeLocalSpotAccepted(
-                        source.spotId(), targetSpotId, targetGeneration, metadata, parts, sequence);
-        ZLinkJavaRawSpot target = localSpot(targetNodeRid, targetSpotId, targetGeneration);
-        if (target == null) {
-            ZLinkInternalSpotNode.SpotAdmissionResolver resolver = spotAdmissionResolver;
-            return resolver == null
-                    ? CompletableFuture.failedFuture(
-                            new ZlinkRequestException(RequestResult.NOT_FOUND))
-                    : resolver.resolve(targetSpotId, 0, false, false, null)
-                            .thenCompose(CompletableFuture::failedFuture);
-        }
+                header == null
+                        ? new byte[0]
+                        : owner.encodeLocalSpotAccepted(header, metadata, parts);
         ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
         CompletableFuture<ZLinkBackendReceived> completion =
                 systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
@@ -4339,9 +4347,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         acceptedRecord,
                         ZLinkJavaRawSpot.copy(parts),
                         reply -> {
-                            if (!terminal.tryWin(ZLinkTerminalWinner.Cause.RESPONSE)) {
-                                return;
-                            }
+                            if (!terminal.tryWin(ZLinkTerminalWinner.Cause.RESPONSE)) return;
                             completion.complete(
                                     new ZLinkBackendReceived(
                                             systems.zlink.framework.runtime.internal.backend
@@ -4357,13 +4363,59 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         // leaves that ownership here. Payload preparation stays outside E3.
         Supplier<CompletionStage<ZLinkBackendReceived>> enqueue =
                 () -> {
+                    Consumer<Throwable> fail =
+                            failure -> {
+                                if (terminal.tryWin(ZLinkTerminalWinner.Cause.FAILURE)) {
+                                    if (requestAdmission != null)
+                                        requestAdmission.completeExceptionally(failure);
+                                    completion.completeExceptionally(failure);
+                                }
+                            };
+                    var staging = relocationStagingIngressHandler;
+                    var local = owner.localAuthorityFence();
+                    if (staging != null
+                            && header != null
+                            && local != null
+                            && header.target().targetNodeGeneration() == targetNodeGeneration
+                            && staging.handleSpot(
+                                    local,
+                                    header,
+                                    metadata,
+                                    () -> acceptedRecord,
+                                    acceptedRecord.length,
+                                    request.parts(),
+                                    request.contentType(),
+                                    replies -> {
+                                        try {
+                                            request.reply(replies);
+                                        } finally {
+                                            Message.closeAll(replies);
+                                        }
+                                    },
+                                    fail,
+                                    requestAdmission == null
+                                            ? null
+                                            : () -> requestAdmission.complete(null))) {
+                        return completion;
+                    }
+                    var target = localSpot(targetNodeRid, targetSpotId, targetGeneration);
+                    if (target == null) {
+                        request.close();
+                        var resolver = spotAdmissionResolver;
+                        if (resolver == null) {
+                            fail.accept(new ZlinkRequestException(RequestResult.NOT_FOUND));
+                        } else {
+                            resolver.resolve(targetSpotId, 0, false, false, null)
+                                    .whenComplete(
+                                            (rejection, error) ->
+                                                    fail.accept(error == null ? rejection : error));
+                        }
+                        return completion;
+                    }
                     var dispatched = enqueueLocalSpot(target, true, request, requestAdmission);
                     dispatched.whenComplete(
                             (ignored, failure) -> {
-                                if (failure != null
-                                        && terminal.tryWin(ZLinkTerminalWinner.Cause.FAILURE)) {
-                                    completion.completeExceptionally(failure);
-                                }
+                                if (failure != null) fail.accept(failure);
                             });
                     systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
                             .forwardCancellation(completion, dispatched);

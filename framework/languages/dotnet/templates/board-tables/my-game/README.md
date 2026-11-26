@@ -20,7 +20,7 @@ Default execution requires Docker Linux containers; no host .NET SDK is needed.
 - Bash on Linux or WSL, or PowerShell 7 on Windows.
 - An operating system and architecture supported by the published Zlink native package.
 
-`Directory.Packages.props` pins the Zlink.Framework package family and the STREAM connector to `0.32.0`. `nuget.config` uses nuget.org only. This directory can be copied and built independently.
+`Directory.Packages.props` pins the Zlink.Framework package family and the STREAM connector to `0.34.1`. `nuget.config` uses nuget.org only. This directory can be copied and built independently.
 
 ## Build
 
@@ -40,6 +40,10 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 
 Scripts remove unique image tags after each invocation. Docker retains build layers for subsequent runs.
 
+## Foreground server
+
+Run `./run-server.sh` on Linux or WSL, or `.\run-server.cmd` on Windows. When it prints `Server ready`, run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner automatically attaches to the published endpoint in `.logs/server.json` and checks `table` and `reconnect`. The restart check and `update` run only in isolation. Press Ctrl+C in the server terminal to stop the nodes and Redis and remove `.logs/server.json`.
+
 ## Client connection
 
 ### Endpoint and first packet
@@ -47,6 +51,8 @@ Scripts remove unique image tags after each invocation. Docker retains build lay
 The Session `players` STREAM listener uses `StreamEndpoint` in `server/config/session.json`, defaulting to `ws://127.0.0.1:0`: loopback WebSocket, OS-assigned port, root path `/`. Read `StreamEndpoint` from the Session's `READY` JSON, as `e2e/MyGame.E2E/TableRun.cs` does. Table mesh listeners and Redis are internal endpoints.
 
 Send `JoinTableRequest(PlayerId, TableId)` first. The Session creates/binds the Actor; successful seating produces a `TableView` push, including the assigned seat and table state. `ActionRejected` reports rejected actions. Entry is send/push; `SessionInfoRequest` is request/reply after binding. This template does not authenticate the supplied player ID; validate identity before binding when adding authentication.
+
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to table selection. Omit `reconnect` or send `false` for first entry.
 
 ### Connector installation
 
@@ -154,7 +160,7 @@ The runner checks the structure, then starts Redis, play node A (table) and B, a
 | Scenario | Verified behavior |
 | --- | --- |
 | `table` | Seats and chips, private cards, rejection of server-originated packets, out-of-turn bets, over-limit values, and insufficient chips. Each rejection has `RetryAfterMs: 0` and leaves table state unchanged. Settlement reports every `cardCount` as zero; a private-hand query before the next hand returns no cards. |
-| `reconnect` | The sessionId in `SessionInfo` changes while the Actor ID and generation stay the same. Seat, chips, cards, and turn persist, and the hand settles after reconnecting with empty hands. |
+| `reconnect` | The sessionId in `SessionInfo` changes while the Actor ID and generation stay the same. Seat, chips, cards, and turn persist, and the hand settles after reconnecting with empty hands. In isolation, a fresh deployment rejects reconnecting to the original table ID with `not-seated`. |
 | `update` | Both clients keep their `SessionInfo` across drain, connection and game state persist, the hand settles on a different node with empty hands, and after the original node is replaced a new table plays one hand. |
 
 After the structure check, the runner executes the domain boundary checks and prints `Domain checks: 7/7`. It then starts the nodes and runs selected scenarios in the order shown above. Scenario results are printed with `✓`/`✗` and `Scenarios: N/M passed`. Failures and cleanup errors are reported with exit code 1. A rerun that passes without a known cause does not cancel an intermittent failure.
@@ -217,6 +223,10 @@ Node stderr records the message flow from the dispatch diagnostics `Normal` logg
 
 ## Known issues in the public package
 
-Validated against the published Framework 0.32.0 packages.
+- This template has no matchmaking or API node yet; players join tables directly. The other languages' board-tables matchmaking (Pool, RoomProvisioner) and API node are tracked in [#5647](https://github.com/zlink-systems/zlink/issues/5647).
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
+
+Validated against the published Framework 0.34.1 packages.
 
 The e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on play nodes (table) only; there are no fixed User Spots in this template.

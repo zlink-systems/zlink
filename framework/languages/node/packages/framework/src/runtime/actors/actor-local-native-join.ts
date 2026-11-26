@@ -322,6 +322,11 @@ export class ZLinkLocalNativeActorJoin {
         `Actor '${actor.context.actorId}' canonical remote Join identity is not configured.`
       );
     }
+    const meshName = runtimeActorMeshName(actor, state, target.routerChannelId);
+    this.options.actorJoinRelocation?.requireRelocatableActor?.(
+      state.meshName ?? meshName,
+      actorType
+    );
     const completions = this.requireCompletions();
     let relocationId: string = randomUUID();
     const completionOperationKey =
@@ -476,7 +481,7 @@ export class ZLinkLocalNativeActorJoin {
         throw new Error('Actor Join OperationId must be distinct from RelocationId.');
       }
       relocated = await relocation.relocateActorJoin({
-        meshName: runtimeActorMeshName(actor, state, target.routerChannelId),
+        meshName,
         actor,
         state,
         target,

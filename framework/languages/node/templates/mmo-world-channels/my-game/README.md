@@ -28,7 +28,7 @@ flowchart LR
 ## Prerequisites
 
 Use Docker Compose v2 and PowerShell 7 on Windows.
-Install the public ZLink Framework 0.32.0 packages specified in `package.json`.
+Install the public ZLink Framework 0.34.0 packages specified in `package.json`.
 Redis ports and node listeners use OS-assigned ports in the e2e runner.
 
 ## Build
@@ -42,11 +42,33 @@ From this directory on Bash:
 On PowerShell:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 The build emits TypeScript and generates the Framework JSON schema catalog from
 the shared DTO declarations. Messages use the default typed JSON serializer.
+
+## Run the server and e2e
+
+Install Node.js 22 or later, npm and Docker Compose v2 for local hosting. From this directory, leave the first command running and execute the second in another terminal.
+
+```bash
+./run-server.sh
+./run-e2e.sh
+```
+
+```powershell
+.\run-server.cmd
+.\run-e2e.cmd
+```
+
+The Windows wrappers start PowerShell 7 with UTF-8 output and a process-scoped execution policy. The equivalent PowerShell scripts are `run-server.ps1` and `run-e2e.ps1`.
+
+`run-server` runs `npm ci`, builds the project, starts Redis and the local nodes, and prints the WebSocket address next to `Server ready`. When present, HTTP API addresses are printed separately. Use Ctrl+C to stop the nodes and Redis. A second server start is rejected while the first server is starting or running.
+
+`run-e2e` detects a ready server through `.logs/server.json` and runs the compatible scenarios against it. Node replacement requires isolation, so attached runs skip `update`. Stop the server before running the full Docker e2e. Use `--local` or `-Local` to request a separate local run with Redis in Docker.
+
+`.logs/run-<id>/` contains generated node settings, separate `*.out.log`, `*.err.log` and `*.flow.log` files, and failure details. Attached runs keep their client results in a new run directory and print the path. The running server continues writing node logs to its own run directory. Docker build and cleanup logs are in `.logs/docker-<project>/`.
 
 ## Client connection
 
@@ -119,9 +141,11 @@ try {
 
 ## Docker e2e
 
+These commands use Docker isolation when no local server is ready.
+
 Docker runs the e2e runner and each node in containers. All roles use one image; the runner image adds Docker CLI 28.5.1. `NODE_IMAGE` pins `node:22.20.0-trixie` with a slim runtime and the native binding's OpenSSL dependency. Nodes share the runner network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied with `docker cp`; stdin/stdout controls use `docker start -a -i`. Each invocation owns a unique Compose project, network and image tags. Cleanup failures return exit code 1, and shared Docker build cache remains available.
 
-Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuration, stdout and message-flow stderr remain in `.logs/run-<id>/`. For local process debugging, install Node.js 22 or later and npm, then run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse an existing local build. Redis remains in Docker.
+Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuration, stdout, stderr and message-flow records remain in `.logs/run-<id>/`. For local process debugging, install Node.js 22 or later and npm, then run `./run-e2e.sh --local` or `.\run-e2e.cmd -Local`. Add `--no-build` or `-NoBuild` to reuse an existing local build. Redis remains in Docker.
 
 ```sh
 ./run-e2e.sh
@@ -130,17 +154,17 @@ Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuratio
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario worlds,channel,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario worlds,channel,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
-| Scenario  | Assertions                                                                                                    |
-| --------- | ------------------------------------------------------------------------------------------------------------- |
-| worlds    | HTTP world list and Session endpoints; fixed reward, cooldown rejection and server retry delay; the same player ID has independent gold in A and B. |
+| Scenario  | Assertions                                                                                                                                                                                                                                              |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| worlds    | HTTP world list and Session endpoints; fixed reward, cooldown rejection and server retry delay; the same player ID has independent gold in A and B.                                                                                                     |
 | channel   | Same-channel visibility, cross-channel isolation, channel-move and disconnect removal; oversized channel requests return `integer-out-of-range` without changing membership; connection and gold persist; internal packets return `packet-not-allowed`. |
-| reconnect | A new Session binds the original Actor with its saved channel and gold.                                       |
-| update    | Drain channelA1 into channelA2, preserve client state, Zone player list and world B, stop the source and start its replacement. |
+| reconnect | A new Session binds the original Actor with its saved channel and gold.                                                                                                                                                                                 |
+| update    | Drain channelA1 into channelA2, preserve client state, Zone player list and world B, stop the source and start its replacement.                                                                                                                         |
 
 ChannelA1 has a one-Zone capacity and starts before channelA2, whose capacity is two.
 This places each fixed Zone on its declared initial owner and leaves room for drain.
@@ -154,7 +178,7 @@ Message Follow is explicitly 30 seconds; the safe shutdown observation budget is
 derived from that duration and the existing operation budget.
 
 The runner checks `zlink.structure.json` before creating its own Compose project.
-It preserves node stdout, stderr message-flow records, client events and Redis
+It preserves node stdout, stderr and message-flow records, client events and Redis
 logs in `.logs/run-<id>/`. Any scenario or cleanup failure returns exit code 1.
 It stops after the first failure to preserve its evidence.
 
@@ -166,11 +190,13 @@ It stops after the first failure to preserve its evidence.
 - **Sending under load** — Send waits for capacity, and the application sees the final result. [Guide](https://docs.zlink.systems/node/guide/server/33-backpressure/#send-backpressure). [server/session/session.ts:31](server/session/session.ts).
 - **Duplicate login** — Without a callback, a bind from another Session is accepted; reject it in the Actor duplicate-bind callback to prevent this. [Guide](https://docs.zlink.systems/node/guide/server/39-session-binding/#duplicate-session-bind). This template keeps the default (accepts the new Session).
 - **ObjectGeneration** — `ObjectGeneration` distinguishes logical incarnations of the same ID; it is not a data version or write authority. [Guide](https://docs.zlink.systems/node/guide/server/34-activation-lifetime/#object-generation). [server/session/session.ts:55](server/session/session.ts).
-- **READY and Serving** — The Framework host prints `READY` after observing runtime `Serving`; the Accounts process prints `READY` without a Framework runtime. [Guide](https://docs.zlink.systems/node/guide/server/12-operations/#wait-for-serving). [server/shared/hosting.ts:91](server/shared/hosting.ts); [server/shared/hosting.ts:141](server/shared/hosting.ts); [server/accounts/main.ts:20](server/accounts/main.ts); [server/accounts/main.ts:24](server/accounts/main.ts). The accounts HTTP process prints `READY` after its server starts, without observing Framework runtime `Serving`:  .
+- **READY and Serving** — The Framework host prints `READY` after observing runtime `Serving`; the Accounts process prints `READY` without a Framework runtime. [Guide](https://docs.zlink.systems/node/guide/server/12-operations/#wait-for-serving). [server/shared/hosting.ts:91](server/shared/hosting.ts); [server/shared/hosting.ts:141](server/shared/hosting.ts); [server/accounts/main.ts:20](server/accounts/main.ts); [server/accounts/main.ts:24](server/accounts/main.ts). The accounts HTTP process prints `READY` after its server starts, without observing Framework runtime `Serving`: .
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
+
+Validated against the published Framework 0.34.0 packages.
 
 ## Deployment sequence
 

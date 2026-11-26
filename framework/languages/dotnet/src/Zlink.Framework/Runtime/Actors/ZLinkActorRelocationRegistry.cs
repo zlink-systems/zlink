@@ -74,7 +74,6 @@ internal static class ZLinkActorRelocationRegistry
     {
         return relocation.PolicyKind switch
         {
-            ZLinkObjectRelocationRegistration.DisabledPolicy => throw Disabled(relocation),
             ZLinkObjectRelocationRegistration.RecreatePolicy => [],
             ZLinkObjectRelocationRegistration.SnapshotPolicy
                 when relocation.AdapterInvoker is { } invoker => await InvokeCaptureAsync(
@@ -99,7 +98,7 @@ internal static class ZLinkActorRelocationRegistry
         switch (relocation.PolicyKind)
         {
             case ZLinkObjectRelocationRegistration.DisabledPolicy:
-                throw Disabled(relocation);
+                throw CreateDisabledException(relocation);
             case ZLinkObjectRelocationRegistration.RecreatePolicy when payload.IsEmpty:
                 return;
             case ZLinkObjectRelocationRegistration.RecreatePolicy:
@@ -130,7 +129,9 @@ internal static class ZLinkActorRelocationRegistry
                 ZLinkRemoteActorJoinPackets.RecreateRelocationContentType,
             ZLinkObjectRelocationRegistration.SnapshotPolicy =>
                 ZLinkRemoteActorJoinPackets.SnapshotRelocationContentType,
-            ZLinkObjectRelocationRegistration.DisabledPolicy => throw Disabled(relocation),
+            ZLinkObjectRelocationRegistration.DisabledPolicy => throw CreateDisabledException(
+                relocation
+            ),
             _ => throw MissingAdapter(relocation),
         };
         if (!string.Equals(contentType, expectedContentType, StringComparison.Ordinal))
@@ -160,7 +161,9 @@ internal static class ZLinkActorRelocationRegistry
             .ConfigureAwait(false);
     }
 
-    private static ZLinkFrameworkException Disabled(ZLinkObjectRelocationRegistration relocation) =>
+    internal static ZLinkFrameworkException CreateDisabledException(
+        ZLinkObjectRelocationRegistration relocation
+    ) =>
         new(
             ZLinkFrameworkErrorKind.Rejected,
             $"Relocation is disabled for Actor type '{relocation.InstanceType}'."

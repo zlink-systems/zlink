@@ -206,6 +206,7 @@ export interface ServiceStatefulMailboxData {
   readonly kindData?: ReceiveKindData;
   readonly applicationMetadata?: Buffer;
   readonly messageFollowOrigin?: import('./service-runtime-contracts').ZLinkMessageFollowOrigin;
+  readonly spotTargetAdmission?: ServiceSpotTargetAdmission;
   /** Prevents a local lifecycle callback from publishing after its operation ended. */
   readonly isPending?: () => boolean;
   /** Carries the local operation deadline into the lifecycle dispatch lane. */
@@ -236,6 +237,35 @@ export type ZLinkActorJoinIngressRouter = (
   reject: (error: unknown) => void,
   prepareSource: (signal: AbortSignal) => Promise<void>
 ) => boolean;
+
+export type ServiceRelocationActorIngressRouter = (
+  ...args: [
+    ...Parameters<ZLinkActorJoinIngressRouter>,
+    onAdmitted?: () => void,
+    signal?: AbortSignal
+  ]
+) => boolean;
+
+export interface ServiceSpotTargetAdmission {
+  readonly activation: import('../spots/spot-activation-state').ZLinkSpotActivation;
+  readonly confirmed: Promise<boolean>;
+}
+
+export type ServiceRelocationRequest =
+  | { readonly kind: 'actor'; readonly target: ServiceActorRouteFence }
+  | { readonly kind: 'spot'; readonly target: ServiceSpotRouteFence };
+
+export type ServiceRelocationRequestAdmission =
+  | { readonly kind: 'actor'; readonly route: ServiceRelocationActorIngressRouter }
+  | {
+      readonly kind: 'spot';
+      readonly activation: import('../spots/spot-activation-state').ZLinkSpotActivation;
+      confirm(signal?: AbortSignal): Promise<boolean>;
+    };
+
+export type ServiceRelocationRequestAdmissionResolver = (
+  request: ServiceRelocationRequest
+) => ServiceRelocationRequestAdmission | undefined;
 
 export interface ServiceCanonicalActorJoinCandidate {
   readonly request: ServiceApplicationPayload;
@@ -501,6 +531,7 @@ export class ServiceStatefulRuntime {
 
   readonly registry: ServiceStatefulRegistry;
   private actorJoinIngressRouter?: ZLinkActorJoinIngressRouter;
+  private relocationRequestAdmission?: ServiceRelocationRequestAdmissionResolver;
   private actorMessageFollowResolver?: (fence: ServiceActorRouteFence) => boolean;
 
   readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult, bigint>;
@@ -1611,7 +1642,12 @@ export class ServiceStatefulRuntime {
     const pending =
       (requestOperation as PendingOperation<ServiceStatefulResult> | undefined) ??
       this.operations.register(timeoutMs);
-    const target = requested === undefined ? undefined : this.acceptSpotAuthority(requested);
+    const target =
+      requested?.targetNodeRid === this.nodeRid
+        ? requested
+        : requested === undefined
+          ? undefined
+          : this.acceptSpotAuthority(requested);
     if (target === undefined) {
       const result = internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
       if (receiver === undefined) pending.reply(result);
@@ -2666,23 +2702,7 @@ export class ServiceStatefulRuntime {
       case 'spotRequest': {
         const followed = this.holdOrRelaySpotMessage(ingress, record);
         if (followed !== undefined) return followed;
-        this.validateDirectSpotFence(record.target);
-        return this.enqueueApplicationFrame(
-          ingress,
-          `spot:${record.target.spot.spotId}`,
-          payloadFrame!,
-          {
-            receiveKind:
-              record.kind === 'spotSend' ? ReceiveKind.SpotSend : ReceiveKind.SpotRequest,
-            operationKind: record.kind === 'spotRequest' ? OperationKind.SpotRequest : 0,
-            ...(record.correlation === undefined ? {} : { correlation: record.correlation }),
-            sourceSpotId: record.sourceSpotId,
-            targetSpot: record.target.spot,
-            ...(record.kind === 'spotRequest'
-              ? { reply: this.replyPort(ingress, record.correlation) }
-              : {})
-          }
-        );
+        return this.enqueueDirectSpotMessage(ingress, record, payloadFrame!);
       }
       case 'actorSend':
       case 'actorRequest': {
@@ -4496,6 +4516,7 @@ export class ServiceStatefulRuntime {
       stateful,
       sourcePreparationOwner:
         domain === 'application' &&
+        stateful.spotTargetAdmission === undefined &&
         this.requestSourceAcceptance !== undefined &&
         (stateful.receiveKind === ReceiveKind.SpotSend ||
           stateful.receiveKind === ReceiveKind.SpotRequest ||
@@ -4506,7 +4527,7 @@ export class ServiceStatefulRuntime {
       applicationJob
     });
     if (accepted) {
-      ingress.onAdmitted?.();
+      if (stateful.spotTargetAdmission === undefined) ingress.onAdmitted?.();
       return domain;
     }
     applicationJob.close();
@@ -5332,15 +5353,7 @@ export class ServiceStatefulRuntime {
       return true;
     };
     if (decoded.kind === 'spotRequest') {
-      this.validateDirectSpotFence(decoded.target);
-      this.enqueueApplicationFrame(ingress, `spot:${decoded.target.spot.spotId}`, payloadFrame!, {
-        receiveKind: ReceiveKind.SpotRequest,
-        operationKind: OperationKind.SpotRequest,
-        correlation: decoded.correlation,
-        sourceSpotId: decoded.sourceSpotId,
-        targetSpot: decoded.target.spot,
-        reply: localReply
-      });
+      this.enqueueDirectSpotMessage(ingress, decoded, payloadFrame!, localReply, pending.signal);
       return;
     }
     if (decoded.kind === 'actorRequest') {
@@ -5351,7 +5364,8 @@ export class ServiceStatefulRuntime {
               ingress,
               decoded,
               payloadFrame,
-              localReply
+              localReply,
+              pending.signal
             )
           : this.validateActorFence(decoded.target);
       if (current === undefined) return;
@@ -5646,26 +5660,51 @@ export class ServiceStatefulRuntime {
     this.actorJoinIngressRouter = route;
   }
 
+  setRelocationRequestAdmission(resolve: ServiceRelocationRequestAdmissionResolver): void {
+    this.relocationRequestAdmission = resolve;
+  }
+
   validateActorMessageFence(fence: ServiceActorRouteFence): Pick<ServiceActorState, 'ref'>;
   validateActorMessageFence(
     fence: ServiceActorRouteFence,
     ingress: RawServiceIngressRecord,
     record: ServiceActorMessage,
     payloadFrame: Buffer | undefined,
-    localReply?: ServiceStatefulMailboxData['reply']
+    localReply?: ServiceStatefulMailboxData['reply'],
+    signal?: AbortSignal
   ): Pick<ServiceActorState, 'ref'> | undefined;
   validateActorMessageFence(
     fence: ServiceActorRouteFence,
     ingress?: RawServiceIngressRecord,
     record?: ServiceActorMessage,
     payloadFrame?: Buffer,
-    localReply?: ServiceStatefulMailboxData['reply']
+    localReply?: ServiceStatefulMailboxData['reply'],
+    signal?: AbortSignal
   ): Pick<ServiceActorState, 'ref'> | undefined {
     if (
       fence.actor.nodeRid !== this.nodeRid ||
       fence.targetNodeGeneration !== this.nodeGeneration
     ) {
       throw new ServiceStaleGenerationError('actor', fence.actor.actorId);
+    }
+    if (
+      record?.kind === 'actorRequest' &&
+      record.messageFollowHopCount === 0 &&
+      ingress !== undefined
+    ) {
+      const admission = this.relocationRequestAdmission?.({ kind: 'actor', target: fence });
+      if (
+        admission?.kind === 'actor' &&
+        this.routeTemporaryActorMessage(
+          admission.route,
+          ingress,
+          record,
+          payloadFrame!,
+          localReply,
+          signal
+        )
+      )
+        return undefined;
     }
     const actor = this.registry.actor(fence.actor.actorId);
     if (
@@ -5709,60 +5748,22 @@ export class ServiceStatefulRuntime {
     localAuthorityOwnerGeneration: bigint,
     localReply: ServiceStatefulMailboxData['reply']
   ): void {
-    const fence = record.target;
-    const request = record.kind === 'actorRequest';
-    const parts = decodeMultipartApplicationParts(payloadFrame, copyPayloadBytes);
-    const retainedSource: RawServiceIngressRecord = {
-      command: ingress.command,
-      flags: ingress.flags,
-      sourceRoutingId: ingress.sourceRoutingId,
-      sourceNodeGeneration: ingress.sourceNodeGeneration,
-      sourceRoute: ingress.sourceRoute,
-      requestSequence: ingress.requestSequence,
-      requestSource: ingress.requestSource,
-      reply: ingress.reply,
-      parts: []
-    };
-    const reply = request
-      ? (localReply ?? this.replyPort(retainedSource, record.correlation))
-      : undefined;
-    const reject = (error: unknown): void => {
-      if (reply === undefined) return;
-      const terminal = failure(error);
-      reply(terminal.terminalResult, terminal.failureCode);
-    };
     if (
-      this.actorJoinIngressRouter?.(
-        ingress.sourceRoutingId === this.nodeRid ? 'local' : 'remote',
-        {
-          get requestSource() {
-            return retainedSource.requestSource;
-          },
-          target: fence,
-          sourceNodeRid: ingress.sourceRoutingId,
-          originalOperation: record.operation,
-          originalReplyRouteId: record.correlation ?? 0n
-        },
-        parts,
-        reply === undefined
-          ? undefined
-          : (replyParts) => {
-              reply(RequestResult.Ok, 0, {
-                packetName: SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
-                contentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
-                payload: encodeMultipartPayload(replyParts)
-              });
-            },
-        reject,
-        async (signal) => {
-          await this.acceptRequestSource(retainedSource, signal);
-        }
-      ) === true
+      this.actorJoinIngressRouter !== undefined &&
+      this.routeTemporaryActorMessage(
+        this.actorJoinIngressRouter,
+        ingress,
+        record,
+        payloadFrame,
+        localReply
+      )
     ) {
       ingress.onAdmitted?.();
       return;
     }
 
+    const fence = record.target;
+    const request = record.kind === 'actorRequest';
     const error = new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.InvalidOperation,
       `Actor '${fence.actor.actorId}' received authority generation ${fence.authorityOwnerGeneration} with local generation ${localAuthorityOwnerGeneration} and no target temporary queue.`
@@ -5770,7 +5771,7 @@ export class ServiceStatefulRuntime {
     const reporter = this.dispatchErrors;
     if (reporter?.captureEnabled() === true) {
       const flowEnabled = reporter.flow.flowCreationEnabled();
-      const headerBytes = parts.at(0);
+      const headerBytes = decodeMultipartApplicationParts(payloadFrame, copyPayloadBytes).at(0);
       const header =
         headerBytes === undefined ? undefined : decodeStreamHeader(headerBytes, flowEnabled);
       const flow = createInboundFlow(header?.flowId, header?.flowOrigin, flowEnabled, undefined);
@@ -5792,6 +5793,189 @@ export class ServiceStatefulRuntime {
       });
     }
     if (request) throw error;
+  }
+
+  private routeTemporaryActorMessage(
+    route: ServiceRelocationActorIngressRouter,
+    ingress: RawServiceIngressRecord,
+    record: ServiceActorMessage,
+    payloadFrame: Buffer,
+    localReply: ServiceStatefulMailboxData['reply'],
+    localSignal?: AbortSignal
+  ): boolean {
+    const fence = record.target;
+    const request = record.kind === 'actorRequest';
+    const parts = decodeMultipartApplicationParts(payloadFrame, copyPayloadBytes);
+    const retainedSource: RawServiceIngressRecord = {
+      command: ingress.command,
+      flags: ingress.flags,
+      sourceRoutingId: ingress.sourceRoutingId,
+      sourceNodeGeneration: ingress.sourceNodeGeneration,
+      sourceRoute: ingress.sourceRoute,
+      requestSequence: ingress.requestSequence,
+      requestSource: ingress.requestSource,
+      reply: ingress.reply,
+      parts: []
+    };
+    const reply = request
+      ? (localReply ?? this.replyPort(retainedSource, record.correlation))
+      : undefined;
+    const reject = (error: unknown): void => {
+      if (reply === undefined) return;
+      const terminal = failure(error);
+      reply(terminal.terminalResult, terminal.failureCode);
+      if (
+        route !== this.actorJoinIngressRouter &&
+        error instanceof Error &&
+        error.cause !== undefined
+      ) {
+        this.reportRelocationAdmissionError(ingress, error.cause, {
+          id: fence.actor.actorId,
+          header: parts[0]
+        });
+      }
+    };
+    return route(
+      ingress.sourceRoutingId === this.nodeRid ? 'local' : 'remote',
+      {
+        get requestSource() {
+          return retainedSource.requestSource;
+        },
+        target: fence,
+        sourceNodeRid: ingress.sourceRoutingId,
+        originalOperation: record.operation,
+        originalReplyRouteId: record.correlation ?? 0n
+      },
+      parts,
+      reply === undefined
+        ? undefined
+        : (replyParts) => {
+            reply(RequestResult.Ok, 0, {
+              packetName: SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+              contentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+              payload: encodeMultipartPayload(replyParts)
+            });
+          },
+      reject,
+      async (signal) => {
+        await this.acceptRequestSource(retainedSource, localSignal ?? signal);
+      },
+      ingress.onAdmitted,
+      localSignal
+    );
+  }
+
+  private enqueueDirectSpotMessage(
+    ingress: RawServiceIngressRecord,
+    wire: Extract<ServiceStatefulWireRecord, { readonly kind: 'spotSend' | 'spotRequest' }>,
+    payloadFrame: Buffer,
+    localReply?: ServiceStatefulMailboxData['reply'],
+    signal?: AbortSignal
+  ): RawServicePumpResult {
+    const request = wire.kind === 'spotRequest';
+    const reply = localReply ?? (request ? this.replyPort(ingress, wire.correlation) : undefined);
+    const admission =
+      request && wire.messageFollowHopCount === 0
+        ? this.relocationRequestAdmission?.({ kind: 'spot', target: wire.target })
+        : undefined;
+    let resolveConfirmation!: (accepted: boolean) => void;
+    const confirmation =
+      admission?.kind === 'spot'
+        ? new Promise<boolean>((resolve) => {
+            resolveConfirmation = resolve;
+          })
+        : undefined;
+    let target = wire.target;
+    if (confirmation === undefined) {
+      if (localReply !== undefined) {
+        const current = this.acceptLocalSpotAuthority(target);
+        if (current === undefined) {
+          const result = internalFrameworkWireReply(
+            ZLinkFrameworkInternalErrorKind.ActorLocationStale
+          );
+          localReply(result.terminalResult, result.failureCode);
+          return 'infrastructure';
+        }
+        target = current;
+      }
+      this.validateDirectSpotFence(target);
+    }
+    const queued = this.enqueueApplicationFrame(
+      ingress,
+      `spot:${target.spot.spotId}`,
+      payloadFrame,
+      {
+        receiveKind: request ? ReceiveKind.SpotRequest : ReceiveKind.SpotSend,
+        operationKind: request ? OperationKind.SpotRequest : 0,
+        ...(wire.correlation === undefined ? {} : { correlation: wire.correlation }),
+        sourceSpotId: wire.sourceSpotId,
+        targetSpot: target.spot,
+        reply,
+        ...(admission?.kind === 'spot' && confirmation !== undefined
+          ? {
+              spotTargetAdmission: {
+                activation: admission.activation,
+                confirmed: confirmation
+              }
+            }
+          : {})
+      }
+    );
+    if (admission?.kind === 'spot' && confirmation !== undefined && queued === 'application') {
+      const reject = (error?: unknown): false => {
+        const terminal =
+          localReply === undefined
+            ? internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.SpotGenerationStale)
+            : internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.RequestTargetNotFound);
+        reply?.(terminal.terminalResult, terminal.failureCode);
+        if (error !== undefined) this.reportRelocationAdmissionError(ingress, error);
+        return false;
+      };
+      void Promise.resolve()
+        .then(async () => {
+          if (!(await admission.confirm(signal))) return reject();
+          await this.acceptRequestSource(ingress, signal);
+          signal?.throwIfAborted();
+          ingress.onAdmitted?.();
+          return true;
+        })
+        .catch(reject)
+        .then(resolveConfirmation);
+    }
+    return queued;
+  }
+
+  private reportRelocationAdmissionError(
+    ingress: RawServiceIngressRecord,
+    error: unknown,
+    actor?: { readonly id: string; readonly header?: Buffer }
+  ): void {
+    const reporter = this.dispatchErrors;
+    if (reporter?.captureEnabled() !== true) return;
+    const flowEnabled = reporter.flow.flowCreationEnabled();
+    const header =
+      actor?.header === undefined ? undefined : decodeStreamHeader(actor.header, flowEnabled);
+    const flow = createInboundFlow(header?.flowId, header?.flowOrigin, flowEnabled, undefined);
+    reporter.report({
+      surface:
+        actor === undefined
+          ? ZLinkDispatchErrorSurface.SpotRoute
+          : ZLinkDispatchErrorSurface.SpotActor,
+      messageKind:
+        actor === undefined
+          ? ZLinkDispatchMessageKind.Request
+          : ZLinkDispatchMessageKind.ActorRequest,
+      reason: ZLinkDispatchErrorReason.StaleTarget,
+      action: ZLinkDispatchErrorAction.ReplyError,
+      sourceRid: ingress.sourceRoutingId,
+      meshName: this.dispatchErrorMeshName,
+      actorId: actor?.id,
+      packetName: header?.name,
+      correlationId: header?.correlationId,
+      flowId: flow?.flowId,
+      flowOrigin: flow?.flowOrigin,
+      error
+    });
   }
 
   private validateSpotFence(fence: ServiceSpotRouteFence): ServiceSpotState {
@@ -6171,35 +6355,39 @@ export class ServiceStatefulRuntime {
   private acceptSpotAuthority(
     requested: ServiceDirectSpotRouteFence
   ): ServiceDirectSpotRouteFence | undefined {
-    const { targetNodeRid, spot, targetNodeGeneration } = requested;
-    if (targetNodeRid === this.nodeRid) {
-      const local = this.registry.spot(spot.spotId);
-      if (
-        local?.kind === 'entry' &&
-        sameSpotRef(local.ref, spot) &&
-        isEntrySpotFence(
-          requested,
-          local,
-          this.localSessionOwner()?.leaseGeneration ?? this.nodeGeneration
-        )
-      ) {
-        return requested;
-      }
-      const current = this.directSpotRoutes.get(directSpotKey(spot.spotId));
-      return local !== undefined &&
-        local.state === 'ready' &&
-        targetNodeGeneration === this.nodeGeneration &&
-        current !== undefined &&
-        current.targetNodeRid === this.nodeRid &&
-        current.targetNodeGeneration === this.nodeGeneration &&
-        current.ownerLeaseGeneration === requested.ownerLeaseGeneration &&
-        (current.spot.generation !== requested.spot.generation ||
-          current.authorityOwnerGeneration === requested.authorityOwnerGeneration)
-        ? current
-        : undefined;
-    }
+    if (requested.targetNodeRid === this.nodeRid) return this.acceptLocalSpotAuthority(requested);
     this.rememberSpotRoute(requested);
-    return this.directSpotRoutes.get(directSpotKey(spot.spotId));
+    return this.directSpotRoutes.get(directSpotKey(requested.spot.spotId));
+  }
+
+  private acceptLocalSpotAuthority<T extends ServiceSpotRouteFence>(
+    requested: T
+  ): T | ServiceDirectSpotRouteFence | undefined {
+    const { spot, targetNodeGeneration } = requested;
+    const local = this.registry.spot(spot.spotId);
+    if (
+      local?.kind === 'entry' &&
+      sameSpotRef(local.ref, spot) &&
+      isEntrySpotFence(
+        requested,
+        local,
+        this.localSessionOwner()?.leaseGeneration ?? this.nodeGeneration
+      )
+    ) {
+      return requested;
+    }
+    const current = this.directSpotRoutes.get(directSpotKey(spot.spotId));
+    return local !== undefined &&
+      local.state === 'ready' &&
+      targetNodeGeneration === this.nodeGeneration &&
+      current !== undefined &&
+      current.targetNodeRid === this.nodeRid &&
+      current.targetNodeGeneration === this.nodeGeneration &&
+      current.ownerLeaseGeneration === requested.ownerLeaseGeneration &&
+      (current.spot.generation !== requested.spot.generation ||
+        current.authorityOwnerGeneration === requested.authorityOwnerGeneration)
+      ? current
+      : undefined;
   }
 
   private ingressSourceGeneration(ingress: RawServiceIngressRecord): bigint {

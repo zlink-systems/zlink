@@ -1,3 +1,9 @@
+import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import { encodeActorReply } from '../actors/actor-reply';
+import { ZLinkStreamMessageKind } from '../streams/protocol';
 import { createHash } from 'node:crypto';
 import {
   type ActorRef,
@@ -24,11 +30,12 @@ import {
   type ZLinkDeferredJoinCompletion,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
-import type {
-  ZLinkActorHandoffPacket,
-  ZLinkActorHandoffResult,
-  ZLinkActorHandoffTerminalAcceptance,
-  ZLinkActorHandoffTerminalAck
+import {
+  RELOCATED_REQUEST_OWNED_BY_REQUESTER,
+  type ZLinkActorHandoffPacket,
+  type ZLinkActorHandoffResult,
+  type ZLinkActorHandoffTerminalAcceptance,
+  type ZLinkActorHandoffTerminalAck
 } from '../actors/actor-handoff';
 import {
   ownerFence,
@@ -183,6 +190,7 @@ export interface ZLinkActorTransferRuntimeActorManager {
 export interface ZLinkActorTransferRuntimeOptions {
   readonly routeTransport: ZLinkActorRoutedJoinTransport;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
+  readonly flowCreationEnabled?: () => boolean;
   readonly spotManager: () => DefaultZLinkSpotManager | undefined;
   readonly actorManager: () => ZLinkActorTransferRuntimeActorManager | undefined;
   readonly primaryMeshNode: () => ZLinkBackendMeshNode;
@@ -228,6 +236,78 @@ export class ZLinkActorTransferRuntime {
   ): (reason?: unknown) => void {
     this.options.actorHandoff.beginProvisional(actorId, objectGeneration);
     return (reason) => this.options.actorHandoff.cancel(actorId, reason);
+  }
+
+  captureTargetRequest(
+    meshName: string,
+    confirm: (signal?: AbortSignal) => Promise<boolean>,
+    ...[
+      origin,
+      message,
+      buffers,
+      reply,
+      reject,
+      prepareSource,
+      onAdmitted,
+      localSignal
+    ]: Parameters<
+      import('../foundation/service-stateful-runtime').ServiceRelocationActorIngressRouter
+    >
+  ): boolean {
+    if (reply === undefined || buffers.length < 2) return false;
+    const { actorId, nodeRid, generation } = message.target.actor;
+    const signal = localSignal ?? this.options.shutdownSignal?.() ?? new AbortController().signal;
+    const rejected = (cause?: unknown) =>
+      createInternalFrameworkException(
+        origin === 'local'
+          ? ZLinkFrameworkInternalErrorKind.ActorRouteNotFound
+          : ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+        `Actor '${actorId}' has no matching target authority.`,
+        cause
+      );
+    const parts = buffers.map((part) => RuntimeMessage.fromOwned(part));
+    const captured = this.options.actorHandoff.capture(
+      origin,
+      actorId,
+      parts,
+      true,
+      undefined,
+      { actorId, nodeRid, objectGeneration: generation, meshName },
+      undefined,
+      message,
+      undefined,
+      onAdmitted,
+      undefined,
+      async () => {
+        try {
+          if (await confirm(signal)) {
+            await prepareSource(signal);
+            signal.throwIfAborted();
+            return;
+          }
+        } catch (error) {
+          throw rejected(error);
+        }
+        throw rejected();
+      }
+    );
+    if (captured === undefined) return false;
+    void captured
+      .then((response) => {
+        if (response !== RELOCATED_REQUEST_OWNED_BY_REQUESTER) {
+          reply(
+            encodeActorReply(
+              buffers[0]!,
+              ZLinkStreamMessageKind.Response,
+              response,
+              this.options.messageSerializers,
+              this.options.flowCreationEnabled?.() ?? true
+            )
+          );
+        }
+      })
+      .catch(reject);
+    return true;
   }
 
   /** Relocation activation owns admission; handler terminals are observed independently. */

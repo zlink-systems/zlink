@@ -12478,7 +12478,8 @@ public sealed partial class EntrySpotActorDispatchTests
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
             includeSpotRoute: true,
-            joinTimeProvider: time
+            joinTimeProvider: time,
+            actorRelocationEnabled: true
         );
         try
         {
@@ -13754,7 +13755,8 @@ public sealed partial class EntrySpotActorDispatchTests
         TimeSpan? sessionReplacementCallbackTimeout = null,
         bool objectClient = false,
         Action<ZLinkSpotNodeRegistration>? configureNode = null,
-        EntryTimerSerialProbe? entryTimerProbe = null
+        EntryTimerSerialProbe? entryTimerProbe = null,
+        bool actorRelocationEnabled = false
     )
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
@@ -13867,8 +13869,9 @@ public sealed partial class EntrySpotActorDispatchTests
             ImplicitHandlerAutoRegistrationEnabled = false,
         };
         registration.Locations.StoreInstance = runtimeLocationProvider;
-        if (relocationStore is not null)
-            registration.Locations.RelocationStoreInstance = relocationStore;
+        if (relocationStore is not null || actorRelocationEnabled)
+            registration.Locations.RelocationStoreInstance =
+                relocationStore ?? new InMemoryRelocationStore();
         if (messageFlowMode is { } mode)
             registration.DispatchOptions.Diagnostics.SetLevel(mode);
         else if (messageFlowObserver is not null)
@@ -13927,7 +13930,13 @@ public sealed partial class EntrySpotActorDispatchTests
                 .Server()
                 .AddActorFactory<ProbeActor, ProbeActorFactory>(
                     "probe",
-                    factory => factory.DisableRelocation()
+                    factory =>
+                    {
+                        if (actorRelocationEnabled)
+                            factory.RecreateOnRelocation();
+                        else
+                            factory.DisableRelocation();
+                    }
                 );
         }
         if (includeJoinTarget)
@@ -15827,7 +15836,10 @@ public sealed partial class EntrySpotActorDispatchTests
         )
         {
             _dispatchHandler = handler;
+            DispatchAttached?.Invoke();
         }
+
+        public Action? DispatchAttached { get; init; }
 
         public bool DispatchHandlerAttached => _dispatchHandler is not null;
 
@@ -16830,6 +16842,13 @@ public sealed partial class EntrySpotActorDispatchTests
             string endpoint,
             string expectedSecurityIdentity
         ) { }
+
+        public bool TryConnectPeerAuto(
+            RoutingId? peerRid,
+            string endpoint,
+            string expectedSecurityIdentity,
+            ulong? expectedLifecycleGeneration
+        ) => true;
 
         public void SetPeerExpectation(
             RoutingId peerRid,

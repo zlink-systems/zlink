@@ -17,11 +17,13 @@ flowchart LR
     fieldB -->|Location / lease| location[Redis]
 ```
 
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
 ## Prerequisites
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-Docker with Compose v2 (Linux containers), and PowerShell 7 or Bash. `Directory.Packages.props` pins public ZLink Framework and Stream Connector 0.32.0 and the 1.23.0 binding. The project uses NuGet.org and requires no repository checkout.
+Docker with Compose v2 (Linux containers), and PowerShell 7 or Bash. `Directory.Packages.props` pins public ZLink Framework and Stream Connector 0.34.1 and the 1.26.0 binding. The project uses NuGet.org and requires no repository checkout.
 
 ## Build
 
@@ -34,12 +36,28 @@ Run commands from this project root:
 PowerShell builds the same Dockerfile targets:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 `Dockerfile` owns fixed `SDK_IMAGE`, `RUNTIME_IMAGE`, and `DOCKER_CLI_IMAGE` defaults. Replace the appropriate base ARG when adopting a ZLink base image. All node roles share the node image because their runtime dependencies match; each retains its own executable entry point. The ASP.NET Core runtime supplies shared hosting dependencies. The runner target adds Docker CLI and structure inputs without including the SDK.
 
 Scripts remove unique image tags after each invocation. Docker retains build layers for subsequent runs.
+
+## Local server
+
+Run from the template directory with the .NET 8 SDK and Docker Compose v2 available. The command builds the server and starts Redis in Docker and the game nodes as local processes.
+
+```bash
+./run-server.sh
+```
+
+```powershell
+.\run-server.cmd
+```
+
+Connect clients to the WebSocket address in the `Server ready` line. When the topology has an HTTP API, the runner also prints its address. Ctrl+C stops the nodes and Redis. A second start is rejected while the server is running.
+
+Send `LeaveDungeonRequest` and wait for `DungeonLeft`. The Dungeon counts the players still inside after the leave and returns that count as `remainingPlayers`. At zero, the Session closes that Spot generation before replying and releases its capacity. A disconnect preserves Dungeon membership for reconnect.
 
 ## Client connection
 
@@ -114,13 +132,17 @@ Console.WriteLine(await received.Task.WaitAsync(ct));
 
 ## Local e2e
 
-Both scripts build images and call the same C# orchestrator inside a runner container. A unique Compose project/network contains Redis and the runner. The runner checks structure before starting nodes. Nodes share its network namespace, preserving loopback listeners and OS-assigned ports without host port mappings. Redis publishes an ephemeral loopback port for local debugging.
+Run `run-e2e` from another terminal to detect the running server through `.logs/server.json`, or run it with the server stopped to use an isolated Docker deployment. The attached run skips `update` because node replacement needs isolated processes.
+
+The runner prints each scenario result and the pass total. Find per-node stdout, stderr, and Framework message flow in `.logs/run-<id>/` as `<node>.out.log`, `<node>.err.log`, and `<node>.flow.log`. An isolated scenario with its own deployment keeps these files in a scenario subdirectory. Failures reference a `*-failure.log` file. Docker build and cleanup logs remain in `.logs/docker-<project>/`.
+
+In isolated Docker mode, both scripts build images and call the same C# runner inside a container. A unique Compose project/network contains Redis and the runner. The runner checks structure before starting nodes. Nodes share its network namespace, preserving loopback listeners and OS-assigned ports without host port mappings. Redis publishes an ephemeral loopback port for local debugging.
 
 The runner creates each node with interactive stdin, copies its configuration with `docker cp`, and attaches through `docker start -a -i`. `ManagedProcess` retains readiness, drain, shutdown, and replacement controls. Only the runner mounts the Docker socket; use a trusted local daemon. Scripts remove their labeled containers, Compose project, and image tags. Cleanup failure returns exit code 1.
 
 Node stderr logs (`<node>.err.log`) include Framework message flow records because dispatch diagnostics use `Normal`. Inspect these logs from the first failing run.
 
-On Unix sockets, Bash runs the runner with the caller's UID/GID and the socket's group so retained logs remain writable by the caller. Windows uses Docker Desktop's filesystem mapping. Build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`; node settings and control logs are in `.logs/run-<id>/`.
+On Unix sockets, the script runs the runner with the caller's UID/GID and the socket's group so retained logs remain writable by the caller. Windows uses Docker Desktop's filesystem mapping. Build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`; node settings and control logs are in `.logs/run-<id>/`.
 
 For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`. Redis remains in Docker. After a local build, `--no-build` or `-NoBuild` skips compilation:
 
@@ -130,8 +152,8 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -Local
-pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
+.\run-e2e.cmd -Local
+.\run-e2e.cmd -Local -NoBuild
 ```
 
 Bash:
@@ -145,9 +167,9 @@ Bash:
 PowerShell:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario field,dungeon,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 | Scenario | Client observations |
@@ -156,6 +178,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 | `dungeon` | Server-issued IDs, immutable nonleader rejection, duplicate entry requests sharing a run, shared Dungeon and stage broadcasts, completion at FinalStage 3. |
 | `reconnect` | Same Actor, Dungeon, RunId, Phase, roster and stage after reconnection. |
 | `update` | Instance drain, relocated RunId/Phase/stage and Session continuity, replacement accepting a distinct party run. |
+| `dungeon-leave` | Verify that the remaining player can query the same Dungeon after the first departure and that the last departure releases the slot. |
 
 Selecting reconnect or update includes party setup. `./run-e2e.sh --check-domain` (PowerShell `-CheckDomain`) runs 95 domain checks before starting play nodes.
 
@@ -173,7 +196,9 @@ Each run owns a unique Compose project, Redis key prefix and `.logs/run-<id>/` d
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
+
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

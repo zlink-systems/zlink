@@ -8,11 +8,13 @@ flowchart LR
     Session -->|Location / relocation store| Redis
 ```
 
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
 ## Prerequisites
 
 Install Docker with Compose v2 and access to a Linux container daemon. Bash or PowerShell 7 runs the scripts. Docker builds use .NET SDK `8.0.415`, ASP.NET runtime `8.0.21`, and Docker CLI `28.5.1`; the image references are at the top of `Dockerfile`. Host debugging also requires the .NET 8 SDK.
 
-`Directory.Packages.props` pins Framework and the STREAM connector to `0.32.0`. NuGet restores from nuget.org only. Do not add repository source references or a private feed.
+`Directory.Packages.props` pins Framework and the STREAM connector to `0.34.1`. NuGet restores from nuget.org only. Do not add repository source references or a private feed.
 
 ## Build
 
@@ -25,10 +27,24 @@ Build the node and runner images from this directory.
 The build command removes its image tags after checking the build; Docker retains reusable build layers. PowerShell provides the same command.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 Both commands build the projects listed in `server/MyGame.sln`.
+
+## Local server
+
+Run from the template directory with the .NET 8 SDK and Docker Compose v2 available. The command builds the server and starts Redis in Docker and the game nodes as local processes.
+
+```bash
+./run-server.sh
+```
+
+```powershell
+.\run-server.cmd
+```
+
+Connect clients to the WebSocket address in the `Server ready` line. When the topology has an HTTP API, the runner also prints its address. Ctrl+C stops the nodes and Redis. A second start is rejected while the server is running.
 
 ## Client connection
 
@@ -79,6 +95,10 @@ Console.WriteLine("STREAM connected; no game packets are registered");
 
 ## Local e2e
 
+Run `run-e2e` from another terminal to detect the running server through `.logs/server.json`, or run it with the server stopped to use an isolated Docker deployment. The attached run checks the STREAM connection. The isolated run also checks drain and shutdown.
+
+The runner prints each scenario result and the pass total. Find per-node stdout, stderr, and Framework message flow in `.logs/run-<id>/` as `<node>.out.log`, `<node>.err.log`, and `<node>.flow.log`. An isolated scenario with its own deployment keeps these files in a scenario subdirectory. Failures reference a `*-failure.log` file. Docker build and cleanup logs remain in `.logs/docker-<project>/`.
+
 Run the default Docker scenario from this directory.
 
 ```bash
@@ -89,9 +109,9 @@ Run the default Docker scenario from this directory.
 The `connect` scenario waits for node READY, connects and disposes one public STREAM connector, then checks drain markers and successful shutdown. PowerShell selects the same scenario.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario connect
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario connect
+.\run-e2e.cmd -CheckStructure
 ```
 
 A successful run prints `✓ connect` and `Scenarios: 1/1 passed`. Cleanup failures return a nonzero exit code.
@@ -120,6 +140,6 @@ PowerShell uses the `-CheckStructure` switch. Changes to registrations, settings
 
 Start Redis, set `RedisEndpoint` and a deployment-specific `KeyPrefix` in `server/config/session.json`, then start the published Session executable with `--config <path>`. The Docker `node` target runs `dotnet /app/session/MyGame.Session.dll --config /app/node.json`; mount your settings at that path and keep stdin open. Publish STREAM on a reachable interface when clients run outside the node's network namespace.
 
-Wait for `READY <json>` before admitting clients. It contains the node ID and actual mesh and STREAM endpoints. This starter registers a RouteMesh listener for future node composition but registers no object server or game Entry. Add gameplay from a separately downloaded sample before deploying a play node.
+Wait for `READY <json>` before admitting clients. It contains the node ID and actual mesh and STREAM endpoints. This starter registers a RouteMesh listener for future node composition but registers no object server or game Entry. Use a separately downloaded sample when designing gameplay and play nodes for your game project.
 
 After clients disconnect, write `drain` to stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`, then write `shutdown` and verify exit code zero. `NodeProtocol` owns these markers. The starter checks an empty host drain; it does not demonstrate moving connected clients or game state to another node.

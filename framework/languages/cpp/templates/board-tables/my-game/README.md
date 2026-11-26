@@ -13,7 +13,7 @@ flowchart LR
 
 Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain and CMake; the host does not need them for the default run.
 
-Public Framework 0.32.0 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.32.0` GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
+Public Framework 0.34.1 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.34.1` GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
 
 ## Client connection
 
@@ -24,6 +24,8 @@ Connect to the Session `players` STREAM listener. `server/config/session.json` p
 The listener is reachable from its host/network namespace. Keep a deployment running separately from e2e, which owns and removes its nodes; configure a reachable `StreamEndpoint` interface and port and expose it from containers for external clients. This is a TCP endpoint with no HTTP/WebSocket path. Browsers, Unity WebGL and Cocos Creator web cannot connect to this default listener; those clients require a deployed WebSocket listener.
 
 Send `JoinTableRequest` (`playerId`, `tableId`) first. Successful seating publishes `TableView` with the table, seat, hand and public player state; `ActionRejected` reports rejected actions. Other game packets and `SessionInfoRequest` require joining first. These operations use `send(...).submit()` and server pushes, not a correlated connector `request` reply. This template does not authenticate player identity; validate it before binding in a production game.
+
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to table selection. Omit `reconnect` or send `false` for first entry.
 
 ### Connector installation
 
@@ -136,7 +138,7 @@ The scripts and C++ runner validate actual structure files, start an isolated Re
 | Scenario | Assertions |
 | --- | --- |
 | `table` | Seats and chips, private cards, rejection of a server-originated packet, out-of-turn bets, over-limit values (`integer-out-of-range`) and insufficient chips. Each rejection has `retryAfterMs: 0` and leaves table state unchanged. Settlement reports every `cardCount` as zero; a private-hand query returns no cards. |
-| `reconnect` | Immediate connection replacement preserves Actor identity, generation, seat, chips, cards and turn while the other player stays connected. Settlement clears every hand, and a later private-hand query returns no cards. |
+| `reconnect` | Immediate connection replacement preserves Actor identity, generation, seat, chips, cards and turn while the other player stays connected. Settlement clears every hand, and a later private-hand query returns no cards. In isolation, a fresh deployment rejects reconnecting to the original table ID with `not-seated`. |
 | `update` | Drain the actual play node (table), observe relocation and SafeToShutdown, preserve both Session identities and game state, settle on the replacement with empty hands, stop and replace the host, then finish a fresh table. |
 
 `ActionRejected.retryAfterMs` is a signed 32-bit JSON integer serialized with the `retryAfterMs` property name. Chip balances, the pot and hand numbers use signed 64-bit integers.
@@ -177,7 +179,11 @@ Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenar
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+- This template has no `run-server` yet: use `run-e2e` (isolated Docker run). Matchmaking, the API node and the `run-server`/attach flow of the other templates are tracked in [#5647](https://github.com/zlink-systems/zlink/issues/5647).
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
+
+Validated against the published Framework 0.34.1 packages.
 
 This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.30.2 added a typed Session reply through `reply_packet` (#1785), and the template has not switched to it.
 

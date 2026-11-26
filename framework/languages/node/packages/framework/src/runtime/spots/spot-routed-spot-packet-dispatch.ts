@@ -1,4 +1,3 @@
-import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import { runOutsideZLinkActorExecution } from '../actors/actor-execution-context';
 import type {
   RoutingId,
@@ -24,6 +23,8 @@ import {
   createInternalFrameworkException
 } from '../framework-errors-internal';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
+import type { ZLinkFlowContextValue } from '../diagnostics/flow-context';
+import { reportSpotPacketFailure } from './spot-packet-terminal';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkSerialWorkOptions } from '../execution/serial-execution-queue';
@@ -54,10 +55,15 @@ interface ZLinkRoutedSpotPacketContext {
   readonly channelName: string;
   readonly onAdmitted?: () => void;
   readonly contentType?: string;
+  readonly correlationId?: string;
+  readonly inboundFlow?: ZLinkFlowContextValue;
+  readonly sourceRid?: string;
   readonly metadata?: ReadonlyMap<string, string> | Readonly<Record<string, string>>;
   readonly workOptions?: ZLinkSerialWorkOptions;
   readonly admissionTimeoutMs?: number;
   readonly signal?: AbortSignal;
+  readonly relocationAdmission?: import('../foundation/service-stateful-runtime').ServiceSpotTargetAdmission;
+  readonly relocationDeadlineUnixMs?: number;
   /** Wait until a recovered activation has actually entered its first handler. */
   readonly awaitFirstHandlerTurn?: boolean;
   readonly onOneWayError?: (error: unknown) => void;
@@ -112,7 +118,8 @@ export class ZLinkRoutedSpotPacketDispatch {
     returnResponse: boolean
   ): Promise<unknown> {
     const receivedAt = new Date();
-    const activation = this.options.resolveActivation(spotId);
+    const activation =
+      context.relocationAdmission?.activation ?? this.options.resolveActivation(spotId);
     if (activation === undefined) {
       this.reportMissing(spotId, packetName, context, returnResponse);
       if (!returnResponse) {
@@ -174,8 +181,10 @@ export class ZLinkRoutedSpotPacketDispatch {
             );
           }
           if (
-            context.activationRecord?.deadlineUnixMs !== undefined &&
-            context.activationRecord.deadlineUnixMs < BigInt(Date.now())
+            (context.activationRecord?.deadlineUnixMs !== undefined &&
+              context.activationRecord.deadlineUnixMs < BigInt(Date.now())) ||
+            (context.relocationDeadlineUnixMs !== undefined &&
+              context.relocationDeadlineUnixMs <= Date.now())
           ) {
             throw createInternalFrameworkException(
               ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
@@ -202,6 +211,7 @@ export class ZLinkRoutedSpotPacketDispatch {
             channelName: context.channelName,
             contentType: context.contentType,
             packetName: packetName!,
+            correlationId: context.correlationId,
             metadata:
               context.metadata === undefined
                 ? ZLinkMessageMetadataEmpty
@@ -279,16 +289,26 @@ export class ZLinkRoutedSpotPacketDispatch {
             `Spot '${spotId}' cannot await a request to its current serial turn.`
           );
         }
+        const workOptions = { ...context.workOptions, onAdmitted: context.onAdmitted };
         await runOutsideZLinkActorExecution(() =>
-          activation.serial.execute(
-            runHandler,
-            { ...context.workOptions, onAdmitted: context.onAdmitted },
-            instanceIntent ? runHandler : undefined
-          )
+          context.relocationAdmission === undefined
+            ? activation.serial.execute(
+                runHandler,
+                workOptions,
+                instanceIntent ? runHandler : undefined
+              )
+            : activation.serial.executeRelocationRequest(
+                runHandler,
+                workOptions,
+                context.relocationAdmission.confirmed
+              )
         );
       }
     } catch (error) {
-      if (context.activationRecord?.activationRecord === undefined)
+      if (
+        context.activationRecord?.activationRecord === undefined &&
+        (context.relocationAdmission === undefined || (await context.relocationAdmission.confirmed))
+      )
         this.reportFailure(spotId, packetName, context, returnResponse, error);
       throw error;
     } finally {
@@ -304,23 +324,29 @@ export class ZLinkRoutedSpotPacketDispatch {
     returnResponse: boolean,
     error: unknown
   ): void {
-    const reporter = this.options.dispatchErrors;
-    if (reporter?.captureEnabled() !== true) return;
-    reporter.report({
-      surface:
-        context.activationRecord?.activationRecord?.kind === 'instanceSpot'
-          ? ZLinkDispatchErrorSurface.InstanceSpot
-          : ZLinkDispatchErrorSurface.SpotRoute,
-      messageKind: returnResponse
-        ? ZLinkDispatchMessageKind.Request
-        : ZLinkDispatchMessageKind.Send,
-      reason: dispatchReasonFromError(error),
-      action: returnResponse ? ZLinkDispatchErrorAction.FailCaller : ZLinkDispatchErrorAction.Drop,
-      packetName,
-      channelName: context.channelName,
-      spotId: String(spotId),
+    reportSpotPacketFailure(
+      this.options.dispatchErrors,
+      {
+        surface:
+          context.activationRecord?.activationRecord?.kind === 'instanceSpot'
+            ? ZLinkDispatchErrorSurface.InstanceSpot
+            : ZLinkDispatchErrorSurface.SpotRoute,
+        messageKind: returnResponse
+          ? ZLinkDispatchMessageKind.Request
+          : ZLinkDispatchMessageKind.Send,
+        action: returnResponse
+          ? ZLinkDispatchErrorAction.FailCaller
+          : ZLinkDispatchErrorAction.Drop,
+        packetName,
+        channelName: context.channelName,
+        spotId: String(spotId),
+        sourceRid: context.sourceRid,
+        correlationId: context.correlationId,
+        flowId: context.inboundFlow?.flowId,
+        flowOrigin: context.inboundFlow?.flowOrigin
+      },
       error
-    });
+    );
   }
 
   private reportMissing(

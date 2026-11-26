@@ -1308,7 +1308,7 @@ public sealed partial class StatefulServiceRuntimeTests
         var ownerBackend = new ZLinkBackendSpotNodeWrapper(owner);
         ownerBackend.ObserveRequestSourceFence(requestSource);
         var follower = new CapturingBackendActorMessageFollowHandler(acceptsOwnership: true);
-        ownerBackend.SetActorMessageFollowIngressHandler(follower.TryFollow);
+        ownerBackend.SetActorMessageFollowIngressHandler((_, parts) => follower.TryFollow(parts));
         var suffix = Guid.NewGuid().ToString("N");
         var callerEndpoint = $"inproc://active-follower-caller-{suffix}";
         var ownerEndpoint = $"inproc://active-follower-owner-{suffix}";
@@ -1397,7 +1397,7 @@ public sealed partial class StatefulServiceRuntimeTests
         var ownerBackend = new ZLinkBackendSpotNodeWrapper(owner);
         ownerBackend.ObserveRequestSourceFence(requestSource);
         var follower = new CapturingBackendActorMessageFollowHandler(acceptsOwnership: false);
-        ownerBackend.SetActorMessageFollowIngressHandler(follower.TryFollow);
+        ownerBackend.SetActorMessageFollowIngressHandler((_, parts) => follower.TryFollow(parts));
         var suffix = Guid.NewGuid().ToString("N");
         var callerEndpoint = $"inproc://rejected-follower-caller-{suffix}";
         var ownerEndpoint = $"inproc://rejected-follower-owner-{suffix}";
@@ -1482,7 +1482,7 @@ public sealed partial class StatefulServiceRuntimeTests
             acceptsOwnership: true,
             reply: false
         );
-        adapter.SetHandler(follower.TryFollow);
+        adapter.SetHandler((_, parts) => follower.TryFollow(parts));
         var operation = new MeshOperationId(229, 233);
         var actor = new ActorRef(
             "follow-adapter-actor",
@@ -1575,7 +1575,7 @@ public sealed partial class StatefulServiceRuntimeTests
             acceptsOwnership: true,
             reply: false
         );
-        ownershipAdapter.SetHandler(ownershipFollower.TryFollow);
+        ownershipAdapter.SetHandler((_, parts) => ownershipFollower.TryFollow(parts));
         ownershipAdapter.SetAdmission(_ => true);
         using (var metadataSource = Message.From(new byte[] { 19, 23, 29 }))
         {

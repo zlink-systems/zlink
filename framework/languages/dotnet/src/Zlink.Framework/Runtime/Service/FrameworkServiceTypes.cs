@@ -379,7 +379,15 @@ internal readonly record struct ActorMessageFollowIngress(
     // call. Copy it only after admission so a rejected stale route does not
     // allocate an application-metadata snapshot.
     internal Message? ApplicationMetadataSource { get; init; }
+    internal EarlyActorRequestAdmission? EarlyAdmission { get; init; }
 }
+
+internal sealed record EarlyActorRequestAdmission(
+    Func<bool> IsCurrent,
+    Action Reject,
+    Action? OnAccepted,
+    CancellationToken CancellationToken
+);
 
 internal interface IActorMessageFollowIngressTarget
 {
@@ -482,8 +490,27 @@ internal sealed class ZLinkCanonicalRelocationPreparationLease
     internal void MarkPrepared() => Volatile.Write(ref _prepared, 1);
 }
 
+internal readonly record struct SpotRelocationRequest(
+    string SpotId,
+    ulong SpotGeneration,
+    ulong NodeGeneration,
+    ulong AuthorityOwnerGeneration,
+    ulong OwnerLeaseGeneration
+);
+
+internal sealed record SpotTargetAdmission(
+    Func<Task<bool>> Confirm,
+    Action Reject,
+    ZLinkRequestAdmission? Admission = null
+) : MeshRecordPayload;
+
 internal interface ICanonicalRelocationTarget
 {
+    Func<Task<bool>>? ConfirmSpotRequest(
+        SpotRelocationRequest request,
+        CancellationToken cancellationToken
+    ) => null;
+
     ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         ZLinkRelocationEnvelope envelope,
@@ -949,6 +976,7 @@ internal struct MeshReceiveRecord
     // Ingress records carry the payload size once it is known. This keeps the
     // mailbox and dispatch pump from rediscovering envelope boundaries.
     internal ulong? ApplicationPayloadBytes { get; set; }
+    internal SpotTargetAdmission? SpotTargetAdmission => KindData as SpotTargetAdmission;
 
     public ActorControlRecord? ActorControl => KindData as ActorControlRecord;
     public ActorJoinCompletion? JoinCompletion => KindData as ActorJoinCompletion;

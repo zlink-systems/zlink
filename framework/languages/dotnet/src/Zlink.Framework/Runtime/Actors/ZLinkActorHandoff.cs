@@ -53,6 +53,7 @@ internal sealed record ZLinkActorHandoffFrame(
 )
 {
     internal Func<ValueTask<bool>>? Withdraw { get; set; }
+    internal Task<bool>? TargetAdmission { get; init; }
     public long CanonicalEncodedLength { get; set; } = CanonicalEncodedLength;
 }
 
@@ -105,7 +106,10 @@ internal static class ZLinkActorHandoffFrames
             )
                 ? boundSession
                 : null
-        );
+        )
+        {
+            TargetAdmission = frame.TargetAdmission,
+        };
     }
 
     internal static long CanonicalEncodedLength(
@@ -160,7 +164,10 @@ internal static class ZLinkActorHandoffFrames
                         ? ZLinkActorBoundSessionHandoffMetadata.Encode(bound)
                         : default,
                     handoffArrivalIndex: frame.ArrivalIndex
-                );
+                )
+                {
+                    TargetAdmission = frame.TargetAdmission,
+                };
                 if (frame.RelocationReplyRouteId != 0)
                     restoredFrame.BindRelocationReplyRoute(frame.RelocationReplyRouteId);
                 restored.Add(restoredFrame);

@@ -1134,6 +1134,24 @@ stateful_object_runtime_t::place_application_on_lane (object_record_t &object,
     return outcome;
 }
 
+stateful_object_runtime_t::object_record_t *
+stateful_object_runtime_t::find_application_owner_on_lane (
+  const object_ref_t &owner, const committed_target_ingress_t *committed, stateful_error_t &error)
+{
+    if (!committed)
+        return find_record_locked (owner, error);
+    // Fence publication can occur while the original waits for Store confirmation.
+    // The current generation can accept immediately, or the same restore owns the hold.
+    if (auto *current = find_record_locked (committed->target, error))
+        return current;
+    auto *staged = find_record_locked (owner, error);
+    if (staged && staged->state == object_state_t::recovering
+        && staged->restore_identity == committed->restore)
+        return staged;
+    error = stateful_error_t::generation_stale;
+    return nullptr;
+}
+
 stateful_error_t stateful_object_runtime_t::enqueue (const object_ref_t &owner,
                                                      turn_domain_t domain,
                                                      turn_record_t record)
@@ -1622,7 +1640,8 @@ task_t<aggregate_relocation_seal_attempt_t>
 stateful_object_runtime_t::try_seal_relocation_aggregate (
   const std::vector<object_ref_t> &participants,
   std::stop_token cancellation,
-  const std::function<task_t<bool> ()> &before_capture)
+  const std::function<task_t<bool> ()> &seal_sessions,
+  std::function<task_t<bool> (const std::vector<object_ref_t> &)> begin_capture)
 {
     struct seal_plan_t
     {
@@ -1645,10 +1664,10 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
 
     // Relocation flow §4.1: the Session owner seals its binding before the
     // source stops application dispatch. Keep serving while that seal is pending.
-    if (before_capture) {
+    if (seal_sessions) {
         bool fenced = false;
         try {
-            fenced = co_await before_capture ();
+            fenced = co_await seal_sessions ();
         }
         catch (...) {
         }
@@ -1705,7 +1724,14 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
         co_return result_t<aggregate_relocation_seal_attempt_t>::success ({plan.error, {}});
 
     // Every failure after the attempt exists aborts the whole aggregate through its one token.
-    const auto conflict = [this, &plan] () -> task_t<aggregate_relocation_seal_attempt_t> {
+    bool capture_started = false;
+    const auto conflict = [this, &plan,
+                           &capture_started] () -> task_t<aggregate_relocation_seal_attempt_t> {
+        // Once a durable Preparing write was attempted, the coordinator
+        // must Preserve it before reopening source execution.
+        if (capture_started)
+            co_return result_t<aggregate_relocation_seal_attempt_t>::success (
+              {stateful_error_t::conflict, {plan.token, {}}});
         (void) co_await abort_relocation_before_cutover (plan.token);
         co_return result_t<aggregate_relocation_seal_attempt_t>::success (
           {stateful_error_t::conflict, {}});
@@ -1791,6 +1817,15 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
         if (!waiter)
             break;
         co_await waiter->task ();
+    }
+
+    // The source execution seal is bound and quiescent. Record Preparing
+    // before invoking application capture or moving the frozen work.
+    if (begin_capture) {
+        capture_started = true;
+        const auto preparing = co_await runtime::await_result (begin_capture (plan.sources));
+        if (!preparing || !preparing.value ())
+            co_return co_await conflict ();
     }
 
     std::vector<frozen_object_state_t> application_states (plan.sources.size ());

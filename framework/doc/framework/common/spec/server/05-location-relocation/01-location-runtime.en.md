@@ -1728,6 +1728,11 @@ and `level` are decimal integers without leading zeros.
 | A participant's new authority payload | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:authorityPayload` |
 | A participant's membership change | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
 
+**Relocation key values.** When a relocation (`aggregate.relocation` of §9.1) writes the records of
+this section, `aggregateId` is its `relocationId` and `aggregateGeneration` is `1`. The source writes
+this inventory once at seal, before it chooses a target, and keeps using the same inventory when the
+target attempt (`target.attemptGeneration`) changes.
+
 **Participant change bytes.** A participant's new authority payload record and membership change
 record store bytes as they are, not JSON. The new authority payload record is the
 application-defined opaque bytes that become the participant authority's `payload` at commit, and
@@ -1913,10 +1918,13 @@ and applying the Session Actor command 44 route update don't block target applic
 message processing. The running source and target runtime each continue this follow-up
 work independently.
 
-The resolver doesn't return a moving object as `Ready` until all the `Ready` conditions
-above are met. Keeping the completion-record payload location — for reply delivery
-through the previous owner and the `Completed` record after target dispatch switchover —
-doesn't block `Ready`.
+Once the owner change commits, the resolver returns the target as the object's route. A target that
+hasn't yet met all the `Ready` conditions above doesn't reject a message arriving on that route
+(with `NotFound` or otherwise); it accepts it into the temporary queue from this section's first
+paragraph and runs it in order when it opens application dispatch. A caller's first request sent
+between the commit and the dispatch opening is therefore handled without failing. Keeping the
+completion-record payload location — for reply delivery through the previous owner and the
+`Completed` record after target dispatch switchover — doesn't block `Ready`. (#5576)
 
 A `PerActor` User Spot's target shell becomes Ready for `ToSpot`, Create, and Join once
 the Spot authority CAS, source Spot queue relay, and target Spot admission preparation

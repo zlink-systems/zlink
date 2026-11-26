@@ -2,6 +2,16 @@
 
 ## Rules for AI
 
+### Reference project
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+### Server and e2e commands
+
+Run `./run-server.sh` or `.\run-server.cmd` to start Redis and the nodes in the foreground. Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal to attach automatically. With the server stopped, run-e2e uses isolated Docker processes. Read per-node stdout, stderr, message flow, and failure detail under `.logs/run-<id>/`.
+
+### Node and game design
+
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
@@ -23,13 +33,15 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/dot
 
 ## Project overview
 
-This C#/.NET 8 project is a MORPG server example in which players meet in a town channel, form parties of up to four, and enter a dedicated Dungeon for their party. It runs a Session node for connections, play nodes A and B (town) for the fixed town channels, play nodes A and B (dungeon) for Dungeons, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.32.0`.
+This C#/.NET 8 project is a MORPG server example in which players meet in a town channel, form parties of up to four, and enter a dedicated Dungeon for their party. It runs a Session node for connections, play nodes A and B (town) for the fixed town channels, play nodes A and B (dungeon) for Dungeons, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.34.1`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
 > **Documentation and package versions.** The [ZLink documentation](https://docs.zlink.systems/), [.NET guide](https://docs.zlink.systems/dotnet/guide/server/), [API reference](https://docs.zlink.systems/dotnet/reference/), and [agent index](https://docs.zlink.systems/llms.txt) are the public documentation entry points. When a current guide describes a newer release, check its API against the package pinned in this project.
 
 ## Development commands
+
+Run one scenario with `./run-e2e.sh --scenario channel`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
 
 Default builds and e2e run nodes and the client in Docker without a host SDK. Run these commands from this directory.
 
@@ -67,7 +79,7 @@ An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame
 
 ### Dungeons
 
-`server/MyGame.Instance/Program.cs` registers the Dungeon factory, and `server/MyGame.Instance/DungeonSpot.cs` owns the party roster and the stage of one Dungeon, accepts only roster members, and answers the typed preparation request. `server/MyGame.Instance/Handlers.cs` holds the Dungeon handlers, including `Advance` and the delivery handler. `DungeonSpot` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract. Add encounters, rewards, and Dungeon lifecycle behavior in this project.
+`server/MyGame.Instance/Program.cs` registers the Dungeon factory, and `server/MyGame.Instance/DungeonSpot.cs` owns the party roster and the stage of one Dungeon, accepts only roster members, and answers the typed preparation request. `server/MyGame.Instance/Handlers.cs` holds the Dungeon handlers, including `Advance` and the delivery handler. `DungeonSpot` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract. Add encounters, rewards, and Dungeon lifecycle behavior in your game project.
 
 ### Shared contracts and hosting
 
@@ -118,7 +130,11 @@ Requests in the example game follow this path. Reading the code along this path 
 
 ## Extending the template domain
 
-Extend this template's domain to build a MORPG server. Follow the [README](README.md) for execution and deployment.
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use nullable reference types such as `string?` or nullable value types such as `long?`. To allow omission, declare a constructor parameter default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/#12-message-value-rules)
+
+Use this template's domain as a reference when designing a MORPG server in a separate project. Follow the [README](README.md) for execution and deployment.
 
 1. Extend channel population and party rules in `server/MyGame.Town/TownSpot.cs`, and Dungeon roster and stage rules in `server/MyGame.Instance/DungeonSpot.cs`. Keep each decision in its owning domain. `server/MyGame.Shared/PartyRun.cs` owns run transitions, Dungeon preparation and progression, and channel bounds.
 2. Add shared contracts in `server/MyGame.Shared/Contracts.cs`. Distinguish client input from internal messages and use the default typed serializer.
@@ -187,7 +203,7 @@ The value applies to child processes started from that environment; preserve std
 export ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1
 ```
 
-`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` is a version-specific diagnostic switch in the public `0.32.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` is a version-specific diagnostic switch in the public `0.34.1` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
 
 ## Reporting ZLink defects
 
