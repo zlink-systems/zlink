@@ -291,6 +291,8 @@ TEST (ReceiveRoleHandoff, T03RotationHasOneReceiverAndOneAttempt)
 #endif
     mesh::service_mailbox_t mailbox;
     std::atomic_uint active{0}, maximum{0}, rotations{0}, publications{0}, started_records{0};
+    std::promise<void> completed_turns;
+    auto turns_completed = completed_turns.get_future ();
     unsigned handoffs = 0, failures = 0;
     std::thread::id previous_receiver;
     mesh::service_mailbox_t::application_ready_batch_t ready;
@@ -328,6 +330,7 @@ TEST (ReceiveRoleHandoff, T03RotationHasOneReceiverAndOneAttempt)
         previous_receiver = current;
         if (rotations == 33) {
             --active;
+            completed_turns.set_value ();
             return false;
         }
         const auto rotation = ++rotations;
@@ -351,7 +354,7 @@ TEST (ReceiveRoleHandoff, T03RotationHasOneReceiverAndOneAttempt)
         mesh::service_mailbox_t::notify_application_ready (batch);
     };
     ASSERT_TRUE (executor.start_role (role));
-    ASSERT_TRUE (until ([&] { return publications == 33; }));
+    ASSERT_EQ (std::future_status::ready, turns_completed.wait_for (5s));
     executor.drain ();
     EXPECT_EQ (1u, maximum.load ());
     EXPECT_EQ (rotations, publications);
@@ -363,6 +366,64 @@ TEST (ReceiveRoleHandoff, T03RotationHasOneReceiverAndOneAttempt)
     EXPECT_EQ (0u, access_t::roles (executor));
     EXPECT_EQ (32u * 64, started_records.load ());
     EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
+}
+
+TEST (ReceiveRoleHandoff, T03DrainAtPublicationEntryRejectsLastOwner)
+{
+    rt::offload_executor_t executor (3);
+    ASSERT_TRUE (until ([&] { return access_t::idle (executor) == 3; }));
+    mesh::service_mailbox_t mailbox;
+    std::promise<void> publishing, release;
+    auto published = publishing.get_future ();
+    auto released = release.get_future ().share ();
+    std::atomic_uint publications{0}, started{0};
+    bool submitted = true;
+    mesh::service_mailbox_t::application_ready_batch_t ready;
+    mailbox.bind_application_dispatch ({}, [&] (const auto &owner) {
+        submitted = executor.try_submit_internal ([&, owner] {
+            EXPECT_TRUE (mailbox.begin_application_drain (owner));
+            auto claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
+                                                  owner, 64, 65536);
+            if (claim) {
+                for (unsigned i = 0; i != claim->claimed_messages; ++i) {
+                    if (mailbox.take ({claim, i}))
+                        ++started;
+                }
+                mailbox.end_application_drain (owner);
+            }
+        });
+    });
+    bool first = true;
+    auto role = std::make_shared<role_t> ();
+    role->receive = [&] {
+        if (!std::exchange (first, false))
+            return false;
+        mailbox.begin_application_receive_turn ();
+        for (unsigned i = 0; i != 64; ++i)
+            EXPECT_TRUE (mailbox.try_enqueue (record ("last-owner", i)));
+        ready = mailbox.take_application_receive_turn ();
+        return true;
+    };
+    role->publication = [&] {
+        ++publications;
+        publishing.set_value ();
+        released.wait ();
+        auto batch = std::move (ready);
+        ready.reset ();
+        mesh::service_mailbox_t::notify_application_ready (batch);
+    };
+    ASSERT_TRUE (executor.start_role (role));
+    const auto reached = published.wait_for (5s);
+    auto draining = std::async (std::launch::async, [&] { executor.drain (); });
+    const bool stopping = until ([&] { return access_t::stopping (executor); });
+    release.set_value ();
+    draining.get ();
+    EXPECT_EQ (std::future_status::ready, reached);
+    EXPECT_TRUE (stopping);
+    EXPECT_EQ (1u, publications.load ());
+    EXPECT_FALSE (submitted);
+    EXPECT_EQ (0u, started.load ());
+    EXPECT_EQ (64u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
 }
 
 mesh::service_mailbox_record_t record (std::string owner, unsigned sequence)
