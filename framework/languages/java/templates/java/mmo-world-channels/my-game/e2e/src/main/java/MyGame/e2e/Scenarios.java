@@ -88,7 +88,8 @@ public final class Scenarios {
             view(a, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD);
             var rejected = a.rejection();
             Structure.require(
-                    Rejection.EARN_TOO_SOON.equals(rejected.reason()) && rejected.retryAfterMs() > 0,
+                    Rejection.EARN_TOO_SOON.equals(rejected.reason())
+                            && rejected.retryAfterMs() > 0,
                     "Early earn was not rejected with a retry delay");
             view(current(a), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD);
             a.waitRetryAfter(rejected.retryAfterMs());
@@ -124,13 +125,15 @@ public final class Scenarios {
                             sameAtCMark,
                             value ->
                                     value.channelId() == Names.FIRST_CHANNEL
-                                            && new TreeSet<>(value.playerIds()).equals(expectedPair));
+                                            && new TreeSet<>(value.playerIds())
+                                                    .equals(expectedPair));
             var sameAtSelf =
                     same.channelViewAfter(
                             sameAtSelfMark,
                             value ->
                                     value.channelId() == Names.FIRST_CHANNEL
-                                            && new TreeSet<>(value.playerIds()).equals(expectedPair));
+                                            && new TreeSet<>(value.playerIds())
+                                                    .equals(expectedPair));
             Structure.require(
                     new TreeSet<>(sameAtC.playerIds()).equals(expectedPair)
                             && new TreeSet<>(sameAtSelf.playerIds()).equals(expectedPair),
@@ -146,13 +149,15 @@ public final class Scenarios {
                             allAtCMark,
                             value ->
                                     value.channelId() == Names.FIRST_CHANNEL
-                                            && new TreeSet<>(value.playerIds()).equals(expectedAll));
+                                            && new TreeSet<>(value.playerIds())
+                                                    .equals(expectedAll));
             var allAtSame =
                     same.channelViewAfter(
                             allAtSameMark,
                             value ->
                                     value.channelId() == Names.FIRST_CHANNEL
-                                            && new TreeSet<>(value.playerIds()).equals(expectedAll));
+                                            && new TreeSet<>(value.playerIds())
+                                                    .equals(expectedAll));
             moving.channelViewAfter(
                     allAtMovingMark,
                     value ->
@@ -191,13 +196,15 @@ public final class Scenarios {
                             oldAtCMark,
                             value ->
                                     value.channelId() == Names.FIRST_CHANNEL
-                                            && new TreeSet<>(value.playerIds()).equals(expectedPair));
+                                            && new TreeSet<>(value.playerIds())
+                                                    .equals(expectedPair));
             var oldAtSame =
                     same.channelViewAfter(
                             oldAtSameMark,
                             value ->
                                     value.channelId() == Names.FIRST_CHANNEL
-                                            && new TreeSet<>(value.playerIds()).equals(expectedPair));
+                                            && new TreeSet<>(value.playerIds())
+                                                    .equals(expectedPair));
             var movedView =
                     moving.channelViewAfter(
                             destinationMark,
@@ -231,11 +238,14 @@ public final class Scenarios {
                             movedMark,
                             value ->
                                     value.channelId() == CHANNEL_TWO
-                                            && new TreeSet<>(value.playerIds()).equals(expectedDestination));
+                                            && new TreeSet<>(value.playerIds())
+                                                    .equals(expectedDestination));
             Structure.require(
                     new TreeSet<>(movedViewForPrimary.playerIds()).equals(expectedDestination),
                     "Channel move did not update the destination list");
-            Structure.require(identity.equals(c.sessionInfo()), "SessionInfo changed during channel transfer");
+            Structure.require(
+                    identity.equals(c.sessionInfo()),
+                    "SessionInfo changed during channel transfer");
             connected(c);
             connected(moving);
         }

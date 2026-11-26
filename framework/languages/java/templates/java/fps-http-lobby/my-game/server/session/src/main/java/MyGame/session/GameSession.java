@@ -51,10 +51,13 @@ public final class GameSession implements ZLinkSession {
         if (context.actors().bound().isEmpty()) {
             if (!packetName.equals(JoinRoomRequest.class.getSimpleName()))
                 return CompletableFuture.failedFuture(
-                        new IllegalStateException("JoinRoomRequest must be the first player packet"));
+                        new IllegalStateException(
+                                "JoinRoomRequest must be the first player packet"));
             var request = payload.decode(JoinRoomRequest.class);
-            if (request.playerId() == null || request.playerId().isBlank()
-                    || request.roomId() == null || request.roomId().isBlank())
+            if (request.playerId() == null
+                    || request.playerId().isBlank()
+                    || request.roomId() == null
+                    || request.roomId().isBlank())
                 return CompletableFuture.failedFuture(
                         new IllegalArgumentException("Player and room IDs are required"));
             return actors.getOrCreate(request.playerId(), Names.PLAYER)
@@ -65,8 +68,10 @@ public final class GameSession implements ZLinkSession {
                             result -> {
                                 ActorRef actor =
                                         switch (result) {
-                                            case ZLinkActorCreateResult.Created created -> created.actor();
-                                            case ZLinkActorCreateResult.Existing existing -> existing.actor();
+                                            case ZLinkActorCreateResult.Created created ->
+                                                    created.actor();
+                                            case ZLinkActorCreateResult.Existing existing ->
+                                                    existing.actor();
                                             case ZLinkActorCreateResult.Rejected rejected ->
                                                     throw new IllegalStateException(
                                                             "Actor creation rejected: " + rejected);

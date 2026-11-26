@@ -46,18 +46,22 @@ class DomainChecksTest {
                 sample.phase = phase;
                 sample.runId = phase == RunPhase.Forming ? null : RUN_ID;
                 var snapshot = Json.MAPPER.writeValueAsString(sample);
-                String result = switch (action) {
-                    case "enter" -> sample.enter("leader");
-                    case "prepared" -> sample.prepared(RUN_ID);
-                    case "started" -> sample.started(RUN_ID);
-                    default -> sample.completed(RUN_ID);
-                };
-                boolean allowed = switch (action) {
-                    case "enter" -> true;
-                    case "prepared" -> phase == RunPhase.Preparing || phase == RunPhase.Entering;
-                    case "started" -> phase == RunPhase.Entering || phase == RunPhase.Active;
-                    default -> phase == RunPhase.Active || phase == RunPhase.Completed;
-                };
+                String result =
+                        switch (action) {
+                            case "enter" -> sample.enter("leader");
+                            case "prepared" -> sample.prepared(RUN_ID);
+                            case "started" -> sample.started(RUN_ID);
+                            default -> sample.completed(RUN_ID);
+                        };
+                boolean allowed =
+                        switch (action) {
+                            case "enter" -> true;
+                            case "prepared" ->
+                                    phase == RunPhase.Preparing || phase == RunPhase.Entering;
+                            case "started" ->
+                                    phase == RunPhase.Entering || phase == RunPhase.Active;
+                            default -> phase == RunPhase.Active || phase == RunPhase.Completed;
+                        };
                 checks.check(
                         allowed
                                 ? result == null
@@ -71,8 +75,8 @@ class DomainChecksTest {
             original.runId = phase == RunPhase.Forming ? null : RUN_ID;
             var encoded = Json.MAPPER.writeValueAsString(original);
             checks.check(
-                    Json.MAPPER.writeValueAsString(
-                                    Json.MAPPER.readValue(encoded, PartyRun.class))
+                    Json.MAPPER
+                            .writeValueAsString(Json.MAPPER.readValue(encoded, PartyRun.class))
                             .equals(encoded),
                     "snapshot " + phase);
         }
@@ -80,9 +84,7 @@ class DomainChecksTest {
         var party = new PartyRun();
         party.members = new ArrayList<>(List.of("leader", "member"));
         checks.check(Names.validId(party.partyId, "party-"), "party ID");
-        checks.check(
-                party.phase == RunPhase.Forming && party.runId == null,
-                "forming");
+        checks.check(party.phase == RunPhase.Forming && party.runId == null, "forming");
         checks.check(party.changeChannel() == null, "forming channel");
         var before = Json.MAPPER.writeValueAsString(party);
         checks.check(
@@ -90,40 +92,40 @@ class DomainChecksTest {
                         && before.equals(Json.MAPPER.writeValueAsString(party)),
                 "nonleader unchanged");
         checks.check(Rules.RUN_MISMATCH.equals(party.started("unknown")), "forming start rejected");
-        checks.check(Rules.RUN_MISMATCH.equals(party.completed("unknown")), "forming completion rejected");
-        checks.check(Rules.RUN_MISMATCH.equals(party.prepared("unknown")), "forming preparation rejected");
+        checks.check(
+                Rules.RUN_MISMATCH.equals(party.completed("unknown")),
+                "forming completion rejected");
+        checks.check(
+                Rules.RUN_MISMATCH.equals(party.prepared("unknown")),
+                "forming preparation rejected");
         checks.check(
                 party.enter("leader") == null && party.phase == RunPhase.Preparing,
                 "prepare transition");
         String run = party.runId;
         checks.check(Names.validId(run, "run-"), "run ID");
-        checks.check(
-                party.enter("leader") == null && party.runId.equals(run),
-                "preparing retry");
+        checks.check(party.enter("leader") == null && party.runId.equals(run), "preparing retry");
         checks.check(Rules.RUN_IN_PROGRESS.equals(party.changeChannel()), "preparing channel");
         party.leave("member");
         checks.check(party.members.contains("member"), "preparing retains member");
         checks.check(Rules.RUN_MISMATCH.equals(party.started(run)), "preparing start rejected");
-        checks.check(Rules.RUN_MISMATCH.equals(party.completed(run)), "preparing completion rejected");
+        checks.check(
+                Rules.RUN_MISMATCH.equals(party.completed(run)), "preparing completion rejected");
         checks.check(Rules.RUN_MISMATCH.equals(party.prepared("other")), "wrong preparation");
         checks.check(
                 party.prepared(run) == null && party.phase == RunPhase.Entering,
                 "entering transition");
         checks.check(party.prepared(run) == null, "prepared retry");
+        checks.check(party.enter("leader") == null && party.runId.equals(run), "entering retry");
         checks.check(
-                party.enter("leader") == null && party.runId.equals(run),
-                "entering retry");
-        checks.check(Rules.RUN_MISMATCH.equals(party.completed(run)), "entering completion rejected");
+                Rules.RUN_MISMATCH.equals(party.completed(run)), "entering completion rejected");
         checks.check(Rules.RUN_IN_PROGRESS.equals(party.changeChannel()), "entering channel");
         party.leave("member");
         checks.check(party.members.size() == 2, "entering retains member");
         checks.check(
-                party.started(run) == null && party.phase == RunPhase.Active,
-                "active transition");
+                party.started(run) == null && party.phase == RunPhase.Active, "active transition");
         checks.check(party.started(run) == null, "started retry");
         checks.check(
-                party.enter("leader") == null && party.runId.equals(run),
-                "active enter unchanged");
+                party.enter("leader") == null && party.runId.equals(run), "active enter unchanged");
         checks.check(Rules.RUN_MISMATCH.equals(party.prepared(run)), "active prepare rejected");
         checks.check(Rules.RUN_MISMATCH.equals(party.completed("other")), "wrong completion");
         checks.check(Rules.RUN_IN_PROGRESS.equals(party.changeChannel()), "active channel");
@@ -141,7 +143,8 @@ class DomainChecksTest {
         party.leave("member");
         checks.check(party.members.size() == 2, "completed retains member");
         checks.check(
-                Json.MAPPER.writeValueAsString(
+                Json.MAPPER
+                        .writeValueAsString(
                                 Json.MAPPER.readValue(
                                         Json.MAPPER.writeValueAsString(party), PartyRun.class))
                         .equals(Json.MAPPER.writeValueAsString(party)),
@@ -168,11 +171,12 @@ class DomainChecksTest {
                 dungeon.prepare(dungeonId, request) == null
                         && before.equals(Json.MAPPER.writeValueAsString(dungeon)),
                 "idempotent prepare");
-        var wrongRun = new PrepareDungeon(
-                "run-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                party.partyId,
-                "town-2",
-                request.members());
+        var wrongRun =
+                new PrepareDungeon(
+                        "run-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        party.partyId,
+                        "town-2",
+                        request.members());
         checks.check(
                 Rules.RUN_MISMATCH.equals(dungeon.prepare(dungeonId, wrongRun))
                         && before.equals(Json.MAPPER.writeValueAsString(dungeon)),
@@ -193,10 +197,7 @@ class DomainChecksTest {
                                 dungeon.prepare(
                                         dungeonId,
                                         new PrepareDungeon(
-                                                run,
-                                                party.partyId,
-                                                "town-1",
-                                                request.members())))
+                                                run, party.partyId, "town-1", request.members())))
                         && before.equals(Json.MAPPER.writeValueAsString(dungeon)),
                 "wrong owner unchanged");
         checks.check(
@@ -214,14 +215,9 @@ class DomainChecksTest {
                 "member admission");
         checks.check(!dungeon.join("other") && dungeon.joined.isEmpty(), "unknown join unchanged");
         checks.check(
-                !dungeon.join("leader") && dungeon.phase == RunPhase.Entering,
-                "partial arrival");
-        checks.check(
-                !dungeon.join("leader") && dungeon.joined.size() == 1,
-                "duplicate arrival");
-        checks.check(
-                dungeon.join("member") && dungeon.phase == RunPhase.Active,
-                "all arrive");
+                !dungeon.join("leader") && dungeon.phase == RunPhase.Entering, "partial arrival");
+        checks.check(!dungeon.join("leader") && dungeon.joined.size() == 1, "duplicate arrival");
+        checks.check(dungeon.join("member") && dungeon.phase == RunPhase.Active, "all arrive");
         checks.check(dungeon.advance() == null && dungeon.stage == 1, "advance one");
         checks.check(dungeon.advance() == null && dungeon.stage == 2, "advance two");
         checks.check(
@@ -235,8 +231,8 @@ class DomainChecksTest {
                         && before.equals(Json.MAPPER.writeValueAsString(dungeon)),
                 "completed advance unchanged");
         checks.check(
-                Json.MAPPER.writeValueAsString(
-                                Json.MAPPER.readValue(before, DungeonState.class))
+                Json.MAPPER
+                        .writeValueAsString(Json.MAPPER.readValue(before, DungeonState.class))
                         .equals(before),
                 "dungeon snapshot");
         dungeon.stage = Names.MAXIMUM_INTEGER;
@@ -248,10 +244,10 @@ class DomainChecksTest {
         dungeon.stage = Names.MAXIMUM_INTEGER + 1;
         checks.check(Rules.INTEGER_OUT_OF_RANGE.equals(dungeon.advance()), "integer above bound");
         checks.check(
-                Json.MAPPER.writeValueAsString(RunPhase.Active).equals("\"Active\""),
-                "enum name");
+                Json.MAPPER.writeValueAsString(RunPhase.Active).equals("\"Active\""), "enum name");
         checks.check(
-                Json.MAPPER.writeValueAsString(
+                Json.MAPPER
+                        .writeValueAsString(
                                 new PartyView("party-id", List.of(), RunPhase.Active, null))
                         .equals(
                                 "{\"partyId\":\"party-id\",\"members\":[],\"phase\":\"Active\",\"runId\":null}"),
@@ -260,8 +256,7 @@ class DomainChecksTest {
                 Json.MAPPER.writeValueAsString(new PartyRun()).contains("\"runId\":null"),
                 "nullable run");
         checks.check(
-                new ActionRejected(Rules.RUN_NOT_ACTIVE).retryAfterMs() == 0,
-                "rejection time");
+                new ActionRejected(Rules.RUN_NOT_ACTIVE).retryAfterMs() == 0, "rejection time");
         System.out.println("Domain checks: " + checks.count + "/" + checks.count + " passed");
     }
 }
