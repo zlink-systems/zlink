@@ -40,13 +40,14 @@ TEST (ActorMaintenanceJoin, HostShutdownClosesOccupiedUserSpot)
         auto state = registration->spot_state;
         state->lane
           .run ([&] {
-              const auto original = state->destroy_actor_registry;
-              state->destroy_actor_registry = [original, &evidence] (const auto &actor) {
+              const auto original = state->close_actor_authority;
+              state->close_actor_authority = [original, &evidence] (const auto &actor,
+                                                                    std::string version) {
                   {
                       std::lock_guard lock (evidence.mutex);
                       ++evidence.destroy_callbacks;
                   }
-                  return original (actor);
+                  return original (actor, std::move (version));
               };
           })
           .get ();

@@ -216,8 +216,11 @@ int session_bound_callback_policy ()
               entered->complete (result_t<void>::success ());
               std::stop_callback on_stop (cancellation, [&] { cancelled = true; });
               if (test_case == case_t::actor_shutdown) {
-                  co_await callback_owner->lane.run_task ([callback_owner] {
-                      callback_owner->retiring_actor_keys.insert ("player:duplicate-bind-actor");
+                  co_await callback_owner->lane.run_task ([callback_owner, &actor] {
+                      callback_owner->destroying_actors.emplace (
+                        "player:duplicate-bind-actor",
+                        std::make_shared<detail::spot_node_builder_state_t::actor_destroy_t> (
+                          actor.object_generation ()));
                   });
                   std::rethrow_exception (detail::make_cancellation_exception ("Actor ended"));
               }
@@ -343,10 +346,14 @@ int session_bound_callback_policy ()
         auto blocker = spot_runtime.run_actor_turn (
           actor,
           [gate_entered, gate_release, spot_state, actor_key,
+           generation = actor.object_generation (),
            test_case] (actor_t &, std::stop_token) -> task_t<result_t<bool>> {
               if (test_case == case_t::retiring) {
-                  co_await spot_state->lane.run_task ([spot_state, actor_key] {
-                      spot_state->retiring_actor_keys.insert (actor_key);
+                  co_await spot_state->lane.run_task ([spot_state, actor_key, generation] {
+                      spot_state->destroying_actors.emplace (
+                        actor_key,
+                        std::make_shared<detail::spot_node_builder_state_t::actor_destroy_t> (
+                          generation));
                   });
               }
               gate_entered->complete (result_t<void>::success ());

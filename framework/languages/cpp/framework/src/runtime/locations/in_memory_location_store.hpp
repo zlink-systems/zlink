@@ -1410,7 +1410,12 @@ class in_memory_location_repository_t : public location_repository_t
         const bool active = snapshot.allocation.state == placement_allocation_state_t::active;
         if (discarded && (!active || !discarded->same_incarnation (snapshot)))
             return false;
-        if (active ? !request && !discarded : !snapshot.pending_creation)
+        const auto actor =
+          active && snapshot.allocation.object_kind == placement_object_kind_t::actor
+            ? decode_direct_actor_authority_payload (snapshot.payload)
+            : std::nullopt;
+        const bool closing_actor = actor && actor->state == actor_authority_state_t::closing;
+        if (active ? !request && !discarded && !closing_actor : !snapshot.pending_creation)
             return false;
         const auto &target = snapshot.allocation.target;
         const bool owner_live = owner_token_is_live (snapshot.owner, now);
@@ -1424,11 +1429,10 @@ class in_memory_location_repository_t : public location_repository_t
             return false;
         }
         if (active) {
-            const auto actor = decode_direct_actor_authority_payload (snapshot.payload);
             if (snapshot.aggregate || (actor && actor->has_relocation_state))
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
-            if (!discarded) {
+            if (!discarded && !closing_actor) {
                 const auto &creation_target = request->target;
                 const auto descriptor = _mesh_nodes.find (mesh_node_key (
                   creation_target.mesh_name, std::string (creation_target.node_rid.value ())));
@@ -1436,7 +1440,8 @@ class in_memory_location_repository_t : public location_repository_t
                 require_disabled_creation_policy (
                   *request, descriptor != _mesh_nodes.end () ? &descriptor->second : nullptr);
             }
-            if (!discarded && snapshot.allocation.object_kind == placement_object_kind_t::actor
+            if (!discarded && !closing_actor
+                && snapshot.allocation.object_kind == placement_object_kind_t::actor
                 && (!actor || actor->state != actor_authority_state_t::ready
                     || actor->actor_id != request->key.global_id
                     || actor->stable_type != request->intent.stable_type))
@@ -1461,7 +1466,8 @@ class in_memory_location_repository_t : public location_repository_t
                                                  "Instance Spot is not steady Ready");
             }
         }
-        const bool wait_elapsed = !active || authority_release_wait_elapsed (snapshot.owner);
+        const bool wait_elapsed =
+          !active || closing_actor || authority_release_wait_elapsed (snapshot.owner);
         if (!discarded && active
             && snapshot.allocation.object_kind == placement_object_kind_t::user_spot)
             members = ended_spot_members_on_lane (key, snapshot, *request, now);

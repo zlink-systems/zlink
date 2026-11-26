@@ -3019,6 +3019,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
   add_executable(test_cpp_framework_spot_close_conformance
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_destroy_contract.cpp
     # Keep the original GoogleTest registration order across translation units.
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_user_spot_creation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relay_admission.cpp

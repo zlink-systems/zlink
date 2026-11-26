@@ -23,6 +23,7 @@
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/transport/endpoint_notation.hpp"
 #include "runtime/utils/uuid.hpp"
+#include "runtime/utils/weak_runtime_owner.hpp"
 #include "runtime/utils/relocation_id_generator.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
@@ -806,6 +807,44 @@ task_t<void> mesh_node_runtime_t::start (
         node->configure_user_spot_operations (_user_spot_store, _user_spot_materializer,
                                               _user_spot_closer);
     }
+    if (_user_spot_store) {
+        struct actor_destroy_target_t
+        {
+            static task_t<bool> run (std::shared_ptr<spot_node_builder_state_t> state,
+                                     std::shared_ptr<location_repository_t> store,
+                                     runtime::protocol::actor_route_fence_t fence)
+            {
+                const auto current =
+                  co_await store->read_authority (runtime::actor_authority_key (fence.actor_id));
+                const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
+                if (!snapshot)
+                    co_return false;
+                const auto &target = snapshot->allocation.target;
+                if (snapshot->object_generation != fence.object_generation
+                    || snapshot->authority_owner_generation != fence.authority_owner_generation
+                    || target.node_lifecycle_generation != fence.target_node_generation
+                    || target.owner.lease_generation <= 0
+                    || static_cast<std::uint64_t> (target.owner.lease_generation)
+                         != fence.owner_lease_generation
+                    || zlink::routing_id_t::from (std::string (target.node_rid.value ()))
+                           .to_bytes ()
+                         != fence.target_node_routing_id)
+                    co_return result_t<bool>::failure (framework_error_kind_t::invalid_operation,
+                                                       "Actor destroy owner fence is stale");
+                co_return co_await spot_node_runtime_t (std::move (state))
+                  .destroy_actor (
+                    actor_ref_access_t::make (target.node_rid, snapshot->allocation.stable_type,
+                                              std::move (fence.actor_id), fence.object_generation,
+                                              target.mesh_name),
+                    std::nullopt, snapshot->store_version);
+            }
+        };
+        node->configure_actor_destroy (
+          [state = std::weak_ptr (spot_state), store = _user_spot_store] (auto fence) {
+              return actor_destroy_target_t::run (lock_runtime_owner (state), store,
+                                                  std::move (fence));
+          });
+    }
     if (_actor_create_target)
         node->configure_actor_create_operations (_actor_create_target);
     // actorJoin(28) receiver admission: self-contained (unlike actorCreate,
@@ -1460,27 +1499,12 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
     co_return result;
 }
 
-task_t<bool> mesh_node_runtime_t::application_actor_transfer_in_progress (actor_ref_t actor) const
+task_t<result_t<bool>>
+mesh_node_runtime_t::destroy_application_actor (actor_ref_t actor,
+                                                std::string expected_store_version)
 {
-    return spot_node_runtime_t (_state->spot_state).actor_transfer_in_progress_async (actor);
-}
-
-task_t<result_t<bool>> mesh_node_runtime_t::destroy_application_actor (actor_ref_t actor)
-{
-    const auto destroyed = co_await spot_node_runtime_t (_state->spot_state).destroy_actor (actor);
-    if (!destroyed)
-        co_return destroyed;
-    const auto stateful = co_await cleanup_application_actor_stateful (actor);
-    if (!stateful)
-        co_return result_t<bool>::failure (stateful.error_kind (),
-                                           stateful.error () ? stateful.error ()->what ()
-                                                             : "stateful Actor cleanup failed");
-    co_return result_t<bool>::success (true);
-}
-
-task_t<result_t<void>> mesh_node_runtime_t::cleanup_application_actor_stateful (actor_ref_t actor)
-{
-    co_return co_await cleanup_local_actor_resources (_node, {}, actor);
+    co_return co_await spot_node_runtime_t (_state->spot_state)
+      .destroy_actor (actor, std::nullopt, std::move (expected_store_version));
 }
 
 task_t<runtime::stateful::aggregate_relocation_result_t>

@@ -4136,7 +4136,9 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained, bool re
     gates.at ("closing")->invalidate_execution_ready ();
     add_actor ("relocating", entry, true);
     gates.at ("relocating")->invalidate_execution_ready ();
-    node->retiring_actor_keys.insert ("player:relocating");
+    node->destroying_actors.emplace (
+      "player:relocating",
+      std::make_shared<detail::spot_node_builder_state_t::actor_destroy_t> (1));
     auto timer_queue = spot->ensure_spot_serial_executor ()->timer_queue ("pending-timer");
     timer = std::make_shared<detail::timer_state_t> ();
     timer->name = "pending-timer";

@@ -28,7 +28,6 @@
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/locations/pending_creation_projection.hpp"
-#include "runtime/utils/poll_interval_wait.hpp"
 #include "runtime/utils/weak_runtime_owner.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/locations/location_runtime.hpp"
@@ -324,7 +323,7 @@ constexpr auto creation_authority_poll_interval = std::chrono::milliseconds (10)
 
 namespace terminal_codec = zlink::framework::runtime::protocol::generated::detail;
 
-std::atomic_uint64_t next_user_spot_operation{1};
+std::atomic_uint64_t next_mesh_operation{1};
 
 class terminal_callback_guard_t final
 {
@@ -1036,13 +1035,19 @@ mesh_node_host_service_t::create_actor (bool exclusive,
       std::tuple<std::string, std::uint64_t, std::optional<std::uint64_t>>;
     std::set<unavailable_target_t> unavailable_targets;
     const auto complete_existing =
-      [&] (const authority_snapshot_t &current) -> result_t<actor_create_result_t> {
+      [&] (const authority_snapshot_t &current) -> std::optional<result_t<actor_create_result_t>> {
         if (current.allocation.stable_type != stable_type)
             return result_t<actor_create_result_t>::failure (framework_error_kind_t::type_mismatch,
                                                              "Actor stable type does not match");
         if (exclusive)
             return result_t<actor_create_result_t>::failure (framework_error_kind_t::already_exists,
                                                              "Actor already exists");
+        const auto payload = decode_direct_actor_authority_payload (current.payload);
+        if (!payload)
+            return result_t<actor_create_result_t>::failure (framework_error_kind_t::unavailable,
+                                                             "Actor authority is unavailable");
+        if (payload->state != actor_authority_state_t::ready)
+            return std::nullopt;
         return result_t<actor_create_result_t>::success (
           actor_create_existing_t{::zlink::framework::detail::actor_ref_access_t::make (
             current.allocation.target.node_rid, current.allocation.stable_type,
@@ -1061,12 +1066,10 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                   return message_t::from_raw (std::move (raw), _serializers);
               }));
         if (snapshot && snapshot->allocation.state == placement_allocation_state_t::active) {
-            const auto projection =
-              decode_actor_authority_payload (snapshot->payload, snapshot->object_generation);
-            if (projection && projection->state == actor_authority_state_t::ready) {
-                const auto owner_available = co_await reader.owner_available (snapshot->owner);
-                if (owner_available)
-                    co_return complete_existing (*snapshot);
+            const auto owner_available = co_await reader.owner_available (snapshot->owner);
+            if (owner_available) {
+                if (auto existing = complete_existing (*snapshot))
+                    co_return std::move (*existing);
             }
         }
     }
@@ -1185,7 +1188,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
     while (std::chrono::steady_clock::now () < deadline) {
         const auto reserved = co_await _location_store->reserve (reserve);
         if (const auto *existing = std::get_if<object_already_exists_t> (&reserved)) {
-            co_return complete_existing (existing->current);
+            if (auto result = complete_existing (existing->current))
+                co_return std::move (*result);
         }
         if (std::holds_alternative<object_type_mismatch_t> (reserved))
             co_return result_t<actor_create_result_t>::failure (
@@ -1373,7 +1377,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
               [this] (zlink::message_t raw) {
                   return message_t::from_raw (std::move (raw), _serializers);
               }));
-        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
+        co_await detail::delay (_services->get_required<detail::delay_owner_t> (),
+                                std::chrono::milliseconds (1));
     }
     co_return result_t<actor_create_result_t>::failure (framework_error_kind_t::deadline_exceeded,
                                                         "Actor creation deadline elapsed");
@@ -1481,9 +1486,8 @@ task_t<std::optional<actor_ref_t>> mesh_node_host_service_t::find_actor (actor_i
         co_return result_t<std::optional<actor_ref_t>>::success (std::nullopt);
     const auto projection =
       decode_actor_authority_payload (snapshot->payload, snapshot->object_generation);
-    if (!projection) {
+    if (!projection || projection->state != actor_authority_state_t::ready)
         co_return result_t<std::optional<actor_ref_t>>::success (std::nullopt);
-    }
     co_return result_t<std::optional<actor_ref_t>>::success (
       ::zlink::framework::detail::actor_ref_access_t::make (
         snapshot->allocation.target.node_rid, snapshot->allocation.stable_type,
@@ -1501,7 +1505,8 @@ task_t<std::optional<spot_ref_t>> mesh_node_host_service_t::find_actor_spot (act
         && snapshot->allocation.state == placement_allocation_state_t::active) {
         const auto projection =
           decode_actor_authority_payload (snapshot->payload, snapshot->object_generation);
-        if (projection && projection->actor.actor_id ().value () == actor_id.value ())
+        if (projection && projection->state == actor_authority_state_t::ready
+            && projection->actor.actor_id ().value () == actor_id.value ())
             co_return result_t<std::optional<spot_ref_t>>::success (spot_ref_t{
               projection->spot_id, projection->spot_generation,
               snapshot->allocation.target.mesh_name, snapshot->allocation.target.node_rid});
@@ -1522,83 +1527,73 @@ mesh_node_host_service_t::find_local_actor_node_async (node_rid_t actor_node)
     co_return nullptr;
 }
 
-task_t<result_t<void>> mesh_node_host_service_t::finalize_local_actor_destroy (actor_ref_t actor)
+task_t<void> mesh_node_host_service_t::update_actor_destroy_authority (
+  actor_ref_t actor, bool closing, std::string expected_store_version)
 {
-    if (::zlink::framework::detail::actor_ref_access_t::empty (actor)) {
-        co_return result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                           "Actor destroy requires an exact ActorRef");
-    }
+    if (!_location_store)
+        co_return;
+    const auto key = actor_authority_key (actor.actor_id ().value ());
+    const auto current = co_await _location_store->read_authority (key);
+    const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
+    if (!snapshot || snapshot->object_generation != actor.object_generation ()
+        || snapshot->allocation.target.node_rid.value () != actor.node_rid ().value ()
+        || snapshot->allocation.stable_type != detail::actor_ref_access_t::actor_type (actor))
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "Actor authority no longer names the destroy incarnation");
+    if (!expected_store_version.empty () && snapshot->store_version != expected_store_version)
+        throw framework_exception_t (framework_error_kind_t::unavailable,
+                                     "Actor owner changed before destroy admission");
+    const auto owner = current_location_owner ();
+    if (!owner || owner->owner_id != snapshot->owner.owner_id
+        || owner->lease_generation != snapshot->owner.lease_generation)
+        throw framework_exception_t (framework_error_kind_t::unavailable,
+                                     "Actor destroy authority belongs to another owner");
+    auto payload = decode_direct_actor_authority_payload (snapshot->payload);
+    const auto expected =
+      closing ? actor_authority_state_t::ready : actor_authority_state_t::closing;
+    if (!payload || payload->state != expected || payload->has_relocation_state
+        || snapshot->aggregate
+        || snapshot->allocation.state != placement_allocation_state_t::active)
+        throw framework_exception_t (framework_error_kind_t::unavailable,
+                                     "Actor authority cannot advance destroy");
 
-    const auto node = co_await find_local_actor_node_async (actor.node_rid ());
-    const auto cleaned = co_await detail::cleanup_local_actor_resources (
-      {}, _services ? std::optional<service_provider_t>{*_services} : std::nullopt, actor);
-    if (!cleaned)
-        co_return cleaned;
-    if (node) {
-        const auto native_cleaned = co_await node->cleanup_application_actor_stateful (actor);
-        if (!native_cleaned)
-            co_return native_cleaned;
+    if (closing) {
+        payload->state = actor_authority_state_t::closing;
+        const auto changed = co_await _location_store->compare_exchange_authority (
+          key, snapshot->store_version, authority_put_t{encode_actor_authority_payload (*payload)});
+        if (!std::holds_alternative<authority_stored_t> (changed))
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Actor authority changed before Closing");
+        co_return;
     }
-
-    std::optional<authority_snapshot_t> removed_snapshot;
-    if (_location_store) {
-        const auto key = actor_authority_key (actor.actor_id ().value ());
-        const auto current = co_await runtime::await_result (_location_store->read_authority (key));
-        if (!current) {
-            co_return detail::propagate_failure<void> (current,
-                                                       "Actor destroy authority read failed");
-        }
-        if (const auto *snapshot = std::get_if<authority_snapshot_t> (&current.value ())) {
-            const bool exact =
-              snapshot->allocation.object_kind == placement_object_kind_t::actor
-              && snapshot->allocation.stable_type
-                   == ::zlink::framework::detail::actor_ref_access_t::actor_type (actor)
-              && snapshot->object_generation == actor.object_generation ()
-              && snapshot->allocation.target.node_rid.value () == actor.node_rid ().value ();
-            if (exact && snapshot->allocation.state == placement_allocation_state_t::active) {
-                const auto removed =
-                  co_await runtime::await_result (_location_store->compare_exchange_authority (
-                    key, snapshot->store_version, authority_delete_t{}));
-                if (!removed) {
-                    co_return detail::propagate_failure<void> (
-                      removed, "Actor destroy authority delete failed");
-                }
-                if (std::holds_alternative<authority_deleted_t> (removed.value ())) {
-                    removed_snapshot = *snapshot;
-                } else {
-                    co_return result_t<void>::failure (
-                      framework_error_kind_t::unavailable,
-                      "Actor destroy authority changed before deletion");
-                }
-            }
-        }
-    }
-
-    if (removed_snapshot && _services) {
-        if (auto actor_resolver = _services->get<actor_address_resolver_t> ()) {
-            const auto &snapshot = *removed_snapshot;
-            const auto expected = spot_address_t{
-              {},
-              zlink::routing_id_t::from (
-                std::string (snapshot.allocation.target.node_rid.value ())),
-              {},
-              0,
-              {},
-              snapshot.object_generation,
-              snapshot.authority_owner_generation,
-              location_owner_token_t{snapshot.allocation.target.owner.owner_id,
-                                     snapshot.allocation.target.owner.lease_generation},
-              snapshot.allocation.target.node_lifecycle_generation};
-            (void) co_await actor_resolver->get ().invalidate_actor_address_if_matches_async (
-              std::string (actor.actor_id ().value ()), expected);
+    if (_services) {
+        if (auto resolver = _services->get<actor_address_resolver_t> ()) {
+            const auto expected_address =
+              spot_address_t{{},
+                             zlink::routing_id_t::from (
+                               std::string (snapshot->allocation.target.node_rid.value ())),
+                             {},
+                             0,
+                             {},
+                             snapshot->object_generation,
+                             snapshot->authority_owner_generation,
+                             snapshot->allocation.target.owner,
+                             snapshot->allocation.target.node_lifecycle_generation};
+            (void) co_await resolver->get ().invalidate_actor_address_if_matches_async (
+              std::string (actor.actor_id ().value ()), expected_address);
         }
     }
-
-    co_return result_t<void>::success ();
+    const auto removed = co_await _location_store->compare_exchange_authority (
+      key, snapshot->store_version, authority_delete_t{});
+    if (!std::holds_alternative<authority_deleted_t> (removed))
+        throw framework_exception_t (framework_error_kind_t::unavailable,
+                                     "Closing Actor authority changed before deletion");
 }
 
 task_t<bool> mesh_node_host_service_t::destroy_actor (actor_ref_t actor)
 {
+    const auto started = std::chrono::steady_clock::now ();
+    const auto cancellation = _descriptor_stop.get_token ();
     try {
         if (!_location_store || ::zlink::framework::detail::actor_ref_access_t::empty (actor)) {
             co_return result_t<bool>::failure (
@@ -1609,94 +1604,78 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (actor_ref_t actor)
         const auto key = actor_authority_key (actor.actor_id ().value ());
         const auto read = co_await _location_store->read_authority (key);
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
-        if (!snapshot) {
-            co_return result_t<bool>::success (false);
-        }
+        if (!snapshot)
+            co_return false;
         if (snapshot->allocation.object_kind != placement_object_kind_t::actor
             || snapshot->allocation.stable_type
                  != ::zlink::framework::detail::actor_ref_access_t::actor_type (actor)
-            || snapshot->object_generation != actor.object_generation ()
-            || snapshot->allocation.target.node_rid.value () != actor.node_rid ().value ()) {
+            || snapshot->object_generation != actor.object_generation ()) {
             co_return result_t<bool>::failure (
               framework_error_kind_t::invalid_operation,
               "ActorRef does not match the current actor incarnation");
         }
-        if (snapshot->allocation.state != placement_allocation_state_t::active) {
+        const auto payload = decode_direct_actor_authority_payload (snapshot->payload);
+        if (snapshot->allocation.state != placement_allocation_state_t::active || !payload
+            || payload->has_relocation_state || snapshot->aggregate) {
             co_return result_t<bool>::failure (framework_error_kind_t::unavailable,
                                                "Actor creation or transfer is in progress");
         }
-
-        const auto node = co_await find_local_actor_node_async (actor.node_rid ());
-        if (node) {
-            if (co_await node->application_actor_transfer_in_progress (actor)) {
-                co_return result_t<bool>::failure (framework_error_kind_t::unavailable,
-                                                   "Actor transfer is in progress");
-            }
-
-            /* The local Spot owns the first destructive step. Its cleanup
-             * callback runs after local state is detached and only then
-             * removes Location authority. This keeps a failed local cleanup
-             * from leaving a deleted authority with retained capacity. */
-            const auto local_destroyed = co_await node->destroy_application_actor (actor);
-            if (!local_destroyed) {
-                co_return result_t<bool>::failure (local_destroyed.error_kind (),
-                                                   local_destroyed.error ()
-                                                     ? local_destroyed.error ()->what ()
-                                                     : "Actor runtime cleanup failed");
-            }
-            /* The Spot destroy callback owns the authority and gateway
-             * finalization for a local Actor. Keep this outer operation as
-             * the result boundary so the finalizer runs exactly once. */
-            co_return result_t<bool>::success (true);
+        if (payload->state == actor_authority_state_t::closing) {
+            const auto released =
+              co_await _location_store->release_ended_reservation (key, snapshot->store_version);
+            if (released)
+                co_return true;
         }
+        const auto &target = snapshot->allocation.target;
+        const auto node = co_await find_local_actor_node_async (target.node_rid);
+        if (node)
+            co_return co_await node->destroy_application_actor (
+              detail::actor_ref_access_t::make (target.node_rid, snapshot->allocation.stable_type,
+                                                std::string (actor.actor_id ().value ()),
+                                                actor.object_generation (), target.mesh_name),
+              snapshot->store_version);
 
-        const auto removed = co_await _location_store->compare_exchange_authority (
-          key, snapshot->store_version, authority_delete_t{});
-        if (!std::holds_alternative<authority_deleted_t> (removed)) {
-            if (const auto *conflict = std::get_if<authority_conflict_t> (&removed)) {
-                if (std::holds_alternative<authority_missing_t> (conflict->current)) {
-                    co_return result_t<bool>::success (false);
-                }
-                const auto &current = std::get<authority_snapshot_t> (conflict->current);
-                if (current.object_generation != actor.object_generation ()) {
-                    co_return result_t<bool>::failure (
-                      framework_error_kind_t::invalid_operation,
-                      "Actor generation changed while destroy was pending");
-                }
-            }
+        const auto source = std::find_if (_nodes.begin (), _nodes.end (), [&] (const auto &entry) {
+            return entry && entry->mesh_name () == target.mesh_name;
+        });
+        if (source == _nodes.end ())
             co_return result_t<bool>::failure (framework_error_kind_t::unavailable,
-                                               "Actor authority changed while destroy was pending");
-        }
-        /* A destroy removes the current authority before the next same-Id
-         * incarnation can be created. Invalidate the resolver entry that was
-         * derived from that authority so a new incarnation cannot reuse the
-         * previous node route when its generation is reused. */
-        if (_services) {
-            if (auto actor_resolver = _services->get<actor_address_resolver_t> ()) {
-                const auto expected = spot_address_t{
-                  {},
-                  zlink::routing_id_t::from (
-                    std::string (snapshot->allocation.target.node_rid.value ())),
-                  {},
-                  0,
-                  {},
-                  snapshot->object_generation,
-                  snapshot->authority_owner_generation,
-                  location_owner_token_t{snapshot->allocation.target.owner.owner_id,
-                                         snapshot->allocation.target.owner.lease_generation},
-                  snapshot->allocation.target.node_lifecycle_generation};
-                (void) co_await actor_resolver->get ().invalidate_actor_address_if_matches_async (
-                  std::string (actor.actor_id ().value ()), expected);
-            }
-        }
+                                               "Actor owner Mesh is unavailable");
+        const auto deadline = started + (*source)->default_request_timeout ();
+        if (std::chrono::steady_clock::now () >= deadline)
+            co_return result_t<bool>::failure (framework_error_kind_t::deadline_exceeded,
+                                               "Actor destroy deadline elapsed");
+        const auto target_rid = zlink::routing_id_t::from (std::string (target.node_rid.value ()));
+        if (target.owner.lease_generation <= 0
+            || !(*source)->has_admitted_peer (target_rid, target.node_lifecycle_generation))
+            co_return result_t<bool>::failure (framework_error_kind_t::unavailable,
+                                               "Actor owner is not RouteMesh-admitted");
+        protocol::actor_destroy_command_t command{
+          next_mesh_operation.fetch_add (1, std::memory_order_relaxed),
+          {std::string (actor.actor_id ().value ()), actor.object_generation (),
+           target_rid.to_bytes (), target.node_lifecycle_generation,
+           snapshot->authority_owner_generation,
+           static_cast<std::uint64_t> (target.owner.lease_generation)}};
+        if (!co_await (*source)->native_node ().transport ().send_actor_destroy (
+              std::move (command)))
+            co_return result_t<bool>::failure (framework_error_kind_t::unavailable,
+                                               "Actor destroy command was not admitted");
 
-        const auto finalized = co_await finalize_local_actor_destroy (actor);
-        if (!finalized) {
-            co_return detail::result_access_t::failure<bool> (framework_exception_t (
-              finalized.error_kind (),
-              finalized.error () ? finalized.error ()->what () : "Actor destroy cleanup failed"));
+        while (std::chrono::steady_clock::now () < deadline && !cancellation.stop_requested ()) {
+            const auto observed = co_await _location_store->read_authority (key, cancellation);
+            if (std::chrono::steady_clock::now () >= deadline || cancellation.stop_requested ())
+                break;
+            const auto *current = std::get_if<authority_snapshot_t> (&observed);
+            if (!current || current->object_generation > actor.object_generation ())
+                co_return true;
+            co_await detail::delay (_services->get_required<detail::delay_owner_t> (),
+                                    std::chrono::milliseconds (1));
         }
-        co_return result_t<bool>::success (true);
+        if (cancellation.stop_requested ())
+            co_return result_t<bool>::failure (framework_error_kind_t::shutting_down,
+                                               "Actor destroy interrupted by Mesh shutdown");
+        co_return result_t<bool>::failure (framework_error_kind_t::deadline_exceeded,
+                                           "Actor destroy deadline elapsed");
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<bool> (error);
@@ -1960,7 +1939,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
     protocol::user_spot_create_header_t command{
       0,
       {source_status.lifecycle_generation (),
-       next_user_spot_operation.fetch_add (1, std::memory_order_relaxed)},
+       next_mesh_operation.fetch_add (1, std::memory_order_relaxed)},
       source_status.routing_id ().to_bytes (),
       source_status.lifecycle_generation (),
       *spot_id,
@@ -2091,7 +2070,7 @@ mesh_node_host_service_t::close_user_spot (std::shared_ptr<detail::mesh_node_run
     protocol::user_spot_close_header_t command{
       0,
       {source_status.lifecycle_generation (),
-       next_user_spot_operation.fetch_add (1, std::memory_order_relaxed)},
+       next_mesh_operation.fetch_add (1, std::memory_order_relaxed)},
       source_status.routing_id ().to_bytes (),
       source_status.lifecycle_generation (),
       {spot.spot_id (), spot.object_generation (),
@@ -2716,30 +2695,33 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                 continue;
             const auto gate = _actor_destroy_gate;
             detail::spot_node_runtime_t spot_runtime (registration->spot_state);
-            struct destroy_actor_cleanup_t
+            struct destroy_actor_authority_t
             {
-                static task_t<result_t<void>> run (mesh_node_host_service_t *self,
-                                                   std::decay_t<decltype (gate)> gate,
-                                                   actor_ref_t actor)
+                static task_t<void> run (mesh_node_host_service_t *self,
+                                         std::decay_t<decltype (gate)> gate,
+                                         actor_ref_t actor,
+                                         bool closing,
+                                         std::string expected_store_version)
                 {
                     if (!gate->try_enter ())
-                        co_return result_t<void>::failure (
-                          framework_error_kind_t::shutting_down,
-                          "Actor destroy cleanup was rejected during Mesh shutdown");
-                    try {
-                        auto result = co_await self->finalize_local_actor_destroy (actor);
-                        gate->leave ();
-                        co_return result;
-                    }
-                    catch (...) {
-                        gate->leave ();
-                        throw;
-                    }
+                        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                                     "Actor destroy interrupted by Mesh shutdown");
+                    struct leave_t
+                    {
+                        std::shared_ptr<actor_destroy_callback_gate_t> held;
+                        ~leave_t () { held->leave (); }
+                    } leave{gate};
+                    co_await self->update_actor_destroy_authority (
+                      std::move (actor), closing, std::move (expected_store_version));
                 }
             };
             spot_runtime.on_destroy_actor (
-              [this, gate] (actor_ref_t actor) -> task_t<result_t<void>> {
-                  return destroy_actor_cleanup_t::run (this, gate, std::move (actor));
+              [this, gate] (actor_ref_t actor, std::string expected_store_version) {
+                  return destroy_actor_authority_t::run (this, gate, std::move (actor), true,
+                                                         std::move (expected_store_version));
+              },
+              [this, gate] (actor_ref_t actor) {
+                  return destroy_actor_authority_t::run (this, gate, std::move (actor), false, {});
               });
             if (actor_gateway) {
                 spot_runtime.on_actor_ref_updated (

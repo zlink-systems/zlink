@@ -1882,6 +1882,15 @@ void public_host_runtime_t::configure_spot_route_fence_resolver (
     });
 }
 
+void public_host_runtime_t::configure_actor_destroy (actor_destroy_target_t target)
+{
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started)
+            throw std::logic_error ("Actor destroy target must be configured before host start");
+        _actor_destroy_target = std::move (target);
+    });
+}
+
 void public_host_runtime_t::configure_actor_create_operations (
   actor_create_operation_target_t target)
 {
@@ -6397,6 +6406,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
   std::shared_ptr<location_repository_t> store,
   user_spot_materializer_t materializer,
   user_spot_closer_t user_spot_closer,
+  actor_destroy_target_t actor_destroy_target,
   actor_create_operation_target_t actor_create_target,
   actor_join_operation_target_t actor_join_target,
   std::function<std::optional<location_owner_token_t> ()> session_route_owner_resolver,
@@ -6424,6 +6434,18 @@ public_host_runtime_t::dispatch_user_spot_batch (
         std::optional<std::pair<std::uint32_t, std::uint32_t>> dispatch_failure;
         try {
             const auto wire = mailbox_record.service_header ();
+            if (wire.kind == protocol::command::actorDestroy) {
+                if (actor_destroy_target) {
+                    auto command = protocol::decode_actor_destroy (
+                      protocol::message_bytes (mailbox_record.parts ().front ()));
+                    auto pending = actor_destroy_target (std::move (command.actor));
+                    detail::observe_task_completion (pending, [] (const result_t<bool> &result) {
+                        if (!result && result.error ())
+                            trace_mesh_host ("actor-destroy-failed", result.error ()->what ());
+                    });
+                }
+                continue;
+            }
             if (wire.kind == protocol::command::messageFollow) {
                 if (mailbox_record.parts ().size () != 1
                     || mailbox_record.source_node_generation == 0)
@@ -7549,6 +7571,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
     std::shared_ptr<zlink::framework::location_repository_t> store;
     user_spot_materializer_t materializer;
     user_spot_closer_t user_spot_closer;
+    actor_destroy_target_t actor_destroy_target;
     actor_create_operation_target_t actor_create_target;
     actor_join_operation_target_t actor_join_target;
     std::function<std::optional<location_owner_token_t> ()> session_route_owner_resolver;
@@ -7560,6 +7583,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
         store = _user_spot_store;
         materializer = _user_spot_materializer;
         user_spot_closer = _user_spot_closer;
+        actor_destroy_target = _actor_destroy_target;
         actor_create_target = _actor_create_target;
         actor_join_target = _actor_join_target;
         session_route_owner_resolver = _session_route_owner_resolver;
@@ -7572,9 +7596,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
     const auto dispatch_batch = [&] (const std::shared_ptr<mesh::service_mailbox_claim_t> &claim)
       -> task_t<std::pair<std::size_t, receive_batch_budget_t>> {
         return dispatch_user_spot_batch (
-          store, materializer, user_spot_closer, actor_create_target, actor_join_target,
-          session_route_owner_resolver, message_follow_handler, bound_session_operations,
-          late_session_route_update_reporter, infrastructure_budget, count, claim);
+          store, materializer, user_spot_closer, actor_destroy_target, actor_create_target,
+          actor_join_target, session_route_owner_resolver, message_follow_handler,
+          bound_session_operations, late_session_route_update_reporter, infrastructure_budget,
+          count, claim);
     };
     do {
         {

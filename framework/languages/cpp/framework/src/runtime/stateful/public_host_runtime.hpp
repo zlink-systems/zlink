@@ -719,6 +719,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                     user_spot_materializer_t materializer,
                                     user_spot_closer_t closer = {});
     void configure_spot_route_fence_resolver (spot_route_fence_resolver_t resolver);
+    using actor_destroy_target_t = std::function<task_t<bool> (protocol::actor_route_fence_t)>;
+    void configure_actor_destroy (actor_destroy_target_t target);
     void configure_actor_create_operations (actor_create_operation_target_t target);
     void configure_actor_join_operations (actor_join_operation_target_t target);
     using actor_join_relocation_prepare_validator_t =
@@ -1085,6 +1087,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::shared_ptr<location_repository_t> store,
       user_spot_materializer_t materializer,
       user_spot_closer_t user_spot_closer,
+      actor_destroy_target_t actor_destroy_target,
       actor_create_operation_target_t actor_create_target,
       actor_join_operation_target_t actor_join_target,
       std::function<std::optional<location_owner_token_t> ()> session_route_owner_resolver,
@@ -1158,6 +1161,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     user_spot_materializer_t _user_spot_materializer;
     user_spot_closer_t _user_spot_closer;
     spot_route_fence_resolver_t _spot_route_fence_resolver;
+    actor_destroy_target_t _actor_destroy_target;
     actor_create_operation_target_t _actor_create_target;
     actor_join_operation_target_t _actor_join_target;
     actor_join_relocation_prepare_validator_t _actor_join_relocation_prepare_validator;

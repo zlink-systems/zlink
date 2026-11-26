@@ -169,6 +169,15 @@ struct actor_route_fence_t
     friend bool operator== (const actor_route_fence_t &, const actor_route_fence_t &) = default;
 };
 
+struct actor_destroy_command_t
+{
+    std::uint64_t correlation;
+    actor_route_fence_t actor;
+};
+
+std::vector<std::uint8_t> encode_actor_destroy (const actor_destroy_command_t &command);
+actor_destroy_command_t decode_actor_destroy (std::span<const std::uint8_t> bytes);
+
 enum class bound_session_binding_state_t : std::uint8_t
 {
     active = 1,

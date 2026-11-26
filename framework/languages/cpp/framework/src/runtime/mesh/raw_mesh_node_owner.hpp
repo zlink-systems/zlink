@@ -458,6 +458,7 @@ class raw_mesh_node_owner_t
       std::optional<protocol::application_payload_t> application_reply = std::nullopt);
     task_t<bool> send_reply_relay_ack (const std::vector<std::uint8_t> &target_routing_id,
                                        const protocol::reply_relay_ack_t &ack);
+    task_t<bool> send_actor_destroy (protocol::actor_destroy_command_t command);
     task_t<bool> send_message_follow (const std::vector<std::uint8_t> &target_routing_id,
                                       const protocol::message_follow_notice_t &notice);
     task_t<bool> send_relocation_control (const std::vector<std::uint8_t> &target_routing_id,

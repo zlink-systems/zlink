@@ -2051,6 +2051,12 @@ raw_mesh_node_owner_t::send_reply_relay_ack (const std::vector<std::uint8_t> &ta
     return send_control (target_routing_id, {protocol::encode_reply_relay_ack (ack)});
 }
 
+task_t<bool> raw_mesh_node_owner_t::send_actor_destroy (protocol::actor_destroy_command_t command)
+{
+    auto parts = detail::backend::raw_message_t{protocol::encode_actor_destroy (command)};
+    return send_control (std::move (command.actor.target_node_routing_id), std::move (parts));
+}
+
 task_t<bool>
 raw_mesh_node_owner_t::send_message_follow (const std::vector<std::uint8_t> &target_routing_id,
                                             const protocol::message_follow_notice_t &notice)
@@ -3715,6 +3721,16 @@ raw_mesh_node_owner_t::admit_control (const service_node_descriptor_t &local,
         if (header.flags != 0)
             return raw_mesh_pump_result_t::protocol_error;
         switch (header.kind) {
+            case protocol::command::actorDestroy: {
+                if (record.parts ().size () != 1)
+                    return raw_mesh_pump_result_t::protocol_error;
+                const auto command = protocol::decode_actor_destroy (
+                  protocol::message_bytes (record.parts ().front ()));
+                if (command.actor.target_node_routing_id != local.node_routing_id
+                    || command.actor.target_node_generation != local.lifecycle_generation)
+                    return raw_mesh_pump_result_t::protocol_error;
+                break;
+            }
             case protocol::command::replyRelay: {
                 if (record.parts ().size () > 2)
                     return raw_mesh_pump_result_t::protocol_error;
@@ -4199,7 +4215,8 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
                                                      admitted->descriptor.lifecycle_generation),
                                      raw_mesh_pump_result_t::infrastructure);
         }
-        if (header.kind == protocol::command::replyRelay
+        if (header.kind == protocol::command::actorDestroy
+            || header.kind == protocol::command::replyRelay
             || header.kind == protocol::command::replyRelayAck
             || header.kind == protocol::command::sessionRelocationRoute
             || header.kind == protocol::command::boundSessionReplaced) {

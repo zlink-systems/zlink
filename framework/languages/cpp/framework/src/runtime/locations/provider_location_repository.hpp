@@ -984,10 +984,11 @@ class provider_location_repository_t final : public location_repository_t
         const bool active = current.allocation.state == placement_allocation_state_t::active;
         if (discarded && (!active || !discarded->same_incarnation (current)))
             co_return stale_authority_reclaim_result_t::recovery_required;
-        if (active && !request && !discarded)
+        const auto actor = decode_direct_actor_authority_payload (current.payload);
+        const bool closing_actor = actor && actor->state == actor_authority_state_t::closing;
+        if (active && !request && !discarded && !closing_actor)
             co_return stale_authority_reclaim_result_t::recovery_required;
         // Relocation authority retains its own recovery protocol.
-        const auto actor = decode_direct_actor_authority_payload (current.payload);
         if (!active && (current.aggregate || (actor && actor->has_relocation_state)))
             co_return stale_authority_reclaim_result_t::recovery_required;
         const auto owner_key = key_owner (current.owner.owner_id);
@@ -1022,7 +1023,7 @@ class provider_location_repository_t final : public location_repository_t
             if (current.aggregate || (actor && actor->has_relocation_state) || mutation_locked)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
-            if (!discarded) {
+            if (!discarded && !closing_actor) {
                 const auto target_key = key_mesh (
                   request->target.mesh_name,
                   zlink::routing_id_t::from (std::string (request->target.node_rid.value ())));
@@ -1042,7 +1043,8 @@ class provider_location_repository_t final : public location_repository_t
                 require_disabled_creation_policy (*request, target_descriptor ? &*target_descriptor
                                                                               : nullptr);
             }
-            if (!discarded && current.allocation.object_kind == placement_object_kind_t::actor
+            if (!discarded && !closing_actor
+                && current.allocation.object_kind == placement_object_kind_t::actor
                 && (!actor || actor->state != actor_authority_state_t::ready
                     || actor->actor_id != request->key.global_id
                     || actor->stable_type != request->intent.stable_type))
@@ -1112,7 +1114,8 @@ class provider_location_repository_t final : public location_repository_t
                                                  "Instance Spot is not steady Ready");
             }
         }
-        const bool wait_elapsed = !active || authority_release_wait_elapsed (current.owner);
+        const bool wait_elapsed =
+          !active || closing_actor || authority_release_wait_elapsed (current.owner);
         if (!wait_elapsed) {
             const auto observed = co_await _store.read (authority_key);
             if (!matches_store_version (observed, stored_authority.value.version))

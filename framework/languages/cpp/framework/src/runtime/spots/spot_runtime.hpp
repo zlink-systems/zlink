@@ -203,8 +203,15 @@ class spot_node_builder_state_t
     /* Destruction requested from an active handler is deferred until the
      * borrowed instance is no longer in use. Packets are rejected as soon as
      * that intent is accepted. */
-    std::set<std::string> retiring_actor_keys;
-    std::set<std::string> destroying_actors;
+    struct actor_destroy_t
+    {
+        explicit actor_destroy_t (std::uint64_t generation) : generation (generation) {}
+
+        const std::uint64_t generation;
+        task_completion_source_t<bool> accepted;
+        task_completion_source_t<bool> terminal;
+    };
+    std::map<std::string, std::shared_ptr<actor_destroy_t>> destroying_actors;
     std::set<std::string> destroyed_actor_keys;
     // A request id is reserved before dispatch and receives one terminal
     // reply. The table owns both states so replay and retry use the same
@@ -333,7 +340,10 @@ class spot_node_builder_state_t
         bool duplicate_bind_is_default = false;
         bool session_bound_is_default = false;
     };
-    std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor_registry;
+    using actor_close_authority_t = std::function<task_t<void> (actor_ref_t, std::string)>;
+    using actor_delete_authority_t = std::function<task_t<void> (actor_ref_t)>;
+    actor_close_authority_t close_actor_authority;
+    actor_delete_authority_t delete_actor_authority;
     std::function<result_t<void> (const actor_ref_t &)> update_actor_registry_ref;
     std::function<task_t<std::optional<zlink::message_t>> (
       const actor_ref_t &,
@@ -900,7 +910,7 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
           std::move (options));
     }
 
-    bool execute_actor_lifecycle (const std::string &actor_id,
+    bool execute_actor_lifecycle (const actor_executor_ptr_t &executor,
                                   std::string name,
                                   queue_t::async_work_t work,
                                   std::function<void ()> rejected)
@@ -915,7 +925,7 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         const auto gate = uses_spot_execution_gate () ? _spot_queue : queue_ptr_t{};
         auto callback_name = name;
         return execute_actor (
-          actor_id, std::move (name),
+          executor, std::move (name),
           [gate, name = std::move (callback_name), work = std::move (work),
            rejected] (auto actor_complete) mutable {
               if (!gate) {
@@ -1904,6 +1914,16 @@ class spot_context_access_t final
     }
 };
 
+inline void record_actor_generation_unlocked (spot_node_builder_state_t &state,
+                                              const std::string &key,
+                                              std::uint64_t generation)
+{
+    const auto destroy = state.destroying_actors.find (key);
+    if (destroy != state.destroying_actors.end () && destroy->second->generation != generation)
+        state.destroying_actors.erase (destroy);
+    state.actor_generations[key] = generation;
+}
+
 inline void record_actor_route_unlocked (spot_node_builder_state_t &state,
                                          const std::string &key,
                                          spot_route_t route,
@@ -1911,7 +1931,7 @@ inline void record_actor_route_unlocked (spot_node_builder_state_t &state,
 {
     state.actor_spot_ids[key] = route.spot_id;
     state.actor_routes[key] = std::move (route);
-    state.actor_generations[key] = generation;
+    record_actor_generation_unlocked (state, key, generation);
 }
 
 inline void record_actor_spot_location_unlocked (spot_node_builder_state_t &state,
@@ -1921,7 +1941,7 @@ inline void record_actor_spot_location_unlocked (spot_node_builder_state_t &stat
 {
     state.actor_spot_ids[key] = std::move (spot_id);
     state.actor_routes.erase (key);
-    state.actor_generations[key] = generation;
+    record_actor_generation_unlocked (state, key, generation);
 }
 
 inline void record_actor_context_route_unlocked (spot_node_builder_state_t &state,
@@ -2033,8 +2053,9 @@ class spot_node_runtime_t
     run_actor_turn (actor_ref_t actor_ref,
                     std::function<task_t<result_t<bool>> (actor_t &, std::stop_token)> work,
                     std::stop_token cancellation = {});
-    task_t<result_t<bool>> destroy_actor (actor_ref_t actor_ref);
-    task_t<result_t<bool>> release_local_actor_async (actor_ref_t actor);
+    task_t<result_t<bool>> destroy_actor (actor_ref_t actor_ref,
+                                          std::optional<std::string> entry_spot = std::nullopt,
+                                          std::string expected_store_version = {});
     void record_actor_spot (const actor_ref_t &actor_ref, spot_id_t spot_id);
     std::optional<spot_route_t> actor_route (const actor_ref_t &actor_ref) const;
     bool matches_actor_message_follow_source (
@@ -2161,7 +2182,8 @@ class spot_node_runtime_t
       runtime::serial_execution_queue_t::async_completion_t application_completed = {},
       runtime::application_dispatch_terminal_owner_t *local_terminal = nullptr);
     void set_route_client (route_client_t route_client);
-    void on_destroy_actor (std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor);
+    void on_destroy_actor (spot_node_builder_state_t::actor_close_authority_t close,
+                           spot_node_builder_state_t::actor_delete_authority_t remove);
     void on_actor_ref_updated (std::function<result_t<void> (const actor_ref_t &)> update_actor);
     void on_actor_packet_relay (std::function<task_t<std::optional<zlink::message_t>> (
                                   const actor_ref_t &,
@@ -2358,7 +2380,6 @@ class spot_node_runtime_t
     // the commit request and once more after the ack for packets that raced it.
     std::vector<handoff_packet_t> take_actor_handoff_backlog (const actor_ref_t &actor_ref);
     bool actor_transfer_in_progress (const actor_ref_t &actor_ref) const;
-    task_t<bool> actor_transfer_in_progress_async (actor_ref_t actor) const;
     // Node-local knowledge required to admit a wire actorJoin(28): the
     // stable type string (never carried on that wire body — reconstructing
     // an actor_ref_t requires it) and the actor's current membership epoch
@@ -2532,6 +2553,10 @@ class spot_node_runtime_t
     execution_queue_on_lane (const runtime::stateful::object_ref_t &object);
     result_t<bool> validate_local_actor_release_on_lane (const actor_ref_t &actor_ref) const;
     result_t<bool> release_local_actor_on_lane (const actor_ref_t &actor_ref);
+    void erase_local_actor_on_lane (const actor_ref_t &actor_ref);
+    task_t<void>
+    finish_actor_destroy (actor_ref_t actor,
+                          std::shared_ptr<spot_node_builder_state_t::actor_destroy_t> operation);
     static task_t<void>
     retire_relocation_source_in (spot_node_runtime_t self,
                                  std::vector<runtime::stateful::object_ref_t> sources);

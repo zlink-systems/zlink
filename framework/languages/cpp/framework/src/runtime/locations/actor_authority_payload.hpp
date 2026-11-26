@@ -30,7 +30,8 @@ inline constexpr char default_mesh_name[] = "default";
 enum class actor_authority_state_t : std::uint8_t
 {
     creating = 0,
-    ready = 1
+    ready = 1,
+    closing = 2
 };
 
 enum class actor_authority_spot_kind_t : std::uint8_t
@@ -757,11 +758,24 @@ decode_instance_spot_authority_payload (std::span<const std::byte> encoded)
     }
 }
 
+inline std::optional<std::uint8_t> actor_authority_operation (actor_authority_state_t state)
+{
+    switch (state) {
+        case actor_authority_state_t::creating:
+            return 1;
+        case actor_authority_state_t::ready:
+            return 0;
+        case actor_authority_state_t::closing:
+            return 3;
+    }
+    return std::nullopt;
+}
+
 inline std::vector<std::byte>
 encode_actor_authority_payload (const actor_authority_payload_t &value)
 {
-    if (value.state != actor_authority_state_t::creating
-        && value.state != actor_authority_state_t::ready)
+    const auto operation = actor_authority_operation (value.state);
+    if (!operation)
         throw std::invalid_argument ("actor authority state is invalid");
     if (value.current_spot_kind != actor_authority_spot_kind_t::entry
         && value.current_spot_kind != actor_authority_spot_kind_t::user)
@@ -785,8 +799,7 @@ encode_actor_authority_payload (const actor_authority_payload_t &value)
         throw std::invalid_argument ("actor authority actor slice is too large");
 
     std::vector<std::byte> body;
-    actor_authority_detail::append_u8 (body,
-                                       value.state == actor_authority_state_t::creating ? 1 : 0);
+    actor_authority_detail::append_u8 (body, *operation);
     actor_authority_detail::append_u8 (body, 1); // actor
     actor_authority_detail::append_u16be (body, static_cast<std::uint16_t> (actor.size ()));
     actor_authority_detail::append_bytes (body, actor);
@@ -849,12 +862,9 @@ inline std::optional<actor_authority_payload_t> decode_direct_actor_authority_pa
         const auto spot_generation = actor_reader.u64be ();
         const auto spot_kind = static_cast<actor_authority_spot_kind_t> (actor_reader.u8 ());
         if (!actor_reader.done () || spot_generation == 0
-            || (state != actor_authority_state_t::creating
-                && state != actor_authority_state_t::ready)
+            || actor_authority_operation (state) != operation
             || (spot_kind != actor_authority_spot_kind_t::entry
-                && spot_kind != actor_authority_spot_kind_t::user)
-            || (state == actor_authority_state_t::creating && operation != 1)
-            || (state == actor_authority_state_t::ready && operation != 0))
+                && spot_kind != actor_authority_spot_kind_t::user))
             return std::nullopt;
         const auto owner_id = body_reader.text8 ();
         const auto owner_lease_generation = body_reader.u64be ();
@@ -871,6 +881,7 @@ inline std::optional<actor_authority_payload_t> decode_direct_actor_authority_pa
             || !actor_authority_detail::read_actor_authority_relocation_state (
               body_reader, std::nullopt, &has_relocation_state, &relocation_phase,
               &relocation_expected_store_version, capture_identity)
+            || (state == actor_authority_state_t::closing && has_relocation_state)
             || body_reader.u8 () != 0 || body_reader.u32be () != 0 || !body_reader.done ())
             return std::nullopt;
         std::string node_rid;
@@ -904,7 +915,7 @@ decode_actor_authority_payload (const std::vector<std::byte> &bytes,
     if (object_generation == 0)
         return std::nullopt;
     const auto payload = decode_direct_actor_authority_payload (bytes);
-    if (!payload)
+    if (!payload || payload->state == actor_authority_state_t::closing)
         return std::nullopt;
     return actor_authority_projection_t{::zlink::framework::detail::actor_ref_access_t::make (
                                           payload->node_rid, payload->stable_type,
