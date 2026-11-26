@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Numerics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
@@ -2139,6 +2140,7 @@ internal abstract partial class ZLinkSpotActivation
         var duration = _runtime.Registration.Locations.Options.MessageFollowDuration;
         if (duration <= TimeSpan.Zero)
         {
+            RegisterInstanceSpotFollowLookup();
             RejectPendingMessageFollowRoutes();
             return;
         }
@@ -2154,10 +2156,62 @@ internal abstract partial class ZLinkSpotActivation
             Stopwatch.GetElapsedTime(0) + duration
         );
         Volatile.Write(ref _messageFollow, messageFollow);
+        RegisterInstanceSpotFollowLookup();
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"message_follow_registered target_rid={targetNodeRid}"
         );
         RelayPendingMessageFollowRoutes();
+    }
+
+    private void RegisterInstanceSpotFollowLookup()
+    {
+        if (this is ZLinkInstanceSpotActivation && NativeSpot is ZLinkBackendSpotWrapper backend)
+            backend.SetInstanceSpotFollowRoute(FindInstanceSpotFollowRoute);
+    }
+
+    private ZLinkSpotMessageFollow? FindInstanceSpotFollowRoute(
+        ZLinkServiceWireCodec.StatefulRecord frame
+    ) =>
+        FindMessageFollowRoute(
+            frame.TargetSpotGeneration,
+            frame.TargetNodeGeneration,
+            frame.AuthorityOwnerGeneration,
+            frame.OwnerLeaseGeneration,
+            frame.MessageFollowHopCount,
+            frame.TargetOwnerId.Length == 0 ? null : frame.TargetOwnerId,
+            out _,
+            out _
+        );
+
+    private ZLinkSpotMessageFollow? FindMessageFollowRoute(
+        ulong objectGeneration,
+        ulong nodeGeneration,
+        ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration,
+        byte hopCount,
+        string? ownerId,
+        out ZLinkSpotMessageFollow? registered,
+        out TimeSpan now
+    )
+    {
+        now = default;
+        registered = Volatile.Read(ref _messageFollow);
+        if (registered is null)
+            return null;
+        now = Stopwatch.GetElapsedTime(0);
+        return
+            (ownerId is null || ownerId == registered.SourceOwner.OwnerId)
+            && registered.MatchesSourceRoute(
+                objectGeneration,
+                nodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
+                hopCount,
+                now
+            )
+            && _runtime.LocationLifecycle?.IsOwnerLeaseValid(registered.SourceOwner) == true
+            ? registered
+            : null;
     }
 
     internal ValueTask WaitForMessageFollowDrainedAsync(CancellationToken cancellationToken)
@@ -2170,19 +2224,30 @@ internal abstract partial class ZLinkSpotActivation
 
     private ZLinkSpotMessageFollowResult TryMessageFollow(ZLinkBackendRouteReceived received)
     {
-        var messageFollow = Volatile.Read(ref _messageFollow);
-        if (messageFollow is null)
+        var messageFollow = FindMessageFollowRoute(
+            ObjectGeneration,
+            received.TargetNodeGeneration,
+            received.AuthorityOwnerGeneration,
+            received.OwnerLeaseGeneration,
+            received.MessageFollowHopCount,
+            ownerId: null,
+            out var registered,
+            out var now
+        );
+        if (registered is null)
             return ZLinkSpotMessageFollowResult.NotApplicable;
-        var now = Stopwatch.GetElapsedTime(0);
-        var currentSourceOwner = _runtime.LocationLifecycle?.OwnerToken;
-        if (!messageFollow.MatchesSourceRoute(received, ObjectGeneration, currentSourceOwner, now))
+        if (
+            messageFollow is null
+            || received.OperationId.High == 0
+            || received.OperationId.Low == 0
+        )
         {
             // A mismatched frame is stale by itself. It must not revoke the
             // bounded Message Follow route for later frames that still carry
             // the exact source authority generations.
-            var removeRoute = messageFollow.ShouldRemoveAfterRejectedFrame(now);
+            var removeRoute = registered.ShouldRemoveAfterRejectedFrame(now);
             if (removeRoute)
-                _ = Interlocked.CompareExchange(ref _messageFollow, null, messageFollow);
+                _ = Interlocked.CompareExchange(ref _messageFollow, null, registered);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"{(removeRoute ? "message_follow_expired" : "message_follow_rejected")}"
             );

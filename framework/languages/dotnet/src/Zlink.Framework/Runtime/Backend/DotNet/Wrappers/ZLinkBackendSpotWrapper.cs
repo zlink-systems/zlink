@@ -91,6 +91,13 @@ internal sealed class ZLinkBackendSpotWrapper
 
     internal ISpot NativeSpot => _spot;
 
+    internal void SetAuthorityOwnerGeneration(ulong authorityOwnerGeneration) =>
+        ((ZLinkManagedSpot)_spot).AuthorityOwnerGeneration = authorityOwnerGeneration;
+
+    internal void SetInstanceSpotFollowRoute(
+        Func<ZLinkServiceWireCodec.StatefulRecord, ZLinkSpotMessageFollow?> lookup
+    ) => ((ZLinkManagedSpot)_spot).SetInstanceSpotFollowRoute(lookup);
+
     // Entry Spot identity is assigned after the MeshNode creates its reserved
     // node-rid key. The managed ISpot owns the catalog rekey, so the backend
     // wrapper must forward this lifecycle operation instead of dropping it.

@@ -5424,7 +5424,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ulong objectGeneration,
         ObservedAuthority? authority,
         string? instanceOwnerId,
-        out ZLinkManagedSpot spot
+        out ZLinkManagedSpot spot,
+        bool exactGeneration = false
     )
     {
         if (!_spots.TryGetValue(ZLinkSpotId.FromBoundary(spotId, nameof(spotId)), out spot!))
@@ -5432,6 +5433,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         // Direct messages address the logical ID. An owner fence belongs only
         // to its own incarnation; the current Ready queue owns admission.
         return spot.IsActive
+            && (!exactGeneration || spot.LifecycleGeneration == objectGeneration)
             && (
                 instanceOwnerId is null
                 || spot.LifecycleGeneration >= objectGeneration
@@ -7556,6 +7558,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
                 return false;
             }
+            case ServiceWireConstants.Command.InstanceSpotFollow:
+            {
+                if (
+                    received.MessageType != ReceivedMessageType.Raw
+                    || !ZLinkServiceWireCodec.TryDecodeInstanceSpotFollow(
+                        head,
+                        out var follow,
+                        out var originalSource
+                    )
+                    || received.Parts.Count != (follow.HasMetadata ? 3 : 2)
+                )
+                    break;
+                return ProcessStateful(
+                    originalSource,
+                    follow.SourceNodeGeneration,
+                    follow,
+                    ref ownership,
+                    instanceReadyRoute: true
+                );
+            }
             case ServiceWireConstants.Command.UserSpotCreate:
             case ServiceWireConstants.Command.UserSpotClose:
             {
@@ -9003,9 +9025,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         var received = ownership.Receipt;
+        var ingressRid = received.RoutingId!.Value;
         var admitted = RunState(() =>
         {
-            if (!_peersByRid.TryGetValue(sourceRid, out var peer))
+            if (!_peersByRid.ContainsKey(ingressRid))
             {
                 //  A request dropped here never reaches any staleness check and
                 //  simply times out at the caller.
@@ -9080,6 +9103,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     (uint)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale,
                     Array.Empty<Message>()
                 );
+            else if (instanceReadyRoute)
+                ReportReadyInstanceSpotRejection(
+                    stateful,
+                    sourceRid,
+                    request,
+                    ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
+                );
             return false;
         }
         var payloadOffset = stateful.HasMetadata ? 2 : 1;
@@ -9117,9 +9147,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 stateful.TargetSpotId,
                 stateful.TargetSpotGeneration,
                 authority,
-                instanceReadyRoute ? stateful.TargetOwnerId : null,
-                out var spot
+                instanceReadyRoute && stateful.MessageFollowHopCount == 0
+                    ? stateful.TargetOwnerId
+                    : null,
+                out var spot,
+                exactGeneration: instanceReadyRoute && stateful.MessageFollowHopCount != 0
             );
+            // A committed source retains this Spot until its Follow admissions drain.
+            if (instanceReadyRoute && !request && spot?.InstanceSpotFollowRoute is { } lookup)
+            {
+                if (
+                    lookup(stateful) is { } route
+                    && TryForwardInstanceSpot(stateful, sourceRid, received.Parts, route)
+                )
+                    return false;
+                accepted = false;
+            }
             var hasTargetSpot = spot is not null;
             var localOwnerLeaseGeneration = checked(
                 (ulong)Volatile.Read(ref _localOwnerLeaseGeneration)
@@ -9162,28 +9205,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         hasTargetSpot && spot!.LifecycleGeneration < stateful.TargetSpotGeneration
                             ? ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
                             : ServiceWireConstants.FrameworkErrorCode.SpotMoving;
-                    if (_logicalMulticastDispatchErrors is { Enabled: true } reporter)
-                        reporter.Report(
-                            new ZLinkDispatchFailure(
-                                ZLinkDispatchErrorSurface.InstanceSpot,
-                                request
-                                    ? ZLinkDispatchMessageKind.Request
-                                    : ZLinkDispatchMessageKind.Send,
-                                ZLinkDispatchErrorReason.StaleTarget,
-                                request
-                                    ? ZLinkDispatchErrorAction.ReplyError
-                                    : ZLinkDispatchErrorAction.Drop,
-                                PacketName: null,
-                                SpotId: stateful.TargetSpotId,
-                                SourceRid: sourceRid.ToString(),
-                                Exception: ZLinkRequestFailureMapper.CreateCompletionException(
-                                    RequestResult.Conflict,
-                                    (int)failureCode,
-                                    "Ready Instance Spot owner fence"
-                                ),
-                                MeshName: _logicalMulticastMeshName
-                            )
-                        );
+                    ReportReadyInstanceSpotRejection(stateful, sourceRid, request, failureCode);
                     if (request)
                         Reply(RequestResult.Conflict, (uint)failureCode, Array.Empty<Message>());
                     return false;
@@ -9377,6 +9399,90 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
         record.ApplicationPayloadBytes = SumParts(parts, 1);
         return EnqueueOwned(owner, record, parts, true, ownership.TakeApplicationOwner());
+    }
+
+    private bool TryForwardInstanceSpot(
+        ZLinkServiceWireCodec.StatefulRecord stateful,
+        RoutingId sourceRid,
+        IReadOnlyList<Message> receivedParts,
+        ZLinkSpotMessageFollow route
+    )
+    {
+        ZLinkMeshDirectPeer peer;
+        try
+        {
+            peer = RequireDirectPeer(route.TargetNodeRid, route.TargetNodeGeneration);
+        }
+        catch (ZlinkSubmitException error)
+            when (error.Result == ZlinkSubmitException.ErrorCode.NotConnected)
+        {
+            return false;
+        }
+        var head = ZLinkServiceWireCodec.EncodeInstanceSpotFollow(stateful, sourceRid, route);
+        var bytes = head.LongLength;
+        for (var i = 1; i < receivedParts.Count; i++)
+            bytes = checked(bytes + (long)receivedParts[i].Size);
+        if (!route.TryAcquire(bytes, out var admission))
+            return false;
+
+        var scheduled = false;
+        try
+        {
+            var wire = new ReadOnlyMemory<byte>[receivedParts.Count];
+            wire[0] = head;
+            for (var i = 1; i < wire.Length; i++)
+                wire[i] = receivedParts[i].ToArray();
+            scheduled = RunRoutedOperation(async () =>
+            {
+                using (admission!)
+                    await SendRoutedBestEffortAsync(
+                            peer.PhysicalRoutingId,
+                            wire,
+                            _stop?.Token ?? CancellationToken.None,
+                            _ =>
+                                ReportReadyInstanceSpotRejection(
+                                    stateful,
+                                    sourceRid,
+                                    request: false,
+                                    ServiceWireConstants.FrameworkErrorCode.SpotMoving
+                                )
+                        )
+                        .ConfigureAwait(false);
+            });
+            return scheduled;
+        }
+        finally
+        {
+            if (!scheduled)
+                admission!.Dispose();
+        }
+    }
+
+    private void ReportReadyInstanceSpotRejection(
+        ZLinkServiceWireCodec.StatefulRecord stateful,
+        RoutingId sourceRid,
+        bool request,
+        ServiceWireConstants.FrameworkErrorCode failureCode
+    )
+    {
+        if (_logicalMulticastDispatchErrors is { Enabled: true } reporter)
+            reporter.Report(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.InstanceSpot,
+                    request ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
+                    ZLinkDispatchErrorReason.StaleTarget,
+                    request ? ZLinkDispatchErrorAction.ReplyError : ZLinkDispatchErrorAction.Drop,
+                    PacketName: null,
+                    SpotId: stateful.TargetSpotId,
+                    SourceRid: sourceRid.ToString(),
+                    Exception: ZLinkRequestFailureMapper.CreateCompletionException(
+                        RequestResult.Conflict,
+                        (int)failureCode,
+                        "Ready Instance Spot owner fence"
+                    ),
+                    MeshName: _logicalMulticastMeshName
+                )
+            );
     }
 
     private void ProcessUserSpotOperation(
@@ -15127,14 +15233,33 @@ internal sealed class ZLinkManagedSpot(
     private readonly Dictionary<ZLinkChannelName, HashSet<string>> _subscriptions = [];
     private int _disposed;
     private int _actorCount;
+    private ulong _authorityOwnerGeneration = authorityOwnerGeneration;
 
     private string _spotId = ZLinkSpotId.Require(spotId, nameof(spotId));
     public RoutingId RoutingId => ZLinkSpotId.ToNativeRoutingId(_spotId);
     internal string SpotId => _spotId;
     public ulong LifecycleGeneration { get; } = lifecycleGeneration;
-    internal ulong AuthorityOwnerGeneration { get; } = authorityOwnerGeneration;
+    internal ulong AuthorityOwnerGeneration
+    {
+        get => Volatile.Read(ref _authorityOwnerGeneration);
+        set => Volatile.Write(ref _authorityOwnerGeneration, value);
+    }
     internal bool IsActive => Volatile.Read(ref _disposed) == 0;
     internal int ActorCount => Volatile.Read(ref _actorCount);
+
+    private Func<
+        ZLinkServiceWireCodec.StatefulRecord,
+        ZLinkSpotMessageFollow?
+    >? _instanceSpotFollowRoute;
+
+    internal Func<
+        ZLinkServiceWireCodec.StatefulRecord,
+        ZLinkSpotMessageFollow?
+    >? InstanceSpotFollowRoute => Volatile.Read(ref _instanceSpotFollowRoute);
+
+    internal void SetInstanceSpotFollowRoute(
+        Func<ZLinkServiceWireCodec.StatefulRecord, ZLinkSpotMessageFollow?> lookup
+    ) => Volatile.Write(ref _instanceSpotFollowRoute, lookup);
 
     public void SetRoutingId(RoutingId routingId)
     {
