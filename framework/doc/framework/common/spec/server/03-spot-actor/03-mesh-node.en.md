@@ -332,12 +332,19 @@ the node removes its admitted record and liveness admission. REJECT does not rem
 the node follows the ADMIT wait rule above (HELLO is sent again every liveness management cycle). No separate peer
 state or timer exists for REJECT.
 
-**Until admission is confirmed by a handshake on the selected route, records other than the
-handshake received on that route are discarded without processing, and no response is sent.** The
-same applies to records the peer sent before the handshake of a new route after the selected route
-changed. A request lost this way isn't sent again. The sender starts a request only on a selected route
-where it received the peer's ADMIT ([Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)), so this
-loss happens only at a selected-route change, and that request ends with the binding's typed result or its deadline.
+**The receiver processes records other than the handshake that arrive on the selected route once it
+has itself admitted the peer's HELLO on that route. Records received before that are discarded without
+processing, and no response is sent.** The receive decision doesn't require that the peer's ADMIT has
+arrived. Receiving the peer's ADMIT is the condition for the sender to use that route. The sender starts
+a request only on a selected route where it received the peer's ADMIT
+([Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)), and the peer sends ADMIT only after it
+admits the HELLO. So a record from the sender arrives after the receiver has admitted it. The receiver
+processes that record even if it hasn't yet received the ADMIT for its own HELLO.
+
+After the selected route changes, records the peer sent before the handshake of the new route are
+discarded, because the receiver hasn't admitted the peer on the new route yet. A request lost this way
+isn't sent again. This loss happens only at a selected-route change, and that request ends with the
+binding's typed result or its deadline.
 
 Lifecycle generation is a non-zero opaque equality token. Which lifecycle is
 newer isn't judged by numeric magnitude.
@@ -582,6 +589,11 @@ runtime snapshot and event).
   new RID's Hello and complete admission.
 - A late READY arriving for the endpoint and RID of a peer whose intent was removed
   doesn't report that peer as admitted again.
+- While the receiving node has admitted the peer's HELLO but hasn't yet received the peer's ADMIT for
+  its own HELLO, each Spot or Actor send and Logical Multicast the peer sends on that route reaches the
+  receiving node's handler once.
+- After the selected route changes, an application record that arrives before the new route's
+  handshake doesn't reach a handler, and no response is sent.
 
 ---
 
