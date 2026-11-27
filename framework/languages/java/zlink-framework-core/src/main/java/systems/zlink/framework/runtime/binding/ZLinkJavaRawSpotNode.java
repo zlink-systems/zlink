@@ -1,7 +1,5 @@
 package systems.zlink.framework.runtime.binding;
 
-import static systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec.ACCEPTED_RECORD_OVERHEAD_BYTES;
-
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -38,6 +36,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReadResult;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
@@ -3653,7 +3652,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             InstanceReply reply,
             Consumer<Throwable> failure,
             ZLinkInternalMeshNode.PeerAuthorityFence sourceAuthority) {
-        InstanceAuthority authority = instanceAuthorities.get(header.route().targetSpotId());
+        var route = (ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route();
+        InstanceAuthority authority = instanceAuthorities.get(route.targetSpotId());
         if (authority == null) {
             return false;
         }
@@ -3682,9 +3682,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                                 owner.encodeAcceptedInstanceSpot(
                                                                         sourceAuthority,
                                                                         header,
-                                                                        (ZLinkServiceM6BWireCodec
-                                                                                        .InstanceRouteFence)
-                                                                                header.route(),
+                                                                        route,
                                                                         metadata,
                                                                         parts),
                                                         (int)
@@ -3694,7 +3692,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                                                 .bytesOf(
                                                                                         parts,
                                                                                         metadata.length,
-                                                                                        ACCEPTED_RECORD_OVERHEAD_BYTES)));
+                                                                                        ZLinkServiceFrozenRecordCodec
+                                                                                                .instanceAcceptedRecordOverhead(
+                                                                                                        route))));
                         if (header.instanceIntent()) received.retainActivationMessage(header);
                         CompletionStage<Void> retained;
                         try {

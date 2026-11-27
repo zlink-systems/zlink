@@ -50,11 +50,11 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToke
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
-import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;

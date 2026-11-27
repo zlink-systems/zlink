@@ -22,6 +22,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
@@ -393,17 +394,11 @@ final class ZLinkUserSpotRetireTargetEndpoint
             ActorTargetStage target = requireActorStage(request);
             return actorStaging.stageRelayedRecord(target.staged(), frozenRecord);
         }
-        ZLinkActorAcceptedJournal.Record actorRecord;
-        try {
-            actorRecord = ZLinkActorAcceptedJournal.decode(frozenRecord);
-        } catch (IllegalArgumentException notActorRecord) {
-            actorRecord = null;
-        }
+        boolean actor = ZLinkServiceFrozenRecordCodec.isActorRecord(frozenRecord);
+        String objectId =
+                actor ? ZLinkActorAcceptedJournal.decode(frozenRecord).actorId() : request.spotId();
         return staging.stageRelayedRecord(
-                requireStage(request).staged(),
-                actorRecord == null ? request.spotId() : actorRecord.actorId(),
-                actorRecord != null,
-                frozenRecord);
+                requireStage(request).staged(), objectId, actor, frozenRecord);
     }
 
     @Override

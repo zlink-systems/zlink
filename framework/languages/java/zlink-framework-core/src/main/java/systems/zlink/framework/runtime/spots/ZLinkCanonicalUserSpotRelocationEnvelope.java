@@ -4,7 +4,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
-import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.spots.ZLinkSpot;
 
@@ -150,7 +150,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
                                 })
                         .toList();
         try {
-            return ServiceWirePilotCodec.encodeRelocationEnvelopeV1(
+            return ZLinkServiceRelocationEnvelopeCodec.encode(
                     new ServiceWirePilotCodec.RelocationEnvelopeV1(
                             relocationId.getMostSignificantBits(),
                             relocationId.getLeastSignificantBits(),

@@ -50,8 +50,8 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
-import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
