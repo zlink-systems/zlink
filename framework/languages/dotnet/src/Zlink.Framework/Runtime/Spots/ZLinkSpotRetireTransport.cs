@@ -1799,9 +1799,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         return null;
     }
 
-    internal Func<Task<bool>>? ConfirmSpotRequest(
+    internal Func<Task<bool>>? ConfirmSpotIngress(
         RoutingId nodeRid,
-        SpotRelocationRequest request,
+        SpotRelocationIngress request,
         CancellationToken cancellationToken
     )
     {
@@ -1810,7 +1810,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         {
             if (
                 candidate is TargetStage stage
-                && stage.SpotParticipant.ObjectKind == ZLinkPlacementObjectKind.UserSpot
+                && stage.SpotParticipant.ObjectKind == request.ObjectKind
                 && stage.SpotParticipant.AuthorityKey == key
                 && stage.SpotParticipant.ObjectGeneration == request.SpotGeneration
                 && stage.Node.Node.RoutingId == nodeRid
@@ -1818,13 +1818,29 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 && stage.TargetOwnerLeaseGeneration == request.OwnerLeaseGeneration
                 && Volatile.Read(ref stage.AdmissionOpened) == 0
             )
-                return () =>
+            {
+                return request.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
+                    ? ConfirmFollowAsync
+                    : ConfirmAuthorityAsync;
+
+                Task<bool> ConfirmAuthorityAsync() =>
                     MatchesAdmissionAuthorityAsync(
                         stage,
                         key,
                         request.AuthorityOwnerGeneration,
                         cancellationToken
                     );
+
+                async Task<bool> ConfirmFollowAsync()
+                {
+                    if (!await ConfirmAuthorityAsync().ConfigureAwait(false))
+                        return false;
+
+                    // Connect ingress to the sealed execution queue before catalog publication.
+                    stage.Spot.Activation.AttachNativeDispatch();
+                    return true;
+                }
+            }
         }
         return null;
     }
