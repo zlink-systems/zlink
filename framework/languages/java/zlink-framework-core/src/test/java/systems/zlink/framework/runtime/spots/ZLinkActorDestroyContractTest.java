@@ -2,6 +2,8 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import static systems.zlink.framework.runtime.spots.ZLinkRemoteSpotRequestFixture.intercept;
+
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -19,6 +21,8 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locations.ZLinkLocationPage;
+import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
@@ -28,11 +32,16 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMutation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseMissing;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
@@ -156,15 +165,7 @@ final class ZLinkActorDestroyContractTest {
             var previous = create(owner);
             var endpoint = owner.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             try (var remote = start(locations, "destroy-caller", endpoint)) {
-                assertTimeoutPreemptively(
-                        Duration.ofSeconds(10),
-                        () -> {
-                            while (owner.routeMeshRuntime().snapshot(MESH).readyPeerCount() == 0
-                                    || remote.routeMeshRuntime().snapshot(MESH).readyPeerCount()
-                                            == 0) {
-                                Thread.sleep(10);
-                            }
-                        });
+                awaitAdmittedPeers(owner, remote);
                 var manager = remote.actorManager();
                 assertTrue(await(manager.destroy(previous)));
                 var current = create(owner);
@@ -181,13 +182,102 @@ final class ZLinkActorDestroyContractTest {
     }
 
     @Test
+    void remoteDestroyReleasesClosingAfterOwnerLeaseEnds() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var repository = new ZLinkProviderLocationRepository(locations);
+        String key = ZLinkAuthorityKeyCodec.actor(ACTOR_ID);
+        var deleteReached = new CompletableFuture<Void>();
+        var deleteProceed = new CompletableFuture<Void>();
+        var deleteFailure = new IllegalStateException("injected Actor destroy Delete failure");
+        var ownerRepository =
+                rejectActorMutation(
+                        repository,
+                        mutation -> mutation instanceof ZLinkAuthorityDelete,
+                        deleteFailure,
+                        deleteReached,
+                        deleteProceed);
+        var ownerConstruction =
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .locationStores(ZLinkRegisteredLocationStores.fromUnified(ownerRepository));
+        var owner = start(locations, "destroy-owner", null, ownerConstruction);
+        try {
+            var actor = create(owner);
+            var observed = new CompletableFuture<ZLinkAuthoritySnapshot>();
+            var callerRepository =
+                    intercept(
+                            repository,
+                            "read",
+                            args -> {
+                                if (!key.equals(args[0])) return null;
+                                return repository
+                                        .read(key, (ZLinkStoreCancellation) args[1])
+                                        .thenApply(
+                                                read -> {
+                                                    if (read
+                                                                    instanceof
+                                                                    ZLinkAuthoritySnapshot snapshot
+                                                            && snapshot.objectGeneration()
+                                                                    == actor.objectGeneration()
+                                                            && ZLinkAuthoritySnapshot.actorClosing(
+                                                                    snapshot.payload(),
+                                                                    snapshot.allocation())) {
+                                                        observed.complete(snapshot);
+                                                    }
+                                                    return read;
+                                                });
+                            });
+            var callerConstruction =
+                    new ZLinkFrameworkRuntimeTestAccess.Construction()
+                            .locationStores(
+                                    ZLinkRegisteredLocationStores.fromUnified(callerRepository));
+            var endpoint = owner.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            try (var caller = start(locations, "destroy-caller", endpoint, callerConstruction)) {
+                awaitAdmittedPeers(owner, caller);
+                var destroy = caller.actorManager().destroy(actor).toCompletableFuture();
+                await(deleteReached);
+                var closing = await(observed);
+                assertEquals(
+                        closing.storeVersion(),
+                        assertInstanceOf(
+                                        ZLinkAuthoritySnapshot.class,
+                                        await(repository.read(key, () -> false)))
+                                .storeVersion());
+                assertFalse(destroy.isDone());
+                var ownerToken =
+                        new ZLinkLocationOwnerToken(
+                                closing.ownerId(), closing.ownerLeaseGeneration());
+                assertEquals(
+                        ZLinkOwnerLeaseReleaseResult.RELEASED,
+                        await(repository.releaseOwnerLease(ownerToken)));
+                assertInstanceOf(
+                        ZLinkOwnerLeaseMissing.class,
+                        await(repository.readOwnerLease(closing.ownerId())));
+                assertTrue(await(destroy));
+                assertInstanceOf(
+                        ZLinkAuthorityMissing.class, await(repository.read(key, () -> false)));
+            }
+        } finally {
+            deleteProceed.complete(null);
+            if (deleteReached.isDone()) {
+                var shutdown = assertThrows(RuntimeException.class, owner::close);
+                assertSame(deleteFailure, shutdown.getCause());
+            } else {
+                owner.close();
+            }
+        }
+    }
+
+    @Test
     void remoteDestroyWithoutAdmittedOwnerIsUnavailable() throws Exception {
         var locations = new ZLinkInMemoryLocationStore();
         var repository = new ZLinkProviderLocationRepository(locations);
         var key = ZLinkAuthorityKeyCodec.actor(ACTOR_ID);
         var wire = new ZLinkServiceM6AWireCodec();
         var deadline = new DefaultZLinkFrameworkOptions().defaultRequestTimeout();
-        try (var owner = start(locations);
+        String ownerRid = "destroy-owner";
+        String callerRid = "destroy-caller";
+        try (var owner =
+                        start(locations, ownerRid, null, localMeshDiscovery(repository, ownerRid));
                 var context = Zlink.createContext();
                 var unadmittedPeer = context.createRouterSocket();
                 var poller = Zlink.createPoller();
@@ -203,11 +293,18 @@ final class ZLinkActorDestroyContractTest {
             poller.add(unadmittedPeer, 0, PollEventFlags.POLLIN);
             var events = new PollEvents(1);
             try (var caller =
-                    start(locations, "destroy-caller", unadmittedPeer.options().lastEndpoint())) {
-                unadmittedPeer.options().recvTimeout(Duration.ofSeconds(5));
+                    start(
+                            locations,
+                            callerRid,
+                            unadmittedPeer.options().lastEndpoint(),
+                            localMeshDiscovery(repository, callerRid))) {
+                long helloDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                 do {
+                    var remaining = Duration.ofNanos(helloDeadline - System.nanoTime());
                     assertTrue(
-                            unadmittedPeer.recv(inbound, RecvFlags.NONE), "expected caller HELLO");
+                            remaining.isPositive() && poller.wait(events, remaining) > 0,
+                            "expected caller HELLO");
+                    assertTrue(unadmittedPeer.recv(inbound, RecvFlags.DONT_WAIT));
                 } while (inbound.parts().getFirst().isEmpty());
                 assertEquals(
                         ServiceWireConstants.COMMAND_HELLO,
@@ -461,6 +558,32 @@ final class ZLinkActorDestroyContractTest {
         }
     }
 
+    private static ZLinkFrameworkRuntimeTestAccess.Construction localMeshDiscovery(
+            ZLinkLocationRepository repository, String localRid) {
+        // Each runtime validates its own descriptor and shares the same actor authority.
+        var rid = RoutingId.from(localRid);
+        var isolated =
+                intercept(
+                        repository,
+                        "listMeshNodes",
+                        args ->
+                                repository
+                                        .listMeshNodes((String) args[0], (ZLinkPageRequest) args[1])
+                                        .thenApply(
+                                                page ->
+                                                        new ZLinkLocationPage<>(
+                                                                page.items().stream()
+                                                                        .filter(
+                                                                                node ->
+                                                                                        node.rid()
+                                                                                                .equals(
+                                                                                                        rid))
+                                                                        .toList(),
+                                                                page.continuationToken())));
+        return new ZLinkFrameworkRuntimeTestAccess.Construction()
+                .locationStores(ZLinkRegisteredLocationStores.fromUnified(isolated));
+    }
+
     private static boolean isClosingPut(ZLinkAuthorityMutation mutation) {
         return mutation instanceof ZLinkAuthorityPut put
                 && new ZLinkActorAuthorityPayloadCodec()
@@ -596,6 +719,18 @@ final class ZLinkActorDestroyContractTest {
             runtime.close();
             throw failure;
         }
+    }
+
+    private static void awaitAdmittedPeers(
+            ZLinkFrameworkRuntime owner, ZLinkFrameworkRuntime caller) {
+        assertTimeoutPreemptively(
+                Duration.ofSeconds(10),
+                () -> {
+                    while (owner.routeMeshRuntime().snapshot(MESH).readyPeerCount() == 0
+                            || caller.routeMeshRuntime().snapshot(MESH).readyPeerCount() == 0) {
+                        Thread.sleep(10);
+                    }
+                });
     }
 
     private static <T> T await(CompletionStage<T> stage) throws Exception {
