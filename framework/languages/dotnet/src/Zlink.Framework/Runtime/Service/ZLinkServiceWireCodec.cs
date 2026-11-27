@@ -61,11 +61,14 @@ internal static partial class ZLinkServiceWireCodec
         ulong OwnerLeaseGeneration,
         byte MessageFollowHopCount,
         bool HasMetadata,
-        bool InstanceIntent = false,
         ulong SourceNodeGeneration = 0,
-        string TargetOwnerId = "",
+        ServiceWireCodec.InstanceRouteV1Case0? ReadyInstanceRoute = null,
         (string ActorId, ulong Generation)? SourceActor = null
-    );
+    )
+    {
+        internal bool InstanceIntent =>
+            ReadyInstanceRoute?.InstanceIntent == ServiceWireCodec.Bool8.True;
+    }
 
     internal readonly record struct UserSpotOperationRecord(
         ServiceWireConstants.Command Command,
@@ -611,55 +614,6 @@ internal static partial class ZLinkServiceWireCodec
             (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
             Array.Empty<byte>()
         );
-        return true;
-    }
-
-    internal static byte[] EncodeActorDestroyReply(
-        ulong correlation,
-        RequestResult terminalResult,
-        ServiceWireConstants.FrameworkErrorCode failureCode,
-        ActorDestroyCompletion? completion
-    )
-    {
-        if (terminalResult != RequestResult.Ok)
-            return EncodeReply(correlation, (int)terminalResult, (uint)failureCode);
-        if (failureCode != ServiceWireConstants.FrameworkErrorCode.None || completion is null)
-            throw new ArgumentOutOfRangeException(nameof(completion));
-        return EncodeReply(
-            correlation,
-            (int)terminalResult,
-            (uint)failureCode,
-            [completion.Destroyed ? (byte)1 : (byte)0]
-        );
-    }
-
-    internal static bool TryDecodeActorDestroyReply(
-        ReplyRecord reply,
-        out ActorDestroyCompletion? completion,
-        out DecodeError error
-    )
-    {
-        completion = null;
-        if (reply.TerminalResult != (int)RequestResult.Ok)
-        {
-            // Transport boundary terminals such as cancellation and shutdown
-            // intentionally have no framework error code. Typed domain
-            // failures carry one, but neither form may carry a success tail.
-            if (reply.Tail.Length != 0)
-            {
-                error = DecodeError.InvalidField;
-                return false;
-            }
-            error = DecodeError.None;
-            return true;
-        }
-        if (reply.FailureCode != 0 || reply.Tail.Length != 1 || reply.Tail[0] > 1)
-        {
-            error = DecodeError.InvalidField;
-            return false;
-        }
-        completion = new ActorDestroyCompletion(reply.Tail[0] == 1);
-        error = DecodeError.None;
         return true;
     }
 
@@ -1675,7 +1629,7 @@ internal static partial class ZLinkServiceWireCodec
         var request = operationKind == (byte)ServiceWireCodec.InstanceOperationKind.Request;
         if (
             request
-                ? operationHigh == 0 || operationLow == 0
+                ? operationHigh == 0 && operationLow == 0
                 : operationHigh != 0 || operationLow != 0
         )
             return false;
@@ -1702,12 +1656,79 @@ internal static partial class ZLinkServiceWireCodec
             route.Authority.LeaseGeneration.Value,
             0,
             (flags & ServiceWireConstants.Flag.Metadata) != 0,
-            route.InstanceIntent == ServiceWireCodec.Bool8.True,
             sourceGeneration,
-            route.Authority.OwnerId.Value
+            route
         );
         return true;
     }
+
+    internal static bool TryDecodeInstanceSpotFollow(
+        ReadOnlySpan<byte> bytes,
+        out StatefulRecord record,
+        out RoutingId sourceNodeRid
+    )
+    {
+        record = default;
+        sourceNodeRid = default;
+        ServiceWireCodec.InstanceSpotFollow55 follow;
+        try
+        {
+            follow = ServiceWireCodec.DecodeInstanceSpotFollow55Header(
+                bytes,
+                ServiceWireCodec.DecodeContext.Empty
+            );
+        }
+        catch (Exception error) when (error is InvalidDataException or EndOfStreamException)
+        {
+            return false;
+        }
+        var target = follow.TargetSpot;
+        sourceNodeRid = follow.SourceNodeRid.RoutingId;
+        record = new StatefulRecord(
+            ServiceWireConstants.Command.SpotSend,
+            0,
+            default,
+            follow.SourceSpotId.Value ?? string.Empty,
+            target.Spot.SpotId.Value,
+            target.Spot.ObjectGeneration.Value,
+            default,
+            target.TargetNodeRid.RoutingId,
+            target.TargetNodeGeneration.Value,
+            target.ExpectedAuthorityOwnerGeneration.Value,
+            target.ExpectedOwnerLeaseGeneration.Value,
+            follow.MessageFollowHopCount.Value,
+            (follow.Flags & (byte)ServiceWireConstants.Flag.Metadata) != 0,
+            SourceNodeGeneration: follow.SourceNodeGeneration.Value
+        );
+        return true;
+    }
+
+    internal static byte[] EncodeInstanceSpotFollow(
+        StatefulRecord source,
+        RoutingId sourceNodeRid,
+        ZLinkSpotMessageFollow route
+    ) =>
+        ServiceWireCodec.EncodeInstanceSpotFollow55Header(
+            new ServiceWireCodec.InstanceSpotFollow55(
+                source.HasMetadata ? (byte)ServiceWireConstants.Flag.Metadata : (byte)0,
+                default,
+                default,
+                new(source.SourceNodeGeneration),
+                new(sourceNodeRid),
+                new(source.SourceSpotId.Length == 0 ? null : source.SourceSpotId),
+                new(checked((byte)(source.MessageFollowHopCount + 1))),
+                new(
+                    new(new(source.TargetSpotId), new(route.ObjectGeneration)),
+                    new(route.TargetNodeRid),
+                    new(route.TargetNodeGeneration),
+                    new(route.TargetAuthorityOwnerGeneration),
+                    new(checked((ulong)route.TargetOwner.LeaseGeneration))
+                ),
+                default,
+                default
+            ),
+            ServiceWireCodec.DecodeContext.Empty
+        );
 
     internal static byte[] EncodeInstanceSpotActivationRecovery(
         InstanceSpotActivationOperation operation,

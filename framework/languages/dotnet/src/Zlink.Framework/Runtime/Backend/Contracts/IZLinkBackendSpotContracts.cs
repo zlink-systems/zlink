@@ -413,12 +413,11 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         CancellationToken cancellationToken
     ) => throw new NotSupportedException();
 
-    ValueTask<bool> DestroyActorRemoteAsync(
+    ValueTask SendActorDestroyAsync(
         ZLinkBackendActorRef actor,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration,
-        TimeSpan timeout,
         CancellationToken cancellationToken
     ) => throw new NotSupportedException();
 

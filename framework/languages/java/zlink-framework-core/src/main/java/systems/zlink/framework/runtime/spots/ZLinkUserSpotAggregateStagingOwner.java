@@ -1,18 +1,23 @@
 package systems.zlink.framework.runtime.spots;
 
+import static systems.zlink.framework.runtime.spots.SpotActivationBase.unwrapCompletion;
+
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.internal.execution.ZLinkConfirmedReplay;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
+import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkSpot;
 
 import java.util.ArrayList;
@@ -102,7 +107,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                                                         ignored ->
                                                                                 CompletableFuture
                                                                                         .failedFuture(
-                                                                                                unwrap(
+                                                                                                unwrapCompletion(
                                                                                                         failure)))))
                 .whenComplete(
                         (staged, failure) -> {
@@ -120,7 +125,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
      * checksum verification failures and is never produced here — it is only preserved when the
      * cause already carries that classification (spec 07e0234db5).
      */
-    private CompletionStage<Object> prepareAndRestoreSpot(
+    private CompletionStage<PreparedSpot> prepareAndRestoreSpot(
             Request request, ZLinkRelocationCancellation cancellation) {
         return backend.prepareSpot(request)
                 .thenCompose(
@@ -129,13 +134,14 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                         .thenApply(ignored -> preparedSpot)
                                         .exceptionallyCompose(
                                                 failure -> {
-                                                    Throwable cause = unwrap(failure);
+                                                    Throwable cause = unwrapCompletion(failure);
                                                     return SpotActivationBase.finishCleanup(
                                                                     relocationInternalFailure(
                                                                             cause),
                                                                     backend.discardSpot(
                                                                             preparedSpot))
-                                                            .thenApply(ignored -> (Object) null);
+                                                            .<PreparedSpot>thenApply(
+                                                                    ignored -> null);
                                                 }));
     }
 
@@ -154,7 +160,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
     }
 
     private CompletionStage<Void> prepareActors(
-            Object preparedSpot,
+            PreparedSpot preparedSpot,
             Request request,
             ZLinkRelocationCancellation cancellation,
             List<Object> prepared) {
@@ -177,7 +183,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         return chain;
     }
 
-    private CompletionStage<Void> discardPartial(Object spot, List<Object> actorsToDiscard) {
+    private CompletionStage<Void> discardPartial(PreparedSpot spot, List<Object> actorsToDiscard) {
         CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
         for (int index = actorsToDiscard.size() - 1; index >= 0; index--) {
             var actor = actorsToDiscard.get(index);
@@ -243,6 +249,11 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                             staged.backlogSealed = true;
                                             return backlog;
                                         }));
+    }
+
+    void setCommittedSpotAuthority(Staged staged, ZLinkAuthoritySnapshot snapshot) {
+        requireActive(staged);
+        backend.setCommittedSpotAuthority(staged.spot, snapshot);
     }
 
     CompletionStage<Void> publishHidden(
@@ -551,9 +562,9 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     .whenComplete(
                             (ignored, failure) -> {
                                 if (failure != null) {
-                                    admission.completeExceptionally(unwrap(failure));
+                                    admission.completeExceptionally(unwrapCompletion(failure));
                                     if (ingress != null)
-                                        notifyIngressFailure(ingress, unwrap(failure));
+                                        notifyIngressFailure(ingress, unwrapCompletion(failure));
                                 }
                             });
         } catch (RuntimeException failure) {
@@ -579,7 +590,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         return replay.handle(
                 (reply, failure) -> {
                     if (failure != null) {
-                        Throwable cause = unwrap(failure);
+                        Throwable cause = unwrapCompletion(failure);
                         throw new CompletionException(cause);
                     }
                     if (ingress.reply() != null && !reply.isEmpty()) {
@@ -622,7 +633,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
     private static void requireStagingPrefix(Request initial, Request finalRequest) {
         Objects.requireNonNull(finalRequest, "finalRequest");
-        if (initial.spotType() != finalRequest.spotType()
+        if (initial.spotKind() != finalRequest.spotKind()
+                || initial.spotType() != finalRequest.spotType()
                 || !initial.spotStableType().equals(finalRequest.spotStableType())
                 || !initial.spotId().equals(finalRequest.spotId())
                 || initial.objectGeneration() != finalRequest.objectGeneration()
@@ -785,14 +797,6 @@ final class ZLinkUserSpotAggregateStagingOwner {
         }
     }
 
-    private static Throwable unwrap(Throwable failure) {
-        Throwable current = failure;
-        while (current instanceof CompletionException && current.getCause() != null) {
-            current = current.getCause();
-        }
-        return current;
-    }
-
     @FunctionalInterface
     interface JournalReplayer {
         CompletionStage<Void> replay(String laneId, ZLinkSerialExecutionQueue.QueuedRecord record);
@@ -811,31 +815,80 @@ final class ZLinkUserSpotAggregateStagingOwner {
         }
     }
 
+    interface PreparedSpot {
+        Object surface();
+
+        CompletionStage<Void> completeRelocationReady();
+
+        CompletionStage<Supplier<CompletionStage<Void>>> beginIngressHold();
+
+        CompletionStage<Void> enqueue(
+                byte[] record,
+                Supplier<CompletionStage<Void>> turn,
+                CompletableFuture<Void> admission);
+
+        default void setCommittedAuthority(ZLinkAuthoritySnapshot snapshot) {}
+
+        CompletionStage<Void> publish();
+
+        void publishTimers();
+
+        CompletionStage<List<byte[]>> replay(ZLinkSpotAcceptedJournal.Record record);
+
+        CompletionStage<Void> discard();
+
+        default ZLinkSpot<?> actorSpot() {
+            throw new IllegalStateException("staged Spot does not own Actor participants");
+        }
+
+        default void stageActorTimers(String actorId, byte[] timerEnvelope) {
+            throw new IllegalStateException("staged Spot does not own Actor participants");
+        }
+
+        default void publishActorTimers(String actorId) {
+            throw new IllegalStateException("staged Spot does not own Actor participants");
+        }
+
+        default CompletionStage<Optional<byte[]>> replayActor(
+                ZLinkActorRuntime.PreparedTransferredActor actor,
+                ZLinkActorAcceptedJournal.Record record) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("staged Spot does not own Actor participants"));
+        }
+    }
+
     interface StagingBackend {
-        CompletionStage<Object> prepareSpot(Request request);
+        default void setCommittedSpotAuthority(
+                PreparedSpot value, ZLinkAuthoritySnapshot snapshot) {}
+
+        CompletionStage<PreparedSpot> prepareSpot(Request request);
 
         CompletionStage<Void> restoreSpot(
-                Object preparedSpot, Request request, ZLinkRelocationCancellation cancellation);
+                PreparedSpot preparedSpot,
+                Request request,
+                ZLinkRelocationCancellation cancellation);
 
         CompletionStage<Object> prepareActor(
                 ActorParticipant participant, ZLinkRelocationCancellation cancellation);
 
-        default CompletionStage<Void> completeRelocationReady(Object preparedSpot) {
-            return CompletableFuture.completedFuture(null);
+        default CompletionStage<Void> completeRelocationReady(PreparedSpot preparedSpot) {
+            return preparedSpot.completeRelocationReady();
         }
 
-        default CompletionStage<Object> beginIngressHold(Object preparedSpot) {
-            return CompletableFuture.completedFuture(null);
+        default CompletionStage<Supplier<CompletionStage<Void>>> beginIngressHold(
+                PreparedSpot preparedSpot) {
+            return preparedSpot.beginIngressHold();
         }
 
-        default CompletionStage<Void> resumeIngress(Object preparedSpot, Object ingressHold) {
-            return CompletableFuture.completedFuture(null);
+        default CompletionStage<Void> resumeIngress(
+                PreparedSpot preparedSpot, Supplier<CompletionStage<Void>> ingressHold) {
+            return ingressHold.get();
         }
 
         CompletionStage<QueuedTurn> prepareIngress(Object preparedActor);
 
         CompletionStage<Void> enqueueIngress(
-                Object preparedSpot,
+                PreparedSpot preparedSpot,
                 List<QueuedTurn> dispatches,
                 String laneId,
                 byte[] record,
@@ -843,7 +896,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 CompletableFuture<Void> admission);
 
         default CompletionStage<Void> stageActorTimers(
-                Object preparedSpot,
+                PreparedSpot preparedSpot,
                 Object preparedActor,
                 ActorParticipant participant,
                 byte[] timerEnvelope) {
@@ -858,10 +911,12 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     new IllegalStateException("staged Actor timer runtime is unavailable"));
         }
 
-        CompletionStage<Void> publishSpot(Object preparedSpot);
+        default CompletionStage<Void> publishSpot(PreparedSpot preparedSpot) {
+            return preparedSpot.publish();
+        }
 
         void publishActor(
-                Object preparedSpot,
+                PreparedSpot preparedSpot,
                 Object preparedActor,
                 String targetSpotId,
                 Long targetOwnerGeneration);
@@ -869,23 +924,24 @@ final class ZLinkUserSpotAggregateStagingOwner {
         void completeActor(Object preparedActor);
 
         default void publishActorTimers(
-                Object preparedSpot, Object preparedActor, ActorParticipant participant) {
+                PreparedSpot preparedSpot, Object preparedActor, ActorParticipant participant) {
             if (!ZLinkSpotTimerRelocationEnvelope.canonicalize(participant.timerEnvelope())
                     .isEmpty()) {
                 throw new IllegalStateException("staged Actor timer runtime is unavailable");
             }
         }
 
-        void publishTimers(Object preparedSpot);
+        default void publishTimers(PreparedSpot preparedSpot) {
+            preparedSpot.publishTimers();
+        }
 
         default CompletionStage<List<byte[]>> replaySpot(
-                Object preparedSpot, ZLinkSpotAcceptedJournal.Record record) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("staged Spot replay is unavailable"));
+                PreparedSpot preparedSpot, ZLinkSpotAcceptedJournal.Record record) {
+            return preparedSpot.replay(record);
         }
 
         default CompletionStage<Optional<byte[]>> replayActor(
-                Object preparedSpot,
+                PreparedSpot preparedSpot,
                 Object preparedActor,
                 ZLinkActorAcceptedJournal.Record record) {
             return CompletableFuture.failedFuture(
@@ -894,7 +950,9 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
         CompletionStage<Void> discardActor(Object preparedActor);
 
-        CompletionStage<Void> discardSpot(Object preparedSpot);
+        default CompletionStage<Void> discardSpot(PreparedSpot preparedSpot) {
+            return preparedSpot.discard();
+        }
     }
 
     record ActorParticipant(
@@ -940,7 +998,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
     }
 
     record Request(
-            Class<? extends ZLinkSpot<?>> spotType,
+            ZLinkPlacementObjectKind spotKind,
+            Class<?> spotType,
             String spotStableType,
             String spotId,
             long objectGeneration,
@@ -949,7 +1008,31 @@ final class ZLinkUserSpotAggregateStagingOwner {
             byte[] timerEnvelope,
             List<ActorParticipant> actors,
             Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> acceptedJournal) {
+        Request(
+                Class<?> spotType,
+                String spotStableType,
+                String spotId,
+                long objectGeneration,
+                byte[] spotState,
+                boolean restoreSpotSnapshot,
+                byte[] timerEnvelope,
+                List<ActorParticipant> actors,
+                Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> acceptedJournal) {
+            this(
+                    ZLinkPlacementObjectKind.USER_SPOT,
+                    spotType,
+                    spotStableType,
+                    spotId,
+                    objectGeneration,
+                    spotState,
+                    restoreSpotSnapshot,
+                    timerEnvelope,
+                    actors,
+                    acceptedJournal);
+        }
+
         Request {
+            Objects.requireNonNull(spotKind, "spotKind");
             Objects.requireNonNull(spotType, "spotType");
             // objectGeneration is spec-bounded to `1..long.MaxValue`
             // (01-glossary "ObjectGeneration"), so `<= 0` never
@@ -989,9 +1072,9 @@ final class ZLinkUserSpotAggregateStagingOwner {
     static final class Staged {
         private final ZLinkUserSpotAggregateStagingOwner owner;
         private final Request request;
-        private final Object spot;
+        private final PreparedSpot spot;
         private final List<Object> actors;
-        private final Object ingressHold;
+        private final Supplier<CompletionStage<Void>> ingressHold;
         private final ZLinkActivationAdmission.Permit restorePermit;
         private final List<PendingIngress> relayedIngress = new ArrayList<>();
         private final List<PendingIngress> pendingIngress = new ArrayList<>();
@@ -1006,9 +1089,9 @@ final class ZLinkUserSpotAggregateStagingOwner {
         private Staged(
                 ZLinkUserSpotAggregateStagingOwner owner,
                 Request request,
-                Object spot,
+                PreparedSpot spot,
                 List<Object> actors,
-                Object ingressHold,
+                Supplier<CompletionStage<Void>> ingressHold,
                 ZLinkActivationAdmission.Permit restorePermit) {
             this.owner = owner;
             this.request = request;
@@ -1088,46 +1171,37 @@ final class ZLinkUserSpotAggregateStagingOwner {
         }
 
         @Override
-        public CompletionStage<Object> prepareSpot(Request request) {
+        public CompletionStage<PreparedSpot> prepareSpot(Request request) {
+            if (request.spotKind() == ZLinkPlacementObjectKind.INSTANCE_SPOT) {
+                return runtime.prepareInstanceSpotRelocation(
+                                meshName,
+                                request.spotType().asSubclass(ZLinkInstanceSpot.class),
+                                request.spotId(),
+                                request.objectGeneration(),
+                                request.timerEnvelope())
+                        .thenApply(PreparedInstanceSpot::new);
+            }
             return spots.prepareRelocationReserved(
                             meshName,
                             request.spotType(),
                             request.spotId(),
                             request.objectGeneration(),
                             request.timerEnvelope())
-                    .thenApply(value -> value);
+                    .thenApply(PreparedUserSpot::new);
         }
 
         @Override
         public CompletionStage<Void> restoreSpot(
-                Object value, Request request, ZLinkRelocationCancellation cancellation) {
-            var prepared = (ZLinkSpotLifecycle.PreparedUserSpot) value;
-            Object spot = spots.preparedSpot(prepared);
+                PreparedSpot spot, Request request, ZLinkRelocationCancellation cancellation) {
             CompletionStage<Void> restore =
                     request.restoreSpotSnapshot()
                             ? adapters.restoreSpot(
                                     request.spotStableType(),
-                                    spot,
+                                    spot.surface(),
                                     request.spotState(),
                                     cancellation)
                             : CompletableFuture.completedFuture(null);
             return restore.thenRun(() -> validateJournal(request.acceptedJournal()));
-        }
-
-        @Override
-        public CompletionStage<Void> completeRelocationReady(Object value) {
-            return spots.completeRelocationReady((ZLinkSpotLifecycle.PreparedUserSpot) value);
-        }
-
-        @Override
-        public CompletionStage<Object> beginIngressHold(Object value) {
-            return spots.beginReservedIngressHold((ZLinkSpotLifecycle.PreparedUserSpot) value);
-        }
-
-        @Override
-        public CompletionStage<Void> resumeIngress(Object value, Object ingressHold) {
-            return spots.resumeReservedIngress(
-                    (ZLinkSpotLifecycle.PreparedUserSpot) value, ingressHold);
         }
 
         @Override
@@ -1138,18 +1212,14 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
         @Override
         public CompletionStage<Void> enqueueIngress(
-                Object value,
+                PreparedSpot spot,
                 List<QueuedTurn> dispatches,
                 String laneId,
                 byte[] record,
                 Supplier<CompletionStage<Void>> turn,
                 CompletableFuture<Void> admission) {
-            var spot =
-                    (ZLinkSpot<?>) spots.preparedSpot((ZLinkSpotLifecycle.PreparedUserSpot) value);
-            var context = (DefaultSpotContext) spot.context();
             if (laneId.equals("spot")) {
-                return context.enqueueAcceptedDispatch(
-                        () -> record, record.length, turn, () -> {}, admission);
+                return spot.enqueue(record, turn, admission);
             }
             if (laneId.startsWith("actor:")) {
                 var dispatch =
@@ -1188,39 +1258,23 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
         @Override
         public CompletionStage<Void> stageActorTimers(
-                Object preparedSpot,
+                PreparedSpot spot,
                 Object preparedActor,
                 ActorParticipant participant,
                 byte[] timerEnvelope) {
-            spots.stageReservedActorTimers(
-                    (ZLinkSpotLifecycle.PreparedUserSpot) preparedSpot,
-                    participant.actorId(),
-                    timerEnvelope);
+            spot.stageActorTimers(participant.actorId(), timerEnvelope);
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
-        public CompletionStage<Void> publishSpot(Object value) {
-            return spots.publishReserved((ZLinkSpotLifecycle.PreparedUserSpot) value);
-        }
-
-        @Override
         public void publishActor(
-                Object preparedSpot,
-                Object value,
-                String targetSpotId,
-                Long targetOwnerGeneration) {
+                PreparedSpot spot, Object value, String targetSpotId, Long targetOwnerGeneration) {
             var prepared = (ZLinkActorRuntime.PreparedTransferredActor) value;
             if (targetOwnerGeneration == null) {
                 actors.publishPreparedTransferredActor(prepared);
             } else {
                 actors.publishPreparedTransferredActor(
-                        prepared,
-                        targetSpotId,
-                        targetOwnerGeneration,
-                        (ZLinkSpot<?>)
-                                spots.preparedSpot(
-                                        (ZLinkSpotLifecycle.PreparedUserSpot) preparedSpot));
+                        prepared, targetSpotId, targetOwnerGeneration, spot.actorSpot());
             }
         }
 
@@ -1232,35 +1286,15 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
         @Override
         public void publishActorTimers(
-                Object preparedSpot, Object preparedActor, ActorParticipant participant) {
-            spots.publishReservedActorTimers(
-                    (ZLinkSpotLifecycle.PreparedUserSpot) preparedSpot, participant.actorId());
-        }
-
-        @Override
-        public void publishTimers(Object value) {
-            spots.publishReservedTimers((ZLinkSpotLifecycle.PreparedUserSpot) value);
-        }
-
-        @Override
-        public CompletionStage<List<byte[]>> replaySpot(
-                Object value, ZLinkSpotAcceptedJournal.Record record) {
-            return spots.replayReserved((ZLinkSpotLifecycle.PreparedUserSpot) value, record);
+                PreparedSpot spot, Object preparedActor, ActorParticipant participant) {
+            spot.publishActorTimers(participant.actorId());
         }
 
         @Override
         public CompletionStage<Optional<byte[]>> replayActor(
-                Object preparedSpot,
-                Object preparedActor,
-                ZLinkActorAcceptedJournal.Record record) {
-            if (runtime == null) {
-                return CompletableFuture.failedFuture(
-                        new IllegalStateException("staged Actor replay runtime is unavailable"));
-            }
-            return runtime.replayPreparedActor(
-                    (ZLinkSpotLifecycle.PreparedUserSpot) preparedSpot,
-                    (ZLinkActorRuntime.PreparedTransferredActor) preparedActor,
-                    record);
+                PreparedSpot spot, Object preparedActor, ZLinkActorAcceptedJournal.Record record) {
+            return spot.replayActor(
+                    (ZLinkActorRuntime.PreparedTransferredActor) preparedActor, record);
         }
 
         @Override
@@ -1269,9 +1303,166 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     (ZLinkActorRuntime.PreparedTransferredActor) value);
         }
 
-        @Override
-        public CompletionStage<Void> discardSpot(Object value) {
-            return spots.discardReserved((ZLinkSpotLifecycle.PreparedUserSpot) value);
+        private final class PreparedUserSpot implements PreparedSpot {
+            private final ZLinkSpotLifecycle.PreparedUserSpot prepared;
+
+            private PreparedUserSpot(ZLinkSpotLifecycle.PreparedUserSpot prepared) {
+                this.prepared = prepared;
+            }
+
+            @Override
+            public ZLinkSpot<?> surface() {
+                return spots.preparedSpot(prepared);
+            }
+
+            @Override
+            public CompletionStage<Void> completeRelocationReady() {
+                return spots.completeRelocationReady(prepared);
+            }
+
+            @Override
+            public CompletionStage<Supplier<CompletionStage<Void>>> beginIngressHold() {
+                return spots.beginReservedIngressHold(prepared)
+                        .thenApply(seal -> () -> spots.resumeReservedIngress(prepared, seal));
+            }
+
+            @Override
+            public CompletionStage<Void> enqueue(
+                    byte[] record,
+                    Supplier<CompletionStage<Void>> turn,
+                    CompletableFuture<Void> admission) {
+                return prepared.created()
+                        .activation()
+                        .context
+                        .enqueueAcceptedDispatch(
+                                () -> record, record.length, turn, () -> {}, admission);
+            }
+
+            @Override
+            public CompletionStage<Void> publish() {
+                return spots.publishReserved(prepared);
+            }
+
+            @Override
+            public void publishTimers() {
+                spots.publishReservedTimers(prepared);
+            }
+
+            @Override
+            public CompletionStage<List<byte[]>> replay(ZLinkSpotAcceptedJournal.Record record) {
+                return spots.replayReserved(prepared, record);
+            }
+
+            @Override
+            public CompletionStage<Void> discard() {
+                return spots.discardReserved(prepared);
+            }
+
+            @Override
+            public ZLinkSpot<?> actorSpot() {
+                return surface();
+            }
+
+            @Override
+            public void stageActorTimers(String actorId, byte[] timerEnvelope) {
+                spots.stageReservedActorTimers(prepared, actorId, timerEnvelope);
+            }
+
+            @Override
+            public void publishActorTimers(String actorId) {
+                spots.publishReservedActorTimers(prepared, actorId);
+            }
+
+            @Override
+            public CompletionStage<Optional<byte[]>> replayActor(
+                    ZLinkActorRuntime.PreparedTransferredActor actor,
+                    ZLinkActorAcceptedJournal.Record record) {
+                if (runtime == null) {
+                    return CompletableFuture.failedFuture(
+                            new IllegalStateException(
+                                    "staged Actor replay runtime is unavailable"));
+                }
+                return runtime.replayPreparedActor(prepared, actor, record);
+            }
+        }
+
+        private final class PreparedInstanceSpot implements PreparedSpot {
+            private final ZLinkInstanceSpotActivation activation;
+
+            private PreparedInstanceSpot(ZLinkInstanceSpotActivation activation) {
+                this.activation = activation;
+            }
+
+            @Override
+            public ZLinkInstanceSpot surface() {
+                return activation.spot();
+            }
+
+            @Override
+            public CompletionStage<Void> completeRelocationReady() {
+                return activation.context.initializeRelocation(surface());
+            }
+
+            @Override
+            public CompletionStage<Supplier<CompletionStage<Void>>> beginIngressHold() {
+                var queue = activation.context.ownerQueue();
+                return queue.relocationPreparationSeal()
+                        .thenApply(
+                                seal -> {
+                                    var held = seal.orElseThrow();
+                                    return () ->
+                                            queue.abortRelocation(held)
+                                                    .thenAccept(
+                                                            resumed -> {
+                                                                if (!resumed) {
+                                                                    throw new IllegalStateException(
+                                                                            "Spot relocation staging seal was lost");
+                                                                }
+                                                            });
+                                });
+            }
+
+            @Override
+            public CompletionStage<Void> enqueue(
+                    byte[] record,
+                    Supplier<CompletionStage<Void>> turn,
+                    CompletableFuture<Void> admission) {
+                return activation
+                        .context
+                        .ownerQueue()
+                        .enqueueRelocatableLazyRecord(
+                                () -> record, record.length, turn, () -> {}, admission);
+            }
+
+            @Override
+            public void setCommittedAuthority(ZLinkAuthoritySnapshot snapshot) {
+                runtime.setRelocatedInstanceAuthority(activation, snapshot);
+            }
+
+            @Override
+            public CompletionStage<Void> publish() {
+                return runtime.publishRelocatedInstanceSpot(activation);
+            }
+
+            @Override
+            public void publishTimers() {
+                activation.context.timers.publishStagedRestore();
+            }
+
+            @Override
+            public CompletionStage<List<byte[]>> replay(ZLinkSpotAcceptedJournal.Record record) {
+                return activation.replayAccepted(
+                        record, received -> activation.replayMessage(received, null));
+            }
+
+            @Override
+            public CompletionStage<Void> discard() {
+                return activation
+                        .context
+                        .ownerQueue()
+                        .discardActivationPreparation()
+                        .thenCompose(ignored -> runtime.discardInstanceSpotActivation(activation));
+            }
         }
     }
 

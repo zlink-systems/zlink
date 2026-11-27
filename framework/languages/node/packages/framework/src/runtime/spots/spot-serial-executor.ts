@@ -1,5 +1,10 @@
+import { startActorTeardown } from '../actors/actor-runtime-state';
 import type { ZLinkExecutionPolicy } from '../admission';
-import { ZLinkUserSpotExecutionMode } from '../../contracts';
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException,
+  ZLinkUserSpotExecutionMode
+} from '../../contracts';
 import { ZLinkActorSerialExecutor } from '../actors';
 import type {
   ZLinkActorHandoffDispatch,
@@ -20,9 +25,12 @@ export type ZLinkActorPacketTurnDispatch = (
   ...args: Parameters<ZLinkActorHandoffDispatch>
 ) => ReturnType<ZLinkActorHandoffDispatch>;
 
-class ActorJoinCompletionSealedError extends Error {
+class ActorJoinCompletionSealedError extends ZLinkFrameworkException {
   constructor() {
-    super('Actor Join completion did not release application dispatch.');
+    super(
+      ZLinkFrameworkErrorKind.Unavailable,
+      'Actor Join completion did not release application dispatch.'
+    );
   }
 }
 
@@ -260,12 +268,21 @@ export class ZLinkSpotSerialExecutor {
       executor.scheduler.discardPendingApplication(error);
   }
 
-  async terminateActor(actorId: string, terminal: () => Promise<void>): Promise<void> {
+  terminateActor(
+    actorId: string,
+    publishClosing: () => Promise<void>,
+    teardown: () => Promise<void>
+  ) {
     const executor = this.actorExecutor(actorId);
-    await executor.close();
-    await terminal();
-    if (this.actorExecutors.get(actorId) === executor) this.actorExecutors.delete(actorId);
-    this.actorSerials.delete(actorId);
+    return startActorTeardown(
+      () => executor.scheduler.closeAdmissionOnSuccess(publishClosing),
+      async () => {
+        await teardown();
+        if (this.actorExecutors.get(actorId) === executor) this.actorExecutors.delete(actorId);
+        this.actorSerials.delete(actorId);
+      },
+      executor.scheduler.whenIdle()
+    );
   }
 
   /**

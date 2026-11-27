@@ -1,3 +1,4 @@
+import { startActorTeardown } from '../actors/actor-runtime-state';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
 import { RequestRuntime } from '../foundation/request-runtime';
@@ -293,7 +294,7 @@ export class ZLinkFrameworkRuntimeHost
   private runtimeRelocationResult?: ZLinkFrameworkRelocationResult;
   private runtimeTerminationResult?: ZLinkFrameworkTerminationResult;
   private relocationOperation?: Promise<ZLinkFrameworkRelocationResult>;
-  private relocationStopStarting?: AbortController;
+  private shutdownRequested = new AbortController();
   private relocationOperationKey?: string;
   private relocationOperationStartedAt?: number;
   private shutdownOperation?: Promise<ZLinkFrameworkTerminationResult>;
@@ -879,7 +880,8 @@ export class ZLinkFrameworkRuntimeHost
       flowCreationEnabled: () => this.flowCreationEnabled(),
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       registration: options.registration,
-      targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
+      shutdownRequested: () => this.shutdownRequested.signal,
+      shutdownDeadline: () => this.shutdownDeadline?.signal,
       ensureEntryActivation: (meshName) => {
         const runtime = this.spotNodeRuntime;
         if (runtime === undefined) throw new Error('Relocation target runtime is not started.');
@@ -899,6 +901,7 @@ export class ZLinkFrameworkRuntimeHost
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),
       completions: (meshName) => this.spotNodeRuntime?.meshCompletionTable(meshName),
       spotManager: () => this.spotManager,
+      acquireSpotReplayPermit: (signal) => this.applicationJobQueue.acquire(signal, 'remote'),
       actorManager: () => this.actorManager,
       actorTransfer: this.actorTransferRuntime,
       boundSessionRelocation: {
@@ -1095,12 +1098,11 @@ export class ZLinkFrameworkRuntimeHost
     this.relocationTargetApplicationVersion = effectiveTargetApplicationVersion;
     this.relocationOperationKey = operationKey;
     this.relocationOperationStartedAt = performance.now();
-    this.relocationStopStarting = new AbortController();
     this.relocationOperation = this.runRelocation(
       options.mode,
       effectiveTargetApplicationVersion,
       deadlineMs,
-      this.relocationStopStarting.signal
+      this.shutdownRequested.signal
     );
     return waitForRuntimeOperation(this.relocationOperation, options.signal);
   }
@@ -1125,8 +1127,8 @@ export class ZLinkFrameworkRuntimeHost
         }
       }
       this.runtimeDeadline = new Date(Date.now() + deadlineMs);
-      this.relocationStopStarting?.abort(new Error('Shutdown requested.'));
       this.shutdownOperationStartedAt = performance.now();
+      this.shutdownRequested.abort(new Error('Shutdown requested.'));
       const teardown = this.teardown.operation;
       this.shutdownOperation = this.runShutdown(deadlineMs, teardown);
     }
@@ -1260,10 +1262,7 @@ export class ZLinkFrameworkRuntimeHost
             }
             this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
             if (teardown === undefined) {
-              if (
-                this.relocationOperation !== undefined &&
-                this.relocationStopStarting?.signal.aborted === true
-              ) {
+              if (this.relocationOperation !== undefined) {
                 await step('host.await_relocation', () => this.relocationOperation!);
               }
               // Seal application admission before the public status reports that the
@@ -1368,7 +1367,6 @@ export class ZLinkFrameworkRuntimeHost
     }
     this.runtimeDeadline = undefined;
     this.relocationTargetApplicationVersion = undefined;
-    this.relocationStopStarting = undefined;
     this.relocationOperation = undefined;
     this.relocationOperationKey = undefined;
     this.relocationOperationStartedAt = undefined;
@@ -1602,6 +1600,7 @@ export class ZLinkFrameworkRuntimeHost
     this.teardown = new RuntimeDisposal();
     this.shutdownOperation = undefined;
     this.shutdownOperationStartedAt = undefined;
+    this.shutdownRequested = new AbortController();
     const previousLease = this.telemetryLease;
     this.telemetryLease = renewTelemetryLease(previousLease);
     if (this.telemetryLease !== previousLease) {
@@ -1820,6 +1819,7 @@ export class ZLinkFrameworkRuntimeHost
     if (state === undefined) {
       return;
     }
+    this.shutdownRequested.abort(new Error('Shutdown requested.'));
     state.abortController.abort();
 
     const channelRuntime = this.channelRuntime;
@@ -2352,11 +2352,28 @@ export class ZLinkFrameworkRuntimeHost
     | 'admission'
     | 'activationAdmission'
     | 'placementCreate'
+    | 'remoteDestroy'
   > {
     this.ensureLocationRuntime();
     return {
       ...this.actorRuntimeOptionsFactory().createActorManagerOptions(),
       activationAdmission: this.activationAdmission,
+      remoteDestroy: async (actor, signal) =>
+        (await this.actorPlacement?.destroy(
+          actor,
+          this.options.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+          async (meshName, fence) => {
+            const node = this.spotNodeRuntime?.meshNode(meshName);
+            if (node === undefined) {
+              throw createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+                `Actor '${actor.actorId}' owner route is unavailable.`
+              );
+            }
+            await node.sendActorDestroy(fence);
+          },
+          signal
+        )) ?? false,
       placementCreate: async (actorId, actorType, createOnly, call, signal) => {
         const placement = this.actorPlacement;
         if (placement === undefined) {
@@ -2739,6 +2756,15 @@ export class ZLinkFrameworkRuntimeHost
               ...(payload === undefined ? {} : { payload })
             };
           },
+          destroyActor: (fence) => {
+            const actors = this.actorManager;
+            const completions = runtime.meshCompletionTable(meshName);
+            if (actors !== undefined && completions !== undefined) {
+              this.detachedTaskRunner().runDetached('Remote Actor destroy', () =>
+                actors.destroyOwnedActor(fence, node, completions)
+              );
+            }
+          },
           createActor: async (record, signal) => {
             const actorPlacement = this.actorPlacement;
             const actors = this.actorManager;
@@ -2915,12 +2941,15 @@ export class ZLinkFrameworkRuntimeHost
         this.spotNodeRuntime?.discardActorActivation(actor, error);
         this.spotManager?.discardActorActivation(actor, error);
       },
-      terminateActorActivation: (actor, terminal) => {
+      terminateActorActivation: (actor, publishClosing, terminal) => {
         const cleanup = async () => {
           await this.serviceRelocation.drainTargetActorRelocation(actor);
           await terminal();
         };
-        return this.spotNodeRuntime?.terminateActorActivation(actor, cleanup) ?? cleanup();
+        if (this.spotNodeRuntime !== undefined) {
+          return this.spotNodeRuntime.terminateActorActivation(actor, publishClosing, cleanup);
+        }
+        return startActorTeardown(publishClosing, cleanup);
       },
       registration: this.options.registration,
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
@@ -3066,7 +3095,7 @@ export class ZLinkFrameworkRuntimeHost
       ...options,
       admission: this.admission,
       errorSink: this.runtimeOrPreStartErrorSink,
-      peerAdmissionSealed: (meshName: string) => !this.admission.accepts(meshName),
+      peerAdmissionSealed: (meshName: string) => this.admission.isSealed(meshName),
       routeActorJoinIngress: (
         meshName: string,
         ...args: Parameters<

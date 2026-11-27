@@ -39,6 +39,7 @@ import java.util.function.Supplier;
 class ZLinkInstanceRequestDeadlineDiagnosticsTest {
     private static final String FLAG = "ZLINK_DEBUG_FRAMEWORK_RELOCATION";
     private static final String MARKER = "[zlink.runtime.relocation] node_request_deadline";
+    private static final String CALLER_MARKER = "deadline callerFutureCompletedNanos: ";
     private static final String MESH = "deadline-mesh";
     private static final String TARGET = "deadline-owner";
     private static final CompletableFuture<Void> ENTERED = new CompletableFuture<>();
@@ -63,12 +64,20 @@ class ZLinkInstanceRequestDeadlineDiagnosticsTest {
         assertTrue(output.contains("bindingSubmittedMs: undefined"), output);
         assertTrue(output.contains("bindingAdmittedMs: undefined"), output);
         assertTrue(output.contains("replyReceivedMs: undefined"), output);
+        long scheduled = timestamp(output, "scheduledDeadlineNanos: ");
+        long ownerVisit = timestamp(output, "ownerVisitNanos: ");
+        long terminal = timestamp(output, "terminalNanos: ");
+        long dispatcher = timestamp(output, "dispatcherStartNanos: ");
+        long caller = timestamp(output, CALLER_MARKER);
+        assertTrue(scheduled <= ownerVisit && ownerVisit <= terminal, output);
+        assertTrue(terminal <= dispatcher && dispatcher <= caller, output);
     }
 
     @Test
     void omitsTheExpiredRequestWithDiagnosticsDisabled() throws Exception {
         String output = run("0");
         assertFalse(output.contains(MARKER), output);
+        assertFalse(output.contains(CALLER_MARKER), output);
     }
 
     @Test
@@ -86,6 +95,12 @@ class ZLinkInstanceRequestDeadlineDiagnosticsTest {
                         .matcher(output);
         assertTrue(matcher.find(), output);
         return Double.parseDouble(matcher.group(1));
+    }
+
+    private static long timestamp(String output, String label) {
+        var matcher = java.util.regex.Pattern.compile(label + "(-?[0-9]+)").matcher(output);
+        assertTrue(matcher.find(), output);
+        return Long.parseLong(matcher.group(1));
     }
 
     private String run(String flag) throws Exception {
@@ -108,7 +123,9 @@ class ZLinkInstanceRequestDeadlineDiagnosticsTest {
         process.environment().put(FLAG, flag);
         var child = process.start();
         try {
-            assertTrue(child.waitFor(20, TimeUnit.SECONDS), () -> "child timed out: " + output);
+            if (!child.waitFor(20, TimeUnit.SECONDS)) {
+                fail("child timed out: " + output + "\n" + Files.readString(output));
+            }
             String log = Files.readString(output);
             assertEquals(0, child.exitValue(), log);
             return log;
@@ -164,10 +181,40 @@ class ZLinkInstanceRequestDeadlineDiagnosticsTest {
                                 .timeout(Duration.ofSeconds(2))
                                 .submit(Echo.class)
                                 .toCompletableFuture();
+                CompletableFuture<Long> callerCompletion =
+                        "1".equals(System.getenv(FLAG))
+                                ? pending.handle((reply, failure) -> System.nanoTime())
+                                : null;
                 ENTERED.get(5, TimeUnit.SECONDS);
+                long watchdogStarted = callerCompletion == null ? 0L : System.nanoTime();
                 var failure =
                         assertThrows(
-                                ExecutionException.class, () -> pending.get(5, TimeUnit.SECONDS));
+                                ExecutionException.class,
+                                () -> {
+                                    try {
+                                        pending.get(5, TimeUnit.SECONDS);
+                                    } catch (TimeoutException timeout) {
+                                        if (callerCompletion != null) {
+                                            long watchdogExpired = System.nanoTime();
+                                            System.err.printf(
+                                                    "deadline watchdogStartedNanos: %d, watchdogExpiredNanos: %d%n",
+                                                    watchdogStarted, watchdogExpired);
+                                            // Observe late delivery while the handler stays
+                                            // blocked.
+                                            try {
+                                                printCallerCompletion(callerCompletion);
+                                            } catch (TimeoutException
+                                                    | ExecutionException observationFailure) {
+                                                timeout.addSuppressed(observationFailure);
+                                            } catch (InterruptedException interrupted) {
+                                                Thread.currentThread().interrupt();
+                                                timeout.addSuppressed(interrupted);
+                                            }
+                                        }
+                                        throw timeout;
+                                    }
+                                });
+                if (callerCompletion != null) printCallerCompletion(callerCompletion);
                 assertEquals(
                         ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                         assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
@@ -175,6 +222,11 @@ class ZLinkInstanceRequestDeadlineDiagnosticsTest {
                 BLOCKED.complete(new Echo(true));
             }
         }
+    }
+
+    private static void printCallerCompletion(CompletableFuture<Long> callerCompletion)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        System.err.println(CALLER_MARKER + callerCompletion.get(5, TimeUnit.SECONDS));
     }
 
     private static void measureAllocations() {

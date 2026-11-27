@@ -197,8 +197,7 @@ class aggregate_commit_contention_store_t final : public location_store_t
   public:
     enum class phase_t
     {
-        transition,
-        page,
+        marker,
         terminal,
         lease_loss,
         counter_race
@@ -221,18 +220,14 @@ class aggregate_commit_contention_store_t final : public location_store_t
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
         bool counter = false;
-        bool page = false;
         bool capacity = false;
         for (const auto &mutation : request.mutations) {
             const auto &key = std::visit (
               [] (const auto &value) -> const store_key_t & { return value.key; }, mutation);
             counter |= key.value == "zlink:v11:authority-owner-counter";
-            page |= key.value.starts_with ("zlink:v11:aggregate-commit:");
             capacity |= key.value.starts_with ("zlink:v11:capacity:");
         }
-        const bool matching = phase == phase_t::transition ? counter
-                              : phase == phase_t::page     ? page
-                                                           : capacity;
+        const bool matching = phase == phase_t::marker ? counter : capacity;
         if (remaining != 0 && matching) {
             --remaining;
             ++rejected;
@@ -246,7 +241,7 @@ class aggregate_commit_contention_store_t final : public location_store_t
         co_return co_await inner.write (std::move (request));
     }
     in_memory_location_store_t inner;
-    phase_t phase = phase_t::transition;
+    phase_t phase = phase_t::marker;
     std::size_t remaining = 0;
     std::size_t rejected = 0;
     std::function<task_t<void> ()> on_conflict;
@@ -254,7 +249,7 @@ class aggregate_commit_contention_store_t final : public location_store_t
     std::size_t counter_reads = 0;
 };
 
-class aggregate_lock_contention_store_t final : public location_store_t
+class aggregate_marker_contention_store_t final : public location_store_t
 {
   public:
     task_t<store_read_result_t> read (store_key_t key) override
@@ -264,24 +259,15 @@ class aggregate_lock_contention_store_t final : public location_store_t
 
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
-        const auto publishes_lock = std::any_of (
-          request.mutations.begin (), request.mutations.end (), [] (const auto &mutation) {
+        const bool installs_marker =
+          std::ranges::any_of (request.mutations, [] (const auto &mutation) {
               const auto *put = std::get_if<store_put_t> (&mutation);
-              return put && put->key.value.starts_with ("zlink:v11:aggregate-lock:");
+              return put && put->key.value.starts_with ("authority")
+                     && nlohmann::json::parse (put->bytes).contains ("visibleStoreVersion");
           });
-        if (!peer_marker_published && publishes_lock) {
+        if (!peer_marker_published && installs_marker) {
             peer_marker_published = true;
             auto peer_request = request;
-            for (auto &mutation : peer_request.mutations) {
-                auto *put = std::get_if<store_put_t> (&mutation);
-                if (!put || !put->key.value.starts_with ("zlink:v11:aggregate-lock:"))
-                    continue;
-                auto marker = nlohmann::json::parse (
-                  reinterpret_cast<const char *> (put->bytes.data ()),
-                  reinterpret_cast<const char *> (put->bytes.data ()) + put->bytes.size ());
-                marker["peerMarker"] = true;
-                put->bytes = bytes (marker.dump ());
-            }
             // The repository may resume on the inner store's lane, so await
             // the peer write instead of blocking that lane.
             const auto published = co_await inner.write (std::move (peer_request));
@@ -301,9 +287,10 @@ class aggregate_lock_contention_store_t final : public location_store_t
     bool peer_marker_published = false;
 };
 
-TEST (CppFrameworkOpaqueLocationStore, AggregatePrepareAdoptsPeerLockAfterConditionalWriteConflict)
+TEST (CppFrameworkOpaqueLocationStore,
+      AggregatePrepareAdoptsPeerMarkerAfterConditionalWriteConflict)
 {
-    aggregate_lock_contention_store_t provider;
+    aggregate_marker_contention_store_t provider;
     provider_location_repository_t repository (provider);
     repository.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto source_claim =
@@ -425,17 +412,17 @@ TEST (CppFrameworkOpaqueLocationStore, AggregatePrepareAdoptsPeerLockAfterCondit
     EXPECT_EQ (source_capacity, capacity_record (provider, source_descriptor));
 }
 
-TEST (CppFrameworkOpaqueLocationStore, AggregatePageReadKeepsSourceVersionUntilCommit)
+TEST (CppFrameworkOpaqueLocationStore, AggregateReadKeepsSourceVersionUntilCommit)
 {
     in_memory_location_store_t provider;
-    zlink::framework::test::aggregate_page_read_keeps_source_version_until_commit (provider, bytes);
+    zlink::framework::test::aggregate_read_keeps_source_version_until_commit (provider, bytes);
 }
 
 TEST (CppFrameworkOpaqueLocationStore, AggregateCommitRechecksFenceAfterTransientConflicts)
 {
     using phase_t = aggregate_commit_contention_store_t::phase_t;
-    for (const auto phase : {phase_t::transition, phase_t::page, phase_t::terminal,
-                             phase_t::lease_loss, phase_t::counter_race}) {
+    for (const auto phase :
+         {phase_t::marker, phase_t::terminal, phase_t::lease_loss, phase_t::counter_race}) {
         SCOPED_TRACE (static_cast<int> (phase));
         aggregate_commit_contention_store_t provider;
         provider_location_repository_t repository (provider);
@@ -512,11 +499,9 @@ TEST (CppFrameworkOpaqueLocationStore, AggregateCommitRechecksFenceAfterTransien
                                                bytes ("aggregate-ready"),
                                                {}});
         }
-        const auto prepared = repository.prepare_aggregate (aggregate).result ().value ();
-        const auto *fence = std::get_if<aggregate_prepared_t> (&prepared);
-        ASSERT_NE (fence, nullptr);
         provider.phase = phase;
-        provider.remaining = phase == phase_t::counter_race ? 0 : 65;
+        if (phase == phase_t::marker)
+            provider.remaining = 65;
         if (phase == phase_t::counter_race) {
             provider.on_counter_read = [&] () -> task_t<void> {
                 object_reserve_request_t peer;
@@ -529,6 +514,11 @@ TEST (CppFrameworkOpaqueLocationStore, AggregateCommitRechecksFenceAfterTransien
                 EXPECT_TRUE (std::holds_alternative<object_reserved_t> (reserved));
             };
         }
+        const auto prepared = repository.prepare_aggregate (aggregate).result ().value ();
+        const auto *fence = std::get_if<aggregate_prepared_t> (&prepared);
+        ASSERT_NE (fence, nullptr);
+        if (phase == phase_t::terminal || phase == phase_t::lease_loss)
+            provider.remaining = 65;
         if (phase == phase_t::lease_loss) {
             provider.on_conflict = [&] () -> task_t<void> {
                 const auto released = co_await repository.release_owner_lease (claimed->token);

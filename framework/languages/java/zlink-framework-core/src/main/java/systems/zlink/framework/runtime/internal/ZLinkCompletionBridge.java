@@ -130,6 +130,14 @@ public final class ZLinkCompletionBridge {
             return FORWARDER.compareAndSet(this, null, waiter);
         }
 
+        /** Settles the owned waiter before a separately dispatched terminal is published. */
+        public final void cancelForwardedWaiter() {
+            if (forwarder instanceof CompletableFuture<?> waiter
+                    && FORWARDER.compareAndSet(this, waiter, null)) {
+                cancelIfIncomplete(waiter);
+            }
+        }
+
         @Override
         public boolean complete(T value) {
             if (finish(null) == FINISHED) return false;

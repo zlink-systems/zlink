@@ -109,10 +109,12 @@ export function bindApplicationJobPermit<TResult, TArgument>(
   callback: (argument?: TArgument) => Promise<TResult> | TResult,
   current?: () => ApplicationJobPermitPort | undefined
 ): (argument?: TArgument) => Promise<TResult> | TResult {
-  const scope = current === undefined ? applicationJobPermitScope.getStore() : current();
+  if (current !== undefined) {
+    return (argument?: TArgument) => applicationJobPermitScope.run(current(), callback, argument);
+  }
+  const scope = applicationJobPermitScope.getStore();
   if (scope === undefined) return callback;
-  return (argument?: TArgument) =>
-    applicationJobPermitScope.run(current === undefined ? scope : current(), callback, argument);
+  return (argument?: TArgument) => applicationJobPermitScope.run(scope, callback, argument);
 }
 
 /**

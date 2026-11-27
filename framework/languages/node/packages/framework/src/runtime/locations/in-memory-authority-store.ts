@@ -395,10 +395,17 @@ export class ZLinkInMemoryAuthorityStore {
       !sameAuthorityIncarnation(this.read(key.value) as ZLinkAuthoritySnapshot, discarded)
     )
       return true;
+    const actor =
+      current.snapshot.allocation.objectKind === 'actor'
+        ? decodeActorAuthorityPayload(
+            serviceRelocationAuthorityApplicationPayload(current.snapshot.payload)
+          )
+        : undefined;
+    const actorClosing = actor?.state === 'closing';
     if (
       current.snapshot.storeVersion.value !== expectedStoreVersion ||
       (current.snapshot.allocation.state === 'active'
-        ? request === undefined
+        ? request === undefined && !actorClosing
         : current.creation === undefined)
     )
       return false;
@@ -435,28 +442,23 @@ export class ZLinkInMemoryAuthorityStore {
           spot.spotId !== creation.key.globalId ||
           spot.activationRecovery !== undefined;
       }
-      const actor =
-        current.snapshot.allocation.objectKind === 'actor'
-          ? decodeActorAuthorityPayload(
-              serviceRelocationAuthorityApplicationPayload(current.snapshot.payload)
-            )
-          : undefined;
       const releaseCandidate =
         !unavailable &&
         (discarded !== undefined ||
+          (request === undefined && actorClosing) ||
           (creation !== undefined &&
             creation.key.kind === current.snapshot.allocation.objectKind &&
             creation.intent.stableType === current.snapshot.allocation.stableType &&
-            (spot !== undefined || actor?.state === 'ready')));
+            (spot !== undefined || actor?.state === 'ready' || actorClosing)));
       const ownerLive = this.validation.isOwnerLive(owner);
       if (ownerLive) return false;
-      if (!releaseCandidate && discarded !== undefined) return false;
+      if (!releaseCandidate && creation === undefined) return false;
       if (!releaseCandidate)
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,
           'Object owner lease is unavailable.'
         );
-      if (creation !== undefined) {
+      if (creation !== undefined && !actorClosing) {
         factoryKey = { meshName: creation.target.meshName, rid: creation.target.nodeRid };
         factoryDescriptor = this.validation.readMeshNode?.(factoryKey);
         requireDisabledCreationPolicy(
@@ -465,7 +467,7 @@ export class ZLinkInMemoryAuthorityStore {
           factoryDescriptor
         );
       }
-      const releaseAllowed = this.ownerLeaseReleaseDelay.allowsAuthority(owner);
+      const releaseAllowed = actorClosing || this.ownerLeaseReleaseDelay.allowsAuthority(owner);
       if (discarded === undefined && spot?.kind === 'user_spot') {
         members = this.endedSpotMembers(key.value, current.snapshot, spot.spotId, factoryKey);
       }
@@ -1312,9 +1314,6 @@ function validateAggregateRequest(request: ZLinkAggregatePrepareRequest): void {
   if (request.aggregateGeneration < 1n || request.participants.length < 1) {
     throw new RangeError('Aggregate generation and participant count are invalid.');
   }
-  if (request.inventoryDigest.byteLength !== SHA256_DIGEST_BYTES) {
-    throw new TypeError(`Aggregate inventory digest must contain ${SHA256_DIGEST_BYTES} bytes.`);
-  }
   validateCapacityVector(request.capacity);
   for (const participant of request.participants) {
     if (participant.relocation !== undefined)
@@ -1542,7 +1541,7 @@ function sameAggregateRequest(
     left.aggregateId.value !== right.aggregateId.value ||
     left.aggregateGeneration !== right.aggregateGeneration ||
     !sameOwner(left.targetOwner, right.targetOwner) ||
-    !Buffer.from(left.inventoryDigest).equals(Buffer.from(right.inventoryDigest)) ||
+    left.sealedInventoryDigest !== right.sealedInventoryDigest ||
     left.participants.length !== right.participants.length ||
     !sameDescriptor(left.targetDescriptor, right.targetDescriptor) ||
     left.targetDescriptorLifecycleGeneration !== right.targetDescriptorLifecycleGeneration ||
@@ -1572,7 +1571,6 @@ function cloneAggregateRequest(
     targetOwner: { ...request.targetOwner },
     targetDescriptor: { ...request.targetDescriptor },
     capacity: cloneCapacity(request.capacity),
-    inventoryDigest: Buffer.from(request.inventoryDigest),
     participants: request.participants.map((participant) => ({
       ...participant,
       authorityKey: { ...participant.authorityKey },
