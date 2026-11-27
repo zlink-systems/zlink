@@ -1308,6 +1308,55 @@
           }
         }
       ]
+    },
+    {
+      "name": "vanished-node-holding-every-permit-reclaimed-on-report",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:234",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [
+          {
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3,
+            "requestSeq": 1
+          }
+        ],
+        "ownerLeases": {
+          "o1:3": "ended"
+        },
+        "reports": [
+          {
+            "node": "n2",
+            "limit": 5,
+            "inFlight": 0,
+            "issuedSinceReport": 0
+          }
+        ],
+        "waiting": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "nodeReport",
+          "node": "n2",
+          "heldPermits": [],
+          "resolvedRequestSeq": 0,
+          "note": "n1 never reports again; the global cap blocks issuing, so this report checks the permit owners' leases",
+          "expect": {
+            "ownerLeaseChecks": 1,
+            "runningPermits": 0,
+            "ticketSessions": [
+              "s2"
+            ]
+          }
+        }
+      ]
     }
   ],
   "nodeScenarios": [
