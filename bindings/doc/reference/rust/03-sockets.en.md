@@ -195,10 +195,15 @@ if sub.subscribe(&mut msg, RecvFlags::NONE)? { /* ... */ }
 | | `pub_options() -> PubSocketOptions<'_>` | the per-type options facade |
 | `SubSocket` / `XSubSocket` | `subscribe(&self, out: &mut TopicMessage, flags: RecvFlags) -> Result<bool, RecvError>` | populates `out` with the next matching publish |
 | | `set_subscription(&self, filter: &str)` / `unset_subscription(&self, filter: &str)` | adds/removes a topic filter; subscriptions accumulate |
-| | `subscription_at(&self, index: usize) -> Result<Option<(String, bool)>, ConfigError>` | a `(filter, is_pattern)` tuple rather than a named struct/record — the filter at that index |
+| | `subscription_at(&self, index: usize) -> Result<Option<(String, bool)>, ConfigError>` | `Ok(Some((filter, is_pattern)))` at that index, or `Ok(None)` when Core returns `ENOENT` |
 | | `common_options()` | the shared options facade |
 | | `sub_options() -> SubSocketOptions<'_>` | the per-type options facade |
 | `XPubSocket` | `receive_subscription_event(&self, out: &mut SubscriptionEvent, flags: RecvFlags) -> Result<bool, RecvError>` | adds this on top of the `PubSocket` shape, in its own `impl` block (not an extension of `PubSocket`'s type); populates `out` with the next subscribe/unsubscribe |
+
+The binding supplies its own buffer on the first call to `zlink_subscription_at`. A successful
+call completes the query, including when the filter is empty. If Core returns `ENOBUFS`, the
+binding calls Core once more with the required length Core returned. Other Core failures
+return `Err(ConfigError)`.
 
 **Neither `PubSocket` nor `XPubSocket` declares `set_routing_id`/`routing_id`** (no routing-id
 surface at all on either type in this binding). **`XSubSocket`'s `impl` block is a full,

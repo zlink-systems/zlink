@@ -216,11 +216,16 @@ if sub.subscribe_into(msg):
 | `SubSocket` | `sub_options` | the per-type options facade |
 | | `connect(endpoint)` / `disconnect(endpoint)` | connects/disconnects to a peer address |
 | | `set_subscription(topic)` / `unset_subscription(topic)` | adds/removes a topic filter; subscriptions accumulate |
-| | `subscription_at(index)` | `(filter, is_pattern)` tuple, or `None` — the filter at that index |
+| | `subscription_at(index)` | `(filter, is_pattern)` at that index, or `None` when Core returns `ENOENT` |
 | | `subscribe_into(topic_message, *, flags=0)` | populates `topic_message` with the next matching publish |
 | `XPubSocket` | `pub_options` / `connect` / `disconnect` / `publish` | same shape as `PubSocket` |
 | | `receive_subscription_event_into(event, *, flags=0)` | populates `event` with the next subscribe/unsubscribe |
 | `XSubSocket` | `sub_options` / `connect` / `disconnect` / `set_subscription` / `unset_subscription` / `subscription_at` / `subscribe_into` | **entirely independent `Protocol` declaration with the identical member set to `SubSocket`** — no shared base type links the two beyond the matching shape |
+
+The binding supplies its own buffer on the first call to `zlink_subscription_at`. A successful
+call completes the query, including when the filter is empty. If Core returns `ENOBUFS`, the
+binding calls Core once more with the required length Core returned. Other Core failures
+raise `ConfigError`.
 
 **Completion result.** `subscribe_into`/`receive_subscription_event_into` follow the
 `False`-on-`DONT_WAIT` convention above.

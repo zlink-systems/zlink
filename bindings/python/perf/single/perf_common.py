@@ -313,7 +313,7 @@ def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
                 if safe_poll(poller, poll_events, -1) == 0:
                     continue
             except zlink_mod.ZlinkError as exc:
-                if exc.native_errno in (errno.EINTR, errno.EAGAIN):
+                if exc.internal_errno in (errno.EINTR, errno.EAGAIN):
                     continue
                 raise
 
@@ -416,7 +416,7 @@ def _submit_backpressured_result():
 
 
 def is_transient_submit_error(exc):
-    return exc.result == _submit_backpressured_result() or exc.native_errno in {
+    return exc.result == _submit_backpressured_result() or exc.internal_errno in {
         errno.EAGAIN,
         errno.EINTR,
         errno.ETIMEDOUT,

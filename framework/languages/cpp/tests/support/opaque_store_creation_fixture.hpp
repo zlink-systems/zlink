@@ -4,7 +4,9 @@
 
 #include "opaque_store_record_fixture.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/location_record_fields.hpp"
 #include <functional>
+#include <nlohmann/json.hpp>
 
 namespace zlink::framework::test::opaque_store
 {

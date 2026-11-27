@@ -28,6 +28,7 @@ APACHE_SCOPES=(
 APACHE_FILES=(
   framework/languages/cpp/cmake/typed-json-allocations.cmake
   framework/languages/cpp/connector/tests/control_frame_contract.hpp
+  framework/languages/cpp/connector/tests/locked_stream_capture.hpp
   framework/languages/cpp/connector/tests/test_connector_dispatch.cpp
   framework/languages/cpp/connector/tests/test_connector_unreal_fifo.cpp
   framework/languages/cpp/connector/tests/test_connector_wait_isolation.cpp
