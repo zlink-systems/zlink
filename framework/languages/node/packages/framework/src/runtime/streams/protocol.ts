@@ -31,6 +31,7 @@ export {
 
 export { utf8Decode, utf8Encode } from '@zlink-systems/stream-wire';
 
+const admissionTicketMetadataKey = '$zlink.admission.ticket';
 const actorRequestDeadlineMetadataKey = '$zlink.actor-request-deadline-unix-ms';
 //  Shared empty metadata for the dominant no-metadata frame; ReadonlyMap
 //  keeps every consumer from mutating it.
@@ -64,6 +65,7 @@ export interface ZLinkStreamFrameHeader {
   readonly requestSeq?: bigint;
   readonly name: string;
   readonly metadata: ReadonlyMap<string, string>;
+  readonly admissionTicket?: string;
   readonly correlationId?: string;
   readonly flowId?: string;
   readonly flowOrigin?: ZLinkFlowOrigin;
@@ -200,6 +202,7 @@ export function decodeStreamHeader(header: Uint8Array, flowEnabled = true): ZLin
     requestSeq: decoded.requestSeq,
     name: decoded.name,
     metadata,
+    admissionTicket: decoded.metadata.get(admissionTicketMetadataKey),
     correlationId: decoded.correlationId,
     flowId: decoded.flowId,
     flowOrigin: decodeFlowOrigin(decoded.flowOrigin),
@@ -223,9 +226,11 @@ export function decodeActorRequestDeadlineUnixMs(header: Uint8Array): number | u
 }
 
 function publicStreamMetadata(metadata: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
-  if (!metadata.has(actorRequestDeadlineMetadataKey)) return metadata;
+  if (!metadata.has(actorRequestDeadlineMetadataKey) && !metadata.has(admissionTicketMetadataKey))
+    return metadata;
   const visible = new Map(metadata);
   visible.delete(actorRequestDeadlineMetadataKey);
+  visible.delete(admissionTicketMetadataKey);
   return visible;
 }
 

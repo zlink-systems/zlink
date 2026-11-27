@@ -10,6 +10,8 @@
 #include "runtime/execution/task_result.hpp"
 #include "runtime/host/app_test_access.hpp"
 #include "runtime/host/hosted_service_lifecycle.hpp"
+#include "runtime/streams/stream_host_ingress.hpp"
+#include "runtime/streams/stream_host_service.hpp"
 #include "runtime/http/http_startup_test_probe.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 #include "runtime/utils/poll_interval_wait.hpp"
@@ -205,6 +207,29 @@ task_t<bool> detail::app_test_access_t::startup_publication (app_t &app)
 const std::atomic_bool &detail::app_test_access_t::stop_requested (app_t &app)
 {
     return app._state->stop_requested;
+}
+
+std::uint64_t detail::app_test_access_t::admission_queue_epoch (const app_t &app)
+{
+    for (const auto &service : app._state->hosted_services) {
+        if (const auto *streams =
+              dynamic_cast<const runtime::stream_host_service_t *> (service.get ())) {
+            if (const auto queue = streams->_ingress->queue ()) {
+                const std::lock_guard lock (queue->_mutex);
+                return queue->_epoch;
+            }
+        }
+    }
+    return 0;
+}
+
+std::optional<std::string> detail::app_test_access_t::stream_endpoint (app_t &app,
+                                                                       const std::string &name)
+{
+    const auto status = app._state->listener_statuses->find (listener_kind_t::stream, name);
+    if (status && !status->endpoint.empty ())
+        return status->endpoint;
+    return {};
 }
 
 app_t::~app_t ()

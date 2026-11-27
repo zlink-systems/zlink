@@ -18,6 +18,11 @@ public final class StreamNodeRegistration {
     private Duration idleTimeout = Duration.ZERO;
     private String authenticationPacketName;
     private Integer maxConcurrentAuthentications;
+    private boolean admissionQueueEnabled;
+    private String admissionQueueKey;
+    private String admissionQueuePreviousKey;
+    private String admissionQueueMeshName;
+    private Integer admissionGlobalLimit;
     private Duration authenticationRetryDelay = Duration.ofMillis(500);
     private final List<String> bindEndpoints = new ArrayList<>();
     private String advertiseHost;
@@ -73,6 +78,26 @@ public final class StreamNodeRegistration {
         authenticationRetryDelay = delay;
     }
 
+    void admissionQueueEnabled(boolean value) {
+        admissionQueueEnabled = value;
+    }
+
+    void admissionQueueKey(String value) {
+        admissionQueueKey = value;
+    }
+
+    void admissionQueuePreviousKey(String value) {
+        admissionQueuePreviousKey = value;
+    }
+
+    void admissionQueueMeshName(String value) {
+        admissionQueueMeshName = value;
+    }
+
+    void admissionGlobalLimit(int value) {
+        admissionGlobalLimit = value;
+    }
+
     ZLinkStreamAuthenticationAdmission.Settings authenticationAdmission(int processors) {
         if (authenticationPacketName != null
                 && (authenticationPacketName.isBlank()
@@ -94,15 +119,71 @@ public final class StreamNodeRegistration {
                 || authenticationRetryDelay.compareTo(Duration.ofMillis(Integer.MAX_VALUE)) > 0
                 || authenticationRetryDelay.getNano() % 1_000_000 != 0) {
             throw new ZLinkConfigurationException(
-                    "AuthenticationRetryDelay must be a whole number of milliseconds in 1..2147483647.");
+                    "AuthenticationRetryDelay must be a whole number of milliseconds in"
+                            + " 1..2147483647.");
         }
         return new ZLinkStreamAuthenticationAdmission.Settings(
-                authenticationPacketName, limit, (int) authenticationRetryDelay.toMillis());
+                authenticationPacketName,
+                limit,
+                (int) authenticationRetryDelay.toMillis(),
+                admissionQueueSettings());
     }
 
-    public static void validateAuthenticationAdmission(List<StreamNodeRegistration> registrations) {
+    private ZLinkStreamAuthenticationAdmission.QueueSettings admissionQueueSettings() {
+        if (!admissionQueueEnabled) {
+            return null;
+        }
+        if (authenticationPacketName == null) {
+            throw new ZLinkConfigurationException(
+                    "AuthenticationPacketName is required when the STREAM admission queue is"
+                            + " enabled.");
+        }
+        int nameBytes = name.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        if (nameBytes < 1 || nameBytes > 255) {
+            throw new ZLinkConfigurationException(
+                    "The STREAM registration name must be 1..255 UTF-8 bytes when the admission"
+                            + " queue is enabled.");
+        }
+        ZLinkAdmissionTickets.validateKey(admissionQueueKey, "AdmissionQueueKey");
+        if (admissionQueuePreviousKey != null) {
+            ZLinkAdmissionTickets.validateKey(
+                    admissionQueuePreviousKey, "AdmissionQueuePreviousKey");
+        }
+        if (admissionGlobalLimit != null && admissionGlobalLimit < 1) {
+            throw new ZLinkConfigurationException("AdmissionGlobalLimit must be in 1..2147483647.");
+        }
+        return new ZLinkStreamAuthenticationAdmission.QueueSettings(
+                admissionQueueKey,
+                admissionQueuePreviousKey,
+                admissionQueueMeshName,
+                admissionGlobalLimit);
+    }
+
+    /**
+     * Registers the admission queue Instance Spot type on the Object server nodes of the queue
+     * RouteMesh (Authentication Admission §3.5.1) when the queue is enabled.
+     */
+    public static void registerAdmissionQueueSpots(
+            List<StreamNodeRegistration> registrations, List<MeshNodeRegistration> meshNodes) {
+        if (registrations.isEmpty()) {
+            return;
+        }
+        var queue = ZLinkStreamAuthenticationAdmission.settings(registrations, meshNodes).queue();
+        if (queue == null) {
+            return;
+        }
+        for (MeshNodeRegistration mesh : meshNodes) {
+            if (mesh.meshName().equals(queue.meshName())) {
+                mesh.registerInternalInstanceSpot(
+                        ZLinkAdmissionQueueMessages.SPOT_TYPE, ZLinkAdmissionQueueSpot.class);
+            }
+        }
+    }
+
+    public static void validateAuthenticationAdmission(
+            List<StreamNodeRegistration> registrations, List<MeshNodeRegistration> meshNodes) {
         if (!registrations.isEmpty()) {
-            ZLinkStreamAuthenticationAdmission.settings(registrations);
+            ZLinkStreamAuthenticationAdmission.settings(registrations, meshNodes);
         }
     }
 

@@ -284,6 +284,11 @@ export interface ZLinkNestStreamNodeBuilder extends ZLinkNestFrameworkOptionsBui
     maxConcurrentAuthentications?: number,
     authenticationRetryDelayMs?: number
   ): this;
+  setAdmissionQueueEnabled(enabled: boolean): this;
+  setAdmissionQueueKey(key: string): this;
+  setAdmissionQueuePreviousKey(key: string): this;
+  setAdmissionQueueMeshName(meshName: string): this;
+  setAdmissionGlobalLimit(limit: number): this;
   setHeartbeat(intervalMs: number, timeoutMs: number): this;
   setIdleTimeout(timeoutMs: number): this;
   bind(endpoint: string | undefined): this;

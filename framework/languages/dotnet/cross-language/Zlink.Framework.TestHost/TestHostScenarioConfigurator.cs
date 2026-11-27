@@ -45,6 +45,9 @@ internal static class TestHostScenarioConfigurator
             case "user-spot-source":
                 ConfigureUserSpotSource(services, options);
                 return;
+            case "login-admission-queue-server":
+                LoginAdmissionQueue.Configure(services, options);
+                return;
             case "login-admission-server":
             case "stream-raw":
                 ConfigureStreamRawNode(services, options);

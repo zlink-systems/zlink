@@ -643,6 +643,8 @@ void remove_subscription (const std::shared_ptr<void> &state_handle, std::uint64
     drop (state->request_sending_handlers);
     drop (state->reply_received_handlers);
     drop (state->admission_waiting_handlers);
+    drop (state->admission_queued_handlers);
+    drop (state->admission_position_handlers);
     drop (state->disconnected_handlers);
     drop (state->actor_bound_handlers);
     drop (state->actor_unbound_handlers);
@@ -1712,6 +1714,29 @@ subscription_t connector_t::on_admission_waiting (
     {
         std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
         state->admission_waiting_handlers.push_back ({id, std::move (handler)});
+    }
+    return subscription_t (_state, id);
+}
+
+subscription_t connector_t::on_admission_queued (std::function<void ()> handler)
+{
+    auto state = detail::state_from (_state);
+    const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
+    {
+        std::lock_guard lock (state->lifecycle_mutex);
+        state->admission_queued_handlers.push_back ({id, std::move (handler)});
+    }
+    return subscription_t (_state, id);
+}
+
+subscription_t connector_t::on_admission_position (
+  std::function<void (std::int32_t, std::chrono::milliseconds)> handler)
+{
+    auto state = detail::state_from (_state);
+    const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
+    {
+        std::lock_guard lock (state->lifecycle_mutex);
+        state->admission_position_handlers.push_back ({id, std::move (handler)});
     }
     return subscription_t (_state, id);
 }

@@ -1,0 +1,302 @@
+{
+  "fixture": "zlink.framework.admission-queue-messages",
+  "version": 1,
+  "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:283",
+  "encoding": "Framework typed JSON (camelCase). dec = 64-bit integer as a decimal string; b64 = unpadded base64url. Unknown fields are ignored; a missing required field or a wrong type is a protocol error.",
+  "spotType": "$zlink.AdmissionQueue",
+  "messages": [
+    {
+      "name": "enqueue-position",
+      "packetName": "$zlink.admission-queue.enqueue",
+      "kind": "request",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:304",
+      "request": {
+        "connection": {
+          "nodeRid": "bm9kZS1h",
+          "nodeLifecycleGeneration": "7",
+          "streamName": "login",
+          "sessionRid": "c2Vzc2lvbi1h"
+        }
+      },
+      "response": {
+        "epoch": "18446744073709551615",
+        "delivery": {
+          "streamName": "login",
+          "sessionRid": "c2Vzc2lvbi1h",
+          "kind": "position",
+          "position": 3,
+          "estimatedWaitMs": 1500
+        }
+      },
+      "replyPacketName": "$zlink.admission-queue.enqueue.reply"
+    },
+    {
+      "name": "enqueue-ticket",
+      "packetName": "$zlink.admission-queue.enqueue",
+      "kind": "request",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:304",
+      "request": {
+        "connection": {
+          "nodeRid": "bm9kZS1h",
+          "nodeLifecycleGeneration": "7",
+          "streamName": "login",
+          "sessionRid": "c2Vzc2lvbi1h"
+        }
+      },
+      "response": {
+        "epoch": "42",
+        "delivery": {
+          "streamName": "login",
+          "sessionRid": "c2Vzc2lvbi1h",
+          "kind": "ticket",
+          "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+          "expiresInMs": 30000
+        }
+      },
+      "replyPacketName": "$zlink.admission-queue.enqueue.reply"
+    },
+    {
+      "name": "report",
+      "packetName": "$zlink.admission-queue.report",
+      "kind": "request",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:305",
+      "request": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "limit": 5,
+        "inFlight": 2,
+        "usedTickets": [
+          {
+            "streamName": "login",
+            "sessionRid": "c2Vzc2lvbi11"
+          }
+        ],
+        "endedSessions": [
+          {
+            "streamName": "login",
+            "sessionRid": "c2Vzc2lvbi1l"
+          }
+        ],
+        "heldPermits": [
+          "9223372036854775807",
+          "12"
+        ],
+        "resolvedRequestSeq": "11"
+      },
+      "response": {
+        "epoch": "42",
+        "deliveries": [
+          {
+            "streamName": "login",
+            "sessionRid": "c2Vzc2lvbi1h",
+            "kind": "position",
+            "position": 3,
+            "estimatedWaitMs": 1500
+          },
+          {
+            "streamName": "login",
+            "sessionRid": "c2Vzc2lvbi1h",
+            "kind": "ticket",
+            "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+            "expiresInMs": 30000
+          }
+        ]
+      },
+      "replyPacketName": "$zlink.admission-queue.report.reply"
+    },
+    {
+      "name": "report-no-global-limit",
+      "packetName": "$zlink.admission-queue.report",
+      "kind": "request",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:305",
+      "request": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "limit": 5,
+        "inFlight": 0,
+        "usedTickets": [],
+        "endedSessions": [],
+        "heldPermits": [],
+        "resolvedRequestSeq": "0"
+      },
+      "response": {
+        "epoch": "42",
+        "deliveries": []
+      },
+      "replyPacketName": "$zlink.admission-queue.report.reply"
+    },
+    {
+      "name": "admit-permit",
+      "packetName": "$zlink.admission-queue.admit-permit",
+      "kind": "request",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:306",
+      "request": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "ownerId": "owner-a",
+        "leaseGeneration": "3",
+        "streamName": "login",
+        "sessionRid": "c2Vzc2lvbi1h",
+        "epoch": "42",
+        "requestSeq": "12"
+      },
+      "response": {
+        "granted": true,
+        "permitId": "12"
+      },
+      "replyPacketName": "$zlink.admission-queue.admit-permit.reply"
+    },
+    {
+      "name": "admit-permit-id-above-2-63",
+      "packetName": "$zlink.admission-queue.admit-permit",
+      "kind": "request",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:306",
+      "request": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "ownerId": "owner-a",
+        "leaseGeneration": "9223372036854775808",
+        "streamName": "login",
+        "sessionRid": "c2Vzc2lvbi1h",
+        "epoch": "42",
+        "requestSeq": "12"
+      },
+      "response": {
+        "granted": true,
+        "permitId": "18446744073709551614"
+      },
+      "replyPacketName": "$zlink.admission-queue.admit-permit.reply"
+    },
+    {
+      "name": "admit-permit-rejected",
+      "packetName": "$zlink.admission-queue.admit-permit",
+      "kind": "request",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:306",
+      "request": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "ownerId": "owner-a",
+        "leaseGeneration": "3",
+        "streamName": "login",
+        "sessionRid": "c2Vzc2lvbi1h",
+        "epoch": "41",
+        "requestSeq": "13"
+      },
+      "response": {
+        "granted": false
+      },
+      "replyPacketName": "$zlink.admission-queue.admit-permit.reply"
+    },
+    {
+      "name": "release-permit",
+      "packetName": "$zlink.admission-queue.release-permit",
+      "kind": "send",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:307",
+      "send": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "permitId": "12"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "generation-as-number",
+      "packetName": "$zlink.admission-queue.release-permit",
+      "payload": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "permitId": "12"
+      },
+      "expect": "protocolError"
+    },
+    {
+      "name": "permit-leading-zero",
+      "packetName": "$zlink.admission-queue.release-permit",
+      "payload": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "permitId": "012"
+      },
+      "expect": "protocolError"
+    },
+    {
+      "name": "missing-session-rid",
+      "packetName": "$zlink.admission-queue.enqueue",
+      "payload": {
+        "connection": {
+          "nodeRid": "bm9kZS1h",
+          "nodeLifecycleGeneration": "7",
+          "streamName": "login"
+        }
+      },
+      "expect": "protocolError"
+    },
+    {
+      "name": "padded-rid",
+      "packetName": "$zlink.admission-queue.enqueue",
+      "payload": {
+        "connection": {
+          "nodeRid": "bm9kZS1h",
+          "nodeLifecycleGeneration": "7",
+          "streamName": "login",
+          "sessionRid": "c2Vzcw=="
+        }
+      },
+      "expect": "protocolError"
+    },
+    {
+      "name": "ticket-delivery-missing-ticket",
+      "packetName": "$zlink.admission-queue.enqueue",
+      "responsePayload": {
+        "epoch": "42",
+        "delivery": {
+          "streamName": "login",
+          "sessionRid": "c2Vzc2lvbi1h",
+          "kind": "ticket",
+          "expiresInMs": 30000
+        }
+      },
+      "expect": "protocolError"
+    },
+    {
+      "name": "unknown-field-ignored",
+      "packetName": "$zlink.admission-queue.release-permit",
+      "payload": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "permitId": "12",
+        "future": true
+      },
+      "expect": "accepted"
+    },
+    {
+      "name": "granted-without-permit-id",
+      "packetName": "$zlink.admission-queue.admit-permit",
+      "responsePayload": {
+        "granted": true
+      },
+      "expect": "protocolError"
+    },
+    {
+      "name": "dec-above-2-64",
+      "packetName": "$zlink.admission-queue.release-permit",
+      "payload": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "permitId": "18446744073709551616"
+      },
+      "expect": "protocolError"
+    },
+    {
+      "name": "dec-negative",
+      "packetName": "$zlink.admission-queue.release-permit",
+      "payload": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "permitId": "-1"
+      },
+      "expect": "protocolError"
+    }
+  ]
+}

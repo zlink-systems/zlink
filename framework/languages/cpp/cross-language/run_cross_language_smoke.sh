@@ -131,9 +131,8 @@ REDIS_PIDS=()
 REDIS_CONTAINERS=()
 RESULTS=()
 
-stop_all() {
-  local container pid
-  # Location Store must remain available until every role has finished teardown.
+stop_roles() {
+  local pid
   for pid in "${PIDS[@]}"; do
     kill "$pid" >/dev/null 2>&1 || true
   done
@@ -141,6 +140,12 @@ stop_all() {
     wait "$pid" >/dev/null 2>&1 || true
   done
   PIDS=()
+}
+
+stop_all() {
+  local container pid
+  # Location Store must remain available until every role has finished teardown.
+  stop_roles
   for container in "${REDIS_CONTAINERS[@]}"; do
     docker rm -f "${container}" >/dev/null 2>&1 || true
   done
@@ -2336,6 +2341,11 @@ run_java_cross_stages() {
 }
 
 case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
+  login-admission-queue)
+    source "${SCRIPT_DIR}/login_admission_queue.sh"
+    stage_login_admission_queue
+    exit 0
+    ;;
   actor-join-sealed-remote-*-*)
     sealed_cell="${ZLINK_CPP_CROSS_LANGUAGE_STAGE#actor-join-sealed-remote-}"
     stage_actor_join_sealed_remote "${sealed_cell%%-*}" "${sealed_cell#*-}"

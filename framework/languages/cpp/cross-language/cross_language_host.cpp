@@ -45,6 +45,7 @@ namespace fw = zlink::framework;
 namespace runtime = zlink::framework::runtime;
 
 #include "login_admission.hpp"
+#include "login_admission_queue.hpp"
 #include "outage_location_store.hpp"
 
 namespace
@@ -1933,10 +1934,11 @@ class user_spot_source_service_t final : public fw::hosted_service_t
 
 /* Shared Redis Location/Relocation Store wiring: the key-prefix suffixes must
  * match the peer hosts byte-for-byte or the two nodes never see each other. */
-void configure_user_spot_stores (fw::zlink_framework_options_t &options, bool target)
+void configure_redis_stores (fw::zlink_framework_options_t &options,
+                             const std::string &prefix,
+                             bool target)
 {
     const auto endpoint = require ("redis-endpoint");
-    const auto prefix = option ("redis-key-prefix", "zlink-cross-user-spot-join");
     auto location =
       std::make_shared<fw::redis::redis_location_store_t> (fw::redis::redis_location_options_t{
         .connection_string = endpoint, .key_prefix = prefix + ":location"});
@@ -1963,6 +1965,44 @@ void configure_user_spot_stores (fw::zlink_framework_options_t &options, bool ta
     options.add_relocation_store (
       std::make_shared<fw::redis::redis_relocation_store_t> (fw::redis::redis_relocation_options_t{
         .connection_string = endpoint, .key_prefix = prefix + ":relocation"}));
+}
+
+int run_login_queue_server (int argc, char **argv)
+{
+    auto app = fw::app_t::create ();
+    const auto event_file = option ("event-file");
+    if (!event_file.empty ())
+        app.logging ().use_file (event_file + ".flow").set_min_level (fw::log_level_t::info);
+
+    auto markers = std::make_unique<login_admission_queue::server_markers_t> ();
+    auto &files = *markers;
+    fw::object_role_t role;
+    if (files.role == "object-server")
+        role = fw::object_role_t::server;
+    else if (files.role == "object-client")
+        role = fw::object_role_t::client;
+    else
+        throw std::runtime_error ("Unexpected login queue role: " + files.role);
+
+    auto &options = app.add_zlink_framework ();
+    configure_redis_stores (options, require ("redis-key-prefix"), false);
+    if (!event_file.empty ())
+        options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
+    options.add_route_mesh (require ("mesh-name"))
+      .listen (require ("bind-endpoint"))
+      .set_automatic_routing_id_prefix (files.role)
+      .set_object_role (role);
+    using login_admission::setting;
+    options.add_stream_node ("login")
+      .bind (require ("stream-endpoint"))
+      .register_session<login_admission_queue::session_t> ()
+      .set_authentication_packet_name (files.packet)
+      .set_max_concurrent_authentications (std::stoi (setting ("ZLINK_LOGIN_QUEUE_LOCAL_LIMIT")))
+      .set_admission_queue_enabled (true)
+      .set_admission_queue_key (setting ("ZLINK_LOGIN_QUEUE_KEY"))
+      .set_admission_global_limit (std::stoi (setting ("ZLINK_LOGIN_QUEUE_GLOBAL_LIMIT")));
+    options.services ().add_singleton (std::move (markers));
+    return login_admission_queue::run_server (app, files, argc, argv);
 }
 
 int run_stream_connector ()
@@ -2059,6 +2099,13 @@ int main (int argc, char **argv)
     }
 
     try {
+        if (mode == "login-admission-queue-server") {
+            return run_login_queue_server (argc, argv);
+        }
+        if (mode == "login-admission-queue-connector") {
+            return login_admission_queue::run_connector (require ("stream-endpoint"),
+                                                         require ("peer-stream-endpoint"));
+        }
         if (mode == "login-admission-connector") {
             return login_admission::run_connector (require ("stream-endpoint"));
         }
@@ -2084,7 +2131,8 @@ int main (int argc, char **argv)
                 const auto mesh_name = require ("mesh-name");
                 g_user_spot_node_rid = require ("node-rid");
                 options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
-                configure_user_spot_stores (options, target);
+                configure_redis_stores (
+                  options, option ("redis-key-prefix", "zlink-cross-user-spot-join"), target);
 
                 auto mesh = options.add_route_mesh (mesh_name);
                 mesh.listen (require ("bind-endpoint"))

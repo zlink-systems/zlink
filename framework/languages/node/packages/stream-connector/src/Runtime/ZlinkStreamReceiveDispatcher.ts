@@ -14,6 +14,12 @@ import { connectorError, toStreamError, utf8Decode } from './ZlinkStreamSupport'
 import { decodeSessionClosing, ZLINK_SESSION_CLOSING } from './Protocol/ZlinkSessionClosing';
 import type { ZlinkStreamCloseReason } from '../Contracts';
 import { zlinkStreamActorBinding, type ZlinkStreamActors } from './ZlinkStreamActors';
+import {
+  ADMISSION_POSITION,
+  ADMISSION_QUEUE_REQUIRED,
+  ADMISSION_RETRY_AFTER,
+  ADMISSION_TICKET
+} from './Protocol/ZlinkStreamAdmissionQueue';
 
 /**
  * Spec stream-connector 32 §9: the one mapping from the error that ended a
@@ -148,9 +154,24 @@ export class ZlinkStreamReceiveDispatcher {
       await this.dispatchControl(connection, header, payload, signal);
       return;
     }
+    if (
+      header.kind === ZlinkStreamMessageKind.Send &&
+      (header.name === ADMISSION_POSITION || header.name === ADMISSION_TICKET)
+    ) {
+      this.pendingRequests.receiveQueuePush(header.name, header.codec, () =>
+        this.decodePayload(header, payload)
+      );
+      return;
+    }
     const actor =
       header.actorSlot === undefined ? undefined : this.actors.resolve(header.actorSlot);
     if (header.kind === ZlinkStreamMessageKind.Response && header.requestSeq !== undefined) {
+      if (
+        this.pendingRequests.resolveEnqueue(header.requestSeq, header.codec, () =>
+          this.decodePayload(header, payload)
+        )
+      )
+        return;
       try {
         this.pendingRequests.resolve(
           header.requestSeq,
@@ -177,11 +198,13 @@ export class ZlinkStreamReceiveDispatcher {
       const receivedAt = performance.now();
       let error: ZlinkStreamError;
       let retryAfter: string | undefined;
+      let queueRequired: string | undefined;
       try {
         const remote = decodeRemoteError(this.decodePayload(header, payload));
         error = remote;
         if (remote.cause.code === 'unavailable') {
-          retryAfter = header.metadata.get('$zlink.admission.retryAfterMs');
+          retryAfter = header.metadata.get(ADMISSION_RETRY_AFTER);
+          queueRequired = header.metadata.get(ADMISSION_QUEUE_REQUIRED);
         }
       } catch (cause) {
         if (cause instanceof ZlinkStreamConnectionEnd) throw cause;
@@ -193,7 +216,13 @@ export class ZlinkStreamReceiveDispatcher {
       }
       if (
         header.requestSeq === undefined ||
-        !this.pendingRequests.reject(header.requestSeq, error, retryAfter, receivedAt)
+        !this.pendingRequests.reject(
+          header.requestSeq,
+          error,
+          retryAfter,
+          receivedAt,
+          queueRequired
+        )
       ) {
         this.events.publishError(error, signal);
       }

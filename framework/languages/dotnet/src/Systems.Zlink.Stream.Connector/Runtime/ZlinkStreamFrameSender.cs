@@ -82,13 +82,23 @@ internal sealed class ZlinkStreamFrameSender(
 
     public ZlinkStreamOutboundFrame WithRequestSequence(
         ZlinkStreamOutboundFrame frame,
-        ZlinkStreamRequestSeq sequence
+        ZlinkStreamRequestSeq sequence,
+        string? admissionTicket = null
     )
     {
         var header = headerCodec.Decode(frame.HeaderBytes);
+        var metadata = admissionTicket is null
+            ? header.Metadata
+            : header.Metadata.With(ZlinkStreamAdmissionQueue.TicketName, admissionTicket);
         return frame with
         {
-            HeaderBytes = headerCodec.Encode(header with { RequestSeq = sequence }),
+            HeaderBytes = headerCodec.Encode(
+                header with
+                {
+                    RequestSeq = sequence,
+                    Metadata = metadata,
+                }
+            ),
             EncodedBytes = default,
         };
     }

@@ -18,6 +18,7 @@ import {
   ZlinkStreamAdmissionWaitingContext,
   ZlinkStreamMessageKind,
   ZlinkStreamMetadata,
+  ZlinkStreamMetadataMap,
   ZlinkStreamRequestCall,
   ZlinkStreamActor,
   ZlinkStreamSendCall,
@@ -39,10 +40,12 @@ import {
   ZlinkStreamFrameProtocol
 } from './Protocol/ZlinkStreamFrameProtocol';
 import { validateName } from './Protocol/ZlinkStreamPacketNameValidator';
+import { ADMISSION_ENQUEUE } from './Protocol/ZlinkStreamAdmissionQueue';
 import { normalizeOptions } from './ZlinkStreamConnectorOptions';
 import {
   connectorError,
   throwIfAborted,
+  utf8Encode,
   unwrapStreamError,
   currentRegistrations,
   registerHandler,
@@ -57,6 +60,8 @@ import { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 import { BrowserStreamTransportFactory } from './Transport/BrowserWebSocketConnection';
 import { DefaultZlinkStreamActor, ZlinkStreamActors } from './ZlinkStreamActors';
 
+const admissionEnqueuePayload = { codec: ZlinkStreamCodec.Json, payload: utf8Encode('{}') };
+
 export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   static readonly heartbeatPingName = ZLINK_STREAM_HEARTBEAT_PING;
   static readonly heartbeatPongName = ZLINK_STREAM_HEARTBEAT_PONG;
@@ -67,7 +72,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     this.receivedMessages.enqueueCallback(callback, callbacks)
   );
   private correlationCounter = 0n;
-  private readonly pendingRequests = new ZlinkStreamPendingRequests();
+  private readonly pendingRequests: ZlinkStreamPendingRequests;
   private readonly frameSender: ZlinkStreamFrameSender;
   private readonly receiveDispatcher: ZlinkStreamReceiveDispatcher;
   private readonly requestSendingHandlers = new Set<
@@ -86,6 +91,23 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     this.options = normalizeOptions(options, new BrowserStreamTransportFactory());
     const protocol = new ZlinkStreamFrameProtocol(this.options);
     this.frameSender = new ZlinkStreamFrameSender(protocol);
+    this.pendingRequests = new ZlinkStreamPendingRequests(
+      async (seq, writeOptions) =>
+        this.frameSender.send(
+          this.lifecycle.connectionForSend(),
+          ZlinkStreamMessageKind.Request,
+          ADMISSION_ENQUEUE,
+          admissionEnqueuePayload,
+          ZlinkStreamMetadataMap.empty,
+          false,
+          seq,
+          this.nextCorrelationId(),
+          undefined,
+          writeOptions
+        ),
+      () => this.events.publishAdmissionQueued(),
+      (position) => this.events.publishAdmissionPosition(position)
+    );
     this.receivedMessages = new ZlinkStreamReceivedMessages(
       this.events,
       this.options.dispatchMode === ZlinkStreamDispatchMode.Immediate
@@ -189,6 +211,20 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     ) => Promise<void> | void
   ): Disposable {
     return this.events.onAdmissionWaiting(handler);
+  }
+
+  onAdmissionQueued(handler: (signal?: AbortSignal) => Promise<void> | void): Disposable {
+    return this.events.onAdmissionQueued(handler);
+  }
+
+  onAdmissionPosition(
+    handler: (
+      position: number,
+      estimatedWaitMs: number,
+      signal?: AbortSignal
+    ) => Promise<void> | void
+  ): Disposable {
+    return this.events.onAdmissionPosition(handler);
   }
 
   onReplyReceived(

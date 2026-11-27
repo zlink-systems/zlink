@@ -320,6 +320,14 @@
         <Compile Include="Runtime/StreamPermitLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.ReaderLiveness.cs"/>
+        <Compile Include="Runtime/AdmissionQueueTicketTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueWireTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueSpotTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueMeshTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueConnectorMeshTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueStreamCodecTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueNodeTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueConfigurationTests.cs"/>
         <Compile Include="Runtime/StreamAuthenticationAdmissionTests.cs"/>
         <Compile Include="Runtime/StreamDisconnectProgressTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>

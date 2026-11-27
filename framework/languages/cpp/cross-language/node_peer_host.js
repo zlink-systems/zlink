@@ -788,6 +788,34 @@ async function messageFollow() {
 
 async function main() {
   switch (mode) {
+    case 'login-admission-queue-server': {
+      const preload = path
+        .join(nodeRoot, 'test/contract/fixtures/telemetry-worker-preload.cjs')
+        .replaceAll('\\', '/');
+      process.env.ZLINK_TEST_TELEMETRY_CASE = 'file';
+      process.env.ZLINK_TEST_TELEMETRY_RECORDS = `${require_('event-file')}.flow`;
+      process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --require "${preload}"`;
+      return require('./login_admission_queue.cjs').serve({
+        settings: args,
+        nestjs,
+        NestFactory,
+        Module,
+        locations: require(path.join(nodeRoot, 'packages/framework-locations-redis/dist')),
+        writeReady,
+        waitForServing: (runtime) => waitForFrameworkServing(runtime, framework)
+      });
+    }
+    case 'login-admission-queue-connector':
+      return require('./login_admission_queue.cjs').connect(
+        require_('stream-endpoint'),
+        require_('peer-stream-endpoint'),
+        require(path.join(nodeRoot, 'packages/stream-connector/dist'))
+      );
+    case 'login-admission-queue-wire':
+      return require('./login_admission_queue.cjs').probe(
+        require_('stream-endpoint'),
+        require(path.join(nodeRoot, 'packages/stream-wire/dist'))
+      );
     case 'login-admission-server':
       return require('./login_admission.cjs').serve({
         endpoint: require_('stream-endpoint'),

@@ -6,6 +6,10 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Protocol;
 internal sealed class ZlinkStreamHeaderCodec
 {
     // Keep byte-compatible with Zlink.Framework stream headers; StreamWireInteropTests is the drift gate.
+    internal const string AdmissionEnqueueName = "$zlink.admission.enqueue";
+    internal const string AdmissionPositionName = "$zlink.admission.position";
+    internal const string AdmissionTicketName = "$zlink.admission.ticket";
+
     private const byte InboundWire = 1;
     private const byte TimerWire = 2;
     private const byte ApplicationWire = 3;
@@ -404,7 +408,14 @@ internal sealed class ZlinkStreamHeaderCodec
             return;
         }
 
-        ZlinkStreamConnector.ValidateName(name, kind == ZlinkStreamMessageKind.Control, errorCode);
+        var allowReserved = kind switch
+        {
+            ZlinkStreamMessageKind.Control => true,
+            ZlinkStreamMessageKind.Request => name == AdmissionEnqueueName,
+            ZlinkStreamMessageKind.Send => name is AdmissionPositionName or AdmissionTicketName,
+            _ => false,
+        };
+        ZlinkStreamConnector.ValidateName(name, allowReserved, errorCode);
     }
 
     private static void ValidateEnum(

@@ -407,6 +407,11 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/spots/spot_route_internal_dispatcher.cpp
   framework/src/runtime/spots/spot_route_packets.cpp
   framework/src/runtime/streams/stream_compression.cpp
+  framework/src/runtime/streams/admission_ticket.cpp
+  framework/src/runtime/streams/admission_queue_messages.cpp
+  framework/src/runtime/streams/admission_queue_state.cpp
+  framework/src/runtime/streams/admission_queue_setup.cpp
+  framework/src/runtime/streams/admission_queue_node.cpp
   framework/src/runtime/streams/stream_runtime.cpp
   framework/src/runtime/streams/stream_host_core.cpp
   framework/src/runtime/streams/stream_host_service.cpp
@@ -477,7 +482,7 @@ zlink_framework_cpp_add_boost_headers(zlink_framework_m6b_objects)
 zlink_framework_cpp_add_boost_headers(zlink_framework_m6c_objects)
 zlink_framework_cpp_add_asio_system_libraries(zlink_framework)
 
-find_package(OpenSSL QUIET)
+find_package(OpenSSL REQUIRED)
 # These object libraries compile Framework headers before they are consumed by
 # zlink_framework, so they need the JSON include usage requirement directly.
 foreach(M6ObjectTarget IN ITEMS
@@ -3439,6 +3444,38 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_typed_reply.cpp
     "framework-unit;framework-contract;stream;reply"
     unit)
+  add_zlink_framework_test(test_cpp_framework_admission_ticket
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_ticket.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  target_compile_definitions(test_cpp_framework_admission_ticket PRIVATE
+    ZLINK_ADMISSION_QUEUE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-queue-v1.json")
+  add_zlink_framework_test(test_cpp_framework_admission_queue_messages
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_queue_messages.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  target_compile_definitions(test_cpp_framework_admission_queue_messages PRIVATE
+    ZLINK_ADMISSION_MESSAGES_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/admission-queue-messages-v1.json")
+  add_zlink_framework_test(test_cpp_framework_admission_queue_startup
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_queue_startup.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  target_compile_definitions(test_cpp_framework_admission_queue_startup PRIVATE
+    ZLINK_ADMISSION_QUEUE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-queue-v1.json")
+  add_zlink_framework_test(test_cpp_framework_admission_queue_state
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_queue_state.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  target_compile_definitions(test_cpp_framework_admission_queue_state PRIVATE
+    ZLINK_ADMISSION_QUEUE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-queue-v1.json")
+  add_zlink_framework_test(test_cpp_framework_admission_queue_integration
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_queue_integration.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  add_zlink_framework_test(test_cpp_framework_admission_queue_node
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_queue_node.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  target_compile_definitions(test_cpp_framework_admission_queue_node PRIVATE
+    ZLINK_ADMISSION_QUEUE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-queue-v1.json")
+  foreach(admission_test IN ITEMS queue_startup queue_node queue_integration)
+    target_include_directories(test_cpp_framework_admission_${admission_test} PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  endforeach()
   add_zlink_framework_test(
     test_cpp_framework_login_admission
     tests/Zlink.Framework.UnitTests/test_cpp_framework_login_admission.cpp
@@ -4279,6 +4316,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "connector-unit;connector-contract;stream;admission"
     TIER contract
     TIMEOUT 30)
+  add_zlink_connector_test(
+    test_cpp_stream_connector_admission_queue
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_admission_queue.cpp
+    "connector-unit;connector-contract;stream;admission"
+    contract)
+  target_compile_definitions(test_cpp_stream_connector_admission_queue PRIVATE
+    ZLINK_ADMISSION_QUEUE_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-queue-v1.json")
+  target_link_libraries(test_cpp_stream_connector_admission_queue PRIVATE zlink::cpp)
   add_zlink_connector_test(
     test_cpp_stream_connector_request_allocations
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_request_allocations.cpp

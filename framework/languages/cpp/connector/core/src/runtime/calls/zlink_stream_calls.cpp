@@ -4,6 +4,7 @@
 
 #include <zlink/framework/detail/binary_text_codec.hpp>
 
+#include "runtime/protocol/admission_queue_codec.hpp"
 #include "runtime/protocol/compression/lz4_compression_codec.hpp"
 #include "runtime/protocol/framing.hpp"
 #include "runtime/protocol/framing/frame_codec.hpp"
@@ -187,21 +188,33 @@ std::optional<std::chrono::milliseconds> parse_retry_after (std::string_view val
     return std::chrono::milliseconds (delay);
 }
 
-std::variant<error_t, std::chrono::milliseconds> classify_request_error (const packet_t &packet)
+using admission_rejection_t = std::variant<std::chrono::milliseconds, queued_admission_t>;
+
+std::variant<error_t, admission_rejection_t> classify_request_error (const packet_t &packet)
 {
     auto remote = decode_remote_error (packet);
     if (!remote) {
         return *remote.error ();
     }
-    const auto retry = packet.metadata.values.find (retry_after_key);
-    if (remote.value ().code != "unavailable" || retry == packet.metadata.values.end ()) {
-        return error_t{error_code_t::remote_error, std::move (remote.value ().message)};
+    if (remote.value ().code == "unavailable") {
+        const auto retry = packet.metadata.values.find (retry_after_key);
+        const auto queue = packet.metadata.values.find (admission_required_key);
+        if (queue != packet.metadata.values.end ()) {
+            if (queue->second == "1" && retry == packet.metadata.values.end ()) {
+                return admission_rejection_t{queued_admission_t{}};
+            }
+            return error_t{error_code_t::frame_decode_failed,
+                           "Invalid authentication admission queue metadata."};
+        }
+        if (retry != packet.metadata.values.end ()) {
+            if (const auto delay = parse_retry_after (retry->second)) {
+                return admission_rejection_t{*delay};
+            }
+            return error_t{error_code_t::frame_decode_failed,
+                           "Invalid authentication admission retry delay."};
+        }
     }
-    if (const auto delay = parse_retry_after (retry->second)) {
-        return *delay;
-    }
-    return error_t{error_code_t::frame_decode_failed,
-                   "Invalid authentication admission retry delay."};
+    return error_t{error_code_t::remote_error, std::move (remote.value ().message)};
 }
 
 bool has_flag (header_flags_t flags, header_flags_t flag) noexcept
@@ -721,12 +734,73 @@ result_t<request_reply_t> request_timeout ()
                                                "stream connector request timed out");
 }
 
-void cancel_request_timer_locked (const pending_request_t &request)
+void cancel_request_alarm (const request_alarm_t &alarm)
 {
-    if (request.cancel_test_timer && *request.cancel_test_timer) {
-        (*request.cancel_test_timer) ();
+    if (const auto timer = std::get_if<std::shared_ptr<boost::asio::steady_timer>> (&alarm)) {
+        cancel_timer (*timer);
+    } else if (const auto cancel = std::get_if<std::function<void ()>> (&alarm);
+               cancel && *cancel) {
+        (*cancel) ();
     }
-    cancel_timer (request.timeout_timer);
+}
+
+template <typename Execute>
+request_alarm_t schedule_request_alarm_locked (const std::shared_ptr<connector_state_t> &state,
+                                               request_clock_t::time_point when,
+                                               Execute execute)
+{
+    auto operation = [weak = std::weak_ptr<connector_state_t> (state),
+                      execute = std::move (execute)] {
+        if (auto locked = weak.lock ()) {
+            execute (locked);
+        }
+    };
+    if (state->request_timing) {
+        return state->request_timing->schedule (when, std::move (operation));
+    }
+    return post_runtime_operation_at (state, when, std::move (operation));
+}
+
+bool waiting_in_admission_queue (const pending_request_t &request)
+{
+    return std::holds_alternative<queued_admission_t> (request.admission_wait);
+}
+
+bool is_connection_admission_waiter_locked (const connector_state_t &state,
+                                            const pending_request_t &request)
+{
+    return waiting_in_admission_queue (request) && request.connection.lock () == state.connection;
+}
+
+std::uint64_t first_admission_waiter_locked (const connector_state_t &state,
+                                             request_clock_t::time_point now)
+{
+    for (const auto &[id, request] : state.pending_requests) {
+        if (is_connection_admission_waiter_locked (state, request) && now < request.deadline) {
+            return id;
+        }
+    }
+    return 0;
+}
+
+bool matches_admission_registration_locked (const connector_state_t &state, std::uint64_t seq)
+{
+    return seq != 0 && state.admission_queue && seq == state.admission_queue->registration_seq;
+}
+
+void clear_admission_queue_locked (connector_state_t &state)
+{
+    if (state.admission_queue) {
+        cancel_request_alarm (state.admission_queue->silence_alarm);
+        state.admission_queue.reset ();
+    }
+}
+
+void clear_empty_admission_queue_locked (connector_state_t &state)
+{
+    if (state.admission_queue && first_admission_waiter_locked (state, request_now (state)) == 0) {
+        clear_admission_queue_locked (state);
+    }
 }
 
 void unindex_retry_attempt_locked (connector_state_t &state,
@@ -769,9 +843,13 @@ void complete_pending_request (std::shared_ptr<connector_state_t> state,
         reply_hook_ids = std::move (request.reply_hook_ids);
         deliver_direct = request.deliver_direct;
         const auto write_id = request.write_id;
-        cancel_request_timer_locked (request);
+        const bool was_queued = waiting_in_admission_queue (request);
+        cancel_request_alarm (request.timeout_alarm);
         unindex_retry_attempt_locked (*state, request_id, request.attempt_seq);
         state->pending_requests.erase (found);
+        if (was_queued) {
+            clear_empty_admission_queue_locked (*state);
+        }
         if (!succeeded) {
             std::erase_if (state->write_queue, [write_id] (const pending_write_t &write) {
                 return write.write_id == write_id;
@@ -814,18 +892,11 @@ void arm_request_timer_locked (const std::shared_ptr<connector_state_t> &state,
                                std::uint64_t request_id,
                                pending_request_t &request)
 {
-    cancel_request_timer_locked (request);
-    const auto next = std::min (request.deadline, request.retry_at.value_or (request.deadline));
-    auto operation = [weak = std::weak_ptr<connector_state_t> (state), request_id] {
-        if (auto locked = weak.lock ()) {
-            on_request_timer (locked, request_id);
-        }
-    };
-    if (state->request_timing) {
-        request.cancel_test_timer = state->request_timing->schedule (next, std::move (operation));
-    } else {
-        request.timeout_timer = post_runtime_operation_at (state, next, std::move (operation));
-    }
+    cancel_request_alarm (request.timeout_alarm);
+    const auto retry = std::get_if<request_clock_t::time_point> (&request.admission_wait);
+    const auto next = retry ? std::min (request.deadline, *retry) : request.deadline;
+    request.timeout_alarm = schedule_request_alarm_locked (
+      state, next, [request_id] (const auto &locked) { on_request_timer (locked, request_id); });
 }
 
 std::chrono::milliseconds admission_jitter (connector_state_t &state)
@@ -837,11 +908,103 @@ std::chrono::milliseconds admission_jitter (connector_state_t &state)
     return std::chrono::milliseconds (std::uniform_int_distribution<int> (0, 50) (generator));
 }
 
-void begin_admission_wait_locked (const std::shared_ptr<connector_state_t> &state,
-                                  std::uint64_t request_id,
-                                  pending_request_t &request,
-                                  request_clock_t::time_point received_at,
-                                  std::chrono::milliseconds delay)
+template <typename Handler, typename Invoke>
+void schedule_admission_event_locked (
+  const std::shared_ptr<connector_state_t> &state,
+  std::vector<handler_entry_t<Handler>> connector_state_t::*registry,
+  Invoke invoke)
+{
+    std::vector<std::uint64_t> ids;
+    {
+        std::lock_guard lock (state->lifecycle_mutex);
+        ids = registered_handler_ids_locked (state.get ()->*registry);
+    }
+    if (!ids.empty ()) {
+        schedule_handler_deliveries (state, registry, ids, std::move (invoke));
+    }
+}
+
+std::uint64_t accept_write_locked (connector_state_t &state, pending_write_t write);
+
+void arm_admission_silence_locked (const std::shared_ptr<connector_state_t> &state,
+                                   request_clock_t::time_point now);
+
+std::optional<error_t> enqueue_admission_locked (const std::shared_ptr<connector_state_t> &state,
+                                                 std::uint64_t initiator,
+                                                 request_clock_t::time_point now)
+{
+    if (state->next_request_seq == 0) {
+        return error_t{error_code_t::send_failed, "stream connector request sequence exhausted"};
+    }
+    stream_header_t header;
+    header.kind = message_kind_t::request;
+    header.codec = codec_t::json;
+    header.name = admission_enqueue_name;
+    header.request_seq = state->next_request_seq;
+    header.correlation_id = next_correlation_id ();
+    const auto encoded = header_codec_t{}.encode (header, true);
+    if (!encoded) {
+        return *encoded.error ();
+    }
+    auto frame = frame_codec_t::encode (encoded.value (), {'{', '}'}, state->options);
+    if (!frame) {
+        return *frame.error ();
+    }
+
+    auto &queue =
+      state->admission_queue ? *state->admission_queue : state->admission_queue.emplace ();
+    queue.registration_seq = state->next_request_seq++;
+    queue.initiator = initiator;
+    pending_write_t write{std::move (frame.value ())};
+    write.admission_enqueue_seq = queue.registration_seq;
+    (void) accept_write_locked (*state, std::move (write));
+    arm_admission_silence_locked (state, now);
+    return std::nullopt;
+}
+
+void arm_admission_silence_locked (const std::shared_ptr<connector_state_t> &state,
+                                   request_clock_t::time_point now)
+{
+    auto &queue = *state->admission_queue;
+    cancel_request_alarm (queue.silence_alarm);
+    const auto due = request_time_after (now, std::chrono::seconds (15));
+    queue.silence_at = due;
+    queue.silence_alarm = schedule_request_alarm_locked (
+      state, due, [due, connection = std::weak_ptr (state->connection)] (const auto &locked) {
+          std::unique_lock lock (locked->transport_mutex);
+          if (locked->connection != connection.lock () || locked->close_requested.load ()
+              || locked->read_state == read_state_t::ending || !locked->admission_queue
+              || locked->admission_queue->silence_at != due) {
+              return;
+          }
+          const auto now = request_now (*locked);
+          const auto initiator = first_admission_waiter_locked (*locked, now);
+          if (initiator == 0) {
+              clear_admission_queue_locked (*locked);
+              return;
+          }
+          const auto failure = enqueue_admission_locked (locked, initiator, now);
+          if (failure) {
+              locked->pending_requests.at (initiator).admission_wait = std::monostate{};
+              clear_empty_admission_queue_locked (*locked);
+          }
+          lock.unlock ();
+          if (failure) {
+              complete_pending_request (
+                locked, initiator,
+                result_t<request_reply_t>::failure (failure->code, failure->message), 0);
+          } else {
+              kick_async_write (locked, "admission-reregister");
+          }
+      });
+}
+
+std::optional<error_t> begin_admission_wait_locked (const std::shared_ptr<connector_state_t> &state,
+                                                    std::uint64_t request_id,
+                                                    pending_request_t &request,
+                                                    request_clock_t::time_point received_at,
+                                                    const admission_rejection_t &rejection,
+                                                    bool &write_accepted)
 {
     unindex_retry_attempt_locked (*state, request_id, request.attempt_seq);
     request.attempt_seq = 0;
@@ -850,20 +1013,56 @@ void begin_admission_wait_locked (const std::shared_ptr<connector_state_t> &stat
         request.deadline =
           std::min (request.deadline, request_time_after (received_at, request.max_admission_wait));
     }
-    request.retry_at = request_time_after (received_at, delay + admission_jitter (*state));
-    std::vector<std::uint64_t> handler_ids;
-    {
-        std::lock_guard lock (state->lifecycle_mutex);
-        handler_ids = registered_handler_ids_locked (state->admission_waiting_handlers);
-    }
-    if (!handler_ids.empty ()) {
+    if (const auto delay = std::get_if<std::chrono::milliseconds> (&rejection)) {
+        request.admission_wait =
+          request_time_after (received_at, *delay + admission_jitter (*state));
         admission_waiting_context_t context{
           request.packet.name,
           request.actor_binding ? std::optional (request.actor_binding->actor_id) : std::nullopt,
-          delay};
-        schedule_handler_deliveries (
-          state, &connector_state_t::admission_waiting_handlers, handler_ids,
+          *delay};
+        schedule_admission_event_locked (
+          state, &connector_state_t::admission_waiting_handlers,
           [context = std::move (context)] (const auto &handler) { handler (context); });
+        return std::nullopt;
+    }
+    request.packet.metadata.values.erase (admission_ticket_name);
+    request.admission_wait = queued_admission_t{};
+    if (state->admission_queue) {
+        return std::nullopt;
+    }
+    auto failure = enqueue_admission_locked (state, request_id, received_at);
+    if (!failure) {
+        write_accepted = true;
+        schedule_admission_event_locked (state, &connector_state_t::admission_queued_handlers,
+                                         [] (const auto &handler) { handler (); });
+    }
+    return failure;
+}
+
+void apply_admission_update_locked (const std::shared_ptr<connector_state_t> &state,
+                                    const admission_update_t &update,
+                                    bool pushed,
+                                    request_clock_t::time_point received_at,
+                                    std::vector<std::uint64_t> &waiting_requests)
+{
+    if (const auto position = std::get_if<admission_position_t> (&update)) {
+        if (pushed) {
+            arm_admission_silence_locked (state, received_at);
+        }
+        schedule_admission_event_locked (state, &connector_state_t::admission_position_handlers,
+                                         [position = *position] (const auto &handler) {
+                                             handler (position.position, position.estimated_wait);
+                                         });
+        return;
+    }
+    clear_admission_queue_locked (*state);
+    const auto &ticket = std::get<std::string> (update);
+    for (auto &[id, request] : state->pending_requests) {
+        if (is_connection_admission_waiter_locked (*state, request)) {
+            request.packet.metadata.values.insert_or_assign (admission_ticket_name, ticket);
+            request.admission_wait = received_at;
+            waiting_requests.push_back (id);
+        }
     }
 }
 
@@ -1045,6 +1244,8 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
     std::unordered_set<std::uint64_t> claimed_replies;
     deferred_delivery_scope_t admission_deliveries (*state);
     bool reschedule = false;
+    bool admission_write_accepted = false;
+    bool malformed_admission_push = false;
     {
         std::unique_lock<std::mutex> lock (state->transport_mutex);
         // A close can leave the previous connection's completion queued
@@ -1086,8 +1287,18 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
             auto value = std::move (frame->value ());
             const auto &header = value.header;
             const auto attempt = header.request_seq.value_or (0);
+            const auto push = header.kind == message_kind_t::send
+                                ? admission_push_kind (header.name)
+                                : std::nullopt;
+            const bool reply =
+              header.kind == message_kind_t::response || header.kind == message_kind_t::error;
+            const bool enqueue_reply =
+              reply && matches_admission_registration_locked (*state, attempt);
+            if (push && !state->admission_queue) {
+                continue;
+            }
             std::uint64_t request_id = 0;
-            if (header.kind == message_kind_t::response || header.kind == message_kind_t::error) {
+            if (reply && !enqueue_reply) {
                 if (const auto first = state->pending_requests.find (attempt);
                     first != state->pending_requests.end ()) {
                     if (first->second.attempt_seq == attempt) {
@@ -1102,7 +1313,7 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                 }
             }
             const bool reply_to_pending = request_id != 0;
-            if (header.kind == message_kind_t::response && !reply_to_pending) {
+            if (header.kind == message_kind_t::response && !reply_to_pending && !enqueue_reply) {
                 continue;
             }
             // Keep the existing read claim until this batch has been consumed.
@@ -1111,6 +1322,11 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
             lock.unlock ();
             auto packet = decode_inbound_packet (*state, header, std::move (value.payload),
                                                  observed_connection);
+            std::optional<admission_update_t> admission_update;
+            if (packet && (push || (enqueue_reply && header.kind == message_kind_t::response))) {
+                admission_update = decode_admission_update (
+                  packet.value ().packet.payload, push.value_or (admission_update_kind_t::either));
+            }
             lock.lock ();
             if (state->connection != observed_connection || state->close_requested.load ()
                 || !is_transport_connected (*state)) {
@@ -1130,6 +1346,49 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                   + " name=" + header.name + " kind=" + message_kind_name (header.kind)
                   + " payloadBytes=" + std::to_string (payload_bytes));
             });
+            if (push || enqueue_reply) {
+                if (!state->admission_queue
+                    || (enqueue_reply && !matches_admission_registration_locked (*state, attempt))
+                    || first_admission_waiter_locked (*state, received_at) == 0) {
+                    continue;
+                }
+                std::uint64_t initiator = 0;
+                if (enqueue_reply) {
+                    initiator = state->admission_queue->initiator;
+                    state->admission_queue->registration_seq = 0;
+                }
+                if (admission_update) {
+                    apply_admission_update_locked (state, *admission_update, push.has_value (),
+                                                   received_at, waiting_requests);
+                } else {
+                    error_t failure{error_code_t::frame_decode_failed,
+                                    "Invalid authentication admission update."};
+                    if (push) {
+                        transport_error = std::move (failure);
+                        state->read_state = read_state_t::ending;
+                        malformed_admission_push = true;
+                        break;
+                    }
+                    if (packet && header.kind == message_kind_t::error) {
+                        auto remote = decode_remote_error (packet.value ().packet);
+                        if (remote) {
+                            failure = {error_code_t::remote_error,
+                                       std::move (remote.value ().message)};
+                        }
+                    }
+                    if (auto request = state->pending_requests.find (initiator);
+                        request != state->pending_requests.end ()
+                        && waiting_in_admission_queue (request->second)) {
+                        request->second.admission_wait = std::monostate{};
+                        clear_empty_admission_queue_locked (*state);
+                        completed_requests.emplace_back (
+                          initiator, 0,
+                          result_t<request_reply_t>::failure (failure.code,
+                                                              std::move (failure.message)));
+                    }
+                }
+                continue;
+            }
             /* §5.2: pending request 매칭은 request_seq가 정본이다. packet name은 대조
        * 조건이 아니므로 이름이 달라도 응답을 버리지 않는다. */
             if (!packet) {
@@ -1159,15 +1418,24 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                                                               std::move (error->message)));
                     } else {
                         const auto found = state->pending_requests.find (request_id);
-                        if (found != state->pending_requests.end ()) {
+                        if (found != state->pending_requests.end ()
+                            && found->second.attempt_seq == attempt) {
                             if (received_at >= found->second.deadline) {
                                 completed_requests.emplace_back (request_id, attempt,
                                                                  request_timeout ());
                             } else {
-                                begin_admission_wait_locked (
+                                auto failure = begin_admission_wait_locked (
                                   state, request_id, found->second, received_at,
-                                  std::get<std::chrono::milliseconds> (decision));
-                                waiting_requests.push_back (request_id);
+                                  std::get<admission_rejection_t> (decision),
+                                  admission_write_accepted);
+                                if (failure) {
+                                    completed_requests.emplace_back (
+                                      request_id, 0,
+                                      result_t<request_reply_t>::failure (
+                                        failure->code, std::move (failure->message)));
+                                } else {
+                                    waiting_requests.push_back (request_id);
+                                }
                             }
                         }
                     }
@@ -1187,16 +1455,6 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                                        + static_cast<std::ptrdiff_t> (consumed));
         reschedule =
           is_transport_connected (*state) && !state->close_requested.load () && !transport_error;
-        for (const auto request_id : waiting_requests) {
-            if (auto found = state->pending_requests.find (request_id);
-                found != state->pending_requests.end ()) {
-                if (reschedule) {
-                    arm_request_timer_locked (state, request_id, found->second);
-                } else {
-                    found->second.retry_at.reset ();
-                }
-            }
-        }
         if (!reschedule) {
             trace_connector_write (*state, "read-pump-stop", [&] {
                 return std::string (
@@ -1214,6 +1472,20 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
    * timeout으로 끊는다. 수신 프레임을 처리한 직후 바로 답한다. */
     queue_due_pong (state);
     admission_deliveries.deliver ();
+    if (reschedule && !waiting_requests.empty ()) {
+        std::lock_guard lock (state->transport_mutex);
+        if (state->connection == observed_connection && !state->close_requested.load ()) {
+            for (const auto request_id : waiting_requests) {
+                if (auto found = state->pending_requests.find (request_id);
+                    found != state->pending_requests.end ()) {
+                    arm_request_timer_locked (state, request_id, found->second);
+                }
+            }
+        }
+    }
+    if (reschedule && admission_write_accepted) {
+        kick_async_write (state, "admission-enqueue");
+    }
 
     for (auto &error : stream_errors) {
         publish_error (*state, std::move (error));
@@ -1241,7 +1513,8 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
         // The state transition must precede socket cancellation. The
         // cancellation completion can otherwise overwrite the original
         // protocol or transport error with Operation canceled.
-        if (connection_ended (state, *transport_error, observed_connection)) {
+        if (connection_ended (state, *transport_error, observed_connection,
+                              malformed_admission_push)) {
             schedule_reconnect (state);
         }
     } else if (reschedule) {
@@ -1449,6 +1722,13 @@ void start_next_async_write (std::shared_ptr<connector_state_t> state)
                       error_code_t::request_timeout, "stream connector request timed out");
                 }
             }
+            const auto registration = state->active_write->admission_enqueue_seq;
+            if (registration != 0
+                && (!matches_admission_registration_locked (*state, registration)
+                    || first_admission_waiter_locked (*state, request_now (*state)) == 0)) {
+                immediate_failure = result_t<void>::failure (
+                  error_code_t::request_timeout, "stream connector admission registration ended");
+            }
             if (!immediate_failure) {
                 connection = state->connection;
                 frame = std::move (state->active_write->frame);
@@ -1569,12 +1849,18 @@ std::vector<pending_wait_t> take_pending_waits_locked (connector_state_t &state)
  * does not rebind to the next one when it does. The dispatch queue and the
  * receive counts stay; the next established connection rebaselines them
  * (§10). */
-connection_operations_t take_connection_operations_locked (connector_state_t &state)
+connection_operations_t take_connection_operations_locked (connector_state_t &state,
+                                                           bool malformed_admission_push)
 {
     connection_operations_t operations;
     operations.waits = take_pending_waits_locked (state);
-    for (const auto &[request_seq, _] : state.pending_requests) {
-        operations.requests.push_back (request_seq);
+    clear_admission_queue_locked (state);
+    for (const auto &[request_seq, request] : state.pending_requests) {
+        operations.requests.emplace_back (
+          request_seq,
+          malformed_admission_push && is_connection_admission_waiter_locked (state, request)
+            ? error_code_t::frame_decode_failed
+            : error_code_t::disconnected);
     }
     if (state.active_write) {
         if (state.active_write->callback) {
@@ -1604,10 +1890,9 @@ void fail_connection_operations (const std::shared_ptr<connector_state_t> &state
     for (auto &callback : operations.writes) {
         callback (result_t<void>::failure (error_code_t::disconnected, message));
     }
-    for (auto request_seq : operations.requests) {
-        complete_pending_request (
-          state, request_seq,
-          result_t<request_reply_t>::failure (error_code_t::disconnected, message));
+    for (const auto &[request_seq, code] : operations.requests) {
+        complete_pending_request (state, request_seq,
+                                  result_t<request_reply_t>::failure (code, message));
     }
     for (auto &wait : operations.waits) {
         deliver_wait_result (state, std::move (wait),
@@ -1617,7 +1902,8 @@ void fail_connection_operations (const std::shared_ptr<connector_state_t> &state
 
 bool connection_ended (const std::shared_ptr<connector_state_t> &state,
                        const error_t &error,
-                       const std::shared_ptr<stream_connection_t> &observed_connection)
+                       const std::shared_ptr<stream_connection_t> &observed_connection,
+                       bool malformed_admission_push)
 {
     connection_operations_t operations;
     std::shared_ptr<boost::asio::steady_timer> heartbeat_timer;
@@ -1631,13 +1917,13 @@ bool connection_ended (const std::shared_ptr<connector_state_t> &state,
         if (state->connection != observed_connection) {
             return false;
         }
+        operations = take_connection_operations_locked (*state, malformed_admission_push);
         state->connection.reset ();
         close_bound_actors (state);
         publish_error (*state, error);
         change_state (state, connection_state_t::disconnected, error);
         ++state->heartbeat_generation;
         heartbeat_timer = std::move (state->heartbeat_timer);
-        operations = take_connection_operations_locked (*state);
     }
     deliveries.deliver ();
     cancel_timer (heartbeat_timer);
@@ -1868,7 +2154,8 @@ void on_request_timer (const std::shared_ptr<connector_state_t> &state, std::uin
         complete_pending_request (state, request_id, request_timeout ());
         return;
     }
-    if (!request.retry_at || now < *request.retry_at) {
+    const auto retry = std::get_if<request_clock_t::time_point> (&request.admission_wait);
+    if (!retry || now < *retry) {
         return;
     }
     if (state->next_request_seq == 0) {
@@ -1880,7 +2167,7 @@ void on_request_timer (const std::shared_ptr<connector_state_t> &state, std::uin
         return;
     }
 
-    request.retry_at.reset ();
+    request.admission_wait = std::monostate{};
     const auto submission = reserve_request_attempt_locked (state, request_id, request);
     arm_request_timer_locked (state, request_id, request);
     trace_request ("submit", submission.seq, request.packet.name,

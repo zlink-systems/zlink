@@ -35,6 +35,10 @@ import { zlink as ChannelHeaderProto } from './generated/channel-header-v1';
 import { formatDeadlineText } from './channel-deadline-text';
 import { ChannelHeaderPrefixes } from './channel-header-prefix';
 import { codecsForFrameworkPacket } from './channel-framework-packets';
+import {
+  admissionQueueReplyName,
+  isAdmissionQueuePacket
+} from '../streams/admission-queue-messages';
 import { readZLinkPacketJsonContract } from '../../contracts/Handlers/Attributes';
 import type {
   ZLinkJsonSchema,
@@ -256,10 +260,11 @@ export function encodeChannelReplyParts(
   codecs?: ZLinkChannelEnvelopeCodecRegistry,
   forService = false
 ): readonly MessageLike[] {
+  const replyName = admissionQueueReplyName(request.messageName) ?? request.messageName;
   return encodePayload(
     payload ?? Buffer.alloc(0),
-    codecsForFrameworkPacket(request.messageName, codecs),
-    request.messageName,
+    codecsForFrameworkPacket(replyName, codecs),
+    replyName,
     'reply',
     ZLinkChannelMessageKind.Response,
     request.channelName,
@@ -357,7 +362,8 @@ export function encodeChannelErrorReplyParts(
 
 export function decodeChannelReply<TReply>(
   parts: readonly Message[],
-  codecs?: ZLinkChannelEnvelopeCodecRegistry
+  codecs?: ZLinkChannelEnvelopeCodecRegistry,
+  requestName?: string
 ): TReply {
   const header = decodeChannelHeader(parts);
   if (header.kind === ZLinkChannelMessageKind.Error) {
@@ -366,9 +372,17 @@ export function decodeChannelReply<TReply>(
   if (header.kind !== ZLinkChannelMessageKind.Response) {
     throw new ZLinkConfigurationException(`Channel reply kind '${header.kind}' is not a response.`);
   }
+  const expectedReplyName = admissionQueueReplyName(requestName);
+  if (expectedReplyName !== undefined && header.messageName !== expectedReplyName) {
+    throw new ZLinkFrameworkException(
+      ZLinkFrameworkErrorKind.ProtocolError,
+      `Expected admission queue reply '${expectedReplyName}', received '${header.messageName}'.`
+    );
+  }
   if (!isCanonicalCodecContentType(header.contentType)) {
     throw unsupportedChannelContentType(header.contentType);
   }
+  requireAdmissionQueueJson(header);
   const serializer = codecs?.serializers.get(header.contentType);
   if (
     serializer === undefined &&
@@ -475,6 +489,7 @@ export function decodeChannelPayload(
     ) {
       throw unsupportedChannelContentType(contentType);
     }
+    requireAdmissionQueueJson(header);
     const serializer = codecs?.serializers.get(contentType);
     if (serializer !== undefined) {
       return serializer.deserialize(
@@ -502,6 +517,12 @@ export function decodeChannelPayload(
       `PayloadDecodeFailed: failed to decode channel payload for '${envelope.header.channelName}:${envelope.header.messageName}'.`,
       error
     );
+  }
+}
+
+function requireAdmissionQueueJson(header: ZLinkChannelEnvelopeHeader): void {
+  if (header.contentType !== JSON_CONTENT_TYPE && isAdmissionQueuePacket(header.messageName)) {
+    throw unsupportedChannelContentType(header.contentType);
   }
 }
 

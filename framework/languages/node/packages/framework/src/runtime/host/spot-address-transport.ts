@@ -474,9 +474,11 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       throw error;
     }
     const deadlineUnixMs = BigInt(deadline.deadlineUnixMs);
+    const packetName = resolveFrameworkPacketName(request, undefined, 'Channel');
     const encoded = this.encodeAtDeadline(
       ZLinkChannelMessageKind.Request,
       selected.meshName,
+      packetName,
       request,
       deadline.deadlineUnixMs
     );
@@ -518,7 +520,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           );
           throw error;
         }
-        const reply = decodeChannelReply<TReply>(completion.parts, this.options.codecs);
+        const reply = decodeChannelReply<TReply>(completion.parts, this.options.codecs, packetName);
         this.traceInstanceAddress(
           ZLinkMessageFlowOutcome.ReplyReceived,
           ZLinkDispatchMessageKind.Request,
@@ -796,13 +798,14 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
   private encodeAtDeadline(
     kind: ZLinkChannelMessageKind,
     meshName: string,
+    packetName: string,
     payload: unknown,
     deadlineUnixMs: number
   ): readonly MessageLike[] {
     return encodeChannelEnvelopePartsAtDeadline(
       kind,
       meshName,
-      undefined,
+      packetName,
       payload,
       deadlineUnixMs,
       undefined,

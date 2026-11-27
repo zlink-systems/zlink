@@ -1,5 +1,6 @@
 import { RequestRuntime } from '../foundation/request-runtime';
 import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
+import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import { identityRequestReply, type ZLinkRequestResult } from '../messaging/request-result';
 import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
@@ -949,16 +950,18 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         destination
       );
     }
+    let requestName: string | undefined;
     return this.requests.prepare<TReply>(
       options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options.signal,
       (requestOperation, receiver) => {
         try {
           throwIfAborted(options.signal);
+          requestName = resolveFrameworkPacketName(request, options.packetName, 'Channel');
           const encoded = this.encodeMessage(
             ZLinkChannelMessageKind.Request,
             meshName,
-            options.packetName,
+            requestName,
             request,
             options.timeoutMs,
             options.metadata
@@ -1000,7 +1003,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           receiver.operationFailed(requestOperation.id, error, undefined);
         }
       },
-      (raw) => this.decodeMeshReply<TReply>(meshName, raw as ZLinkMeshCompletion),
+      (raw) => this.decodeMeshReply<TReply>(meshName, raw as ZLinkMeshCompletion, requestName),
       (error) =>
         mapMeshSubmissionError(
           error,
@@ -1238,12 +1241,16 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     );
   }
 
-  private decodeMeshReply<TReply>(meshName: string, completion: ZLinkMeshCompletion): TReply {
+  private decodeMeshReply<TReply>(
+    meshName: string,
+    completion: ZLinkMeshCompletion,
+    requestName?: string
+  ): TReply {
     try {
       if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
         throw meshRequestFailure(meshName, completion.terminalResult, completion.failureErrno);
       }
-      return decodeChannelReply<TReply>(completion.parts, this.codecs);
+      return decodeChannelReply<TReply>(completion.parts, this.codecs, requestName);
     } finally {
       closeMeshCompletion(completion);
     }

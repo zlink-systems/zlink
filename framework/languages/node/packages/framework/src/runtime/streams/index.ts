@@ -59,6 +59,20 @@ import {
 import { ZLinkBoundSessionService, type ZLinkBoundSessionTransport } from './bound-session-service';
 import { normalizeStreamAuthenticationAdmission } from '../../contracts/Configuration/RegistrationNormalizers';
 import { ZLinkAuthenticationAdmission } from './authentication-admission';
+import type { AdmissionTickets } from './admission-tickets';
+import { AdmissionQueueNode } from './admission-queue-node';
+import {
+  AdmissionEnqueue,
+  AdmissionNodeReport,
+  AdmissionAdmitPermit,
+  AdmissionReleasePermit,
+  admissionUpdate,
+  type AdmissionNodeIdentity,
+  type AdmissionOwner
+} from './admission-queue-messages';
+import { admissionQueueSpotType } from '../../contracts/Configuration/RegistrationNormalizers';
+import type { ZLinkSpotAddressTransport } from '../spots/spot-outbound';
+import { requireOneWayCompletion } from '../messaging/submission-result';
 import { ZLinkManagedStream } from './managed-stream';
 import {
   messageToBytes,
@@ -198,6 +212,13 @@ export interface ZLinkStreamRuntimeManagerOptions {
   readonly nativeMeshNodeForName?: (meshName: string) => ZLinkBackendMeshNode | undefined;
   readonly meshCompletionsForName?: (meshName: string) => ZLinkMeshCompletionTable | undefined;
   readonly applicationJobQueue?: ApplicationJobQueue;
+  readonly admissionQueueRuntime?: {
+    readonly transport: ZLinkSpotAddressTransport;
+    readonly tickets: AdmissionTickets;
+    readonly local: (meshName: string) => AdmissionNodeIdentity | undefined;
+    readonly owner: () => AdmissionOwner | undefined;
+    readonly error: (error: unknown) => void;
+  };
 }
 
 // A STREAM node's native resources, recorded as each one is created. The
@@ -214,6 +235,8 @@ interface ZLinkStartedStreamNode {
 
 export class ZLinkStreamRuntimeManager {
   private authenticationAdmission: ZLinkAuthenticationAdmission | undefined;
+  private admissionReportTimer?: ReturnType<typeof setInterval>;
+  private readonly admissionQueueStop = new AbortController();
   private readonly nodes = new Map<string, ZLinkStartedStreamNode>();
   private readonly applicationJobQueue: ApplicationJobQueue;
 
@@ -234,6 +257,47 @@ export class ZLinkStreamRuntimeManager {
         this.options.dispatchErrors
       );
     }
+    const route = this.options.registration.admissionQueueRoute;
+    const runtime = this.options.admissionQueueRuntime;
+    if (route !== undefined && runtime === undefined) {
+      throw new ZLinkConfigurationException('STREAM admission queue runtime is required.');
+    }
+    const call =
+      route === undefined
+        ? undefined
+        : {
+            instanceSpot: true,
+            instanceSpotType: admissionQueueSpotType,
+            initialMeshName: route.meshName
+          };
+    const queue =
+      route === undefined || runtime === undefined
+        ? undefined
+        : new AdmissionQueueNode(runtime.tickets, first.admissionGlobalLimit !== undefined, {
+            local: () => runtime.local(route.meshName),
+            owner: runtime.owner,
+            limit: () => first.maxConcurrentAuthentications!,
+            inFlight: () => this.authenticationAdmission!.activeCount,
+            report: (report) =>
+              runtime.transport.requestToSpotAddress(
+                route.spotId,
+                new AdmissionNodeReport(report),
+                { ...call!, signal: this.admissionQueueStop.signal }
+              ),
+            acquire: (request) =>
+              runtime.transport.requestToSpotAddress(
+                route.spotId,
+                new AdmissionAdmitPermit(request),
+                call!
+              ),
+            release: (release) => {
+              void runtime.transport
+                .sendToSpotAddress(route.spotId, new AdmissionReleasePermit(release), call!)
+                .then((result) => requireOneWayCompletion(result, 'Admission permit release'))
+                .catch(runtime.error);
+            },
+            error: runtime.error
+          });
     const streamAdapter = this.options.backendAdapterFactory.createStreamAdapter();
     const monitoringAdapter = this.options.backendAdapterFactory.createMonitoringAdapter();
     for (const [nodeName, streamNode] of streamNodes) {
@@ -319,7 +383,7 @@ export class ZLinkStreamRuntimeManager {
       // The runtime disposes the poller, so the poller is created where nothing
       // can fail before the runtime owns it.
       const readablePoller = streamAdapter.createReadablePoller(socket);
-      const runtime = new ZLinkStreamSessionNodeRuntimeCore({
+      const sessionRuntime = new ZLinkStreamSessionNodeRuntimeCore({
         nodeName,
         sessionTypeName: sessionType.name,
         heartbeatIntervalMs: streamNode.heartbeatIntervalMs,
@@ -330,6 +394,21 @@ export class ZLinkStreamRuntimeManager {
         readablePoller,
         applicationJobQueue: this.applicationJobQueue,
         authenticationAdmission: this.authenticationAdmission,
+        admissionQueue: queue,
+        enqueueAdmission:
+          queue === undefined
+            ? undefined
+            : async (connection) => {
+                const { delivery } = await queue.enqueue(() =>
+                  runtime!.transport.requestToSpotAddress(
+                    route!.spotId,
+                    new AdmissionEnqueue({ connection }),
+                    { ...call!, signal: this.admissionQueueStop.signal }
+                  )
+                );
+                return admissionUpdate(delivery);
+              },
+        onError: queue === undefined ? undefined : runtime!.error,
         nativeSessionService,
         meshCompletions,
         nativeSessionRouteForMesh: (meshName) => nativeSessionRoutes.get(meshName),
@@ -349,13 +428,34 @@ export class ZLinkStreamRuntimeManager {
             sessionHandlerTypes
           )
       });
-      node.runtime = runtime;
-      runtime.start();
+      node.runtime = sessionRuntime;
+      sessionRuntime.start();
       this.options.listenerRecords?.record('stream', nodeName, advertisedEndpoint);
+    }
+    if (queue !== undefined) {
+      this.admissionReportTimer = setInterval(() => {
+        void queue
+          .report()
+          .then(async (reply) => {
+            if (reply === undefined) return;
+            for (const delivery of reply.deliveries) {
+              await this.nodes
+                .get(delivery.streamName)
+                ?.runtime?.deliverAdmission(delivery)
+                .catch(runtime!.error);
+            }
+          })
+          .catch((error) => {
+            if (!this.admissionQueueStop.signal.aborted) runtime!.error(error);
+          });
+      }, 1_000);
+      this.admissionReportTimer.unref();
     }
   }
 
   async dispose(shutdownSignal?: AbortSignal): Promise<void> {
+    clearInterval(this.admissionReportTimer);
+    this.admissionQueueStop.abort();
     const nodes = [...this.nodes.values()];
     try {
       for (const node of nodes.reverse()) {

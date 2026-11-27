@@ -18,6 +18,11 @@ internal sealed class Program
     private static async Task Main(string[] args)
     {
         var options = TestHostOptions.Parse(args);
+        if (options.Mode == "login-admission-queue-connector")
+        {
+            await LoginAdmissionQueue.ConnectAsync(options);
+            return;
+        }
         if (options.Mode == "login-admission-connector")
         {
             await LoginAdmission.ConnectAsync(

@@ -70,6 +70,12 @@ public final class ZLinkLiveLocationRows {
         return leaseTracker.remainingAdmissionLifetime(ownerId, ownerLeaseGeneration);
     }
 
+    /** Whether the owner lease still admits the given lease generation (§3.5.3 permit reclaim). */
+    public CompletionStage<Boolean> ownerLeaseLive(String ownerId, long ownerLeaseGeneration) {
+        return ownerLeaseRemaining(ownerId, ownerLeaseGeneration)
+                .thenApply(remaining -> remaining != null);
+    }
+
     boolean hasObservedLiveLease(ZLinkMeshNodeDescriptor node) {
         return leaseTracker.hasObservedLiveLease(node.ownerId(), node.leaseGeneration());
     }
