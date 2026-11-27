@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MPL-2.0
 
-from typing import Optional, Protocol, runtime_checkable
+from typing import List, Optional, Protocol, runtime_checkable
 
 from ..eventing.codes import MonitorEventMask
 from .codes import ReceiveFlowState
+from .connection_attempt import ConnectionAttempt
 
 
 @runtime_checkable
@@ -55,6 +56,18 @@ class _DisconnectRidContract(_SocketContract, Protocol):
     def disconnect_rid(self, peer_rid):
         """Disconnect the peer identified by ``peer_rid`` rather than by
         address."""
+        ...
+
+
+@runtime_checkable
+class _ConnectSocketContract(_DisconnectRidContract, Protocol):
+    """Sockets that connect outward and report their connection attempts."""
+
+    def connection_attempts_snapshot(self) -> List[ConnectionAttempt]:
+        """Return one :class:`ConnectionAttempt` per current outbound
+        connection registration as one atomic snapshot. A successful
+        snapshot clears ``PollEventFlag.POLLCONNECT`` readiness unless a
+        later change raced with it."""
         ...
 
 

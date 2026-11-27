@@ -1,0 +1,21 @@
+{
+  "fixture": "zlink.framework.actor-join-sealed-remote",
+  "version": 1,
+  "senderLanguages": ["cpp", "dotnet", "java", "node"],
+  "ownerLanguages": {
+    "cpp": "expected-failure-before-owner-fix",
+    "dotnet": "enabled",
+    "java": "expected-failure-before-owner-fix",
+    "node": "enabled"
+  },
+  "expect": {
+    "requestTimeoutMs": 5000,
+    "requestMaxElapsedMs": 1000,
+    "requestErrorKind": "unavailable",
+    "sendOwnerAction": "drop",
+    "ownerDropEvent": "zlink.dispatch_error",
+    "ownerDropReasons": {
+      "node": "handler_exception"
+    }
+  }
+}

@@ -1,5 +1,12 @@
 # SPDX-License-Identifier: MPL-2.0
 
+from .connection_attempt import (
+    ConnectionAttempt,
+    ConnectionAttemptState,
+    ConnectionFailure,
+    ConnectionFailureKind,
+    ConnectionFailureStage,
+)
 from .message_socket_contracts import DealerSocket, PairSocket
 from .pubsub_socket_contracts import PubSocket, SubSocket, XPubSocket, XSubSocket
 from .routed_socket_contracts import RouterRoute, RouterSocket
@@ -14,6 +21,11 @@ from .socket_options import (
 from .stream_socket import StreamSocket
 
 __all__ = [
+    "ConnectionAttempt",
+    "ConnectionAttemptState",
+    "ConnectionFailure",
+    "ConnectionFailureKind",
+    "ConnectionFailureStage",
     "CommonSocketOptions",
     "DealerSocketOptions",
     "PubSocketOptions",

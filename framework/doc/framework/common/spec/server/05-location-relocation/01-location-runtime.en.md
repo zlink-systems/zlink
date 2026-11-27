@@ -1696,6 +1696,8 @@ selection or a timeout.
 | `Prepared` | Source is owner. Target attempt number, target owner lease, and target node must all be present. No relocation-specific capacity reservation is recorded. |
 | `Committed` through `Completed` | The exactly recorded target is owner. Keeps the same target attempt number. |
 
+The owner of a participant in an aggregate is decided by the single commit of the aggregate record. After the aggregate record's `state` ([§8.3](#83-storage-format-of-aggregate-records-and-the-participant-inventory)) becomes `committed`, the target recorded on that participant is owner even when the participant record's `aggregate.relocation.phase` is still `prepared`. Readers don't judge the participant phase separately, and writers change the participant phase to `committed` in the same batch as the aggregate commit.
+
 An Actor move that doesn't change User Spot membership changes owner with a single
 `NewOwner` CAS. Re-preparing on the same target process only replaces the target attempt
 number and prep info — it doesn't swap in a different target. A previous attempt can't

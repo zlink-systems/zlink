@@ -73,7 +73,7 @@ func recvSubscriptionEventInto(
 	flags RecvFlags,
 ) error {
 	if out == nil {
-		return &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newRecvError(RecvInvalidHandle, int(C.EFAULT))
 	}
 	var rid C.zlink_routing_id_t
 	var subscribed C.int

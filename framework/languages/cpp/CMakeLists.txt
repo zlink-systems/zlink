@@ -1618,6 +1618,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_features(test_cpp_framework_mesh_shutdown_seal PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_mesh_shutdown_seal PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_mesh_shutdown_seal PRIVATE
     zlink_framework_m6a_runtime zlink_framework Threads::Threads)

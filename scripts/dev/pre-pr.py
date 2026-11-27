@@ -56,6 +56,9 @@ NODE_COMMON = (
 NODE_EXTRA = (
     "Run Node M6B runtime gate",
     "Run Node M6C runtime gate",
+    "Run Node M6A runtime gate",
+    "Run Node M5 foundation gate",
+    "Run the tutorial StreamClient receiving check",
     "Verify packed Node packages in clean consumers",
 )
 NODE_BROWSER = "Run actual Chromium Stream Connector E2E"
@@ -342,6 +345,16 @@ def dotnet(temp, selected, results):
         results["dotnet"] = verdict(ok and gate.run("Verify framework relocation conformance inventory"))
 
 
+def install_chromium(root, node, env):
+    # The browser E2E reads Chromium from PLAYWRIGHT_BROWSERS_PATH. Install the
+    # revision of the Playwright pinned in package-lock.json first, so a version
+    # bump never leaves a host with only an older browser; it takes seconds when
+    # that revision is already present. Linux system packages stay a host concern.
+    workspace = root / "framework/languages/node"
+    return subprocess.run([node, "scripts/browser-e2e/install-chromium.mjs"],
+                          cwd=workspace, env=env).returncode == 0
+
+
 @contextmanager
 def node_workspace(temp):
     # CI pins package.json/lock and regenerates a tracked WebGL bundle. Give each
@@ -399,6 +412,9 @@ def node(temp):
                 sdk = Path(os.environ.get("ZLINK_EMSDK_ROOT", Path.home() / ".cache/zlink/emsdk"))
                 if not (sdk / "upstream/emscripten/emcc").is_file():
                     print(f"pre-pr: emsdk 3.1.38 is required at {sdk}", file=sys.stderr)
+                    matrix_ok = False
+                elif not install_chromium(root, executable, {**os.environ, **env, **git_env}):
+                    print("pre-pr: installing Chromium for the browser E2E failed", file=sys.stderr)
                     matrix_ok = False
                 else:
                     matrix_ok = job.run(NODE_BROWSER)

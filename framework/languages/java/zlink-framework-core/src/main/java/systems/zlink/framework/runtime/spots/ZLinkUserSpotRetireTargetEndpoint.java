@@ -1308,15 +1308,13 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                                 })
                                                         .thenCompose(
                                                                 failure ->
-                                                                        ZLinkSerialExecutionQueue
-                                                                                .manageCurrent(
-                                                                                        actorJoin
-                                                                                                .notifyTargetCompletion(
-                                                                                                        target
-                                                                                                                .directAdmission(),
-                                                                                                        target
-                                                                                                                .staged(),
-                                                                                                        failure))
+                                                                        actorJoin
+                                                                                .notifyTargetCompletion(
+                                                                                        target
+                                                                                                .directAdmission(),
+                                                                                        target
+                                                                                                .staged(),
+                                                                                        failure)
                                                                                 .thenApply(
                                                                                         ignored ->
                                                                                                 failure))

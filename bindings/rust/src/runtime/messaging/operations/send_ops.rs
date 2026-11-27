@@ -6,199 +6,227 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::error::{SubmitError, SubmitResult};
-use crate::ffi;
-use crate::internal::{CompletionEntry, CompletionOwner, RoutedHandle};
-use crate::messaging_operations::{
-    Empty, MessageParts, PublishOp, PublishOpStorage, SendOp, SendOpStorage, SendSubmission,
+use crate::contracts::errors::errors::{SubmitError, SubmitResult};
+use crate::contracts::messaging::operations::{
+    Empty, PublishOp, PublishOpStorage, SendOp, SendOpStorage, SendSubmission,
 };
-use crate::native_errors::submit_error_from_rc;
+use crate::internal::MessageParts;
+use crate::internal::{CompletionEntry, CompletionOwner, RoutedHandle};
+use crate::runtime::errors::native_errors::submit_error_from_rc;
+use crate::runtime::native::ffi;
 
-pub(crate) fn socket_send_op(
-    handle: *mut c_void,
-    completion_owner: Arc<CompletionOwner>,
-) -> SendOp<Empty> {
-    SendOp {
-        inner: SendOpStorage {
-            handle,
-            routed: None,
-            completion_owner,
-            target: None,
-            parts: MessageParts::default(),
-        },
-        _state: std::marker::PhantomData,
-    }
-}
-
-pub(crate) fn dealer_send_op(
-    routed: Arc<RoutedHandle>,
-    completion_owner: Arc<CompletionOwner>,
-) -> SendOp<Empty> {
-    SendOp {
-        inner: SendOpStorage {
-            handle: routed.handle(),
-            routed: Some(routed),
-            completion_owner,
-            target: None,
-            parts: MessageParts::default(),
-        },
-        _state: std::marker::PhantomData,
-    }
-}
-
-pub(crate) fn routed_send_op(
-    routed: Arc<RoutedHandle>,
-    completion_owner: Arc<CompletionOwner>,
-    target: crate::RoutingId,
-) -> SendOp<Empty> {
-    SendOp {
-        inner: SendOpStorage {
-            handle: routed.handle(),
-            routed: Some(routed),
-            completion_owner,
-            target: Some(target),
-            parts: MessageParts::default(),
-        },
-        _state: std::marker::PhantomData,
-    }
-}
-
-pub(crate) fn stream_send_to_op(
-    handle: *mut c_void,
-    completion_owner: Arc<CompletionOwner>,
-    target: crate::RoutingId,
-) -> SendOp<Empty> {
-    SendOp {
-        inner: SendOpStorage {
-            handle,
-            routed: None,
-            completion_owner,
-            target: Some(target),
-            parts: MessageParts::default(),
-        },
-        _state: std::marker::PhantomData,
-    }
-}
-
-pub(crate) fn socket_publish_op(handle: *mut c_void, topic: smol_str::SmolStr) -> PublishOp<Empty> {
-    PublishOp {
-        inner: PublishOpStorage {
-            handle,
-            topic,
-            parts: MessageParts::default(),
-            flags: crate::SendFlags::NONE,
-        },
-        _state: std::marker::PhantomData,
-    }
-}
-
-pub(crate) fn submit_publish(mut op: PublishOpStorage) -> Result<(), SubmitError> {
-    let flags = op.flags.bits();
-    let mut topic_buf = [0u8; 256];
-    let bytes = op.topic.as_str().as_bytes();
-    let mut long_topic_buf = Vec::new();
-    let topic_ptr = if bytes.len() < topic_buf.len() {
-        topic_buf[..bytes.len()].copy_from_slice(bytes);
-        topic_buf.as_ptr().cast()
-    } else {
-        long_topic_buf.reserve_exact(bytes.len() + 1);
-        long_topic_buf.extend_from_slice(bytes);
-        long_topic_buf.push(0);
-        long_topic_buf.as_ptr().cast()
-    };
-    let (rc, errno) = submit_shared_message(&mut op.parts, |parts, count| unsafe {
-        ffi::zlink_publish(op.handle, topic_ptr, parts, count, flags)
-    })?;
-    check_submit_result(rc, errno)
-}
-
-pub(crate) fn submit_send(mut op: SendOpStorage) -> Result<SendSubmission, SubmitError> {
-    if op.parts.is_empty() {
-        return Err(SubmitError::new(
-            SubmitResult::InvalidArgument,
-            libc::EINVAL,
-        ));
-    }
-    live_handle(&op)?;
-
-    let owner = Arc::clone(&op.completion_owner);
-    let context = owner.next_context();
-    // The entry exists before the native call, so a WRITABLE record pulled by
-    // the drain before the submit returns joins the token inside the entry.
-    let entry = owner.register_send(context)?;
-    match submit_send_attempt(&mut op, context) {
-        Ok(SendAttempt::Admitted) => {
-            owner.unregister(context);
-            Ok(SendSubmission {
-                result: SubmitResult::Ok,
-                admitted: Box::pin(std::future::ready(Ok(()))),
-            })
+impl crate::internal::SocketStorage {
+    pub(crate) fn socket_send_op(&self) -> SendOp<Empty> {
+        let handle = self.handle;
+        let completion_owner = self
+            .completion_owner
+            .as_ref()
+            .expect("socket completion owner")
+            .clone();
+        SendOp {
+            inner: SendOpStorage {
+                handle,
+                routed: None,
+                completion_owner,
+                target: None,
+                parts: MessageParts::default(),
+            },
+            _state: std::marker::PhantomData,
         }
-        Ok(SendAttempt::Waiting(completion_id)) => {
-            if let Err(error) = owner.publish_send_token(&entry, completion_id) {
-                if entry.detach() {
+    }
+}
+
+impl crate::internal::SocketStorage {
+    pub(crate) fn dealer_send_op(&self) -> SendOp<Empty> {
+        let routed = self.routed_handle.as_ref().expect("DEALER handle").clone();
+        let completion_owner = self
+            .completion_owner
+            .as_ref()
+            .expect("DEALER completion owner")
+            .clone();
+        SendOp {
+            inner: SendOpStorage {
+                handle: routed.handle(),
+                routed: Some(routed),
+                completion_owner,
+                target: None,
+                parts: MessageParts::default(),
+            },
+            _state: std::marker::PhantomData,
+        }
+    }
+}
+
+impl SendOpStorage {
+    pub(crate) fn routed_send_op(
+        routed: Arc<RoutedHandle>,
+        completion_owner: Arc<CompletionOwner>,
+        target: crate::RoutingId,
+    ) -> SendOp<Empty> {
+        SendOp {
+            inner: SendOpStorage {
+                handle: routed.handle(),
+                routed: Some(routed),
+                completion_owner,
+                target: Some(target),
+                parts: MessageParts::default(),
+            },
+            _state: std::marker::PhantomData,
+        }
+    }
+}
+
+impl SendOpStorage {
+    pub(crate) fn stream_send_to_op(
+        handle: *mut c_void,
+        completion_owner: Arc<CompletionOwner>,
+        target: crate::RoutingId,
+    ) -> SendOp<Empty> {
+        SendOp {
+            inner: SendOpStorage {
+                handle,
+                routed: None,
+                completion_owner,
+                target: Some(target),
+                parts: MessageParts::default(),
+            },
+            _state: std::marker::PhantomData,
+        }
+    }
+}
+
+impl crate::internal::SocketStorage {
+    pub(crate) fn socket_publish_op(&self, topic: &str) -> PublishOp<Empty> {
+        let handle = self.handle;
+        let topic = super::topic_or_panic(topic, "topic");
+        PublishOp {
+            inner: PublishOpStorage {
+                handle,
+                topic,
+                parts: MessageParts::default(),
+                flags: crate::SendFlags::NONE,
+            },
+            _state: std::marker::PhantomData,
+        }
+    }
+}
+
+impl PublishOpStorage {
+    pub(crate) fn submit_publish(self) -> Result<(), SubmitError> {
+        let mut op = self;
+        let flags = op.flags.bits();
+        let mut topic_buf = [0u8; 256];
+        let bytes = op.topic.as_str().as_bytes();
+        let mut long_topic_buf = Vec::new();
+        let topic_ptr = if bytes.len() < topic_buf.len() {
+            topic_buf[..bytes.len()].copy_from_slice(bytes);
+            topic_buf.as_ptr().cast()
+        } else {
+            long_topic_buf.reserve_exact(bytes.len() + 1);
+            long_topic_buf.extend_from_slice(bytes);
+            long_topic_buf.push(0);
+            long_topic_buf.as_ptr().cast()
+        };
+        let (rc, errno) = submit_shared_message(&mut op.parts, |parts, count| unsafe {
+            ffi::zlink_publish(op.handle, topic_ptr, parts, count, flags)
+        })?;
+        check_submit_result(rc, errno)
+    }
+}
+
+impl SendOpStorage {
+    pub(crate) fn submit_send(self) -> Result<SendSubmission, SubmitError> {
+        let mut op = self;
+        if op.parts.is_empty() {
+            return Err(SubmitError::new(
+                SubmitResult::InvalidArgument,
+                libc::EINVAL,
+            ));
+        }
+        live_handle(&op)?;
+
+        let owner = Arc::clone(&op.completion_owner);
+        let context = owner.next_context();
+        // The entry exists before the native call, so a WRITABLE record pulled by
+        // the drain before the submit returns joins the token inside the entry.
+        let entry = owner.register_send(context)?;
+        match submit_send_attempt(&mut op, context) {
+            Ok(SendAttempt::Admitted) => {
+                owner.unregister(context);
+                Ok(SendSubmission {
+                    result: SubmitResult::Ok,
+                    admitted: Box::pin(std::future::ready(Ok(()))),
+                })
+            }
+            Ok(SendAttempt::Waiting(completion_id)) => {
+                if let Err(error) = owner.publish_send_token(&entry, completion_id) {
+                    if entry.detach() {
+                        owner.unregister(context);
+                    }
+                    return Err(error);
+                }
+                Ok(SendSubmission {
+                    result: SubmitResult::Backpressured,
+                    admitted: Box::pin(SendFuture {
+                        operation: Some(op),
+                        context,
+                        entry: Some(entry),
+                        waiting_for_writable: true,
+                        finished: false,
+                    }),
+                })
+            }
+            Err(failure) => {
+                let removable = match failure.live_token {
+                    Some(completion_id) => {
+                        let _ = owner.publish_send_token(&entry, completion_id);
+                        entry.detach()
+                    }
+                    None => true,
+                };
+                if removable {
                     owner.unregister(context);
                 }
-                return Err(error);
+                Err(failure.error)
             }
-            Ok(SendSubmission {
-                result: SubmitResult::Backpressured,
-                admitted: Box::pin(SendFuture {
-                    operation: Some(op),
-                    context,
-                    entry: Some(entry),
-                    waiting_for_writable: true,
-                    finished: false,
-                }),
-            })
-        }
-        Err(failure) => {
-            let removable = match failure.live_token {
-                Some(completion_id) => {
-                    let _ = owner.publish_send_token(&entry, completion_id);
-                    entry.detach()
-                }
-                None => true,
-            };
-            if removable {
-                owner.unregister(context);
-            }
-            Err(failure.error)
         }
     }
 }
 
-pub(crate) fn submit_send_blocking(mut op: SendOpStorage) -> Result<(), SubmitError> {
-    let owner = Arc::clone(&op.completion_owner);
-    owner.ensure_open()?;
-    let handle = live_handle(&op)?;
-    let target: *const ffi::zlink_routing_id_t = op
-        .target
-        .as_ref()
-        .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
-    let (rc, errno) = submit_owned_message(&mut op.parts, |parts, count| unsafe {
-        if target.is_null() {
-            ffi::zlink_send(
-                handle,
-                parts,
-                count,
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        } else {
-            ffi::zlink_send_rid(
-                handle,
-                target,
-                parts,
-                count,
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        }
-    })?;
-    check_submit_result(rc, errno)
+impl SendOpStorage {
+    pub(crate) fn submit_send_blocking(self) -> Result<(), SubmitError> {
+        let mut op = self;
+        let owner = Arc::clone(&op.completion_owner);
+        owner.ensure_open()?;
+        let handle = live_handle(&op)?;
+        let target: *const ffi::zlink_routing_id_t = op
+            .target
+            .as_ref()
+            .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
+        let (rc, errno) = submit_owned_message(&mut op.parts, |parts, count| unsafe {
+            if target.is_null() {
+                ffi::zlink_send(
+                    handle,
+                    parts,
+                    count,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            } else {
+                ffi::zlink_send_rid(
+                    handle,
+                    target,
+                    parts,
+                    count,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            }
+        })?;
+        check_submit_result(rc, errno)
+    }
 }
 
 /// Managed DONTWAIT SEND.

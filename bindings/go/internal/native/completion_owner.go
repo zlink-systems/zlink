@@ -140,7 +140,7 @@ func (e *completionEntry) finishAdmittedLocked(err error) {
 
 func (e *completionEntry) setWritableWaiting(waiting bool) error {
 	if e == nil || e.owner == nil {
-		return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 	}
 	return e.owner.setWritableWaiting(e, waiting)
 }
@@ -243,9 +243,9 @@ func (e *completionEntry) shutdown() {
 	e.attemptMu.Lock()
 	defer e.attemptMu.Unlock()
 
-	shutdownErr := error(&SubmitError{Result: SubmitTerminated, nativeErrno: int(C.ESHUTDOWN)})
+	shutdownErr := error(newSubmitError(SubmitTerminated, int(C.ESHUTDOWN)))
 	if e.kind == completionRequest {
-		shutdownErr = &RequestError{Result: RequestTerminated, nativeErrno: int(C.ESHUTDOWN)}
+		shutdownErr = newRequestError(RequestTerminated, int(C.ESHUTDOWN))
 	}
 
 	e.mu.Lock()
@@ -347,7 +347,7 @@ func newCompletionOwner(socket unsafe.Pointer) *completionOwner {
 
 func (o *completionOwner) register(entry *completionEntry) error {
 	if o == nil || entry == nil {
-		return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -356,10 +356,10 @@ func (o *completionOwner) register(entry *completionEntry) error {
 
 func (o *completionOwner) registerLocked(entry *completionEntry) error {
 	if o.shutdown {
-		return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.ESHUTDOWN)}
+		return newSubmitError(SubmitInvalidState, int(C.ESHUTDOWN))
 	}
 	if o.publicOwner == nil && (entry.kind == completionRequest || entry.writableWaiting) {
-		return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.EBUSY)}
+		return newSubmitError(SubmitInvalidState, int(C.EBUSY))
 	}
 	entry.owner = o
 	o.entries[entry.handleKey] = entry
@@ -379,7 +379,7 @@ func (o *completionOwner) publishInitialSendWait(entry *completionEntry, id uint
 	entry.publishSendWait(id)
 	var activationErr error
 	if o.publicOwner == nil {
-		activationErr = &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.EBUSY)}
+		activationErr = newSubmitError(SubmitInvalidState, int(C.EBUSY))
 	} else {
 		entry.writableWaiting = true
 	}
@@ -431,18 +431,18 @@ func (o *completionOwner) unregister(entry *completionEntry) {
 
 func (o *completionOwner) setWritableWaiting(entry *completionEntry, waiting bool) error {
 	if o == nil || entry == nil {
-		return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.shutdown || o.entries[entry.handleKey] != entry {
-		return &SubmitError{Result: SubmitTerminated, nativeErrno: int(C.ESHUTDOWN)}
+		return newSubmitError(SubmitTerminated, int(C.ESHUTDOWN))
 	}
 	if entry.writableWaiting == waiting {
 		return nil
 	}
 	if waiting && o.publicOwner == nil {
-		return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.EBUSY)}
+		return newSubmitError(SubmitInvalidState, int(C.EBUSY))
 	}
 	entry.writableWaiting = waiting
 	return nil
@@ -450,16 +450,16 @@ func (o *completionOwner) setWritableWaiting(entry *completionEntry, waiting boo
 
 func (o *completionOwner) transferToPublic(poller *Poller) error {
 	if o == nil || poller == nil {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	o.mu.Lock()
 	if o.shutdown {
 		o.mu.Unlock()
-		return &ConfigError{Result: ConfigInvalidState, nativeErrno: int(C.ESHUTDOWN)}
+		return newConfigError(ConfigInvalidState, int(C.ESHUTDOWN))
 	}
 	if o.publicOwner != nil && o.publicOwner != poller {
 		o.mu.Unlock()
-		return &ConfigError{Result: ConfigInvalidState, nativeErrno: int(C.EBUSY)}
+		return newConfigError(ConfigInvalidState, int(C.EBUSY))
 	}
 	if o.publicOwner == poller {
 		o.mu.Unlock()
@@ -617,7 +617,7 @@ func (e *completionEntry) captureWritable(record earlyWritableRecord) (terminal,
 		e.mu.Unlock()
 		e.setWritableWaiting(false)
 		e.send.payload.close()
-		e.finishSend(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
+		e.finishSend(newSubmitError(SubmitInternalError, int(C.EPROTO)))
 		e.attemptMu.Unlock()
 		return true, false
 	}
@@ -630,7 +630,7 @@ func (e *completionEntry) captureWritable(record earlyWritableRecord) (terminal,
 		// outlive its matching wait token.
 		e.mu.Lock()
 		if !e.publicDone {
-			err := error(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
+			err := error(newSubmitError(SubmitInternalError, int(C.EPROTO)))
 			e.err = err
 			e.finishAdmittedLocked(err)
 			e.publicDone = true
@@ -646,7 +646,7 @@ func (e *completionEntry) captureWritable(record earlyWritableRecord) (terminal,
 		record.contextKey != e.handleKey {
 		e.setWritableWaiting(false)
 		e.send.payload.close()
-		e.finishSend(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
+		e.finishSend(newSubmitError(SubmitInternalError, int(C.EPROTO)))
 		e.attemptMu.Unlock()
 		return true, false
 	}
@@ -663,7 +663,7 @@ func (e *completionEntry) captureWritable(record earlyWritableRecord) (terminal,
 	if sendResult != C.ZLINK_SEND_ADMITTED || terminalErrno != 0 {
 		e.setWritableWaiting(false)
 		e.send.payload.close()
-		e.finishSend(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
+		e.finishSend(newSubmitError(SubmitInternalError, int(C.EPROTO)))
 		e.attemptMu.Unlock()
 		return true, false
 	}
@@ -716,7 +716,7 @@ func (e *completionEntry) captureRequestWritable(completion *C.zlink_completion_
 			if !publicDone {
 				e.mu.Lock()
 				if !e.publicDone {
-					err := error(&RequestError{Result: RequestInternalError, nativeErrno: int(C.EPROTO)})
+					err := error(newRequestError(RequestInternalError, int(C.EPROTO)))
 					e.err = err
 					e.finishAdmittedLocked(err)
 					e.publicDone = true
@@ -733,7 +733,7 @@ func (e *completionEntry) captureRequestWritable(completion *C.zlink_completion_
 		if e.request != nil && e.request.payload != nil {
 			e.request.payload.close()
 		}
-		e.finishSend(&RequestError{Result: RequestInternalError, nativeErrno: int(C.EPROTO)})
+		e.finishSend(newRequestError(RequestInternalError, int(C.EPROTO)))
 		return true, false
 	}
 
@@ -797,7 +797,7 @@ func (e *completionEntry) attemptRequest() bool {
 	if err == nil {
 		if completionID == 0 {
 			e.request.payload.close()
-			e.finishSend(&RequestError{Result: RequestInternalError, nativeErrno: int(C.EPROTO)})
+			e.finishSend(newRequestError(RequestInternalError, int(C.EPROTO)))
 			return true
 		}
 		e.request.payload.close()
@@ -808,7 +808,7 @@ func (e *completionEntry) attemptRequest() bool {
 
 	var submitErr *SubmitError
 	if errors.As(err, &submitErr) && submitErr.Result == SubmitBackpressured &&
-		submitErr.internalErrno() == int(C.EAGAIN) && completionID != 0 {
+		submitErr.InternalErrno() == int(C.EAGAIN) && completionID != 0 {
 		e.publishSendWait(completionID)
 		if activateErr := e.setWritableWaiting(true); activateErr != nil {
 			e.request.payload.close()
@@ -836,7 +836,7 @@ func sendCompletionError(sendResult SendCompleteResult, terminalErrno int) error
 		result = SubmitInternalError
 		nativeErrno = int(C.EPROTO)
 	}
-	return &SubmitError{Result: result, nativeErrno: nativeErrno}
+	return newSubmitError(result, nativeErrno)
 }
 
 func captureNativeCompletion(
@@ -857,7 +857,7 @@ func captureNativeCompletion(
 		return nil, false, terminal, retry, nil
 	}
 	if completion.kind != C.ZLINK_COMPLETION_REQUEST {
-		return nil, true, true, false, &RequestError{Result: RequestInternalError, nativeErrno: int(C.EPROTO)}
+		return nil, true, true, false, newRequestError(RequestInternalError, int(C.EPROTO))
 	}
 	result := RequestResult(completion.request_result)
 	if result != RequestOK {

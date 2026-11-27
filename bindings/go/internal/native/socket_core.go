@@ -26,7 +26,7 @@ type socketCore struct {
 
 func newSocketCore(ctx *Context, socketType C.zlink_socket_type_t) (*socketCore, error) {
 	if ctx == nil || ctx.closed.Load() {
-		return nil, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return nil, newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	handle, cerr := C.zlink_socket(ctx.raw(), socketType)
 	if handle == nil {
@@ -79,7 +79,7 @@ func (s *socketCore) Disconnect(endpoint string) error {
 }
 
 func (s *socketCore) DisconnectRID(peerRID RoutingID) error {
-	rid := peerRID.toC()
+	rid := routingIDToC(peerRID)
 	nativeResult4, nativeErr4 :=
 		C.zlink_disconnect_rid(
 			s.raw(),
@@ -189,12 +189,13 @@ func (s *socketCore) getStringOption(option C.zlink_option_t, capHint int) (stri
 	if err != nil {
 		return "", err
 	}
-	return string(buf[:int(size)]), nil
+	// Core reports the size including the terminating NUL.
+	return strings.TrimSuffix(string(buf[:int(size)]), "\x00"), nil
 }
 
 func (s *socketCore) setOption(option C.zlink_option_t, ptr unsafe.Pointer, size C.size_t) error {
 	if s == nil {
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	return setNativeOption(s.raw(), s.isClosed(), option, ptr, size)
 }
@@ -218,7 +219,7 @@ func (s *socketCore) withEndpointCString(endpoint string, fn func(*C.char) error
 
 func (s *socketCore) withValidatedCString(value string, validate func(string) error, fn func(*C.char) error) error {
 	if s.isClosed() {
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	if err := validate(value); err != nil {
 		return err

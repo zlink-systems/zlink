@@ -106,7 +106,7 @@ currently selects. `RouterRoute` exposes `routing_id`, `route_generation`. The r
 nonzero opaque token. Compare it only for equality. `PollEventFlag.POLLROUTE` signals a change in a
 selected route.
 
-A connection-attempt snapshot returns one row per outbound connect registration. The target surface (**not implemented yet**, #5752) is
+A connection-attempt snapshot returns one row per outbound connect registration. The surface is
 `connection_attempts_snapshot() -> List[ConnectionAttempt]` on raw sockets other than STREAM, with Poller
 readiness `PollEventFlag.POLLCONNECT`. `ConnectionAttempt` contains `endpoint`, `intent_id`, `revision`,
 `last_failure_id`, `state`, `last_failure`. `ConnectionFailure` contains `kind`, `stage`,

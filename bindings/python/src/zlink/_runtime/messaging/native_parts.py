@@ -52,7 +52,7 @@ def _materialize_native_parts(payload):
                     initialized += 1
                     continue
 
-            _init_msg_from_buffer(native_parts[index], part, borrow=False)
+            _init_msg_from_buffer(native_parts[index], part)
             initialized += 1
     except Exception:
         _close_multipart(native_parts, initialized)

@@ -18,6 +18,30 @@ fn assert_send_submission(_: Result<SendSubmission, zlink::SubmitError>) {}
 
 fn assert_request_submission(_: Result<RequestSubmission, zlink::ZlinkError>) {}
 
+#[test]
+#[allow(deprecated)]
+fn socket_constructor_names_have_the_same_result() {
+    let ctx = Context::new().unwrap();
+    macro_rules! check_constructor {
+        ($new:ident, $old:ident) => {{
+            let canonical = ctx.$new().unwrap();
+            let legacy = ctx.$old().unwrap();
+            assert_eq!(
+                canonical.common_options().linger().unwrap(),
+                legacy.common_options().linger().unwrap()
+            );
+        }};
+    }
+    check_constructor!(create_pair_socket, pair_socket);
+    check_constructor!(create_dealer_socket, dealer_socket);
+    check_constructor!(create_router_socket, router_socket);
+    check_constructor!(create_pub_socket, pub_socket);
+    check_constructor!(create_sub_socket, sub_socket);
+    check_constructor!(create_xpub_socket, xpub_socket);
+    check_constructor!(create_xsub_socket, xsub_socket);
+    check_constructor!(create_stream_socket, stream_socket);
+}
+
 // ---------------------------------------------------------------------------
 // Socket type capability separation
 // ---------------------------------------------------------------------------
@@ -175,9 +199,7 @@ fn common_typed_options() {
     options.set_receive_high_water_mark(2000).unwrap();
     assert_eq!(options.receive_high_water_mark().unwrap(), 2000);
 
-    options
-        .set_linger(100)
-        .unwrap();
+    options.set_linger(100).unwrap();
     assert_eq!(options.submit_retry_mode().unwrap(), SubmitRetryMode::Off);
     assert_eq!(
         options.submit_retry_timeout().unwrap(),
@@ -215,9 +237,7 @@ fn router_typed_options() {
     router.set_probe(false).unwrap();
     sock.set_routing_id(&RoutingId::from(b"router-surface"))
         .unwrap();
-    common
-        .set_linger(1)
-        .unwrap();
+    common.set_linger(1).unwrap();
     common
         .set_rid_duplicate_policy(RidDuplicatePolicy::Reject)
         .unwrap();
@@ -232,9 +252,7 @@ fn pub_typed_options() {
     pub_options.set_verbose(false).unwrap();
     pub_options.set_verboser(false).unwrap();
     pub_options.set_no_drop(false).unwrap();
-    common
-        .set_receive_timeout(1)
-        .unwrap();
+    common.set_receive_timeout(1).unwrap();
 }
 
 #[test]

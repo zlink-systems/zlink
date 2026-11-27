@@ -26,11 +26,11 @@ func recvMultipart(nativeBuffer *[]C.zlink_msg_t, reuse []*Message, flags RecvFl
 		)
 		if result == C.ZLINK_RECV_BUFFER_TOO_SMALL {
 			if partCount <= C.size_t(len(native)) {
-				return nil, &RecvError{Result: RecvInternalError, nativeErrno: int(C.EPROTO)}
+				return nil, newRecvError(RecvInternalError, int(C.EPROTO))
 			}
 			required := int(partCount)
 			if required <= 0 {
-				return nil, &RecvError{Result: RecvInternalError, nativeErrno: int(C.EOVERFLOW)}
+				return nil, newRecvError(RecvInternalError, int(C.EOVERFLOW))
 			}
 			if cap(native) >= required {
 				native = native[:required]
@@ -44,7 +44,7 @@ func recvMultipart(nativeBuffer *[]C.zlink_msg_t, reuse []*Message, flags RecvFl
 			return nil, err
 		}
 		if partCount == 0 || partCount > C.size_t(len(native)) {
-			return nil, &RecvError{Result: RecvInternalError, nativeErrno: int(C.EPROTO)}
+			return nil, newRecvError(RecvInternalError, int(C.EPROTO))
 		}
 		return adoptReceivedParts(native, int(partCount), reuse)
 	}

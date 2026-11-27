@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
-use crate::ffi;
+use crate::native::ffi;
 
 #[derive(Clone)]
 pub(crate) struct PollerSocketRegistration {
