@@ -20,47 +20,63 @@ type connectionSocket struct {
 
 // SetSendHighWaterMark sets the send byte HWM over the full uint64 range.
 func (s *connectionSocket) SetSendHighWaterMark(value uint64) error {
-	return s.setUint64Option(C.ZLINK_OPT_SNDHWM, value)
+	return s.CommonOptions().SetSendHighWaterMark(value)
 }
 
 // SendHighWaterMark returns the send byte HWM without narrowing the Core value.
 func (s *connectionSocket) SendHighWaterMark() (uint64, error) {
-	return s.getUint64Option(C.ZLINK_OPT_SNDHWM)
+	return s.CommonOptions().SendHighWaterMark()
 }
 
 // SetReceiveHighWaterMark sets the receive byte HWM over the full uint64 range.
 func (s *connectionSocket) SetReceiveHighWaterMark(value uint64) error {
-	return s.setUint64Option(C.ZLINK_OPT_RCVHWM, value)
+	return s.CommonOptions().SetReceiveHighWaterMark(value)
 }
 
 // ReceiveHighWaterMark returns the receive byte HWM without narrowing the Core value.
 func (s *connectionSocket) ReceiveHighWaterMark() (uint64, error) {
-	return s.getUint64Option(C.ZLINK_OPT_RCVHWM)
+	return s.CommonOptions().ReceiveHighWaterMark()
 }
 
 func (s *connectionSocket) SetLinger(value time.Duration) error {
-	return s.setDurationOption(C.ZLINK_OPT_LINGER, value)
+	return s.CommonOptions().SetLinger(value)
 }
 
+func (s *connectionSocket) Linger() (time.Duration, error) { return s.CommonOptions().Linger() }
+
 func (s *connectionSocket) SetReceiveTimeout(value time.Duration) error {
-	return s.setDurationOption(C.ZLINK_OPT_RCVTIMEO, value)
+	return s.CommonOptions().SetReceiveTimeout(value)
+}
+
+func (s *connectionSocket) ReceiveTimeout() (time.Duration, error) {
+	return s.CommonOptions().ReceiveTimeout()
 }
 
 func (s *connectionSocket) SetSendTimeout(value time.Duration) error {
-	return s.setDurationOption(C.ZLINK_OPT_SNDTIMEO, value)
+	return s.CommonOptions().SetSendTimeout(value)
+}
+
+func (s *connectionSocket) SendTimeout() (time.Duration, error) {
+	return s.CommonOptions().SendTimeout()
 }
 
 func (s *connectionSocket) SetTCPKeepalive(value bool) error {
-	return s.setBoolOption(C.ZLINK_OPT_TCP_KEEPALIVE, value)
+	return s.CommonOptions().SetTCPKeepalive(value)
 }
+
+func (s *connectionSocket) TCPKeepalive() (bool, error) { return s.CommonOptions().TCPKeepalive() }
 
 func (s *connectionSocket) SetTCPNoDelay(value bool) error {
-	return s.setBoolOption(C.ZLINK_OPT_TCP_NODELAY, value)
+	return s.CommonOptions().SetTCPNoDelay(value)
 }
 
+func (s *connectionSocket) TCPNoDelay() (bool, error) { return s.CommonOptions().TCPNoDelay() }
+
 func (s *connectionSocket) SetIPv6(value bool) error {
-	return s.setBoolOption(C.ZLINK_OPT_IPV6, value)
+	return s.CommonOptions().SetIPv6(value)
 }
+
+func (s *connectionSocket) IPv6() (bool, error) { return s.CommonOptions().IPv6() }
 
 func (s *connectionSocket) SetRidDuplicatePolicy(value int) error {
 	return s.setIntOption(C.ZLINK_OPT_RID_DUPLICATE_POLICY, int32(value))
@@ -72,29 +88,27 @@ func (s *connectionSocket) RidDuplicatePolicy() (int, error) {
 }
 
 func (s *connectionSocket) SetSubmitRetryMode(value SubmitRetryMode) error {
-	return s.setIntOption(C.ZLINK_OPT_SUBMIT_RETRY_MODE, int32(value))
+	return s.CommonOptions().SetSubmitRetryMode(value)
 }
 
 func (s *connectionSocket) SubmitRetryMode() (SubmitRetryMode, error) {
-	value, err := s.getIntOption(C.ZLINK_OPT_SUBMIT_RETRY_MODE)
-	return SubmitRetryMode(value), err
+	return s.CommonOptions().SubmitRetryMode()
 }
 
 func (s *connectionSocket) SetSubmitRetryTimeout(value time.Duration) error {
-	return s.setDurationOption(C.ZLINK_OPT_SUBMIT_RETRY_TIMEOUT, value)
+	return s.CommonOptions().SetSubmitRetryTimeout(value)
 }
 
 func (s *connectionSocket) SubmitRetryTimeout() (time.Duration, error) {
-	return s.getDurationOption(C.ZLINK_OPT_SUBMIT_RETRY_TIMEOUT)
+	return s.CommonOptions().SubmitRetryTimeout()
 }
 
 func (s *connectionSocket) SetSubmitRetryAttempts(value int) error {
-	return s.setIntOption(C.ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS, int32(value))
+	return s.CommonOptions().SetSubmitRetryAttempts(value)
 }
 
 func (s *connectionSocket) SubmitRetryAttempts() (int, error) {
-	value, err := s.getIntOption(C.ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS)
-	return int(value), err
+	return s.CommonOptions().SubmitRetryAttempts()
 }
 
 // SetReceiveFlowState sets this socket's local receive-flow state
