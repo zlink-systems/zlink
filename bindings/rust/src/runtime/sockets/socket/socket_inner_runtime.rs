@@ -1,4 +1,14 @@
 use super::*;
+
+/// Core's endpoint field is `char[256]`: reject NUL bytes and anything over 255
+/// bytes here instead of letting Core truncate.
+fn endpoint_cstring(addr: &str) -> Option<CString> {
+    if addr.len() > 255 {
+        return None;
+    }
+    CString::new(addr).ok()
+}
+
 impl crate::internal::SocketStorage {
     pub(crate) fn create(
         ctx: &crate::contracts::core::context::Context,
@@ -36,7 +46,7 @@ impl crate::internal::SocketStorage {
     // -- Connection --------------------------------------------------------
 
     pub(crate) fn bind(&self, addr: &str) -> Result<(), BindError> {
-        let c = CString::new(addr).map_err(|_| {
+        let c = endpoint_cstring(addr).ok_or_else(|| {
             BindError::new(
                 crate::contracts::errors::errors::BindResult::InvalidArgument,
                 libc::EINVAL,
@@ -46,7 +56,7 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn connect(&self, addr: &str) -> Result<(), ConnectError> {
-        let c = CString::new(addr).map_err(|_| {
+        let c = endpoint_cstring(addr).ok_or_else(|| {
             ConnectError::new(
                 crate::contracts::errors::errors::ConnectResult::InvalidArgument,
                 libc::EINVAL,
@@ -56,7 +66,7 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn unbind(&self, addr: &str) -> Result<(), ConnectError> {
-        let c = CString::new(addr).map_err(|_| {
+        let c = endpoint_cstring(addr).ok_or_else(|| {
             ConnectError::new(
                 crate::contracts::errors::errors::ConnectResult::InvalidArgument,
                 libc::EINVAL,
@@ -66,7 +76,7 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn disconnect(&self, addr: &str) -> Result<(), ConnectError> {
-        let c = CString::new(addr).map_err(|_| {
+        let c = endpoint_cstring(addr).ok_or_else(|| {
             ConnectError::new(
                 crate::contracts::errors::errors::ConnectResult::InvalidArgument,
                 libc::EINVAL,

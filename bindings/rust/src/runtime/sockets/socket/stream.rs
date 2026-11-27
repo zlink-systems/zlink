@@ -34,9 +34,9 @@ impl SocketInner {
         out.reset();
         let mut rid = ptr::null();
         let mut header = Message::new()
-            .map_err(|error| RecvError::new(RecvResult::InternalError, error.native_errno()))?;
+            .map_err(|error| RecvError::new(RecvResult::InternalError, error.internal_errno()))?;
         let mut body = Message::new()
-            .map_err(|error| RecvError::new(RecvResult::InternalError, error.native_errno()))?;
+            .map_err(|error| RecvError::new(RecvResult::InternalError, error.internal_errno()))?;
         let rc = unsafe {
             ffi::zlink_stream_recv_packet(handle, &mut rid, header.raw_mut(), body.raw_mut(), flags)
         };

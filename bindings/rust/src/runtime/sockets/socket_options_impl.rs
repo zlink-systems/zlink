@@ -207,11 +207,11 @@ impl<'a> RouterSocketOptions<'a> {
     pub fn set_connect_routing_id(&self, id: &RoutingId) -> Result<(), ConfigError> {
         self.inner.set_connect_routing_id(id)
     }
-    /// Returns this peer's relative load-balancing weight (0-100).
+    /// Returns this peer's relative load-balancing weight (0-10000).
     pub fn weight(&self) -> Result<u32, ConfigError> {
         self.inner.weight()
     }
-    /// Sets this peer's relative load-balancing weight (0-100); higher values
+    /// Sets this peer's relative load-balancing weight (0-10000); higher values
     /// receive a larger share of round-robined sends.
     pub fn set_weight(&self, value: u32) -> Result<(), ConfigError> {
         self.inner.set_weight(value)
@@ -236,11 +236,11 @@ impl<'a> DealerSocketOptions<'a> {
     pub fn set_probe(&self, enabled: bool) -> Result<(), ConfigError> {
         self.inner.set_probe(enabled)
     }
-    /// Returns this peer's relative load-balancing weight (0-100).
+    /// Returns this peer's relative load-balancing weight (0-10000).
     pub fn weight(&self) -> Result<u32, ConfigError> {
         self.inner.weight()
     }
-    /// Sets this peer's relative load-balancing weight (0-100); higher values
+    /// Sets this peer's relative load-balancing weight (0-10000); higher values
     /// receive a larger share of round-robined sends.
     pub fn set_weight(&self, value: u32) -> Result<(), ConfigError> {
         self.inner.set_weight(value)
