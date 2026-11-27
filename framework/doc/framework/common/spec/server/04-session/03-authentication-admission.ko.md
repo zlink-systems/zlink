@@ -154,17 +154,34 @@ Connector는 다음과 같이 처리한다.
   기다렸다가 같은 ticket으로 다시 보낸다.
 - 마감은 §5.8과 같다: 원래 request deadline과 `처음 거절을 받은 시각 + MaxAdmissionWait` 중 이른 쪽. 마감이 지나면
   `RequestTimeout`으로 끝내고 더 보내지 않는다.
-- `$zlink.admission.queueRequired` 값이 `"1"`이 아니거나 Response·Send payload가 위 형식이 아니면 `FrameDecodeFailed`로
-  그 request만 끝내고 연결은 유지한다.
+- `$zlink.admission.queueRequired` 값이 `"1"`이 아니거나 Response payload가 위 형식이 아니면 `FrameDecodeFailed`로
+  그 request만 끝내고 연결은 유지한다. 형식이 틀린 Send는 §3.5.5를 따른다.
 
 ### 3.5 대기열 세부 계약
 
 다음은 PM 판정(11-25, #4546 2단계)으로 정했다. 바꿀 때는 이 절, [Stream Connector §5.8](../../stream-connector/32-stream-connector.ko.md#58-입장-대기와-자동-재시도)과
 공통 fixture를 함께 고친다.
 
+#### 3.5.0 2단계 설정
+
+2단계 설정은 1단계와 같은 STREAM session 등록 options(§1.1)에 둔다. 언어별 이름은 언어별 exact interface 문서가 정한다.
+한 node의 STREAM 등록마다 값이 다르면 시작할 때 설정 오류다.
+
+| 설정 | 의미 | 기본값 |
+|---|---|---|
+| `AdmissionQueueEnabled` | 2단계(로그인 대기열)를 켠다. bool | `false` |
+| `AdmissionQueueKey` | ticket 서명 현재 키(§3.5.2). 2단계를 켜면 필수 | 없음 |
+| `AdmissionQueuePreviousKey` | ticket 검증 이전 키(§3.5.2). 선택 | 없음 |
+| `AdmissionQueueMeshName` | 대기열 Spot을 둘 RouteMesh(§3.5.1). process에 MeshNode가 하나면 생략하고 그 mesh를 쓴다. 여럿이면 필수 | 없음 |
+| `AdmissionGlobalLimit` | mesh 전체 동시 인증 상한(§3.5.3). `1..2147483647` 정수, 선택 | 없음(node별 예산만) |
+
+`AdmissionQueueEnabled`가 `true`인데 `AuthenticationPacketName`이나 `AdmissionQueueKey`가 없거나, MeshNode가 없거나, MeshNode가 여럿인데
+`AdmissionQueueMeshName`이 없으면(`Mesh selection is required`, Instance Spot 기본 mesh 판정과 같다), 2단계를 켠 STREAM 등록 이름이 UTF-8 1~255 byte가 아니면(ticket MAC의 `len(StreamName)`이 1 byte다) 시작할 때 설정 오류다. 모든 node에 같은 값을 둔다.
+`false`이면 나머지 2단계 설정은 읽지 않는다.
+
 #### 3.5.1 대기열 Spot과 epoch
 
-- 대기열 Spot은 인증 STREAM 등록이 속한 RouteMesh마다 하나인 Instance Spot이고 Spot ID는 `$zlink.admission-queue`다.
+- 대기열 Spot은 §3.5.0의 대기열 RouteMesh(MeshNode가 하나면 그 mesh, 여럿이면 `AdmissionQueueMeshName`)에 하나인 Instance Spot이고 Spot ID는 `$zlink.admission-queue/<RouteMeshName>`이다. Spot ID는 Location Store에서 mesh를 가리지 않는 전역 이름이므로 RouteMesh 이름을 넣어 같은 Store를 쓰는 RouteMesh끼리 겹치지 않게 한다(Spot ID 길이 상한 안에서).
   Framework가 첫 `$zlink.admission.enqueue`나 첫 node 보고(§3.5.3)를 `InstanceSpot(...)` intent로 보내 준비한다.
   배치는 기존 Instance Spot 배치 규칙을 따르며 별도 배치 권위를 두지 않는다.
 - Epoch는 대기열 Spot incarnation이 초기화할 때 CSPRNG로 만드는 0이 아닌 64-bit 부호 없는 정수다. Incarnation이
@@ -176,9 +193,10 @@ Connector는 다음과 같이 처리한다.
 
 - Ticket 바이트는 `version(1 byte, 0x01) || expiresAtUnixMs(8 byte big-endian) || epoch(8 byte big-endian) || mac(32 byte)`
   49 byte이고, wire에는 이것을 padding 없는 base64url로 보낸다(66자). 길이나 version이 다르면 서명을 검사하지 않고 거절한다.
-- `mac = HMAC-SHA256(key, "zlink-admission-ticket-v1" || 0x00 || len(SessionRid)(1 byte) || SessionRid 바이트 || expiresAtUnixMs || epoch)`.
-  SessionRid는 ticket에 넣지 않는다. 검증 node는 인증 request를 받은 session의 SessionRid로 다시 계산하므로, 다른
-  session에서 받은 ticket은 서명이 맞지 않는다.
+- `mac = HMAC-SHA256(key, "zlink-admission-ticket-v1" || 0x00 || len(NodeRid)(1 byte) || NodeRid 바이트 || nodeLifecycleGeneration(8 byte big-endian) || len(StreamName)(1 byte) || StreamName UTF-8 || len(SessionRid)(1 byte) || SessionRid 바이트 || expiresAtUnixMs || epoch)`.
+  SessionRid는 Core STREAM socket 안에서만 고유하므로(node·listener가 다르면 같은 값이 나올 수 있다) 연결 식별은
+  (node RID, node lifecycle generation, STREAM 등록 이름, SessionRid)로 한다. 이 값들은 ticket에 넣지 않는다. 검증 node는
+  인증 request를 받은 연결의 자기 값으로 다시 계산하므로, 다른 연결에서 받은 ticket은 서명이 맞지 않는다.
 - 만료 시각은 UTC Unix 밀리초 wall clock이다. 발급 Spot은 `발급 시각 + 30초`로 정한다. 검증 node는
   `현재 wall clock ≤ expiresAtUnixMs + 2000ms`일 때만 받는다(2초는 node 간 시계 차 허용값). `expiresInMs`는
   `expiresAtUnixMs − 발급 시각`이다.
@@ -190,15 +208,46 @@ Connector는 다음과 같이 처리한다.
 #### 3.5.3 Node 보고와 ticket 발급
 
 - 2단계가 켜진 node는 1초마다 대기열 Spot에 `NodeReport` Spot request를 보낸다. 내용은 node RID, 1단계 한도, 현재
-  처리 중 수, 직전 보고 뒤 사용된 ticket의 SessionRid 목록, 직전 보고 뒤 끝난 대기 session의 SessionRid 목록이다.
+  처리 중 수, 직전 보고 뒤 사용된 ticket의 SessionRid 목록, 직전 보고 뒤 끝난 대기 session의 SessionRid 목록, 전역 상한이 있을 때 쥐고 있는 permit ID 목록과 끝난 요청의 연속 최대 순번(아래)이다.
   Spot은 그 Response로 현재 epoch를 돌려준다. 이 보고는 Framework 내부 Spot 메시지이고 client wire가 아니다.
 - Spot은 3초 안에 받은 보고만 유효로 본다. 유효 보고가 없는 node의 session에는 ticket을 내지 않는다.
-- 대기자는 SessionRid와 그 session의 node RID로 기록한다. Ticket은 그 session의 node에서만 쓸 수 있으므로 발급
+- 대기자는 연결 식별(node RID, node lifecycle generation, STREAM 등록 이름, SessionRid)로 기록하고, node 보고의 사용·종료
+  목록도 같은 연결 식별을 쓴다. Ticket은 그 session의 node에서만 쓸 수 있으므로 발급
   예산도 node마다 센다: `예산(N) = max(0, 한도 − 처리 중 수 − 그 보고 뒤 N의 대기자에게 낸 ticket 수)`. Spot은 보고를
   받을 때와 대기자가 들어올 때 각 node의 예산만큼 그 node 대기자에게 enqueue 순서대로 ticket을 낸다. 그래서 순서는
   node 안에서 FIFO이고 mesh 전체로는 근사 FIFO다.
+- 전역 상한(아래)이 있으면 발급 예산에도 넣는다: `예산(N) = min(node 예산(N), max(0, AdmissionGlobalLimit − 실행 중 permit 수 − 아직 쓰이지 않은 미만료 발급 ticket 수))`.
+  그래서 permit이 빌 만큼만 ticket이 나간다. `AdmitPermit`이 `granted=false`를 받은 연결의 ticket은 그 자리에서 무효가 되고, Spot은 그
+  대기자를 그 node FIFO의 맨 앞에 다시 둔다. 그 연결이 다시 enqueue하면 같은 ticket이 아니라 현재 순번을 받는다.
+  Spot은 `AdmitPermit`을 받은 연결에 지금 유효한(발급됐고 만료·무효가 아닌) ticket이 있을 때만 `granted`를 검토하고, 없으면 `granted=false`다.
+  그래서 무효화 뒤 새 ticket이 나가기 전에 옛 ticket으로 다시 온 인증은 거절되고, 새 ticket이 나간 뒤에는 같은 연결·같은 epoch이므로
+  ticket 바이트와 상관없이 같게 다룬다.
+- **전역 상한.** 설정 값 `AdmissionGlobalLimit`(양의 정수, 선택)이 있으면 mesh 전체의 동시 인증 실행 수를 이 값으로 막는다.
+  Ticket은 입장 자격일 뿐이고, 실행 permit은 대기열 Spot이 따로 준다.
+  - Node는 유효한 ticket을 가진 인증을 handler에 넣기 전에 대기열 Spot에 `AdmitPermit` Spot request를 한 번 보낸다. 내용은 node
+    RID, node owner lease(`ownerId`, `leaseGeneration`), SessionRid, ticket의 epoch와 `requestSeq`다. `requestSeq`는 node incarnation 안에서
+    단조 증가하는 요청 순번이고 Spot은 permit에 그 순번을 기록한다. Spot은 `실행 중 permit 수 < AdmissionGlobalLimit`
+    이고 epoch가 현재 값이면 `granted`=true와 permit ID(0이 아닌 64-bit)를 Response로 주고, 아니면 `granted`=false Response를 준다(§3.5.8).
+    Node는 거절을 받으면 client에 §3.4 첫 행과 같은 `unavailable`+queueRequired를 보내고, 그 연결은 §3.5.5대로 다시 대기한다.
+  - Node는 handler가 끝나면(성공·실패·취소 모두) `ReleasePermit` Spot send로 permit을 반납한다. Spot은 같은 permit의 반납을
+    멱등으로 처리한다.
+  - Spot은 permit마다 node owner lease를 기록한다. 다음 두 경우에만 permit을 쥔 owner들의 lease를 Location Store에서 확인해,
+    끝난 lease의 permit을 모두 회수한다: `AdmitPermit`이 상한에 닿았을 때, 그리고 node `report`를 처리하며 발급 예산을 셀 때
+    전역 상한 때문에 ticket을 내지 못한 대기자가 있을 때(permit을 쥔 node가 반납 없이 사라져 `AdmitPermit`이 다시 오지 않는
+    경우에도 회수되게 한다). 그 밖에는 Store를 읽지 않는다. Node 보고(§3.5.3)는
+    쥐고 있는 permit ID 목록과 '이 순번 이하의 `AdmitPermit`은 모두 끝났다(응답을 받았거나 기본 timeout으로 포기했다)'인 연속 최대
+    `requestSeq`를 보낸다. Spot은 `requestSeq`가 그 값 이하인데 목록에 없는 permit만 회수한다. 그래서 응답이 사라진 permit은 그
+    요청의 timeout 뒤 회수되고, 응답 순서가 뒤바뀌어도 아직 끝나지 않은 요청의 permit은 회수되지 않는다.
+  - `AdmitPermit`은 Framework Spot request의 기본 timeout으로 기다린다(새 설정·timer 없음). 실패하거나 그 안에 응답이 없으면 handler를 실행하지 않고 `unavailable`로 끝낸다.
+    전역 상한이 있으면 Spot이 없을 때 넘겨 들여보내지 않는다.
+  - Ticket 재사용, 사용 보고 지연, 보고 만료와 epoch 전환은 permit 수에 영향을 주지 않는다. 비용은 2단계와 전역 상한을 켰을 때
+    인증마다 Spot 왕복 1회와 반납 send 1회다.
+  - 모든 node에 같은 값을 설정한다. Spot은 자기 incarnation이 도는 node의 설정 값을 쓴다. 새 incarnation은 permit 수 0에서
+    시작하지만, 이전 incarnation의 permit을 쥔 node는 새 epoch를 받은 보고 Response 뒤 그 permit을 반납한 것으로 보고 새로 셀
+    permit에 포함하지 않으므로, incarnation 전환 직후에는 상한을 잠시 넘을 수 있다. 그 폭은 전환 시점에 실행 중이었거나 응답이 오가던 permit 수 이하다(이전 incarnation의 grant가 전환 뒤 늦게 도착한 경우 포함). Owner lease가 끝나 permit을 회수당한 node에서 아직 끝나지 않은 handler도
+    같은 종류의 일시적 초과로 본다.
 - 예상 대기 `estimatedWaitMs`는 `ceil(position × 1000 / r)`이고, r은 최근 30초 동안 낸 ticket 수 ÷ 30(초당)이다.
-  r이 0이면 `position × 1000`이다. 결과는 2^31 − 1에서 자른다. `position`은 1부터 시작하는 mesh 전체 순번이다.
+  r이 0이면 `position × 1000`이다. 결과는 2^31 − 1에서 자른다. `position`은 mesh 전체 FIFO에서 그 대기자 앞에 있는 **ticket을 받지 않은** 대기자 수 + 1이다(ticket을 받은 대기자는 더 기다리지 않으므로 세지 않는다). `estimatedWaitMs`도 이 `position`으로 계산한다.
 - 같은 SessionRid의 `$zlink.admission.enqueue`는 멱등이다. 이미 대기 중이면 현재 순번을, ticket을 받고 아직 쓰지
   않았고 만료되지 않았으면 같은 ticket을 Response로 준다. 새 대기자를 만들지 않는다.
 - 대기자를 지우는 경우는 세 가지다: 보고에 사용된 ticket으로 올라온 경우, 보고에 끝난 session으로 올라온 경우,
@@ -220,6 +269,8 @@ Connector는 다음과 같이 처리한다.
   operation 식별자 없이 연결 단위로 처리한다.
 - Ticket Send가 enqueue Response보다 먼저 와도 받는다. Ticket을 받은 뒤 오는 순번(Response나 Send)은 무시하고
   `OnAdmissionPosition`도 부르지 않는다. 대기 중인 request가 없을 때 온 position·ticket Send는 버린다.
+- 대기 중인 request가 있을 때 온 position·ticket Send의 payload가 §3.4 형식이 아니면, Send에는 operation 식별자가 없어
+  특정 request에 귀속할 수 없으므로 그 연결에서 대기 중인 인증 request를 모두 `FrameDecodeFailed`로 끝내고 연결을 닫는다.
 
 #### 3.5.6 예약 이름과 metadata 충돌
 
@@ -238,6 +289,35 @@ Connector는 다음과 같이 처리한다.
   상태가 끝났다는 별도 callback은 없다. 각 request의 완료가 끝을 알린다.
 - 한 연결의 순서는 `OnAdmissionQueued` → `OnAdmissionPosition`* → (`OnAdmissionWaiting`*) → request 완료다.
   정확한 signature는 언어별 exact interface가 구현 PR과 함께 정한다.
+
+#### 3.5.8 대기열 Spot 등록과 node 간 메시지
+
+- 대기열 Spot의 Spot type은 Framework Instance Spot type `$zlink.AdmissionQueue`다. 2단계를 켠 node 중 대기열 RouteMesh(§3.5.0)의
+  Object role이 Server인 node만 이 type을 등록한다(배치 후보). Object Client node는 등록하지 않고 메시지만 보낸다(기존 Instance Spot
+  intent). 그 mesh에 Location Store가 없거나 Object role이 `None`이면 시작할 때 설정 오류다. 실행 중 그 mesh에 Server node가 없으면
+  `enqueue`·`report`가 실패하고 node는 §3.5.1대로 ticket을 모두 거절한다.
+- 대기열 Spot과 node 사이 메시지는 아래 네 가지이며 기존 typed JSON 규칙([Message model §5](../00-foundation/05-message-model.ko.md))을
+  따른다. 필드 이름은 camelCase, `dec`는 부호 없는 64-bit 정수(0..2^64−1)의 10진 문자열(부호·선행 0 없음), `b64`는 padding 없는 base64url이다. 모든 필드는 필수이고
+  `?`가 붙은 것만 선택이다. 알 수 없는 필드는 무시하고, 빠진 필수 필드나 형식 오류는 protocol error다.
+- 대기자에게 가는 순번·ticket은 새 전달 경로를 두지 않는다. Spot은 그 node의 다음 `report` Response에 `deliveries`로 싣고, node가
+  자기 연결로 §3.4의 `$zlink.admission.position`·`$zlink.admission.ticket` Send를 보낸다. `enqueue` Response의 `delivery`도 같다.
+
+공통 형식
+
+| 이름 | 필드 |
+|---|---|
+| `Connection` | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `streamName` string · `sessionRid` b64 |
+| `Delivery` | `streamName` string · `sessionRid` b64 · `kind` `"position"`\|`"ticket"` · `position?` int32(1부터) · `estimatedWaitMs?` int32 · `ticket?` b64(66자) · `expiresInMs?` int32. `kind`가 `position`이면 `position`·`estimatedWaitMs`, `ticket`이면 `ticket`·`expiresInMs`가 필수다 |
+
+응답은 요청과 같은 application payload envelope로 가며 packet name은 요청 이름 뒤에 `.reply`를 붙인다
+(`$zlink.admission-queue.enqueue.reply`·`.report.reply`·`.admit-permit.reply`). `release-permit`은 send라 응답이 없다.
+
+| 메시지 | 종류 | 요청 | 응답 |
+|---|---|---|---|
+| `$zlink.admission-queue.enqueue` | request | `connection` Connection | `epoch` dec · `delivery` Delivery |
+| `$zlink.admission-queue.report` | request(1초마다, §3.5.3) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `limit` int32 · `inFlight` int32 · `usedTickets` [{`streamName`, `sessionRid`}] · `endedSessions` [{`streamName`, `sessionRid`}] · `heldPermits` [dec] · `resolvedRequestSeq` dec(전역 상한이 없으면 `"0"`) | `epoch` dec · `deliveries` [Delivery](이 node 대기자 중 순번·예상 대기가 바뀐 것, 5초가 지난 것, 새 ticket) |
+| `$zlink.admission-queue.admit-permit` | request(§3.5.3 전역 상한) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `ownerId` string · `leaseGeneration` dec · `streamName` string · `sessionRid` b64 · `epoch` dec · `requestSeq` dec | `granted` bool · `permitId?` dec(`granted`면 필수, 0이 아님). 거절도 Response(`granted`=false)이고, node는 그때 client에 §3.4 첫 행(`unavailable` + queueRequired)을 보낸다 |
+| `$zlink.admission-queue.release-permit` | send | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `permitId` dec | — |
 
 ## 4. 시험
 
