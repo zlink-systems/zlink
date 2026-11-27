@@ -2873,7 +2873,7 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
-    private static ZLinkSpotAcceptedJournalRecord DecodeRelocationReplayRecord(
+    internal static ZLinkSpotAcceptedJournalRecord DecodeRelocationReplayRecord(
         ZLinkRelocationQueuedJob job,
         string channelName
     )
