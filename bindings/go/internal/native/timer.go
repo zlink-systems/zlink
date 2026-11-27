@@ -32,7 +32,7 @@ func (t *Timer) raw() unsafe.Pointer {
 
 func (t *Timer) Start(intervalNs, repeatCount uint64) error {
 	if t == nil || t.closed || t.handle == nil {
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	nativeResult0, nativeErr0 := C.zlink_timer_start(t.handle, C.uint64_t(intervalNs), C.uint64_t(repeatCount))
 	return configErrorFromCall(nativeResult0, nativeErr0)
@@ -40,7 +40,7 @@ func (t *Timer) Start(intervalNs, repeatCount uint64) error {
 
 func (t *Timer) Stop() error {
 	if t == nil || t.closed || t.handle == nil {
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	nativeResult1, nativeErr1 := C.zlink_timer_stop(t.handle)
 	return configErrorFromCall(nativeResult1, nativeErr1)
@@ -52,7 +52,7 @@ func (t *Timer) Stop() error {
 // control-plane APIs by doc/spec/bindings/go/README.md §Receive And Subscribe Shape.
 func (t *Timer) Recv() (uint64, bool, error) {
 	if t == nil || t.closed || t.handle == nil {
-		return 0, false, &RecvError{Result: RecvTerminated, nativeErrno: int(C.EFAULT)}
+		return 0, false, newRecvError(RecvTerminated, int(C.EFAULT))
 	}
 	var fireCount C.uint64_t
 	rc, cerr := C.zlink_timer_recv(t.handle, &fireCount)

@@ -42,7 +42,7 @@ func withCStringPair(left string, right string, fn func(*C.char, *C.char) error)
 
 func subscriptionAt(handle unsafe.Pointer, index int) (string, bool, error) {
 	if index < 0 {
-		return "", false, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return "", false, newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	var size C.size_t
 	var isPattern C.int

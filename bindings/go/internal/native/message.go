@@ -4,158 +4,43 @@ package native
 
 /*
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include "zlink.h"
+_Static_assert(offsetof(zlink_routing_id_t, size) == 0, "routing id size offset");
+_Static_assert(offsetof(zlink_routing_id_t, data) == 1, "routing id data offset");
 */
 import "C"
 
 import (
-	"bytes"
-	"encoding/binary"
-	"encoding/hex"
-	"fmt"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 	"unsafe"
+
+	"zlink.systems/zlink/contracts"
 )
 
-const maxRoutingIDSize = 255
 const maxFixedCStringFieldSize = 255
 
-// RoutingID is a fixed-size value type. The data lives inline in a
-// [255]byte array (matching zlink_routing_id_t) rather than a heap
-// slice, so construction from a recv path or hex string no longer
-// allocates and copies are register/stack moves.
-type RoutingID struct {
-	data [maxRoutingIDSize]byte
-	size uint8
-}
+type RoutingID = contracts.RoutingID
 
-func NewRoutingID(data []byte) RoutingID {
-	if len(data) == 0 || len(data) > maxRoutingIDSize {
-		return RoutingID{}
-	}
-	var rid RoutingID
-	rid.size = uint8(copy(rid.data[:], data))
-	return rid
-}
+var (
+	NewRoutingID          = contracts.NewRoutingID
+	NewRoutingIDString    = contracts.NewRoutingIDString
+	NewRoutingIDUint32    = contracts.NewRoutingIDUint32
+	NewRoutingIDUUIDBytes = contracts.NewRoutingIDUUIDBytes
+	NewRoutingIDFromHex   = contracts.NewRoutingIDFromHex
+)
 
-// NewRoutingIDString encodes a user-visible routing id string as UTF-8.
-// Invalid input returns the empty RoutingID value.
-func NewRoutingIDString(value string) RoutingID {
-	return NewRoutingID([]byte(value))
-}
+// RoutingID and zlink_routing_id_t have the same fixed layout. These bounds
+// make the FFI conversion a value copy without allocating on send or receive.
+var _ [int(unsafe.Sizeof(RoutingID{})) - int(C.sizeof_zlink_routing_id_t)]byte
+var _ [int(C.sizeof_zlink_routing_id_t) - int(unsafe.Sizeof(RoutingID{}))]byte
 
-func NewRoutingIDUint32(value uint32) RoutingID {
-	var data [4]byte
-	binary.BigEndian.PutUint32(data[:], value)
-	return NewRoutingID(data[:])
-}
-
-func NewRoutingIDUUIDBytes(value [16]byte) RoutingID {
-	return NewRoutingID(value[:])
-}
-
-// NewRoutingIDFromHex parses the hex form returned by RoutingID.Hex. Invalid
-// input returns the empty RoutingID value.
-func NewRoutingIDFromHex(value string) RoutingID {
-	rid, err := parseRoutingIDHex(value)
-	if err != nil {
-		return RoutingID{}
-	}
-	return rid
-}
-
-// parseRoutingIDHex parses the hex form returned by RoutingID.Hex. Invalid
-// input returns *ConfigError.
-func parseRoutingIDHex(value string) (RoutingID, error) {
-	if len(value) == 0 || len(value)%2 != 0 || len(value) > maxRoutingIDSize*2 {
-		return RoutingID{}, validationError("routing id string must be non-empty even-length hex and decode to at most %d bytes", maxRoutingIDSize)
-	}
-	data, err := hex.DecodeString(value)
-	if err != nil {
-		return RoutingID{}, validationError("routing id string must contain only hex digits")
-	}
-	rid := NewRoutingID(data)
-	if rid.Size() == 0 {
-		return RoutingID{}, validationError("routing id length must be between 1 and %d bytes", maxRoutingIDSize)
-	}
-	return rid, nil
-}
-
-func (r RoutingID) Bytes() []byte {
-	return append([]byte(nil), r.data[:r.size]...)
-}
-
-func (r RoutingID) Size() int {
-	return int(r.size)
-}
-
-func (r RoutingID) Hash() uint64 {
-	const (
-		offset64 = 14695981039346656037
-		prime64  = 1099511628211
-	)
-	hash := uint64(offset64)
-	for _, b := range r.data[:r.size] {
-		hash ^= uint64(b)
-		hash *= prime64
-	}
-	return hash
-}
-
-func (r RoutingID) String() string {
-	if text := r.printableUTF8(); text != "" {
-		return text
-	}
-	if r.size == 4 {
-		return fmt.Sprintf("%d", binary.BigEndian.Uint32(r.data[:4]))
-	}
-	if r.size == 16 {
-		hexText := r.Hex()
-		return fmt.Sprintf("%s-%s-%s-%s-%s", hexText[:8], hexText[8:12], hexText[12:16], hexText[16:20], hexText[20:])
-	}
-	return "hex:" + r.Hex()
-}
-
-func (r RoutingID) Hex() string {
-	return hex.EncodeToString(r.data[:r.size])
-}
-
-func (r RoutingID) Equal(other RoutingID) bool {
-	return bytes.Equal(r.data[:r.size], other.data[:other.size])
-}
-
-func (r RoutingID) printableUTF8() string {
-	raw := r.data[:r.size]
-	if !utf8.Valid(raw) {
-		return ""
-	}
-	text := string(raw)
-	if strings.IndexFunc(text, unicode.IsControl) >= 0 {
-		return ""
-	}
-	return text
-}
-
-func (r RoutingID) toC() C.zlink_routing_id_t {
-	var out C.zlink_routing_id_t
-	out.size = C.uint8_t(r.size)
-	if r.size > 0 {
-		copy(unsafe.Slice((*byte)(unsafe.Pointer(&out.data[0])), int(r.size)), r.data[:r.size])
-	}
-	return out
+func routingIDToC(r RoutingID) C.zlink_routing_id_t {
+	return *(*C.zlink_routing_id_t)(unsafe.Pointer(&r))
 }
 
 func routingIDFromC(raw C.zlink_routing_id_t) RoutingID {
-	size := int(raw.size)
-	if size == 0 {
-		return RoutingID{}
-	}
-	var rid RoutingID
-	rid.size = uint8(copy(rid.data[:], unsafe.Slice((*byte)(unsafe.Pointer(&raw.data[0])), size)))
-	return rid
+	return *(*RoutingID)(unsafe.Pointer(&raw))
 }
 
 func routingIDFromCPtr(raw *C.zlink_routing_id_t) RoutingID {
@@ -215,7 +100,7 @@ func (m *Message) clone() (*Message, error) {
 
 func (m *Message) Clone() (*Message, error) {
 	if m == nil || m.closed {
-		return nil, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return nil, newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	return m.clone()
 }

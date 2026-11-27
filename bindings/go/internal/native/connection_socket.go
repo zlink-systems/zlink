@@ -174,7 +174,7 @@ func (s *connectionSocket) getPubIntOption(option C.zlink_pub_option_t) (int, er
 }
 
 func (s *connectionSocket) setPubRoutingIDOption(option C.zlink_pub_option_t, id RoutingID) error {
-	raw := id.toC()
+	raw := routingIDToC(id)
 	nativeResult1, nativeErr1 := C.zlink_set_pub_option(s.raw(), option, routingIDPointer(&raw), C.size_t(raw.size))
 	return configErrorFromCall(nativeResult1, nativeErr1)
 }

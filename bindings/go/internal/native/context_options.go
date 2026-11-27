@@ -92,7 +92,7 @@ func (o *ContextOptions) SetThreadNamePrefix(value string) error {
 		return err
 	}
 	if len(value) > 16 {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	var ptr unsafe.Pointer
 	var n C.size_t
@@ -150,7 +150,7 @@ func (o *ContextOptions) SetAutoHwmRecalcDebounce(value time.Duration) error {
 	}
 	ms := value / time.Millisecond
 	if ms > math.MaxInt32 {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	return ctx.setIntOption(C.ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS, int(ms))
 }
@@ -260,17 +260,17 @@ func (o *ContextOptions) CoreHwmBudgetBytes() (uint64, error) {
 
 func (o *ContextOptions) context() (*Context, error) {
 	if o == nil || o.ctx == nil || o.ctx.closed.Load() || o.ctx.raw() == nil {
-		return nil, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return nil, newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	return o.ctx, nil
 }
 
 func (c *Context) setIntOption(option C.zlink_ctx_option_t, value int) error {
 	if c == nil || c.closed.Load() || c.raw() == nil {
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	if value < math.MinInt32 || value > math.MaxInt32 {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	rc, cerr := C.zlink_ctx_set(c.raw(), option, C.int(value))
 	return configErrorFromCall(rc, cerr)
@@ -278,7 +278,7 @@ func (c *Context) setIntOption(option C.zlink_ctx_option_t, value int) error {
 
 func (c *Context) getIntOption(option C.zlink_ctx_option_t) (int, error) {
 	if c == nil || c.closed.Load() || c.raw() == nil {
-		return 0, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return 0, newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	var result C.zlink_config_result_t
 	value, cerr := C.zlink_ctx_get(c.raw(), option, &result)
@@ -290,7 +290,7 @@ func (c *Context) getIntOption(option C.zlink_ctx_option_t) (int, error) {
 
 func (c *Context) setUint64DataOption(option C.zlink_ctx_option_t, value uint64) error {
 	if c == nil || c.closed.Load() || c.raw() == nil {
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	raw := C.uint64_t(value)
 	nativeResult4, nativeErr4 := C.zlink_ctx_set_data(
@@ -304,7 +304,7 @@ func (c *Context) setUint64DataOption(option C.zlink_ctx_option_t, value uint64)
 
 func (c *Context) getUint64DataOption(option C.zlink_ctx_option_t) (uint64, error) {
 	if c == nil || c.closed.Load() || c.raw() == nil {
-		return 0, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return 0, newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	var raw C.uint64_t
 	size := C.size_t(unsafe.Sizeof(raw))
@@ -324,7 +324,7 @@ func durationToMillis(value time.Duration) (int32, error) {
 	}
 	ms := value / time.Millisecond
 	if ms > math.MaxInt32 {
-		return 0, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return 0, newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	return int32(ms), nil
 }

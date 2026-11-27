@@ -14,22 +14,15 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+	"zlink.systems/zlink/contracts"
 )
 
 type StreamSocket struct {
 	core *routedSocket
 }
 
-type StreamReceiveMode int32
+type StreamReceiveMode = contracts.StreamReceiveMode
 
-const (
-	StreamReceiveUnspecified StreamReceiveMode = iota
-	StreamReceiveRaw
-	StreamReceivePacket
-)
-
-// StreamPacket is reusable caller-owned storage for one decoded STREAM
-// packet. Its zero value is empty and ready for RecvPacket.
 type StreamPacket struct {
 	routingID RoutingID
 	header    *Message
@@ -88,7 +81,7 @@ func (p *StreamPacket) Close() error {
 		return nil
 	}
 	if !p.receiving.CompareAndSwap(false, true) {
-		return &RecvError{Result: RecvInvalidState, nativeErrno: int(C.EBUSY)}
+		return newRecvError(RecvInvalidState, int(C.EBUSY))
 	}
 	defer p.receiving.Store(false)
 	return p.reset()
@@ -198,7 +191,7 @@ func (s *StreamSocket) SetTLSClient(caCertPath string, hostname string, trustSys
 }
 
 func (s *StreamSocket) SetRoutingID(id RoutingID) error {
-	raw := id.toC()
+	raw := routingIDToC(id)
 	nativeResult16, nativeErr16 := C.zlink_set_routing_id(s.raw(), routingIDPointer(&raw), C.size_t(raw.size))
 	return configErrorFromCall(nativeResult16, nativeErr16)
 }
@@ -231,10 +224,10 @@ func (s *StreamSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 
 func (s *StreamSocket) RecvPacket(out *StreamPacket, flags RecvFlags) (bool, error) {
 	if out == nil {
-		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return false, newRecvError(RecvInvalidHandle, int(C.EFAULT))
 	}
 	if !out.receiving.CompareAndSwap(false, true) {
-		return false, &RecvError{Result: RecvInvalidState, nativeErrno: int(C.EBUSY)}
+		return false, newRecvError(RecvInvalidState, int(C.EBUSY))
 	}
 	defer out.receiving.Store(false)
 	_ = out.reset()
@@ -267,7 +260,7 @@ func (s *StreamSocket) RecvPacket(out *StreamPacket, flags RecvFlags) (bool, err
 	if routingID.Size() == 0 {
 		_ = header.Close()
 		_ = body.Close()
-		return false, &RecvError{Result: RecvInternalError, nativeErrno: int(C.EPROTO)}
+		return false, newRecvError(RecvInternalError, int(C.EPROTO))
 	}
 	out.routingID = routingID
 	out.header = header
@@ -277,7 +270,7 @@ func (s *StreamSocket) RecvPacket(out *StreamPacket, flags RecvFlags) (bool, err
 
 func (s *StreamSocket) ReceiveMode() (StreamReceiveMode, error) {
 	if s == nil || s.core == nil || s.core.isClosed() {
-		return StreamReceiveUnspecified, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return StreamReceiveUnspecified, newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	var raw C.int
 	size := C.size_t(C.sizeof_int)
@@ -291,10 +284,10 @@ func (s *StreamSocket) ReceiveMode() (StreamReceiveMode, error) {
 
 func (s *StreamSocket) SetReceiveMode(mode StreamReceiveMode) error {
 	if mode != StreamReceiveRaw && mode != StreamReceivePacket {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	if s == nil || s.core == nil || s.core.isClosed() {
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	raw := C.int(mode)
 	nativeResult20, nativeErr20 := C.zlink_set_stream_option(

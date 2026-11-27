@@ -28,7 +28,7 @@ func newDealerSocket(ctx *Context) (*DealerSocket, error) {
 }
 
 func (s *DealerSocket) SetRoutingID(id RoutingID) error {
-	raw := id.toC()
+	raw := routingIDToC(id)
 	nativeResult1, nativeErr1 := C.zlink_set_routing_id(s.raw(), routingIDPointer(&raw), C.size_t(raw.size))
 	return configErrorFromCall(nativeResult1, nativeErr1)
 }

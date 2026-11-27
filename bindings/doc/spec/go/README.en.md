@@ -11,8 +11,8 @@ title: "Go Bindings Public Contract"
 > **What this chapter defines** — the public type, ownership, and error
 > contract the Go binding provides on top of the Core raw C API.
 
-This document defines how Go exposes the socket capabilities in the common spec. The public declarations in
-`bindings/go/contracts/` and the module root define the exact names and signatures.
+This document defines how Go exposes the socket capabilities in the common spec. The module root declares
+the exact names and signatures of the public API.
 
 | Section | Covers |
 |---|---|
@@ -32,13 +32,17 @@ This document defines how Go exposes the socket capabilities in the common spec.
 
 The Go module's import path is `zlink.systems/zlink`. A typical
 consumer imports the `zlink` package at the module root.
-`zlink.systems/zlink/contracts` is a public projection that declares
-the same contract split by category, and the root package re-exports it.
+`zlink.systems/zlink/contracts` defines enums, constants, results, errors,
+and value structs that do not reference runtime resources; the root package
+re-exports them. `internal/native` implements concrete handles and public types
+containing native state, which the root package exposes. Whether the concrete
+Context, socket, Poller, Timer, and SocketMonitor handles need separate contract
+interfaces remains a later decision.
 
-Runtime handles, cgo declarations, native structs, completion-drain state, and
-buffer marshalling are implementation
-details of `internal/native`. These types and this package are not part of
-the consumer contract.
+The internal fields of concrete handles exposed at the root, cgo declarations,
+native structs, completion-drain state, and buffer marshalling are implementation
+details of `internal/native`. This internal state and package are outside the
+consumer contract.
 
 - The package contract projects the Core raw C API.
 - It includes Context, Message, raw sockets, monitor, poller, timer, and utility, but not Spot, Actor, MeshNode, or service operations.

@@ -12,13 +12,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
+	"zlink.systems/zlink/contracts"
 )
 
-type Version struct {
-	Major int
-	Minor int
-	Patch int
-}
+type Version = contracts.Version
 
 func RuntimeVersion() Version {
 	var major C.int
@@ -43,52 +40,9 @@ type ContextOptions struct {
 	ctx *Context
 }
 
-// CoreHwmBudgetSnapshot is an immutable value copy of Core's ABI-v1 budget snapshot.
-type CoreHwmBudgetSnapshot struct {
-	ABIVersion, StructSize                                               uint32
-	BudgetGeneration, MeasurementEpoch                                   uint64
-	ConfiguredMemoryLimitBytes, ResolvedMemoryLimitBytes                 uint64
-	ConfiguredCoreBudgetBytes, EffectiveCoreBudgetBytes                  uint64
-	TotalPlannedHwmBytes, TotalAppliedHwmBytes, ManualReservedHwmBytes   uint64
-	CoreQueueAccountedBytes, ApplicationAccountedBytes                   uint64
-	CurrentAccountedBytes, ProvisionalAccountedBytes, PeakAccountedBytes uint64
-	CompletionCurrentAccountedBytes, CompletionPeakAccountedBytes        uint64
-	CompletionPendingMessageCount, TotalMessagingAccountedBytes          uint64
-	MonitorQueueAppliedHwmBytes, MonitorQueueAccountedBytes              uint64
-	TotalInstanceAppliedHwmBytes, TotalInstanceAccountedBytes            uint64
-	OversizeAdmissionCount, LargestOversizeMessageBytes                  uint64
-	ActiveDirectionalQueueCount, ActiveCompletionDirectionalQueueCount   uint64
-	ActiveSendQueueCount, ActiveReceiveQueueCount                        uint64
-	OutstandingApplicationLeaseCount, RetiredQueueCount                  uint64
-	DeferredOriginCreditBytes, UnlimitedManualQueueCount                 uint64
-	BlockedRatioPPM, Flags                                               uint32
-	ReservedUint64                                                       [8]uint64
-}
-
-func (s CoreHwmBudgetSnapshot) BudgetPlanningActive() bool { return s.Flags&(1<<0) != 0 }
-func (s CoreHwmBudgetSnapshot) BudgetInsufficient() bool   { return s.Flags&(1<<1) != 0 }
-func (s CoreHwmBudgetSnapshot) AggregateHwmValid() bool    { return s.Flags&(1<<2) != 0 }
-func (s CoreHwmBudgetSnapshot) AggregateOverflow() bool    { return s.Flags&(1<<3) != 0 }
-
-type AutoHwmProfile int
-
-const (
-	AutoHwmProfileCompact    AutoHwmProfile = AutoHwmProfile(C.ZLINK_AUTO_HWM_PROFILE_COMPACT)
-	AutoHwmProfileLowLatency AutoHwmProfile = AutoHwmProfile(C.ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY)
-	AutoHwmProfileBalanced   AutoHwmProfile = AutoHwmProfile(C.ZLINK_AUTO_HWM_PROFILE_BALANCED)
-	AutoHwmProfileThroughput AutoHwmProfile = AutoHwmProfile(C.ZLINK_AUTO_HWM_PROFILE_THROUGHPUT)
-)
-
-type AutoHwmRecalcReason uint32
-
-const (
-	AutoHwmRecalcReasonNone           AutoHwmRecalcReason = AutoHwmRecalcReason(C.ZLINK_AUTO_HWM_RECALC_REASON_NONE)
-	AutoHwmRecalcReasonInitial        AutoHwmRecalcReason = AutoHwmRecalcReason(C.ZLINK_AUTO_HWM_RECALC_REASON_INITIAL)
-	AutoHwmRecalcReasonRoleChange     AutoHwmRecalcReason = AutoHwmRecalcReason(C.ZLINK_AUTO_HWM_RECALC_REASON_ROLE_CHANGE)
-	AutoHwmRecalcReasonPolicyToggle   AutoHwmRecalcReason = AutoHwmRecalcReason(C.ZLINK_AUTO_HWM_RECALC_REASON_POLICY_TOGGLE)
-	AutoHwmRecalcReasonRefresh        AutoHwmRecalcReason = AutoHwmRecalcReason(C.ZLINK_AUTO_HWM_RECALC_REASON_REFRESH)
-	AutoHwmRecalcReasonDeferredShrink AutoHwmRecalcReason = AutoHwmRecalcReason(C.ZLINK_AUTO_HWM_RECALC_REASON_DEFERRED_SHRINK)
-)
+type CoreHwmBudgetSnapshot = contracts.CoreHwmBudgetSnapshot
+type AutoHwmProfile = contracts.AutoHwmProfile
+type AutoHwmRecalcReason = contracts.AutoHwmRecalcReason
 
 func NewContext() (*Context, error) {
 	handle, cerr := C.zlink_ctx_new()
@@ -177,7 +131,7 @@ func (c *Context) shutdownSocketCompletions() {
 // RecalculateAutoHwm forces an automatic HWM recalculation. Returns *ConfigError on failure.
 func (c *Context) RecalculateAutoHwm() error {
 	if c == nil || c.closed.Load() || c.raw() == nil {
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	nativeResult0, nativeErr0 := C.zlink_ctx_auto_hwm_recalculate(c.raw())
 	return configErrorFromCall(nativeResult0, nativeErr0)
@@ -185,7 +139,7 @@ func (c *Context) RecalculateAutoHwm() error {
 
 func (c *Context) CoreHwmBudgetSnapshot() (CoreHwmBudgetSnapshot, error) {
 	if c == nil || c.closed.Load() || c.raw() == nil {
-		return CoreHwmBudgetSnapshot{}, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return CoreHwmBudgetSnapshot{}, newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	var raw C.zlink_auto_hwm_budget_snapshot_t
 	raw.abi_version = C.ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1
@@ -199,24 +153,49 @@ func (c *Context) CoreHwmBudgetSnapshot() (CoreHwmBudgetSnapshot, error) {
 		reserved[index] = uint64(raw.reserved_u64[index])
 	}
 	return CoreHwmBudgetSnapshot{
-		uint32(raw.abi_version), uint32(raw.struct_size), uint64(raw.budget_generation), uint64(raw.measurement_epoch),
-		uint64(raw.configured_memory_limit_bytes), uint64(raw.resolved_memory_limit_bytes),
-		uint64(raw.configured_core_budget_bytes), uint64(raw.effective_core_budget_bytes), uint64(raw.total_planned_hwm_bytes),
-		uint64(raw.total_applied_hwm_bytes), uint64(raw.manual_reserved_hwm_bytes), uint64(raw.core_queue_accounted_bytes),
-		uint64(raw.application_accounted_bytes), uint64(raw.current_accounted_bytes), uint64(raw.provisional_accounted_bytes),
-		uint64(raw.peak_accounted_bytes), uint64(raw.completion_current_accounted_bytes), uint64(raw.completion_peak_accounted_bytes),
-		uint64(raw.completion_pending_message_count), uint64(raw.total_messaging_accounted_bytes), uint64(raw.monitor_queue_applied_hwm_bytes),
-		uint64(raw.monitor_queue_accounted_bytes), uint64(raw.total_instance_applied_hwm_bytes), uint64(raw.total_instance_accounted_bytes),
-		uint64(raw.oversize_admission_count), uint64(raw.largest_oversize_message_bytes), uint64(raw.active_directional_queue_count),
-		uint64(raw.active_completion_directional_queue_count), uint64(raw.active_send_queue_count), uint64(raw.active_receive_queue_count),
-		uint64(raw.outstanding_application_lease_count), uint64(raw.retired_queue_count), uint64(raw.deferred_origin_credit_bytes),
-		uint64(raw.unlimited_manual_queue_count), uint32(raw.blocked_ratio_ppm), uint32(raw.flags), reserved,
+		ABIVersion:                            uint32(raw.abi_version),
+		StructSize:                            uint32(raw.struct_size),
+		BudgetGeneration:                      uint64(raw.budget_generation),
+		MeasurementEpoch:                      uint64(raw.measurement_epoch),
+		ConfiguredMemoryLimitBytes:            uint64(raw.configured_memory_limit_bytes),
+		ResolvedMemoryLimitBytes:              uint64(raw.resolved_memory_limit_bytes),
+		ConfiguredCoreBudgetBytes:             uint64(raw.configured_core_budget_bytes),
+		EffectiveCoreBudgetBytes:              uint64(raw.effective_core_budget_bytes),
+		TotalPlannedHwmBytes:                  uint64(raw.total_planned_hwm_bytes),
+		TotalAppliedHwmBytes:                  uint64(raw.total_applied_hwm_bytes),
+		ManualReservedHwmBytes:                uint64(raw.manual_reserved_hwm_bytes),
+		CoreQueueAccountedBytes:               uint64(raw.core_queue_accounted_bytes),
+		ApplicationAccountedBytes:             uint64(raw.application_accounted_bytes),
+		CurrentAccountedBytes:                 uint64(raw.current_accounted_bytes),
+		ProvisionalAccountedBytes:             uint64(raw.provisional_accounted_bytes),
+		PeakAccountedBytes:                    uint64(raw.peak_accounted_bytes),
+		CompletionCurrentAccountedBytes:       uint64(raw.completion_current_accounted_bytes),
+		CompletionPeakAccountedBytes:          uint64(raw.completion_peak_accounted_bytes),
+		CompletionPendingMessageCount:         uint64(raw.completion_pending_message_count),
+		TotalMessagingAccountedBytes:          uint64(raw.total_messaging_accounted_bytes),
+		MonitorQueueAppliedHwmBytes:           uint64(raw.monitor_queue_applied_hwm_bytes),
+		MonitorQueueAccountedBytes:            uint64(raw.monitor_queue_accounted_bytes),
+		TotalInstanceAppliedHwmBytes:          uint64(raw.total_instance_applied_hwm_bytes),
+		TotalInstanceAccountedBytes:           uint64(raw.total_instance_accounted_bytes),
+		OversizeAdmissionCount:                uint64(raw.oversize_admission_count),
+		LargestOversizeMessageBytes:           uint64(raw.largest_oversize_message_bytes),
+		ActiveDirectionalQueueCount:           uint64(raw.active_directional_queue_count),
+		ActiveCompletionDirectionalQueueCount: uint64(raw.active_completion_directional_queue_count),
+		ActiveSendQueueCount:                  uint64(raw.active_send_queue_count),
+		ActiveReceiveQueueCount:               uint64(raw.active_receive_queue_count),
+		OutstandingApplicationLeaseCount:      uint64(raw.outstanding_application_lease_count),
+		RetiredQueueCount:                     uint64(raw.retired_queue_count),
+		DeferredOriginCreditBytes:             uint64(raw.deferred_origin_credit_bytes),
+		UnlimitedManualQueueCount:             uint64(raw.unlimited_manual_queue_count),
+		BlockedRatioPPM:                       uint32(raw.blocked_ratio_ppm),
+		Flags:                                 uint32(raw.flags),
+		ReservedUint64:                        reserved,
 	}, nil
 }
 
 func (c *Context) ResetCoreHwmBudgetMetrics() error {
 	if c == nil || c.closed.Load() || c.raw() == nil {
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	nativeResult2, nativeErr2 := C.zlink_ctx_reset_auto_hwm_budget_metrics(c.raw())
 	return configErrorFromCall(nativeResult2, nativeErr2)

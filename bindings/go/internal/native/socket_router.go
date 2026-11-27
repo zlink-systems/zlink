@@ -70,7 +70,7 @@ func (s *RouterSocket) Probe() (bool, error) {
 }
 
 func (s *RouterSocket) SetRoutingID(id RoutingID) error {
-	raw := id.toC()
+	raw := routingIDToC(id)
 	nativeResult8, nativeErr8 := C.zlink_set_routing_id(s.raw(), routingIDPointer(&raw), C.size_t(raw.size))
 	return configErrorFromCall(nativeResult8, nativeErr8)
 }
@@ -126,7 +126,7 @@ func (s *RouterSocket) Handover() (bool, error) {
 }
 
 func (s *RouterSocket) SetConnectRoutingID(id RoutingID) error {
-	raw := id.toC()
+	raw := routingIDToC(id)
 	nativeResult14, nativeErr14 := C.zlink_set_router_option(s.raw(), C.ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, routingIDPointer(&raw), C.size_t(raw.size))
 	return configErrorFromCall(nativeResult14, nativeErr14)
 }
