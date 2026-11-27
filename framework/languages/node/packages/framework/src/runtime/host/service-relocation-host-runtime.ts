@@ -209,7 +209,6 @@ import {
 } from '../locations/aggregate-inventory-store';
 import { decodeAuthorityKey, encodeAuthorityKey } from '../locations/authority-key-codec';
 import { isIndeterminateLocationStoreFailure } from '../locations/location-store-failure';
-import { isPreparedAuthorityRelocation } from '../locations/authority-relocation-record';
 import type { ZLinkDomainLocationStore as ZLinkLocationStore } from '../locations/domain-store-contract';
 import type {
   ZLinkAggregateId,
@@ -3440,9 +3439,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           })
         )
           return 'lost';
-        const { payload, relocation } = observed.current;
-        const prepared = isPreparedAuthorityRelocation(relocation, envelope.aggregateId);
-        const publication = prepared ? undefined : this.codec.read(payload);
+        const { payload } = observed.current;
+        const publication = this.codec.read(payload);
         this.options.shutdownDeadline?.()?.throwIfAborted();
         const preserved = await store
           .compareExchangeAuthority(
@@ -3454,8 +3452,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
               payload:
                 publication === undefined
                   ? payload
-                  : this.codec.clear(payload, publication.reference),
-              ...(prepared ? { relocation: { ...relocation, phase: 'aborted' as const } } : {})
+                  : this.codec.clear(payload, publication.reference)
             }
           )
           .catch((error: unknown) => {
