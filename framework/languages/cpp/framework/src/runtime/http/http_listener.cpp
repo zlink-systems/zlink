@@ -3,6 +3,7 @@
 #include "../utils/available_processor_count.hpp"
 
 #include "runtime/http/http_host_service.hpp"
+#include "runtime/http/http_startup_test_probe.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/http/http_request_pipeline.hpp"
 #include "runtime/utils/poll_interval_wait.hpp"
@@ -91,12 +92,12 @@ class http_host_service_t::listener_t
                 health_builder_t &health,
                 service_provider_t &services,
                 std::size_t handler_worker_count,
-                std::atomic_bool &stop) :
+                const std::atomic<admission_t> &admission) :
         _endpoint (&endpoint),
         _options (&options),
         _health (&health),
         _services (&services),
-        _stop (&stop),
+        _admission (admission),
         _active_connections (0),
         _active_requests (0),
         _handler_executor (
@@ -118,7 +119,13 @@ class http_host_service_t::listener_t
     {
     }
 
-    ~listener_t () { stop_workers (); }
+    ~listener_t ()
+    {
+        stop_workers ();
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        probe_http_startup (http_startup_event_t::listener_destroyed);
+#endif
+    }
 
     void open ()
     {
@@ -142,6 +149,9 @@ class http_host_service_t::listener_t
     {
         // async captures every exception from the thread in its future;
         // join consumes it after all listeners have been stopped.
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        probe_http_startup (http_startup_event_t::accept_started);
+#endif
         _run = std::async (std::launch::async, [this] { _io.run (); });
     }
 
@@ -233,14 +243,19 @@ class http_host_service_t::listener_t
         tcp::socket socket;
     };
 
+    bool accepting () const noexcept
+    {
+        return _admission.load (std::memory_order_acquire) == admission_t::accepting;
+    }
+
     void start_accept ()
     {
-        if (_stop->load (std::memory_order_acquire)) {
+        if (!accepting ()) {
             return;
         }
         auto connection = std::make_shared<connection_t> ();
         _acceptor.async_accept (connection->socket, [this, connection] (beast::error_code error) {
-            if (!error && !_stop->load (std::memory_order_acquire)) {
+            if (!error && accepting ()) {
                 if (_active_connections.load (std::memory_order_acquire)
                     >= _options->server.max_connections) {
                     reject_overloaded (std::move (connection->socket));
@@ -267,8 +282,7 @@ class http_host_service_t::listener_t
                     }
                 }
             }
-            if (!_stop->load (std::memory_order_acquire)
-                && error != asio::error::operation_aborted) {
+            if (accepting () && error != asio::error::operation_aborted) {
                 if (error) {
                     _accept_retry_timer.expires_after (accept_error_retry_interval);
                     _accept_retry_timer.async_wait ([this] (beast::error_code retry_error) {
@@ -365,7 +379,7 @@ class http_host_service_t::listener_t
             {
                 const std::lock_guard<std::mutex> lock (_listener._sockets_mutex);
                 _listener._sockets.emplace (_stream, close);
-                close_now = _listener._stop->load (std::memory_order_acquire);
+                close_now = !_listener.accepting ();
             }
             if (close_now) {
                 close ();
@@ -434,8 +448,7 @@ class http_host_service_t::listener_t
     {
         beast::flat_buffer buffer;
         std::size_t served = 0;
-        while (!_stop->load (std::memory_order_acquire)
-               && served < _options->server.max_keep_alive_requests) {
+        while (accepting () && served < _options->server.max_keep_alive_requests) {
             http::request_parser<http::string_body> parser;
             parser.body_limit (_options->server.max_request_body_size);
             parser.header_limit (_options->server.max_header_size);
@@ -488,7 +501,7 @@ class http_host_service_t::listener_t
             request_guard.reset ();
             response.keep_alive (request.keep_alive ()
                                  && served + 1 < _options->server.max_keep_alive_requests
-                                 && !_stop->load (std::memory_order_acquire));
+                                 && accepting ());
             set_request_timeout (stream, _options->server.write_timeout);
             (void) co_await http::async_write (stream, response,
                                                asio::redirect_error (asio::use_awaitable, ec));
@@ -554,7 +567,7 @@ class http_host_service_t::listener_t
     const http_options_snapshot_t *_options;
     health_builder_t *_health;
     service_provider_t *_services;
-    std::atomic_bool *_stop;
+    const std::atomic<admission_t> &_admission;
     std::atomic_size_t _active_connections;
     std::atomic_size_t _active_requests;
     std::stop_source _wait_stop;
@@ -593,67 +606,119 @@ http_host_service_t::~http_host_service_t ()
 task_t<void> http_host_service_t::start (service_provider_t &services)
 {
     try {
-        _stop.store (false, std::memory_order_release);
-        _health->add_hosted_service_check ("http.host")
-          .set_status ("http.host", health_status_t::unhealthy, "HTTP listeners are starting");
-        _listeners.reserve (_options.endpoints.size ());
+        with_listeners ([&] (listeners_t &listeners) {
+            _health->add_hosted_service_check ("http.host")
+              .set_status ("http.host", health_status_t::unhealthy, "HTTP listeners are starting");
+            set_admission_locked (admission_t::accepting);
+            listeners.reserve (_options.endpoints.size ());
+        });
         for (const auto &endpoint : _options.endpoints) {
-            auto listener = std::make_unique<listener_t> (endpoint, _options, *_health, services,
-                                                          _handler_worker_count, _stop);
-            _listeners.push_back (std::move (listener));
-            _listeners.back ()->open ();
-            _listener_statuses->add_http (_listeners.back ()->status ());
+            auto listener = std::make_shared<listener_t> (endpoint, _options, *_health, services,
+                                                          _handler_worker_count, _admission);
+            with_listeners ([&] (listeners_t &listeners) { listeners.push_back (listener); });
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+            probe_http_startup (http_startup_event_t::before_bind);
+#endif
+            listener->open ();
+            _listener_statuses->add_http (listener->status ());
         }
-        for (const auto &listener : _listeners) {
-            listener->start ();
-        }
-        _health->set_status ("http.host", health_status_t::healthy);
+        with_listeners ([&] (const listeners_t &listeners) {
+            // Serialize accept loop launch with the admission seal. Join happens after unlocking.
+            if (_admission.load (std::memory_order_relaxed) == admission_t::accepting) {
+                for (const auto &listener : listeners)
+                    listener->start ();
+                _health->set_status ("http.host", health_status_t::healthy);
+            }
+        });
         return task_t<void> (result_t<void>::success ());
     }
     catch (...) {
         const auto failure = std::current_exception ();
-        stop ();
+        stop_listeners (admission_t::inactive);
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        probe_http_startup (http_startup_event_t::rollback_complete);
+#endif
         auto result = listener_failure (failure);
         _health->set_status ("http.host", health_status_t::unhealthy, result.error ()->what ());
         return task_t<void> (std::move (result));
     }
 }
 
+http_host_service_t::admission_t
+http_host_service_t::set_admission_locked (admission_t next) noexcept
+{
+    const auto previous = _admission.load (std::memory_order_relaxed);
+    if (previous != admission_t::sealed)
+        _admission.store (next, std::memory_order_release);
+    return previous;
+}
+
+http_host_service_t::listeners_t http_host_service_t::listener_snapshot ()
+{
+    return with_listeners ([] (const listeners_t &listeners) { return listeners; });
+}
+
+http_host_service_t::listeners_t http_host_service_t::close_admission (admission_t next)
+{
+    return with_listeners ([&] (const listeners_t &listeners) {
+        if (set_admission_locked (next) == admission_t::accepting)
+            _health->set_status ("http.host", health_status_t::unhealthy,
+                                 "HTTP listeners are stopped");
+        return listeners;
+    });
+}
+
 void http_host_service_t::seal_application_dispatch () noexcept
 {
-    _stop.store (true, std::memory_order_release);
-    for (const auto &listener : _listeners)
+    for (const auto &listener : close_admission (admission_t::sealed)) {
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        probe_http_startup (http_startup_event_t::before_seal_listener);
+#endif
         listener->seal_application_dispatch ();
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        probe_http_startup (http_startup_event_t::after_seal_listener);
+#endif
+    }
 }
 
 bool http_host_service_t::wait_for_accepted_callbacks_until (
   std::chrono::steady_clock::time_point deadline) noexcept
 {
-    return std::all_of (_listeners.begin (), _listeners.end (), [deadline] (const auto &listener) {
+    const auto listeners = listener_snapshot ();
+    return std::all_of (listeners.begin (), listeners.end (), [deadline] (const auto &listener) {
         return listener->wait_for_active_requests_until (deadline);
     });
 }
 
 void http_host_service_t::cancel_execution_waits () noexcept
 {
-    for (const auto &listener : _listeners)
+    const auto listeners = listener_snapshot ();
+    for (const auto &listener : listeners)
         listener->cancel_execution_waits ();
+}
+
+http_host_service_t::listeners_t http_host_service_t::request_listener_stop (admission_t next)
+{
+    auto listeners = close_admission (next);
+    for (const auto &listener : listeners)
+        listener->stop ();
+    return listeners;
 }
 
 void http_host_service_t::request_stop () noexcept
 {
-    if (!_stop.exchange (true, std::memory_order_acq_rel)) {
-        _health->set_status ("http.host", health_status_t::unhealthy, "HTTP listeners are stopped");
-    }
-    for (auto &listener : _listeners) {
-        listener->stop ();
-    }
+    (void) request_listener_stop (admission_t::sealed);
 }
 
 void http_host_service_t::stop () noexcept
 {
-    request_stop ();
-    for (auto &listener : _listeners) {
+    stop_listeners (admission_t::sealed);
+}
+
+void http_host_service_t::stop_listeners (admission_t next) noexcept
+{
+    auto listeners = request_listener_stop (next);
+    for (const auto &listener : listeners) {
         try {
             listener->join ();
         }
@@ -663,10 +728,10 @@ void http_host_service_t::stop () noexcept
                                  failure.error ()->what ());
         }
     }
-    for (auto &listener : _listeners) {
+    for (const auto &listener : listeners)
         listener->stop_after_accept_loop ();
-    }
-    _listeners.clear ();
+    with_listeners ([] (listeners_t &owned) { owned.clear (); });
+    listeners.clear ();
     _listener_statuses->clear_http ();
 }
 
