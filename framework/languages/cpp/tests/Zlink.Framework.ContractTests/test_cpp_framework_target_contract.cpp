@@ -186,8 +186,13 @@ int main ()
       read_text_file (root / "framework/src/runtime/protocol/service_wire_codec.hpp");
     const auto generated_service_wire_constants =
       read_text_file (root / "../../runtime/protocol/generated/cpp/service_wire_constants.hpp");
+    const auto stateful_runtime = root / "framework/src/runtime/stateful";
     const auto public_host_runtime =
-      read_text_file (root / "framework/src/runtime/stateful/public_host_runtime.cpp");
+      read_text_file (stateful_runtime / "public_host_runtime.cpp")
+      + read_text_file (stateful_runtime / "public_host_runtime_authority.cpp")
+      + read_text_file (stateful_runtime / "public_host_runtime_messaging.cpp")
+      + read_text_file (stateful_runtime / "public_host_runtime_relocation.cpp")
+      + read_text_file (stateful_runtime / "public_host_runtime_internal.hpp");
     const auto raw_stateful_dispatch =
       read_text_file (root / "framework/src/runtime/stateful/raw_stateful_dispatch.cpp");
     const auto raw_stateful_dispatch_header =

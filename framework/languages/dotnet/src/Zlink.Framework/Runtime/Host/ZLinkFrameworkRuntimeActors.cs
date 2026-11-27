@@ -1208,7 +1208,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 .ExecuteRelocationCompletionAsync(
                                     currentRef.Generation,
                                     token =>
-                                        actor.OnJoinCompletedAsync(
+                                        DeliverActorJoinCompletionAsync(
+                                            actorState,
+                                            actor,
                                             new ZLinkActorJoinCompletion.Accepted(
                                                 new ZLinkActorJoinOperationId(
                                                     recovery.OperationIdHigh,
@@ -1633,7 +1635,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 .ExecuteRelocationCompletionAsync(
                                     currentRef.Generation,
                                     token =>
-                                        actor.OnJoinCompletedAsync(
+                                        DeliverActorJoinCompletionAsync(
+                                            actorState,
+                                            actor,
                                             new ZLinkActorJoinCompletion.Accepted(
                                                 new ZLinkActorJoinOperationId(
                                                     request.OperationIdHigh,
@@ -2832,6 +2836,38 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
     }
 
+    internal async ValueTask DeliverActorJoinCompletionAsync(
+        ZLinkActorRuntimeState actorState,
+        IZLinkActor actor,
+        ZLinkActorJoinCompletion completion,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await actor.OnJoinCompletedAsync(completion, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (completion is ZLinkActorJoinCompletion.Accepted)
+        {
+            // Seal application dispatch while the lifecycle turn is held. The committed
+            // Join still settles its handoff and routes replies for work refused by the seal.
+            actorState.SealFailedJoinCompletion(failure);
+            if (Flow.DispatchErrorsEnabled)
+                Flow.TraceDispatchError(
+                    new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.ActorRelocation,
+                        ZLinkDispatchMessageKind.Control,
+                        ZLinkDispatchErrorReason.HandlerException,
+                        ZLinkDispatchErrorAction.Drop,
+                        "OnJoinCompleted",
+                        ActorId: actorState.ActorId,
+                        Exception: failure
+                    )
+                );
+            TryReportUnhandledCallbackException(failure);
+        }
+    }
+
     internal async ValueTask DeliverFailedTransferredActorJoinAsync(
         ZLinkActorRuntimeState actorState,
         ZLinkRemoteActorHandoffCompletionRequest request,
@@ -2873,7 +2909,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ExecuteRelocationCompletionAsync(
                     actorRef.Generation,
                     token =>
-                        actor.OnJoinCompletedAsync(
+                        DeliverActorJoinCompletionAsync(
+                            actorState,
+                            actor,
                             new ZLinkActorJoinCompletion.Failed(
                                 new ZLinkActorJoinOperationId(
                                     request.OperationIdHigh,

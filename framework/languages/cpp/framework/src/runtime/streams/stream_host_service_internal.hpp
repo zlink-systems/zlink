@@ -127,7 +127,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 detail::stream_session_factory_t session_factory,
                 service_provider_t &services,
                 detail::delay_owner_t *delay_owner,
-                std::atomic_bool &stop,
+                stream_host_service_t &host,
                 std::shared_ptr<std::atomic_bool> drain_flag,
                 std::stop_token shutdown_cancellation,
                 std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring,
@@ -488,6 +488,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     template <typename T, typename Owner, typename... Args>
     static std::shared_ptr<T> make_transport (std::shared_ptr<Owner> lifetime, Args &&...args);
 
+    bool start_ingress ();
+
     void start_boost_accept ();
 
     void handle_boost_accept (const std::shared_ptr<tcp_connection_t> &connection,
@@ -584,6 +586,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     detail::stream_session_factory_t _session_factory;
     service_provider_t *_services;
     detail::delay_owner_t *_delay_owner;
+    stream_host_service_t &_host;
     std::atomic_bool *_stop;
     std::shared_ptr<std::atomic_bool> _drain_flag;
     std::stop_token _shutdown_cancellation;

@@ -537,7 +537,9 @@ internal sealed class ZLinkActorInboundPipeline(
                     Exception: error,
                     ActorId: frame.Actor.ActorId,
                     CorrelationId: frame.Header.CorrelationId,
-                    MeshName: receiverMeshName
+                    SourceRid: frame.SourceNodeRid.ToHex(),
+                    MeshName: receiverMeshName,
+                    TargetRid: frame.Actor.NodeRid.ToHex()
                 )
             );
         if (!isRequest)

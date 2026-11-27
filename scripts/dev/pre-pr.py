@@ -56,6 +56,9 @@ NODE_COMMON = (
 NODE_EXTRA = (
     "Run Node M6B runtime gate",
     "Run Node M6C runtime gate",
+    "Run Node M6A runtime gate",
+    "Run Node M5 foundation gate",
+    "Run the tutorial StreamClient receiving check",
     "Verify packed Node packages in clean consumers",
 )
 NODE_BROWSER = "Run actual Chromium Stream Connector E2E"
@@ -318,7 +321,9 @@ def dotnet(temp, selected, results):
                    "Prepare the Core release runtime for this platform"):
         results["dotnet" if "dotnet" in selected else "dotnet-contract"] = "fail"
         return
-    tests = [step["name"] for step in job.steps if step.get("run", "").startswith("bash scripts/ci/dotnet-test.sh ")]
+    tests = [step["name"] for step in job.steps
+             if step.get("run", "").startswith(("bash scripts/ci/dotnet-test.sh ",
+                                                "bash scripts/ci/dotnet-run-check.sh "))]
     contracts = [name for name in tests if name.startswith("Run framework contract tests")]
     if not contracts:
         raise ValueError("No .NET contract test steps found in framework-dotnet.yml")

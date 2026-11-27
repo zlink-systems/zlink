@@ -31,6 +31,13 @@ class paused_aggregate_commit_store_t final : public location_store_t
     }
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
+        const bool aborting =
+          interrupt_abort_reply
+          && std::ranges::any_of (request.mutations, [] (const auto &mutation) {
+                 const auto *put = std::get_if<store_put_t> (&mutation);
+                 return put && put->key.value.starts_with ("zlink:v11:aggregate:")
+                        && nlohmann::json::parse (put->bytes).at ("state") == "aborted";
+             });
         const bool committing = std::ranges::any_of (request.mutations, [] (const auto &mutation) {
             const auto *put = std::get_if<store_put_t> (&mutation);
             if (!put || !put->key.value.starts_with ("zlink:v11:aggregate:"))
@@ -42,11 +49,19 @@ class paused_aggregate_commit_store_t final : public location_store_t
             commit_waiting.complete (result_t<bool>::success (true));
             co_await release.task ();
         }
-        co_return co_await inner.write (std::move (request));
+        auto written = co_await inner.write (std::move (request));
+        if (aborting && std::holds_alternative<store_write_applied_t> (written)) {
+            abort_reply_lost = true;
+            co_return result_t<store_write_result_t>::failure (
+              framework_error_kind_t::internal_failure, "provider lost the aggregate abort reply");
+        }
+        co_return written;
     }
     location_store_t &inner;
     task_completion_source_t<bool> commit_waiting;
     task_completion_source_t<void> release;
+    bool interrupt_abort_reply = false;
+    bool abort_reply_lost = false;
 };
 
 inline task_t<aggregate_commit_result_t>
@@ -62,7 +77,8 @@ template <typename TBytes>
 void aggregate_read_keeps_source_version_until_commit (
   location_store_t &store,
   TBytes bytes,
-  authority_aggregate_codec::json_t relocation_record = nullptr)
+  authority_aggregate_codec::json_t relocation_record = nullptr,
+  bool interrupt_abort = false)
 {
     namespace stateful = zlink::framework::runtime::stateful;
     paused_aggregate_commit_store_t provider (store);
@@ -204,6 +220,48 @@ void aggregate_read_keeps_source_version_until_commit (
     });
     ASSERT_TRUE (provider.commit_waiting.task ().result ().value ());
     EXPECT_FALSE (pending.await_ready ());
+    if (interrupt_abort) {
+        provider.interrupt_abort_reply = true;
+        EXPECT_EQ (repository.abort_aggregate (fence).result ().value (),
+                   aggregate_abort_result_t::aborted);
+        EXPECT_TRUE (provider.abort_reply_lost);
+        release_commit.run ();
+        EXPECT_EQ (pending.result ().value (), aggregate_commit_result_t::stale);
+
+        // The new repository has no knowledge of the interrupted caller.
+        provider_location_repository_t recovered (store);
+        const auto attempt = recovered
+                               .compare_exchange_authority (key, before.store_version,
+                                                            authority_put_t{bytes ("preserve")})
+                               .result ()
+                               .value ();
+        ASSERT_TRUE (std::holds_alternative<authority_conflict_t> (attempt));
+        const auto &conflict = std::get<authority_conflict_t> (attempt);
+        ASSERT_TRUE (std::holds_alternative<authority_snapshot_t> (conflict.current));
+        EXPECT_EQ (std::get<authority_snapshot_t> (conflict.current).payload, before.payload);
+        const auto restored =
+          std::get<authority_snapshot_t> (recovered.read_authority (key).result ().value ());
+        EXPECT_EQ (restored.payload, before.payload);
+        EXPECT_EQ (restored.owner.owner_id, source.owner.owner_id);
+        EXPECT_NE (restored.store_version, before.store_version);
+        const auto changed = recovered
+                               .compare_exchange_authority (key, restored.store_version,
+                                                            authority_put_t{bytes ("updated")})
+                               .result ()
+                               .value ();
+        EXPECT_TRUE (std::holds_alternative<authority_stored_t> (changed));
+        const auto nodes = recovered.list_mesh_nodes_core (target.mesh_name).result ().value ();
+        const auto target_rid = zlink::routing_id_t::from (std::string (target.node_rid.value ()));
+        const auto target_node =
+          std::find_if (nodes.items.begin (), nodes.items.end (),
+                        [&] (const auto &node) { return node.rid == target_rid; });
+        ASSERT_NE (target_node, nodes.items.end ());
+        EXPECT_EQ (target_node->capacity.actors.active, 0);
+        EXPECT_EQ (target_node->capacity.actors.reserved, 0);
+        EXPECT_EQ (target_node->capacity.spots.active, 0);
+        EXPECT_EQ (target_node->capacity.spots.reserved, 0);
+        return;
+    }
     // Release the commit even if an observation fails, so the fixture owns no pending work.
     const auto read = repository.read_authority (key).result ().value ();
     const auto during = std::get<authority_snapshot_t> (read);
