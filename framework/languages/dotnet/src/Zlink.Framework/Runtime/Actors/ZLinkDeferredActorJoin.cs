@@ -319,7 +319,21 @@ internal sealed class ZLinkDeferredActorJoin(
             if (relayed is not null)
                 await relayed.SourceCleanup().ConfigureAwait(false);
             if (completion is not null)
-                await NotifySourceAsync(completion, cancellationToken).ConfigureAwait(false);
+            {
+                try
+                {
+                    await actor
+                        .OnJoinCompletedAsync(completion, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception callbackFailure)
+                    when (completion is ZLinkActorJoinCompletion.Accepted)
+                {
+                    // Publish the seal before restoring the suffix and releasing the turn.
+                    actorState.SealFailedJoinCompletion(callbackFailure);
+                    throw;
+                }
+            }
         }
         finally
         {
@@ -338,14 +352,6 @@ internal sealed class ZLinkDeferredActorJoin(
 
     private TimeSpan RemainingTimeout() =>
         timeout - runtime.Registration.TimeProvider.GetElapsedTime(_registeredTimestamp);
-
-    private ValueTask NotifySourceAsync(
-        ZLinkActorJoinCompletion completion,
-        CancellationToken cancellationToken
-    )
-    {
-        return actor.OnJoinCompletedAsync(completion, cancellationToken);
-    }
 
     private ZLinkFrameworkErrorKind MapFailure(Exception exception)
     {

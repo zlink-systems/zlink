@@ -209,6 +209,7 @@ import {
 } from '../locations/aggregate-inventory-store';
 import { decodeAuthorityKey, encodeAuthorityKey } from '../locations/authority-key-codec';
 import { isIndeterminateLocationStoreFailure } from '../locations/location-store-failure';
+import { isPreparedAuthorityRelocation } from '../locations/authority-relocation-record';
 import type { ZLinkDomainLocationStore as ZLinkLocationStore } from '../locations/domain-store-contract';
 import type {
   ZLinkAggregateId,
@@ -3439,7 +3440,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           })
         )
           return 'lost';
-        const publication = this.codec.read(observed.current.payload);
+        const { payload, relocation } = observed.current;
+        const prepared = isPreparedAuthorityRelocation(relocation, envelope.aggregateId);
+        const publication = prepared ? undefined : this.codec.read(payload);
         this.options.shutdownDeadline?.()?.throwIfAborted();
         const preserved = await store
           .compareExchangeAuthority(
@@ -3450,8 +3453,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
               generationTransition: 'preserve',
               payload:
                 publication === undefined
-                  ? observed.current.payload
-                  : this.codec.clear(observed.current.payload, publication.reference)
+                  ? payload
+                  : this.codec.clear(payload, publication.reference),
+              ...(prepared ? { relocation: { ...relocation, phase: 'aborted' as const } } : {})
             }
           )
           .catch((error: unknown) => {
@@ -3562,7 +3566,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     phase?: 'aborted'
   ): Promise<ZLinkAuthoritySnapshot> {
     const key = { value: participant.key } as ZLinkAuthorityKey;
-    if (phase !== undefined && current.relocation !== undefined) {
+    if (
+      phase !== undefined &&
+      current.relocation !== undefined &&
+      current.relocation.phase !== phase
+    ) {
       const progress = await this.requireLocationStore().compareExchangeAuthority(
         key,
         current.storeVersion,

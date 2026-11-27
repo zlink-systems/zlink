@@ -381,6 +381,29 @@ internal sealed class ZLinkActorRuntimeState(
     private volatile ZLinkActorDestroyPhase _destroyPhase;
     private volatile bool _reservedCreationPending;
     internal int _deferredJoinPending;
+    private JoinCompletionSeal? _joinCompletionSeal;
+
+    internal void SealFailedJoinCompletion(Exception failure) =>
+        Volatile.Write(ref _joinCompletionSeal, new JoinCompletionSeal(failure));
+
+    internal void EnsureJoinCompletionAvailable()
+    {
+        if (Volatile.Read(ref _joinCompletionSeal) is { } seal)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{ActorId}' is sealed after Join completion failed.",
+                innerException: seal
+            )
+            {
+                Origin = ZLinkErrorOrigin.Framework,
+            };
+    }
+
+    internal static bool IsJoinCompletionRefusal(ZLinkFrameworkException failure) =>
+        failure.InnerException is JoinCompletionSeal;
+
+    private sealed class JoinCompletionSeal(Exception cause)
+        : Exception("Join completion failed.", cause);
 
     public bool IsDispatchBlocked => DispatchBlockKind() is not null;
 
@@ -567,6 +590,7 @@ internal sealed class ZLinkActorRuntimeState(
             return Context;
 
         Interlocked.Exchange(ref _contextInvalidated, 0);
+        Volatile.Write(ref _joinCompletionSeal, null);
         Context = createContext();
         EnsureActorMetric();
         return Context;
@@ -1887,8 +1911,10 @@ internal sealed class ZLinkActorRuntimeState(
     )
     {
         EnsureDispatchNotBlocked();
+        EnsureJoinCompletionAvailable();
         using var turn = await _dispatchMailbox.EnterAsync(cancellationToken).ConfigureAwait(false);
         EnsureDispatchAvailable();
+        EnsureJoinCompletionAvailable();
         using var dispatch = EnterDispatch();
         await operation(cancellationToken).ConfigureAwait(false);
     }
@@ -1902,6 +1928,7 @@ internal sealed class ZLinkActorRuntimeState(
     )
     {
         EnsureDispatchNotBlocked();
+        EnsureJoinCompletionAvailable();
         if (replayReservation is not null)
         {
             T result = default!;
@@ -1911,6 +1938,7 @@ internal sealed class ZLinkActorRuntimeState(
                     async ct =>
                     {
                         EnsureDispatchAvailable(allowRelocationReplay);
+                        EnsureJoinCompletionAvailable();
                         using var dispatch = EnterDispatch();
                         result = await operation(ct).ConfigureAwait(false);
                     },
@@ -1923,6 +1951,7 @@ internal sealed class ZLinkActorRuntimeState(
             .EnterAsync(cancellationToken, countAsPendingRequest)
             .ConfigureAwait(false);
         EnsureDispatchAvailable(allowRelocationReplay);
+        EnsureJoinCompletionAvailable();
         using var dispatch = EnterDispatch();
         return await operation(cancellationToken).ConfigureAwait(false);
     }

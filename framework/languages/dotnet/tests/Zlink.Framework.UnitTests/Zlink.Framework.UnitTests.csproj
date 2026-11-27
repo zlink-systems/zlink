@@ -246,6 +246,8 @@
         <Compile Include="Runtime/ActorRouteCacheConfirmationTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeQueryTests.cs"/>
         <Compile Include="Runtime/InstanceSpotActivationJournalTests.cs"/>
+        <Compile Include="Runtime/InstanceSpotRelocationReplayTests.cs"/>
+        <Compile Include="Runtime/InstanceSpotRelocationCallerTests.cs"/>
         <Compile Include="Runtime/SameTargetInstanceActivationTests.cs"/>
         <Compile Include="Runtime/InstanceSpotSendDeadlineTests.cs"/>
         <Compile Include="Runtime/SpotStoreFailureKindTests.cs"/>
