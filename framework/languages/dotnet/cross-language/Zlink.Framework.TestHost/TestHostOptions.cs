@@ -30,7 +30,8 @@ internal sealed record TestHostOptions(
     string? OutageControlPrefix = null,
     string? OutageRunId = null,
     string? OutageOrder = null,
-    string? StartFilePath = null
+    string? StartFilePath = null,
+    string? PeerStreamEndpoint = null
 )
 {
     public static TestHostOptions Parse(string[] args)
@@ -84,6 +85,7 @@ internal sealed record TestHostOptions(
         public string? PublishTopic { get; set; }
         public string? PublishValue { get; set; }
         public string? StreamEndpoint { get; set; }
+        public string? PeerStreamEndpoint { get; set; }
         public string? MeshName { get; set; }
         public string? NodeRid { get; set; }
         public string? BindEndpoint { get; set; }
@@ -153,6 +155,9 @@ internal sealed record TestHostOptions(
                 case "--stream-endpoint":
                     StreamEndpoint = readValue();
                     break;
+                case "--peer-stream-endpoint":
+                    PeerStreamEndpoint = readValue();
+                    break;
                 case "--mesh-name":
                     MeshName = readValue();
                     break;
@@ -221,7 +226,8 @@ internal sealed record TestHostOptions(
                 OutageControlPrefix,
                 OutageRunId,
                 OutageOrder,
-                StartFilePath
+                StartFilePath,
+                PeerStreamEndpoint
             );
         }
     }

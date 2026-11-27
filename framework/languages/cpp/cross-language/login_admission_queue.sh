@@ -117,11 +117,20 @@ node node java
 node node node
 java node node
 node java java
+dotnet dotnet dotnet
+dotnet dotnet java
+dotnet dotnet node
+java java dotnet
+node node dotnet
+dotnet java java
+java dotnet dotnet
+dotnet node node
+node dotnet dotnet
 MATRIX
   for server in cpp dotnet java node; do
     for connector in cpp dotnet java node; do
       case "${server}:${connector}" in
-        cpp:*|dotnet:*|*:cpp|*:dotnet)
+        cpp:*|*:cpp)
           echo "SKIP login-admission-queue ${server} ${connector} (phase 2 host pending)"
           ;;
       esac
