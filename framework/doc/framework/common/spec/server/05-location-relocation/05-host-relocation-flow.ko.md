@@ -813,7 +813,9 @@ Fanout publisher의 endpoint, identity와 실행 세대를 Store에 게시한 �
 표준 cooperative cancellation을 지원하는 언어는 Spot closing callback에 남은 deadline을
 나타내는 정리용 cancellation signal을 전달한다. 이미 수락한 handler의 token은 재사용하지
 않는다. Callback exception은 `ForceStopped/TeardownFailed`, deadline 만료는
-`ForceStopped/DeadlineExceeded`다. Hardware failure와 `SIGKILL`에서는 callback을 보장하지
+`ForceStopped/DeadlineExceeded`다. Stop deadline에 authority가 아직 정해지지 않은 relocation unit은 owner
+lease 만료로 다루지 않는다. 그 unit은 relocation 실패로 기록하고, expired-owner 정리(대기 backlog 즉시 실패 등)를 하지
+않으며 Store authority도 바꾸지 않는다. 그 unit의 다음 owner 조회가 Store authority로 결과를 판정한다. Hardware failure와 `SIGKILL`에서는 callback을 보장하지
 않는다. 종료 중이던 relocation이나 cleanup을 다른 runtime이 자동으로 이어받는 동작을
 보장하지 않는다.
 
