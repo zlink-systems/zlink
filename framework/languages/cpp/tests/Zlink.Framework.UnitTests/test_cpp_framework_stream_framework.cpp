@@ -58,6 +58,13 @@
 
 using namespace zlink::framework::test::stream_framework;
 
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+namespace zlink::framework::test::stream_framework
+{
+int stream_startup_shutdown_cases ();
+} // namespace zlink::framework::test::stream_framework
+#endif
+
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
@@ -66,7 +73,11 @@ int main (int argc, char **argv)
     if (argc == 2 && std::string_view (argv[1]) == "--session-creation-failure-ws")
         return session_creation_failure (true);
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+    if (argc == 2 && std::string_view (argv[1]) == "--stream-startup-shutdown")
+        return stream_startup_shutdown_cases ();
     if (argc == 2 && std::string_view (argv[1]) == "--core-session-lifecycle-boundaries") {
+        if (const auto startup = stream_startup_shutdown_cases (); startup != 0)
+            return startup;
         zlink::framework::detail::configure_stream_dispatch_executor ();
         const auto normal = core_session_lifecycle_boundaries (core_lifecycle_case_t::normal);
         const auto drain = core_session_lifecycle_boundaries (core_lifecycle_case_t::drain);

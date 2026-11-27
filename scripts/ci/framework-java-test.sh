@@ -23,4 +23,15 @@ trap stop_watchdog EXIT
   :zlink-framework-locations-etcd:test \
   :zlink-framework-locations-etcd:contractTest \
   :zlink-framework-testkit:test \
+  :zlink-framework-testkit:contractTest \
+  :zlink-framework-testkit:fakeBackendTest \
+  :zlink-framework-core:contractTest \
+  :zlink-framework-kotlin:contractTest \
+  :zlink-framework-kotlin:integrationTest \
+  :zlink-framework-locations-etcd:integrationTest \
+  :zlink-framework-provider-abstractions:contractTest \
+  :zlink-framework-codec-protobuf:test \
+  :zlink-framework-codec-msgpack:test \
+  :zlink-http-client:test \
+  :zlink-http-client-kotlin:test \
   -Pzlink.includeSamples=false

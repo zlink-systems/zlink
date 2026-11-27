@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace zlink::framework::runtime::host
 {
@@ -19,6 +20,12 @@ struct public_host_runtime_test_access_t
 {
     static task_t<stateful::stateful_error_t> advance_authority (public_host_runtime_t &host,
                                                                  stateful::object_ref_t committed);
+
+    static std::pair<std::shared_ptr<task_completion_source_t<void>>,
+                     std::shared_ptr<task_completion_source_t<void>>>
+    track_previous_target (public_host_runtime_t &host,
+                           const stateful::object_ref_t &object,
+                           bool pending_request);
 
     enum class authority_interleaving_t
     {

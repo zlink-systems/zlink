@@ -1,0 +1,400 @@
+Context.Close *Context) error
+Context.CoreHwmBudgetSnapshot *Context) (CoreHwmBudgetSnapshot, error)
+Context.DealerSocket *Context) (*DealerSocket, error)
+Context.Options *Context) *ContextOptions
+Context.PairSocket *Context) (*PairSocket, error)
+Context.PubSocket *Context) (*PubSocket, error)
+Context.RecalculateAutoHwm *Context) error
+Context.ResetCoreHwmBudgetMetrics *Context) error
+Context.RouterSocket *Context) (*RouterSocket, error)
+Context.Shutdown *Context) error
+Context.StreamSocket *Context) (*StreamSocket, error)
+Context.SubSocket *Context) (*SubSocket, error)
+Context.XPubSocket *Context) (*XPubSocket, error)
+Context.XSubSocket *Context) (*XSubSocket, error)
+DealerSocket.Bind *DealerSocket, string) error
+DealerSocket.Close *DealerSocket) error
+DealerSocket.CommonOptions *DealerSocket) *CommonSocketOptions
+DealerSocket.Connect *DealerSocket, string) error
+DealerSocket.ConnectionAttemptsSnapshot *DealerSocket) ([]ConnectionAttempt, error)
+DealerSocket.Disconnect *DealerSocket, string) error
+DealerSocket.DisconnectRID *DealerSocket, RoutingID) error
+DealerSocket.IPv6 *DealerSocket) (bool, error)
+DealerSocket.LastEndpoint *DealerSocket) (string, error)
+DealerSocket.Linger *DealerSocket) (time.Duration, error)
+DealerSocket.Probe *DealerSocket) (bool, error)
+DealerSocket.ReceiveHighWaterMark *DealerSocket) (uint64, error)
+DealerSocket.ReceiveTimeout *DealerSocket) (time.Duration, error)
+DealerSocket.Recv *DealerSocket, *Received, RecvFlags) (bool, error)
+DealerSocket.Request *DealerSocket) RequestOp
+DealerSocket.RequestTimeout *DealerSocket) (time.Duration, error)
+DealerSocket.RidDuplicatePolicy *DealerSocket) (int, error)
+DealerSocket.RoutingID *DealerSocket) (RoutingID, error)
+DealerSocket.Send *DealerSocket) SendOp
+DealerSocket.SendHighWaterMark *DealerSocket) (uint64, error)
+DealerSocket.SendTimeout *DealerSocket) (time.Duration, error)
+DealerSocket.SetIPv6 *DealerSocket, bool) error
+DealerSocket.SetLinger *DealerSocket, time.Duration) error
+DealerSocket.SetProbe *DealerSocket, bool) error
+DealerSocket.SetReceiveFlowState *DealerSocket, ReceiveFlowState) error
+DealerSocket.SetReceiveHighWaterMark *DealerSocket, uint64) error
+DealerSocket.SetReceiveTimeout *DealerSocket, time.Duration) error
+DealerSocket.SetRequestTimeout *DealerSocket, time.Duration) error
+DealerSocket.SetRidDuplicatePolicy *DealerSocket, int) error
+DealerSocket.SetRoutingID *DealerSocket, RoutingID) error
+DealerSocket.SetSendHighWaterMark *DealerSocket, uint64) error
+DealerSocket.SetSendTimeout *DealerSocket, time.Duration) error
+DealerSocket.SetSubmitRetryAttempts *DealerSocket, int) error
+DealerSocket.SetSubmitRetryMode *DealerSocket, SubmitRetryMode) error
+DealerSocket.SetSubmitRetryTimeout *DealerSocket, time.Duration) error
+DealerSocket.SetTCPKeepalive *DealerSocket, bool) error
+DealerSocket.SetTCPNoDelay *DealerSocket, bool) error
+DealerSocket.SetTLSClient *DealerSocket, string, string, bool) error
+DealerSocket.SetTLSServer *DealerSocket, string, string, bool) error
+DealerSocket.SetWeight *DealerSocket, int) error
+DealerSocket.SubmitRetryAttempts *DealerSocket) (int, error)
+DealerSocket.SubmitRetryMode *DealerSocket) (SubmitRetryMode, error)
+DealerSocket.SubmitRetryTimeout *DealerSocket) (time.Duration, error)
+DealerSocket.TCPKeepalive *DealerSocket) (bool, error)
+DealerSocket.TCPNoDelay *DealerSocket) (bool, error)
+DealerSocket.Unbind *DealerSocket, string) error
+DealerSocket.Weight *DealerSocket) (int, error)
+Message.Bytes *Message) []uint8
+Message.Clone *Message) (*Message, error)
+Message.Close *Message) error
+Message.Copy *Message) (*Message, error)
+Message.CopyTo *Message, []uint8) (int, error)
+Message.Data *Message) []uint8
+Message.IsEmpty *Message) bool
+Message.RefCount *Message) int
+Message.Size *Message) int
+Message.String *Message) string
+Message.Text *Message) string
+Message.TryCopyTo *Message, []uint8) bool
+PairSocket.Bind *PairSocket, string) error
+PairSocket.Close *PairSocket) error
+PairSocket.CommonOptions *PairSocket) *CommonSocketOptions
+PairSocket.Connect *PairSocket, string) error
+PairSocket.ConnectionAttemptsSnapshot *PairSocket) ([]ConnectionAttempt, error)
+PairSocket.Disconnect *PairSocket, string) error
+PairSocket.DisconnectRID *PairSocket, RoutingID) error
+PairSocket.IPv6 *PairSocket) (bool, error)
+PairSocket.LastEndpoint *PairSocket) (string, error)
+PairSocket.Linger *PairSocket) (time.Duration, error)
+PairSocket.ReceiveHighWaterMark *PairSocket) (uint64, error)
+PairSocket.ReceiveTimeout *PairSocket) (time.Duration, error)
+PairSocket.Recv *PairSocket, *Received, RecvFlags) (bool, error)
+PairSocket.RidDuplicatePolicy *PairSocket) (int, error)
+PairSocket.Send *PairSocket) SendOp
+PairSocket.SendHighWaterMark *PairSocket) (uint64, error)
+PairSocket.SendTimeout *PairSocket) (time.Duration, error)
+PairSocket.SetIPv6 *PairSocket, bool) error
+PairSocket.SetLinger *PairSocket, time.Duration) error
+PairSocket.SetReceiveFlowState *PairSocket, ReceiveFlowState) error
+PairSocket.SetReceiveHighWaterMark *PairSocket, uint64) error
+PairSocket.SetReceiveTimeout *PairSocket, time.Duration) error
+PairSocket.SetRidDuplicatePolicy *PairSocket, int) error
+PairSocket.SetSendHighWaterMark *PairSocket, uint64) error
+PairSocket.SetSendTimeout *PairSocket, time.Duration) error
+PairSocket.SetSubmitRetryAttempts *PairSocket, int) error
+PairSocket.SetSubmitRetryMode *PairSocket, SubmitRetryMode) error
+PairSocket.SetSubmitRetryTimeout *PairSocket, time.Duration) error
+PairSocket.SetTCPKeepalive *PairSocket, bool) error
+PairSocket.SetTCPNoDelay *PairSocket, bool) error
+PairSocket.SetTLSClient *PairSocket, string, string, bool) error
+PairSocket.SetTLSServer *PairSocket, string, string, bool) error
+PairSocket.SubmitRetryAttempts *PairSocket) (int, error)
+PairSocket.SubmitRetryMode *PairSocket) (SubmitRetryMode, error)
+PairSocket.SubmitRetryTimeout *PairSocket) (time.Duration, error)
+PairSocket.TCPKeepalive *PairSocket) (bool, error)
+PairSocket.TCPNoDelay *PairSocket) (bool, error)
+PairSocket.Unbind *PairSocket, string) error
+Poller.AddFd *Poller, int, PollEventFlag, uintptr) error
+Poller.AddMonitor *Poller, *SocketMonitor, PollEventFlag, uintptr) error
+Poller.AddSocket *Poller, SocketTarget, PollEventFlag, uintptr) error
+Poller.AddTimer *Poller, *Timer, uintptr) error
+Poller.Close *Poller) error
+Poller.ModifyFd *Poller, int, PollEventFlag) error
+Poller.ModifyMonitor *Poller, *SocketMonitor, PollEventFlag) error
+Poller.ModifySocket *Poller, SocketTarget, PollEventFlag) error
+Poller.RemoveFd *Poller, int) error
+Poller.RemoveMonitor *Poller, *SocketMonitor) error
+Poller.RemoveSocket *Poller, SocketTarget) error
+Poller.RemoveTimer *Poller, *Timer) error
+Poller.Size *Poller) (int, error)
+Poller.Wait *Poller, []PollEvent, time.Duration) (int, error)
+PubSocket.ApproveSubscribe *PubSocket, RoutingID) error
+PubSocket.Bind *PubSocket, string) error
+PubSocket.Close *PubSocket) error
+PubSocket.CommonOptions *PubSocket) *CommonSocketOptions
+PubSocket.Connect *PubSocket, string) error
+PubSocket.ConnectionAttemptsSnapshot *PubSocket) ([]ConnectionAttempt, error)
+PubSocket.Disconnect *PubSocket, string) error
+PubSocket.DisconnectRID *PubSocket, RoutingID) error
+PubSocket.IPv6 *PubSocket) (bool, error)
+PubSocket.LastEndpoint *PubSocket) (string, error)
+PubSocket.Linger *PubSocket) (time.Duration, error)
+PubSocket.Manual *PubSocket) (bool, error)
+PubSocket.ManualLastValue *PubSocket) (bool, error)
+PubSocket.NoDrop *PubSocket) (bool, error)
+PubSocket.PubOptions *PubSocket) *PubSocketOptions
+PubSocket.Publish *PubSocket, string) PublishOp
+PubSocket.ReceiveHighWaterMark *PubSocket) (uint64, error)
+PubSocket.ReceiveTimeout *PubSocket) (time.Duration, error)
+PubSocket.RejectSubscribe *PubSocket, RoutingID) error
+PubSocket.RidDuplicatePolicy *PubSocket) (int, error)
+PubSocket.SendHighWaterMark *PubSocket) (uint64, error)
+PubSocket.SendTimeout *PubSocket) (time.Duration, error)
+PubSocket.SetIPv6 *PubSocket, bool) error
+PubSocket.SetLinger *PubSocket, time.Duration) error
+PubSocket.SetManual *PubSocket, bool) error
+PubSocket.SetManualLastValue *PubSocket, bool) error
+PubSocket.SetNoDrop *PubSocket, bool) error
+PubSocket.SetReceiveFlowState *PubSocket, ReceiveFlowState) error
+PubSocket.SetReceiveHighWaterMark *PubSocket, uint64) error
+PubSocket.SetReceiveTimeout *PubSocket, time.Duration) error
+PubSocket.SetRidDuplicatePolicy *PubSocket, int) error
+PubSocket.SetSendHighWaterMark *PubSocket, uint64) error
+PubSocket.SetSendTimeout *PubSocket, time.Duration) error
+PubSocket.SetSubmitRetryAttempts *PubSocket, int) error
+PubSocket.SetSubmitRetryMode *PubSocket, SubmitRetryMode) error
+PubSocket.SetSubmitRetryTimeout *PubSocket, time.Duration) error
+PubSocket.SetTCPKeepalive *PubSocket, bool) error
+PubSocket.SetTCPNoDelay *PubSocket, bool) error
+PubSocket.SetTLSClient *PubSocket, string, string, bool) error
+PubSocket.SetTLSServer *PubSocket, string, string, bool) error
+PubSocket.SetVerbose *PubSocket, bool) error
+PubSocket.SetVerboser *PubSocket, bool) error
+PubSocket.SetWelcomeMessage *PubSocket, *Message) error
+PubSocket.SubmitRetryAttempts *PubSocket) (int, error)
+PubSocket.SubmitRetryMode *PubSocket) (SubmitRetryMode, error)
+PubSocket.SubmitRetryTimeout *PubSocket) (time.Duration, error)
+PubSocket.TCPKeepalive *PubSocket) (bool, error)
+PubSocket.TCPNoDelay *PubSocket) (bool, error)
+PubSocket.Unbind *PubSocket, string) error
+PubSocket.Verbose *PubSocket) (bool, error)
+PubSocket.Verboser *PubSocket) (bool, error)
+PubSocket.WelcomeMessage *PubSocket) (*Message, error)
+RouterSocket.Bind *RouterSocket, string) error
+RouterSocket.Close *RouterSocket) error
+RouterSocket.CommonOptions *RouterSocket) *CommonSocketOptions
+RouterSocket.Connect *RouterSocket, string) error
+RouterSocket.ConnectionAttemptsSnapshot *RouterSocket) ([]ConnectionAttempt, error)
+RouterSocket.Disconnect *RouterSocket, string) error
+RouterSocket.DisconnectRID *RouterSocket, RoutingID) error
+RouterSocket.Handover *RouterSocket) (bool, error)
+RouterSocket.IPv6 *RouterSocket) (bool, error)
+RouterSocket.LastEndpoint *RouterSocket) (string, error)
+RouterSocket.Linger *RouterSocket) (time.Duration, error)
+RouterSocket.Mandatory *RouterSocket) (bool, error)
+RouterSocket.Probe *RouterSocket) (bool, error)
+RouterSocket.ReceiveHighWaterMark *RouterSocket) (uint64, error)
+RouterSocket.ReceiveTimeout *RouterSocket) (time.Duration, error)
+RouterSocket.Recv *RouterSocket, *Received, RecvFlags) (bool, error)
+RouterSocket.Reply *RouterSocket, RoutingID, ReplyToken) ReplyOp
+RouterSocket.Request *RouterSocket, RoutingID) RequestOp
+RouterSocket.RequestTimeout *RouterSocket) (time.Duration, error)
+RouterSocket.RidDuplicatePolicy *RouterSocket) (int, error)
+RouterSocket.RoutesSnapshot *RouterSocket) ([]RouterRoute, error)
+RouterSocket.RoutingID *RouterSocket) (RoutingID, error)
+RouterSocket.SendHighWaterMark *RouterSocket) (uint64, error)
+RouterSocket.SendTimeout *RouterSocket) (time.Duration, error)
+RouterSocket.SendTo *RouterSocket, RoutingID) SendOp
+RouterSocket.SetConnectRoutingID *RouterSocket, RoutingID) error
+RouterSocket.SetHandover *RouterSocket, bool) error
+RouterSocket.SetIPv6 *RouterSocket, bool) error
+RouterSocket.SetLinger *RouterSocket, time.Duration) error
+RouterSocket.SetMandatory *RouterSocket, bool) error
+RouterSocket.SetProbe *RouterSocket, bool) error
+RouterSocket.SetReceiveFlowState *RouterSocket, ReceiveFlowState) error
+RouterSocket.SetReceiveHighWaterMark *RouterSocket, uint64) error
+RouterSocket.SetReceiveTimeout *RouterSocket, time.Duration) error
+RouterSocket.SetRequestTimeout *RouterSocket, time.Duration) error
+RouterSocket.SetRidDuplicatePolicy *RouterSocket, int) error
+RouterSocket.SetRoutingID *RouterSocket, RoutingID) error
+RouterSocket.SetSendHighWaterMark *RouterSocket, uint64) error
+RouterSocket.SetSendTimeout *RouterSocket, time.Duration) error
+RouterSocket.SetSubmitRetryAttempts *RouterSocket, int) error
+RouterSocket.SetSubmitRetryMode *RouterSocket, SubmitRetryMode) error
+RouterSocket.SetSubmitRetryTimeout *RouterSocket, time.Duration) error
+RouterSocket.SetTCPKeepalive *RouterSocket, bool) error
+RouterSocket.SetTCPNoDelay *RouterSocket, bool) error
+RouterSocket.SetTLSClient *RouterSocket, string, string, bool) error
+RouterSocket.SetTLSServer *RouterSocket, string, string, bool) error
+RouterSocket.SetWeight *RouterSocket, int) error
+RouterSocket.SubmitRetryAttempts *RouterSocket) (int, error)
+RouterSocket.SubmitRetryMode *RouterSocket) (SubmitRetryMode, error)
+RouterSocket.SubmitRetryTimeout *RouterSocket) (time.Duration, error)
+RouterSocket.TCPKeepalive *RouterSocket) (bool, error)
+RouterSocket.TCPNoDelay *RouterSocket) (bool, error)
+RouterSocket.Unbind *RouterSocket, string) error
+RouterSocket.Weight *RouterSocket) (int, error)
+SocketMonitor.Close *SocketMonitor) error
+SocketMonitor.Recv *SocketMonitor, RecvFlags) (*MonitorEvent, error)
+SocketMonitor.Status *SocketMonitor) (*MonitorStatus, error)
+StreamSocket.Bind *StreamSocket, string) error
+StreamSocket.Close *StreamSocket) error
+StreamSocket.DisconnectRID *StreamSocket, RoutingID) error
+StreamSocket.LastEndpoint *StreamSocket) (string, error)
+StreamSocket.Notify *StreamSocket) (bool, error)
+StreamSocket.ReceiveHighWaterMark *StreamSocket) (uint64, error)
+StreamSocket.ReceiveMode *StreamSocket) (StreamReceiveMode, error)
+StreamSocket.Recv *StreamSocket, *Received, RecvFlags) (bool, error)
+StreamSocket.RecvPacket *StreamSocket, *StreamPacket, RecvFlags) (bool, error)
+StreamSocket.RoutingID *StreamSocket) (RoutingID, error)
+StreamSocket.SendHighWaterMark *StreamSocket) (uint64, error)
+StreamSocket.SendTo *StreamSocket, RoutingID) SendOp
+StreamSocket.SetIPv6 *StreamSocket, bool) error
+StreamSocket.SetLinger *StreamSocket, time.Duration) error
+StreamSocket.SetNotify *StreamSocket, bool) error
+StreamSocket.SetReceiveFlowState *StreamSocket, ReceiveFlowState) error
+StreamSocket.SetReceiveHighWaterMark *StreamSocket, uint64) error
+StreamSocket.SetReceiveMode *StreamSocket, StreamReceiveMode) error
+StreamSocket.SetReceiveTimeout *StreamSocket, time.Duration) error
+StreamSocket.SetRoutingID *StreamSocket, RoutingID) error
+StreamSocket.SetSendHighWaterMark *StreamSocket, uint64) error
+StreamSocket.SetSendTimeout *StreamSocket, time.Duration) error
+StreamSocket.SetTCPKeepalive *StreamSocket, bool) error
+StreamSocket.SetTCPNoDelay *StreamSocket, bool) error
+StreamSocket.SetTLSClient *StreamSocket, string, string, bool) error
+StreamSocket.SetTLSServer *StreamSocket, string, string, bool) error
+StreamSocket.Unbind *StreamSocket, string) error
+SubSocket.Bind *SubSocket, string) error
+SubSocket.Close *SubSocket) error
+SubSocket.CommonOptions *SubSocket) *CommonSocketOptions
+SubSocket.Connect *SubSocket, string) error
+SubSocket.ConnectionAttemptsSnapshot *SubSocket) ([]ConnectionAttempt, error)
+SubSocket.Disconnect *SubSocket, string) error
+SubSocket.DisconnectRID *SubSocket, RoutingID) error
+SubSocket.IPv6 *SubSocket) (bool, error)
+SubSocket.LastEndpoint *SubSocket) (string, error)
+SubSocket.Linger *SubSocket) (time.Duration, error)
+SubSocket.ReceiveHighWaterMark *SubSocket) (uint64, error)
+SubSocket.ReceiveTimeout *SubSocket) (time.Duration, error)
+SubSocket.RidDuplicatePolicy *SubSocket) (int, error)
+SubSocket.SendHighWaterMark *SubSocket) (uint64, error)
+SubSocket.SendTimeout *SubSocket) (time.Duration, error)
+SubSocket.SetIPv6 *SubSocket, bool) error
+SubSocket.SetLinger *SubSocket, time.Duration) error
+SubSocket.SetReceiveFlowState *SubSocket, ReceiveFlowState) error
+SubSocket.SetReceiveHighWaterMark *SubSocket, uint64) error
+SubSocket.SetReceiveTimeout *SubSocket, time.Duration) error
+SubSocket.SetRidDuplicatePolicy *SubSocket, int) error
+SubSocket.SetSendHighWaterMark *SubSocket, uint64) error
+SubSocket.SetSendTimeout *SubSocket, time.Duration) error
+SubSocket.SetSubmitRetryAttempts *SubSocket, int) error
+SubSocket.SetSubmitRetryMode *SubSocket, SubmitRetryMode) error
+SubSocket.SetSubmitRetryTimeout *SubSocket, time.Duration) error
+SubSocket.SetSubscription *SubSocket, string) error
+SubSocket.SetTCPKeepalive *SubSocket, bool) error
+SubSocket.SetTCPNoDelay *SubSocket, bool) error
+SubSocket.SetTLSClient *SubSocket, string, string, bool) error
+SubSocket.SetTLSServer *SubSocket, string, string, bool) error
+SubSocket.SubmitRetryAttempts *SubSocket) (int, error)
+SubSocket.SubmitRetryMode *SubSocket) (SubmitRetryMode, error)
+SubSocket.SubmitRetryTimeout *SubSocket) (time.Duration, error)
+SubSocket.Subscribe *SubSocket, *TopicMessage, RecvFlags) (bool, error)
+SubSocket.SubscriptionAt *SubSocket, int) (Subscription, bool, error)
+SubSocket.TCPKeepalive *SubSocket) (bool, error)
+SubSocket.TCPNoDelay *SubSocket) (bool, error)
+SubSocket.TopicsCount *SubSocket) (int, error)
+SubSocket.Unbind *SubSocket, string) error
+SubSocket.UnsetSubscription *SubSocket, string) error
+Timer.Close *Timer) error
+Timer.Recv *Timer) (uint64, bool, error)
+Timer.Start *Timer, uint64, uint64) error
+Timer.Stop *Timer) error
+XPubSocket.ApproveSubscribe *XPubSocket, RoutingID) error
+XPubSocket.Bind *XPubSocket, string) error
+XPubSocket.Close *XPubSocket) error
+XPubSocket.CommonOptions *XPubSocket) *CommonSocketOptions
+XPubSocket.Connect *XPubSocket, string) error
+XPubSocket.ConnectionAttemptsSnapshot *XPubSocket) ([]ConnectionAttempt, error)
+XPubSocket.Disconnect *XPubSocket, string) error
+XPubSocket.DisconnectRID *XPubSocket, RoutingID) error
+XPubSocket.IPv6 *XPubSocket) (bool, error)
+XPubSocket.LastEndpoint *XPubSocket) (string, error)
+XPubSocket.Linger *XPubSocket) (time.Duration, error)
+XPubSocket.Manual *XPubSocket) (bool, error)
+XPubSocket.ManualLastValue *XPubSocket) (bool, error)
+XPubSocket.NoDrop *XPubSocket) (bool, error)
+XPubSocket.PubOptions *XPubSocket) *PubSocketOptions
+XPubSocket.Publish *XPubSocket, string) PublishOp
+XPubSocket.ReceiveHighWaterMark *XPubSocket) (uint64, error)
+XPubSocket.ReceiveSubscriptionEvent *XPubSocket, *SubscriptionEvent, RecvFlags) (bool, error)
+XPubSocket.ReceiveTimeout *XPubSocket) (time.Duration, error)
+XPubSocket.RejectSubscribe *XPubSocket, RoutingID) error
+XPubSocket.RidDuplicatePolicy *XPubSocket) (int, error)
+XPubSocket.SendHighWaterMark *XPubSocket) (uint64, error)
+XPubSocket.SendTimeout *XPubSocket) (time.Duration, error)
+XPubSocket.SetIPv6 *XPubSocket, bool) error
+XPubSocket.SetLinger *XPubSocket, time.Duration) error
+XPubSocket.SetManual *XPubSocket, bool) error
+XPubSocket.SetManualLastValue *XPubSocket, bool) error
+XPubSocket.SetNoDrop *XPubSocket, bool) error
+XPubSocket.SetReceiveFlowState *XPubSocket, ReceiveFlowState) error
+XPubSocket.SetReceiveHighWaterMark *XPubSocket, uint64) error
+XPubSocket.SetReceiveTimeout *XPubSocket, time.Duration) error
+XPubSocket.SetRidDuplicatePolicy *XPubSocket, int) error
+XPubSocket.SetSendHighWaterMark *XPubSocket, uint64) error
+XPubSocket.SetSendTimeout *XPubSocket, time.Duration) error
+XPubSocket.SetSubmitRetryAttempts *XPubSocket, int) error
+XPubSocket.SetSubmitRetryMode *XPubSocket, SubmitRetryMode) error
+XPubSocket.SetSubmitRetryTimeout *XPubSocket, time.Duration) error
+XPubSocket.SetTCPKeepalive *XPubSocket, bool) error
+XPubSocket.SetTCPNoDelay *XPubSocket, bool) error
+XPubSocket.SetTLSClient *XPubSocket, string, string, bool) error
+XPubSocket.SetTLSServer *XPubSocket, string, string, bool) error
+XPubSocket.SetVerbose *XPubSocket, bool) error
+XPubSocket.SetVerboser *XPubSocket, bool) error
+XPubSocket.SetWelcomeMessage *XPubSocket, *Message) error
+XPubSocket.SubmitRetryAttempts *XPubSocket) (int, error)
+XPubSocket.SubmitRetryMode *XPubSocket) (SubmitRetryMode, error)
+XPubSocket.SubmitRetryTimeout *XPubSocket) (time.Duration, error)
+XPubSocket.TCPKeepalive *XPubSocket) (bool, error)
+XPubSocket.TCPNoDelay *XPubSocket) (bool, error)
+XPubSocket.Unbind *XPubSocket, string) error
+XPubSocket.Verbose *XPubSocket) (bool, error)
+XPubSocket.Verboser *XPubSocket) (bool, error)
+XPubSocket.WelcomeMessage *XPubSocket) (*Message, error)
+XSubSocket.Bind *XSubSocket, string) error
+XSubSocket.Close *XSubSocket) error
+XSubSocket.CommonOptions *XSubSocket) *CommonSocketOptions
+XSubSocket.Connect *XSubSocket, string) error
+XSubSocket.ConnectionAttemptsSnapshot *XSubSocket) ([]ConnectionAttempt, error)
+XSubSocket.Disconnect *XSubSocket, string) error
+XSubSocket.DisconnectRID *XSubSocket, RoutingID) error
+XSubSocket.IPv6 *XSubSocket) (bool, error)
+XSubSocket.LastEndpoint *XSubSocket) (string, error)
+XSubSocket.Linger *XSubSocket) (time.Duration, error)
+XSubSocket.ReceiveHighWaterMark *XSubSocket) (uint64, error)
+XSubSocket.ReceiveTimeout *XSubSocket) (time.Duration, error)
+XSubSocket.RidDuplicatePolicy *XSubSocket) (int, error)
+XSubSocket.SendHighWaterMark *XSubSocket) (uint64, error)
+XSubSocket.SendTimeout *XSubSocket) (time.Duration, error)
+XSubSocket.SetIPv6 *XSubSocket, bool) error
+XSubSocket.SetLinger *XSubSocket, time.Duration) error
+XSubSocket.SetReceiveFlowState *XSubSocket, ReceiveFlowState) error
+XSubSocket.SetReceiveHighWaterMark *XSubSocket, uint64) error
+XSubSocket.SetReceiveTimeout *XSubSocket, time.Duration) error
+XSubSocket.SetRidDuplicatePolicy *XSubSocket, int) error
+XSubSocket.SetSendHighWaterMark *XSubSocket, uint64) error
+XSubSocket.SetSendTimeout *XSubSocket, time.Duration) error
+XSubSocket.SetSubmitRetryAttempts *XSubSocket, int) error
+XSubSocket.SetSubmitRetryMode *XSubSocket, SubmitRetryMode) error
+XSubSocket.SetSubmitRetryTimeout *XSubSocket, time.Duration) error
+XSubSocket.SetSubscription *XSubSocket, string) error
+XSubSocket.SetTCPKeepalive *XSubSocket, bool) error
+XSubSocket.SetTCPNoDelay *XSubSocket, bool) error
+XSubSocket.SetTLSClient *XSubSocket, string, string, bool) error
+XSubSocket.SetTLSServer *XSubSocket, string, string, bool) error
+XSubSocket.SubmitRetryAttempts *XSubSocket) (int, error)
+XSubSocket.SubmitRetryMode *XSubSocket) (SubmitRetryMode, error)
+XSubSocket.SubmitRetryTimeout *XSubSocket) (time.Duration, error)
+XSubSocket.Subscribe *XSubSocket, *TopicMessage, RecvFlags) (bool, error)
+XSubSocket.SubscriptionAt *XSubSocket, int) (Subscription, bool, error)
+XSubSocket.TCPKeepalive *XSubSocket) (bool, error)
+XSubSocket.TCPNoDelay *XSubSocket) (bool, error)
+XSubSocket.TopicsCount *XSubSocket) (int, error)
+XSubSocket.Unbind *XSubSocket, string) error
+XSubSocket.UnsetSubscription *XSubSocket, string) error

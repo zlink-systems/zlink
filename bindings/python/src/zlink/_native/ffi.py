@@ -44,6 +44,27 @@ class ZlinkCompletion(ctypes.Structure):
     ]
 
 
+class ZlinkConnectionFailure(ctypes.Structure):
+    _fields_ = [
+        ("kind", ctypes.c_uint32),
+        ("stage", ctypes.c_uint32),
+        ("normalized_errno", ctypes.c_int32),
+        ("disconnect_reason", ctypes.c_uint32),
+    ]
+
+
+class ZlinkConnectionAttempt(ctypes.Structure):
+    _fields_ = [
+        ("endpoint_offset", ctypes.c_size_t),
+        ("endpoint_length", ctypes.c_size_t),
+        ("intent_id", ctypes.c_uint64),
+        ("revision", ctypes.c_uint64),
+        ("last_failure_id", ctypes.c_uint64),
+        ("state", ctypes.c_uint32),
+        ("last_failure", ZlinkConnectionFailure),
+    ]
+
+
 class ZlinkMonitorEvent(ctypes.Structure):
     _fields_ = [
         ("event", ctypes.c_uint64),
@@ -267,6 +288,19 @@ class _Lib:
             ("zlink_unbind", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_disconnect", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_disconnect_rid", [ctypes.c_void_p, p_rid], ctypes.c_int),
+            (
+                "zlink_socket_connection_attempts_snapshot",
+                [
+                    ctypes.c_void_p,
+                    ctypes.POINTER(ZlinkConnectionAttempt),
+                    ctypes.c_size_t,
+                    p_size,
+                    ctypes.c_char_p,
+                    ctypes.c_size_t,
+                    p_size,
+                ],
+                ctypes.c_int,
+            ),
             ("zlink_send", [ctypes.c_void_p, p_msg, ctypes.c_size_t, ctypes.c_int, ctypes.c_void_p, p_completion_id], ctypes.c_int),
             ("zlink_send_rid", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_size_t, ctypes.c_int, ctypes.c_void_p, p_completion_id], ctypes.c_int),
             ("zlink_request", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_size_t, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, p_completion_id], ctypes.c_int),

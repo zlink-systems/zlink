@@ -1,13 +1,25 @@
 use super::*;
+
+const DEFAULT_OPTION_BUFFER_SIZE: usize = 256;
+
+/// Core's endpoint field is `char[256]`: reject NUL bytes and anything over 255
+/// bytes here instead of letting Core truncate.
+fn endpoint_cstring(addr: &str) -> Option<CString> {
+    if addr.len() > 255 {
+        return None;
+    }
+    CString::new(addr).ok()
+}
+
 impl crate::internal::SocketStorage {
     pub(crate) fn create(
-        ctx: &crate::core_context::Context,
+        ctx: &crate::contracts::core::context::Context,
         typ: ffi::zlink_socket_type_t,
     ) -> Result<Self, ConfigError> {
         let handle = unsafe { ffi::zlink_socket(context_handle(ctx), typ) };
         if handle.is_null() {
             return Err(ConfigError::new(
-                crate::error::ConfigResult::InvalidHandle,
+                crate::contracts::errors::errors::ConfigResult::InvalidHandle,
                 last_errno(),
             ));
         }
@@ -36,28 +48,41 @@ impl crate::internal::SocketStorage {
     // -- Connection --------------------------------------------------------
 
     pub(crate) fn bind(&self, addr: &str) -> Result<(), BindError> {
-        let c = CString::new(addr)
-            .map_err(|_| BindError::new(crate::error::BindResult::InvalidArgument, libc::EINVAL))?;
+        let c = endpoint_cstring(addr).ok_or_else(|| {
+            BindError::new(
+                crate::contracts::errors::errors::BindResult::InvalidArgument,
+                libc::EINVAL,
+            )
+        })?;
         check_bind_rc(unsafe { ffi::zlink_bind(self.handle, c.as_ptr()) })
     }
 
     pub(crate) fn connect(&self, addr: &str) -> Result<(), ConnectError> {
-        let c = CString::new(addr).map_err(|_| {
-            ConnectError::new(crate::error::ConnectResult::InvalidArgument, libc::EINVAL)
+        let c = endpoint_cstring(addr).ok_or_else(|| {
+            ConnectError::new(
+                crate::contracts::errors::errors::ConnectResult::InvalidArgument,
+                libc::EINVAL,
+            )
         })?;
         check_connect_rc(unsafe { ffi::zlink_connect(self.handle, c.as_ptr()) })
     }
 
     pub(crate) fn unbind(&self, addr: &str) -> Result<(), ConnectError> {
-        let c = CString::new(addr).map_err(|_| {
-            ConnectError::new(crate::error::ConnectResult::InvalidArgument, libc::EINVAL)
+        let c = endpoint_cstring(addr).ok_or_else(|| {
+            ConnectError::new(
+                crate::contracts::errors::errors::ConnectResult::InvalidArgument,
+                libc::EINVAL,
+            )
         })?;
         check_connect_rc(unsafe { ffi::zlink_unbind(self.handle, c.as_ptr()) })
     }
 
     pub(crate) fn disconnect(&self, addr: &str) -> Result<(), ConnectError> {
-        let c = CString::new(addr).map_err(|_| {
-            ConnectError::new(crate::error::ConnectResult::InvalidArgument, libc::EINVAL)
+        let c = endpoint_cstring(addr).ok_or_else(|| {
+            ConnectError::new(
+                crate::contracts::errors::errors::ConnectResult::InvalidArgument,
+                libc::EINVAL,
+            )
         })?;
         check_connect_rc(unsafe { ffi::zlink_disconnect(self.handle, c.as_ptr()) })
     }
@@ -137,52 +162,29 @@ impl crate::internal::SocketStorage {
         &self,
         index: usize,
     ) -> Result<Option<(String, bool)>, ConfigError> {
-        let mut len = 0usize;
-        let mut is_pattern = 0i32;
-        let rc = unsafe {
+        let mut buffer = vec![0u8; DEFAULT_OPTION_BUFFER_SIZE];
+        let mut len = buffer.len();
+        let mut is_pattern = 0;
+        let mut query = |buffer: &mut [u8], len: &mut usize| unsafe {
             ffi::zlink_subscription_at(
                 self.handle,
                 index,
-                ptr::null_mut(),
-                &mut len,
+                buffer.as_mut_ptr().cast(),
+                len,
                 &mut is_pattern,
             )
         };
-        if rc != 0 && len == 0 {
-            let err = check_config_rc(rc).expect_err("nonzero subscription_at result");
-            if err.code() == crate::error::ConfigResult::NotFound {
-                return Ok(None);
-            }
-            return Err(err);
+        let mut rc = query(&mut buffer, &mut len);
+        if rc == ffi::zlink_config_result_t::ZLINK_CONFIG_BUFFER_TOO_SMALL as i32 {
+            buffer.resize(len, 0);
+            rc = query(&mut buffer, &mut len);
         }
-        if len == 0 {
-            check_config_rc(unsafe {
-                ffi::zlink_subscription_at(
-                    self.handle,
-                    index,
-                    ptr::null_mut(),
-                    &mut len,
-                    &mut is_pattern,
-                )
-            })?;
-            return Ok(Some((String::new(), is_pattern != 0)));
+        if rc == ffi::zlink_config_result_t::ZLINK_CONFIG_NOT_FOUND as i32 {
+            return Ok(None);
         }
-        let mut buffer = vec![0i8; len];
-        check_config_rc(unsafe {
-            ffi::zlink_subscription_at(
-                self.handle,
-                index,
-                buffer.as_mut_ptr(),
-                &mut len,
-                &mut is_pattern,
-            )
-        })?;
-        let bytes = buffer
-            .iter()
-            .take(len)
-            .map(|value| *value as u8)
-            .collect::<Vec<_>>();
-        let filter = String::from_utf8(bytes).map_err(|_| config_validation_error())?;
+        check_config_rc(rc)?;
+        buffer.truncate(len);
+        let filter = String::from_utf8(buffer).map_err(|_| config_validation_error())?;
         Ok(Some((filter, is_pattern != 0)))
     }
 
@@ -247,7 +249,11 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn set_linger(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_LINGER, milliseconds)
+        set_int_opt(
+            self.handle,
+            ffi::zlink_option_t::ZLINK_OPT_LINGER,
+            milliseconds,
+        )
     }
 
     pub(crate) fn linger(&self) -> Result<i32, ConfigError> {
@@ -255,7 +261,11 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn set_send_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO, milliseconds)
+        set_int_opt(
+            self.handle,
+            ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO,
+            milliseconds,
+        )
     }
 
     pub(crate) fn send_timeout(&self) -> Result<i32, ConfigError> {
@@ -263,7 +273,11 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn set_receive_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO, milliseconds)
+        set_int_opt(
+            self.handle,
+            ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO,
+            milliseconds,
+        )
     }
 
     pub(crate) fn receive_timeout(&self) -> Result<i32, ConfigError> {
@@ -457,7 +471,7 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn last_endpoint(&self) -> Result<String, ConfigError> {
-        let mut buf = [0u8; 256];
+        let mut buf = [0u8; DEFAULT_OPTION_BUFFER_SIZE];
         let mut len = buf.len();
         check_config_rc(unsafe {
             ffi::zlink_get_option(
@@ -488,7 +502,9 @@ impl crate::internal::SocketStorage {
             )
         }) {
             Ok(()) => Ok(()),
-            Err(err) if err.code() == crate::error::ConfigResult::InvalidHandle => {
+            Err(err)
+                if err.code() == crate::contracts::errors::errors::ConfigResult::InvalidHandle =>
+            {
                 self.set_tls_cert(cert)?;
                 self.set_tls_key(key)?;
                 set_bool_opt(
@@ -546,7 +562,9 @@ impl crate::internal::SocketStorage {
             )
         }) {
             Ok(()) => Ok(()),
-            Err(err) if err.code() == crate::error::ConfigResult::InvalidHandle => {
+            Err(err)
+                if err.code() == crate::contracts::errors::errors::ConfigResult::InvalidHandle =>
+            {
                 self.set_tls_ca(ca_cert)?;
                 self.set_tls_hostname(hostname)?;
                 self.set_tls_trust_system(trust_system)
@@ -639,7 +657,7 @@ impl crate::internal::SocketStorage {
     pub(crate) fn get_pub_message_opt(
         &self,
         opt: ffi::zlink_pub_option_t,
-    ) -> Result<crate::message::Message, ConfigError> {
+    ) -> Result<crate::contracts::messaging::message::Message, ConfigError> {
         // Two-step query: first probe the length with a null buffer, then
         // allocate exactly what's needed. Previously this always allocated a
         // 64 KiB scratch buffer up front; for the welcome-message case the
@@ -649,7 +667,7 @@ impl crate::internal::SocketStorage {
             ffi::zlink_get_pub_option(self.handle, opt, std::ptr::null_mut(), &mut len)
         })?;
         if len == 0 {
-            return crate::message::Message::try_from([]);
+            return crate::contracts::messaging::message::Message::try_from([]);
         }
         let mut buf = vec![0u8; len];
         let mut filled = len;
@@ -661,7 +679,7 @@ impl crate::internal::SocketStorage {
                 &mut filled,
             )
         })?;
-        crate::message::Message::try_from(&buf[..filled])
+        crate::contracts::messaging::message::Message::try_from(&buf[..filled])
     }
 
     // -- SUB-option helper -------------------------------------------------
@@ -939,4 +957,18 @@ fn supports_completion(typ: ffi::zlink_socket_type_t) -> bool {
             | ffi::zlink_socket_type_t::ZLINK_SOCKET_ROUTER
             | ffi::zlink_socket_type_t::ZLINK_SOCKET_STREAM
     )
+}
+
+impl crate::internal::RoutedHandle {
+    pub(crate) fn close_native(&self) -> i32 {
+        let handle = self.handle();
+        if handle.is_null() {
+            return 0;
+        }
+        let rc = unsafe { crate::runtime::native::ffi::zlink_close(handle) };
+        if rc == 0 {
+            self.detach();
+        }
+        rc
+    }
 }

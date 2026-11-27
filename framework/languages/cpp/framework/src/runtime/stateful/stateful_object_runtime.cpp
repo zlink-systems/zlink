@@ -1100,6 +1100,9 @@ stateful_object_runtime_t::place_application_on_lane (object_record_t &object,
                                                       bool restored)
 {
     enqueue_outcome_t outcome;
+    if (owner.kind == object_kind_t::actor
+        && record.actor_admitted_at == std::chrono::steady_clock::time_point::min ())
+        record.actor_admitted_at = std::chrono::steady_clock::now ();
     // Relocation flow §4.2: ingress admitted after the cut S takes the existing ingress hold;
     // ingress admitted before it stays in the source FIFO that the capture saves.
     if (after_cut) {
@@ -2288,9 +2291,10 @@ stateful_object_runtime_t::restore_relocation (frozen_object_state_t frozen,
     }
 }
 
-stateful_error_t
-stateful_object_runtime_t::commit_relocation_restore (const object_ref_t &target,
-                                                      const relocation_restore_identity_t &identity)
+stateful_error_t stateful_object_runtime_t::commit_relocation_restore (
+  const object_ref_t &target,
+  const relocation_restore_identity_t &identity,
+  const std::function<void ()> &before_actor_join_completion)
 {
     relocation_state_commit_t commit;
     const auto preflight = _lane.run_sync ([&, this] {
@@ -2310,7 +2314,7 @@ stateful_object_runtime_t::commit_relocation_restore (const object_ref_t &target
         return preflight;
     if (commit) {
         try {
-            if (!commit ({target}))
+            if (!commit ({target}, before_actor_join_completion))
                 return stateful_error_t::conflict;
         }
         catch (...) {
@@ -2357,7 +2361,7 @@ stateful_error_t stateful_object_runtime_t::commit_relocation_restore_aggregate 
         return preflight;
     if (commit) {
         try {
-            if (!commit (targets))
+            if (!commit (targets, {}))
                 return stateful_error_t::conflict;
         }
         catch (...) {

@@ -148,17 +148,16 @@ if xpub.receive_subscription_event_into(evt):
     ...
 ```
 
-**Options.** This `Protocol` declares no members of its own beyond its docstring description
-("its routing id, topic, and whether it subscribed") — the concrete runtime implementation exposes
-`routing_id`/`topic`/`subscribed`-shaped attributes, but this contract file itself declares none as
-typed members, unlike `Message`/`Received`/`TopicMessage` above, which enumerate their surface
-explicitly.
+| Member | Meaning |
+| --- | --- |
+| `routing_id: Optional[RoutingId]` | the subscriber's routing id, or `None` when it is not available. `RoutingId` compares equal to `bytes`, and `bytes(evt.routing_id)` returns the raw bytes |
+| `topic: str` | the topic that was subscribed or unsubscribed |
+| `subscribed: bool` | `True` for subscribe, `False` for unsubscribe |
 
-**Completion result.** N/A — no members are contractually specified here.
+**Completion result.** `receive_subscription_event_into` returns `False` when `DONT_WAIT` is set and no event is available.
 
 **When to use.** Use on an XPUB socket's subscription-event receive path (Sockets category) to
-observe subscriber churn; consult the runtime implementation or the spec directly for the exact
-attribute names, since this Protocol doesn't enumerate them.
+observe subscriber churn. Reuse one instance (via `create_subscription_event()`) across the receive loop.
 
 ---
 
