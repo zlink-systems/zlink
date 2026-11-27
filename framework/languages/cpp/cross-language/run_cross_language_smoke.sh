@@ -1458,21 +1458,26 @@ PYTHON
   local send_drop="${RUN_DIR}/send-drop.events"
   touch "${probe_file}"
   wait_for_line "${sender_events}" 'late-actor-send|submitted=' 15
-  "${PYTHON_BIN[@]}" - "${fixture}" "${owner_events}.flow" "${sender_rid}" >"${send_drop}" <<'PYTHON'
+  "${PYTHON_BIN[@]}" - "${fixture}" "${owner_events}.flow" "${sender_rid}" "${owner}" >"${send_drop}" <<'PYTHON'
 import json
 from pathlib import Path
+import re
 import sys
 import time
 
 expect = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["expect"]
 flow_path = Path(sys.argv[2])
 sender_rid = sys.argv[3]
+# A listed owner must report its own reason; other owners only need a named reason.
+reason = expect["ownerDropReasons"].get(sys.argv[4])
+reason_field = re.compile(rf" reason={re.escape(reason) if reason else '[A-Za-z_]+'} ")
 deadline = time.monotonic() + 2
 while True:
     flow = flow_path.read_text(encoding="utf-8").splitlines()
     dropped = [line for line in flow if f" source_rid={sender_rid} " in line
                and f" action={expect['sendOwnerAction']} " in line
-               and expect["ownerRejectionMessage"] in line]
+               and f" event={expect['ownerDropEvent']} " in line
+               and reason_field.search(line)]
     if dropped:
         print(*dropped, sep="\n")
         break
