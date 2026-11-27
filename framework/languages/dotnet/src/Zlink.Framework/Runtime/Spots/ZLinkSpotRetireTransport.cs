@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
@@ -2563,7 +2564,13 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     )
                 )
             )
+            {
+                _ = ZLinkRelocationCompletionStore.CompletionBlocker(
+                    found.Snapshot,
+                    services.GetService<ILogger<ZLinkFrameworkMaintenanceRuntime>>()
+                );
                 return true;
+            }
         }
         return false;
     }

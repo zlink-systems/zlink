@@ -214,10 +214,8 @@ internal sealed class ZLinkActorRemoteJoiner(
             ?? throw new InvalidOperationException("Actor handoff requires a location store.");
         var authorityRead = await ExecuteWithDeadlineAsync(
                 token =>
-                    ReadCaptureAuthorityAsync(
-                        authorityStore,
+                    authorityStore.ReadAuthorityAsync(
                         ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.Context.ActorId),
-                        actorState,
                         token
                     ),
                 RemainingTimeout(deadline.Monotonic),
@@ -239,7 +237,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{actor.Context.ActorId}' authority changed before handoff."
             );
-        ZLinkRelocationCompletionStore.RequireCompletionSettled(authority.Snapshot);
         var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(authorityStore);
         var actorAuthorityOwnerGeneration = authority.Snapshot.AuthorityOwnerGeneration;
         var captureRequired = relocation.PolicyKind == 2;
@@ -734,6 +731,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                     ZLinkFrameworkErrorKind.InvalidOperation,
                     $"Actor '{actor.Context.ActorId}' authority changed during relocation preflight."
                 );
+            ZLinkRelocationCompletionStore.RequireCompletionSettled(currentAuthority.Snapshot);
             sourceAuthoritySnapshot = currentAuthority.Snapshot;
             var hasBoundSession = actorState.TryGetBoundSession(out var boundSession);
             //  The seal branch is conditional, so its trace being absent means

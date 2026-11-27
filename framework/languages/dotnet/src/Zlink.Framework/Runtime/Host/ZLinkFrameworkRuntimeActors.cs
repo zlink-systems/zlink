@@ -262,23 +262,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                 //  Waiting for the host-wide operation count here would make an
                 //  accepted turn wait for the relocation marker that can only be
                 //  published after this preflight returns.
-                preflightStage = "initial_actor_handoff_wait";
+                preflightStage = "completion_preflight";
                 if (
                     await _actorDrainCoordinator
                         .HasCompletionBlockerAsync(cancellationToken)
                         .ConfigureAwait(false)
                 )
                     return ZLinkFrameworkRelocationReason.OperationInProgress;
-                await WaitForAcceptedActorHandoffsAsync(cancellationToken).ConfigureAwait(false);
-
-                var operationBaseline = SnapshotOperationAdmissions();
-                var actorBaseline = DrainAdmission.SnapshotActorAdmissions();
-                var handoffBaseline = await _actorHandoffAdmissions
-                    .SnapshotDrainAsync()
-                    .ConfigureAwait(false);
-                if (actorBaseline.ActiveCount != 0 || !handoffBaseline.IsSafe)
-                    continue;
-
                 preflightStage = "relocation_target_preflight";
                 if (
                     (
@@ -292,6 +282,17 @@ internal sealed partial class ZLinkFrameworkRuntime
                         .ConfigureAwait(false)
                 )
                     return ZLinkFrameworkRelocationReason.OperationInProgress;
+
+                preflightStage = "initial_actor_handoff_wait";
+                await WaitForAcceptedActorHandoffsAsync(cancellationToken).ConfigureAwait(false);
+
+                var operationBaseline = SnapshotOperationAdmissions();
+                var actorBaseline = DrainAdmission.SnapshotActorAdmissions();
+                var handoffBaseline = await _actorHandoffAdmissions
+                    .SnapshotDrainAsync()
+                    .ConfigureAwait(false);
+                if (actorBaseline.ActiveCount != 0 || !handoffBaseline.IsSafe)
+                    continue;
 
                 var plan = new ZLinkRetirePreflightPlan();
                 ZLinkFrameworkRelocationReason? targetBlocker = null;
