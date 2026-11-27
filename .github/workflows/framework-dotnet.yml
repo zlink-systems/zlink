@@ -105,13 +105,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
 
-      - name: Pack the public .NET binding contract
+      - name: Prepare the public .NET binding package
         id: versions
         shell: bash
         env:

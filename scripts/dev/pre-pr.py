@@ -9,6 +9,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ci"))
+from framework_timing import event, timed
 
 ROOT = Path.cwd()
 WORKFLOWS = Path(".github/workflows")
@@ -27,7 +31,7 @@ CPP = (
     "Resolve the runner vcpkg",
     "Install Framework C++ vcpkg dependencies",
     "Verify vcpkg versions against the manifest and Conan locks",
-    "Build the checkout C++ binding package",
+    "Prepare the C++ binding package",
     "Configure and build Framework C++ tests",
     "Report Framework C++ compile RSS",
     "Run Framework C++ unit and contract tests",
@@ -35,7 +39,7 @@ CPP = (
 JAVA_TEST = "Run Framework Java core, integration and Spring starter tests"
 JAVA = (
     "Verify framework relocation conformance inventory",
-    "Fetch Core and build the checkout Java binding package on Linux",
+    "Prepare the Java binding package on Linux",
     "Verify the packaged Java public contract and API snapshot",
     "Verify the packaged Kotlin public contract and API snapshot",
     JAVA_TEST,
@@ -47,9 +51,9 @@ NODE_COMMON = (
     "Verify Node perf package.json pins",
     "Check the Linux native toolchain",
     "Prepare the Core release runtime for this platform",
-    "Build the checkout Node binding package",
+    "Prepare the Node binding package",
     "Build the local-package pin of @zlink-systems/http-client used by the workspace manifest",
-    "Pin framework install to the checkout Node binding package",
+    "Pin framework install to the prepared Node binding package",
     "Install framework dependencies",
     "Run Node framework release gate",
 )
@@ -65,7 +69,7 @@ NODE_CROSS = (
     "Check the native toolchain",
     "Prepare the Core release runtime",
     "Prepare the .NET local packages for the cross-language test host",
-    "Build the checkout Node binding package",
+    "Prepare the Node binding package",
     "Build the local-package pin of @zlink-systems/http-client used by the workspace manifest",
     "Install and build the Node framework workspace",
     "Run Node framework cross-language smoke",
@@ -144,8 +148,9 @@ def redis_required():
 
 
 def release_prefix():
-    return command("bash", "scripts/local-package/core/fetch-release.sh",
-                   "--platform", "linux-x64", stdout=subprocess.PIPE, text=True).strip()
+    with timed("Core release fetch"):
+        return command("bash", "scripts/local-package/core/fetch-release.sh",
+                       "--platform", "linux-x64", stdout=subprocess.PIPE, text=True).strip()
 
 
 def read_exports(path):
@@ -165,7 +170,8 @@ class Job:
         self.outcomes = {}
         self.context = {
             "github.workspace": str(root), "github.token": os.environ.get("GH_TOKEN", ""),
-            "inputs.single_worker": "false", "matrix.target.name": "linux-x64",
+            "inputs.single_worker": "false", "inputs.warm_binding_cache": "false",
+            "matrix.target.name": "linux-x64",
             "matrix.target.core_platform": "linux-x64",
             "matrix.target.local_package_root": ".artifacts/wsl", **context,
         }
@@ -201,7 +207,8 @@ class Job:
             if failed and "always()" not in step.get("if", ""):
                 continue
             try:
-                self.run_step(step)
+                with timed(step["name"]):
+                    self.run_step(step)
                 self.outcomes[step["name"]] = True
             except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
                 self.outcomes[step["name"]] = False
@@ -259,7 +266,29 @@ def cpp(temp):
     redis_required()
     env = os.environ
     parallel = env.get("BUILD_PARALLEL") or "2"
+    cmake = shutil.which("cmake")
+    if not cmake:
+        raise ValueError("cmake is required")
+    bin_dir = temp / "cpp-bin"
+    bin_dir.mkdir()
+    (bin_dir / "cmake").symlink_to(ROOT / "scripts/dev/pre-pr-cmake.py")
+    launcher = {}
+    if not env.get("ZLINK_SCCACHE_LAUNCHER"):
+        ccache = shutil.which("ccache")
+        if ccache:
+            launcher = {
+                "CMAKE_C_COMPILER_LAUNCHER": ccache,
+                "CMAKE_CXX_COMPILER_LAUNCHER": ccache,
+                "CCACHE_DIR": str(Path.home() / ".cache/zlink/ccache"),
+                "CCACHE_MAXSIZE": "20G",
+            }
+        else:
+            print("pre-pr: warning: ccache is unavailable; compiling without ccache", file=sys.stderr)
     job = Job(ROOT, temp, "framework-cpp", "framework-cpp", env={
+        **launcher,
+        "PATH": os.pathsep.join((str(bin_dir), env["PATH"])),
+        "ZLINK_PRE_PR_CMAKE": os.path.abspath(cmake),
+        "ZLINK_LOCAL_BINDING_CACHE": str(ROOT / ".cache/framework-cpp/binding"),
         "BUILD_PARALLEL": parallel,
         # The workflow reads the self-hosted parallelism from a repository variable,
         # which a local run has no access to; the local gate uses BUILD_PARALLEL.
@@ -267,6 +296,7 @@ def cpp(temp):
         "VCPKG_MAX_CONCURRENCY": env.get("VCPKG_MAX_CONCURRENCY") or parallel,
         "ZLINK_SCCACHE_LAUNCHER": env.get("ZLINK_SCCACHE_LAUNCHER", ""),
         "RUNNER_ARCH": "X64",
+        "ZLINK_BINDING_BUILD_JOBS": parallel,
         "RUNNER_NAME": f"pre-pr-{ROOT.name}",
         "VCPKG_INSTALLATION_ROOT": env.get("VCPKG_INSTALLATION_ROOT") or env.get("VCPKG_ROOT", ""),
         **{key: env[key] for key in ("ZLINK_LOCAL_PACKAGE_ROOT",) if key in env},
@@ -306,7 +336,7 @@ def dotnet(temp, selected, results):
         redis_required()
     workflow_name = "framework-dotnet"
     pack = Job(ROOT, temp, workflow_name, "prepare-dotnet-binding")
-    if not pack.run("Pack the public .NET binding contract"):
+    if not pack.run("Prepare the public .NET binding package"):
         results["dotnet" if "dotnet" in selected else "dotnet-contract"] = "fail"
         return
     nuget = temp / "zlink-local-packages" / "nuget"
@@ -353,6 +383,7 @@ def node_workspace(temp):
     command("git", "read-tree", "HEAD", env=env)
     command("git", "checkout-index", "--all", env=env, cwd=root)
     changes = git_output("diff", "HEAD", "--name-only", "--no-renames", "-z")
+    changes += git_output("ls-files", "--others", "--exclude-standard", "-z")
     for item in filter(None, changes.split(b"\0")):
         relative = Path(os.fsdecode(item))
         source = ROOT / relative
@@ -431,6 +462,7 @@ def main():
         parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
         parser.add_argument("--no-merge", action="store_true")
         parser.add_argument("--only")
+        parser.add_argument("--heavy-lock", action="store_true")
         args = parser.parse_args()
         requested = set(args.only.split(",")) if args.only is not None else set()
         valid = set(CHECKS) - {"merge", "paths"}
@@ -439,23 +471,36 @@ def main():
     except SystemExit:
         return 2
 
+    if args.heavy_lock and not os.environ.get("ZLINK_HEAVY_SLOT"):
+        started = time.monotonic()
+        event("heavy slot", "wait-start")
+        env = {**os.environ, "ZLINK_PRE_PR_HEAVY_WAIT_STARTED": str(started)}
+        child_args = [arg for arg in sys.argv[1:] if arg != "--heavy-lock"]
+        return subprocess.call(["flock", "-o", str(Path.home() / "heavy.lock"),
+                                sys.executable, __file__, *child_args], env=env)
+    started = os.environ.pop("ZLINK_PRE_PR_HEAVY_WAIT_STARTED", None)
+    if started:
+        event("heavy slot", "acquired", float(started))
+
     try:
         if not args.no_merge:
             status["merge"] = "fail"
-            if not git_output("branch", "--show-current").strip():
-                raise ValueError("default merge requires a checked-out branch; use --no-merge on a detached HEAD")
-            command("git", "fetch", "origin", "main")
-            try:
-                command("git", "merge", "--no-edit", "origin/main")
-            except subprocess.CalledProcessError:
-                command("git", "diff", "--name-only", "--diff-filter=U")
-                raise
+            with timed("Synchronize with origin/main"):
+                if not git_output("branch", "--show-current").strip():
+                    raise ValueError("default merge requires a checked-out branch; use --no-merge on a detached HEAD")
+                command("git", "fetch", "origin", "main")
+                try:
+                    command("git", "merge", "--no-edit", "origin/main")
+                except subprocess.CalledProcessError:
+                    command("git", "diff", "--name-only", "--diff-filter=U")
+                    raise
             status["merge"] = "pass"
 
         selected = requested
         if not selected:
             status["paths"] = "fail"
-            selected = select()
+            with timed("Select checks from changed paths"):
+                selected = select()
             status["paths"] = "pass"
         if "java" in selected:
             selected.update(("java-private-access", "jvm-api-snapshot"))

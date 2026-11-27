@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -eo pipefail
-# The framework consumes the public binding package contract. During
-# pre-release CI the package is packed from this checkout against the
-# verified Core release instead of waiting for nuget.org publication.
+# The framework consumes the public binding package prepared by the binding job.
 package_root="${RUNNER_TEMP}/zlink-local-packages"
 nuget_source="${package_root}/nuget"
 mkdir -p "${nuget_source}"

@@ -2,6 +2,7 @@
 # Reuse the Linux x64 batch steps. Leave checkout, setup actions and toolchain
 # installs, caches, artifact transport, Redis lifecycle, Windows/release/nightly
 # steps, cross-platform result comparison and Pages deployment to CI.
+# Pass --heavy-lock to acquire the host heavy slot and measure the wait.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
