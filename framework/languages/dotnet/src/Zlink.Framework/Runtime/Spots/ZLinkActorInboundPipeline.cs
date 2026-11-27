@@ -411,7 +411,7 @@ internal sealed class ZLinkActorInboundPipeline(
                 .ConfigureAwait(false);
             return;
         }
-        if (state.IsDispatchBlocked)
+        if (state.DispatchBlockFailure(frame.Actor.Generation) is { } dispatchFailure)
         {
             await ZLinkActorBoundSessionRelay
                 .ReplyStaleActorAsync(
@@ -423,10 +423,7 @@ internal sealed class ZLinkActorInboundPipeline(
                     frame.Flags,
                     frame.RouteContext.ReplyCapability,
                     frame.Header,
-                    new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{frame.Actor.ActorId}' is being destroyed."
-                    ),
+                    dispatchFailure,
                     cancellationToken,
                     frame.DirectReply
                 )

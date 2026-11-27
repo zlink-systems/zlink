@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
-import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 import java.io.IOException;

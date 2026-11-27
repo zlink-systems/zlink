@@ -134,6 +134,19 @@ export class ZLinkActorPlacementCoordinator {
         if (observed.kind === 'missing' || observed.objectGeneration > current.objectGeneration) {
           return true;
         }
+        if (
+          observed.objectGeneration === current.objectGeneration &&
+          observed.allocation.state === 'active' &&
+          decodeActorAuthorityIdentity(observed.payload, observed.objectGeneration)?.state ===
+            'closing' &&
+          (await store.releaseEndedReservation?.(
+            key,
+            observed.storeVersion.value,
+            deadline.signal
+          )) === true
+        ) {
+          return true;
+        }
         await waitForAuthorityChange(deadline.signal);
       }
     } catch (error) {

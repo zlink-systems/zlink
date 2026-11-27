@@ -668,7 +668,7 @@ TEST (SendAllocations, LocalSendIdentityReadsKeepOnlyTheReadyResultAllocations)
     const auto identity = node.routing_id ();
     using identity_task_t = fw::task_t<std::optional<zlink::routing_id_t>>;
     std::array<std::optional<identity_task_t>, 2> baseline_tasks, actual_tasks;
-    // app.cpp's NodeDirect send decision and submit_local_node_send each read
+    // app_framework_assembly.cpp's NodeDirect send decision and submit_local_node_send each read
     // routing_id_async. Hold the mutable configuration owner to expose any
     // identity turn those two real reads would otherwise execute inline.
     std::promise<void> entered, release;
