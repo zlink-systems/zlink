@@ -24,7 +24,7 @@ function rawFixture(mode) {
   };
   const record = {
     sourceRid: 'source',
-    routeGeneration: 1,
+    routeGeneration: 1n,
     parts,
     close() {
       counts.closes += 1;
@@ -99,7 +99,8 @@ function rawFixture(mode) {
   runtime.start();
   if (mode === 'dispatch') {
     runtime.topology.admittedPeer = () => ({
-      liveness: { connectionId: 1 },
+      remoteAdmitReceived: true,
+      liveness: { connectionId: 1n },
       descriptor: { lifecycleGeneration: 1n }
     });
     runtime.liveness.recordReceived = () => {};

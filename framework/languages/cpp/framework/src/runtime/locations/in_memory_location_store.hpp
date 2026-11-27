@@ -10,6 +10,7 @@
 
 #include "runtime/locations/location_key_codec.hpp"
 #include "runtime/locations/aggregate_inventory.hpp"
+#include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_store_limits.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -1054,7 +1055,6 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<aggregate_prepare_result_t> ();
-        const auto inventory_tree = aggregate_inventory::build_tree (request.participants);
         return _lane
           .run ([&] {
               if (request.aggregate_generation == 0 || request.aggregate_generation > max_generation
@@ -1068,8 +1068,7 @@ class in_memory_location_repository_t : public location_repository_t
                   || std::any_of (request.participants.begin (), request.participants.end (),
                                   [] (const aggregate_participant_t &participant) {
                                       return !participant.membership_mutation.empty ();
-                                  })
-                  || !inventory_tree)
+                                  }))
                   return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
 
               const auto aggregate_key = aggregate_id_key (request.aggregate_id);
@@ -1133,7 +1132,6 @@ class in_memory_location_repository_t : public location_repository_t
 
               aggregate_state_t state;
               state.request = std::move (request);
-              state.inventory = *inventory_tree;
               _aggregates.emplace (aggregate_key, std::move (state));
               const auto &stored = _aggregates.at (aggregate_key).request;
               apply_capacity_bundle (_pending_by_placement, target, stored.capacity_bundle, true);
@@ -1286,6 +1284,40 @@ class in_memory_location_repository_t : public location_repository_t
           .get ();
     }
 
+    task_t<bool>
+    seal_relocation_inventory (aggregate_fence_t fence,
+                               std::string digest,
+                               std::vector<aggregate_participant_t> participants) override
+    {
+        const auto tree = aggregate_inventory::build_tree (participants);
+        if (tree.root.at (location_record_fields::digestSha256) != digest)
+            return completed (false);
+        return _lane
+          .run ([&] {
+              // §8.3: one sealed source inventory per (relocationId, 1); a reseal must be identical.
+              const auto [sealed, inserted] = _sealed_inventories.try_emplace (
+                aggregate_inventory::key_suffix (fence),
+                sealed_inventory_t{std::move (digest), std::move (participants)});
+              return completed (inserted || sealed->second.digest == digest);
+          })
+          .get ();
+    }
+
+    task_t<std::optional<std::vector<aggregate_participant_t>>>
+    read_relocation_inventory (aggregate_fence_t fence, std::string digest) override
+    {
+        return _lane
+          .run ([&] {
+              const auto sealed =
+                _sealed_inventories.find (aggregate_inventory::key_suffix (fence));
+              if (sealed == _sealed_inventories.end () || sealed->second.digest != digest)
+                  return completed (std::optional<std::vector<aggregate_participant_t>>{});
+              return completed (
+                std::optional<std::vector<aggregate_participant_t>>{sealed->second.participants});
+          })
+          .get ();
+    }
+
     task_t<std::int64_t> remove_all_by_owner (location_owner_token_t owner) override
     {
         return _lane
@@ -1340,8 +1372,13 @@ class in_memory_location_repository_t : public location_repository_t
     struct aggregate_state_t
     {
         aggregate_prepare_request_t request;
-        aggregate_inventory::tree_t inventory;
         aggregate_status_t status = aggregate_status_t::prepared;
+    };
+
+    struct sealed_inventory_t
+    {
+        std::string digest;
+        std::vector<aggregate_participant_t> participants;
     };
 
 
@@ -1410,7 +1447,12 @@ class in_memory_location_repository_t : public location_repository_t
         const bool active = snapshot.allocation.state == placement_allocation_state_t::active;
         if (discarded && (!active || !discarded->same_incarnation (snapshot)))
             return false;
-        if (active ? !request && !discarded : !snapshot.pending_creation)
+        const auto actor =
+          active && snapshot.allocation.object_kind == placement_object_kind_t::actor
+            ? decode_direct_actor_authority_payload (snapshot.payload)
+            : std::nullopt;
+        const bool closing_actor = actor && actor->state == actor_authority_state_t::closing;
+        if (active ? !request && !discarded && !closing_actor : !snapshot.pending_creation)
             return false;
         const auto &target = snapshot.allocation.target;
         const bool owner_live = owner_token_is_live (snapshot.owner, now);
@@ -1424,11 +1466,10 @@ class in_memory_location_repository_t : public location_repository_t
             return false;
         }
         if (active) {
-            const auto actor = decode_direct_actor_authority_payload (snapshot.payload);
             if (snapshot.aggregate || (actor && actor->has_relocation_state))
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
-            if (!discarded) {
+            if (!discarded && !closing_actor) {
                 const auto &creation_target = request->target;
                 const auto descriptor = _mesh_nodes.find (mesh_node_key (
                   creation_target.mesh_name, std::string (creation_target.node_rid.value ())));
@@ -1436,7 +1477,8 @@ class in_memory_location_repository_t : public location_repository_t
                 require_disabled_creation_policy (
                   *request, descriptor != _mesh_nodes.end () ? &descriptor->second : nullptr);
             }
-            if (!discarded && snapshot.allocation.object_kind == placement_object_kind_t::actor
+            if (!discarded && !closing_actor
+                && snapshot.allocation.object_kind == placement_object_kind_t::actor
                 && (!actor || actor->state != actor_authority_state_t::ready
                     || actor->actor_id != request->key.global_id
                     || actor->stable_type != request->intent.stable_type))
@@ -1461,7 +1503,8 @@ class in_memory_location_repository_t : public location_repository_t
                                                  "Instance Spot is not steady Ready");
             }
         }
-        const bool wait_elapsed = !active || authority_release_wait_elapsed (snapshot.owner);
+        const bool wait_elapsed =
+          !active || closing_actor || authority_release_wait_elapsed (snapshot.owner);
         if (!discarded && active
             && snapshot.allocation.object_kind == placement_object_kind_t::user_spot)
             members = ended_spot_members_on_lane (key, snapshot, *request, now);
@@ -1500,7 +1543,7 @@ class in_memory_location_repository_t : public location_repository_t
     // Location runtime §6.1: every Actor membership of the old User Spot incarnation must
     // belong to an ended-owner member (steady Ready, activated, outside any aggregate, owner
     // lease invalid). The release must fit one provider batch; the key set mirrors the
-    // provider repository batch (authority, aggregate lock, owner lease, descriptor and capacity).
+    // provider repository batch (authority, owner lease, descriptor and capacity).
     std::vector<std::string> ended_spot_members_on_lane (const std::string &spot_key,
                                                          const authority_snapshot_t &spot,
                                                          const object_reserve_request_t &request,
@@ -1509,9 +1552,7 @@ class in_memory_location_repository_t : public location_repository_t
         const auto node = [] (const object_creation_target_t &target) {
             return mesh_node_key (target.mesh_name, std::string (target.node_rid.value ()));
         };
-        std::set<std::string> batch_keys{"authority:" + spot_key,
-                                         "aggregate-lock:" + spot_key,
-                                         "owner:" + spot.owner.owner_id,
+        std::set<std::string> batch_keys{"authority:" + spot_key, "owner:" + spot.owner.owner_id,
                                          "descriptor:" + node (spot.allocation.target),
                                          "descriptor:" + node (request.target),
                                          "capacity:" + node (spot.allocation.target)};
@@ -1537,7 +1578,6 @@ class in_memory_location_repository_t : public location_repository_t
                 wait_elapsed = false;
             members.push_back (member_key);
             batch_keys.insert ("authority:" + member_key);
-            batch_keys.insert ("aggregate-lock:" + member_key);
             batch_keys.insert ("owner:" + authority.owner.owner_id);
             batch_keys.insert ("capacity:" + node (authority.allocation.target));
         }
@@ -2130,6 +2170,7 @@ class in_memory_location_repository_t : public location_repository_t
     std::map<std::string, reservation_state_t> _reservations;
     std::map<std::string, creation_terminal_record_t> _creation_terminals;
     std::map<std::string, aggregate_state_t> _aggregates;
+    std::map<std::string, sealed_inventory_t> _sealed_inventories;
     std::map<std::string, std::uint64_t> _pending_by_placement;
     std::map<std::string, std::uint64_t> _active_by_placement;
     std::uint64_t _object_generation = 0;

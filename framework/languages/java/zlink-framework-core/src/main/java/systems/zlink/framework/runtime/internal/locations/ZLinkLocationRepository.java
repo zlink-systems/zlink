@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.locations;
 import systems.zlink.framework.locations.*;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
@@ -166,6 +167,39 @@ public interface ZLinkLocationRepository {
 
     CompletionStage<ZLinkAggregateAbortResult> abortAggregate(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation);
+
+    default CompletionStage<byte[]> sealAggregateInventory(
+            ZLinkAggregateFence fence,
+            List<ZLinkAggregateParticipant> participants,
+            ZLinkStoreCancellation cancellation) {
+        if (this instanceof systems.zlink.framework.locationprovider.ZLinkLocationStore provider) {
+            return new ZLinkAggregateInventoryStore(provider)
+                    .store(fence, participants, cancellation::isCancellationRequested);
+        }
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("aggregate inventory is not supported"));
+    }
+
+    default CompletionStage<List<ZLinkAggregateInventoryStore.StoredParticipant>>
+            readAggregateInventory(
+                    ZLinkAggregateFence fence, byte[] digest, ZLinkStoreCancellation cancellation) {
+        if (this instanceof systems.zlink.framework.locationprovider.ZLinkLocationStore provider) {
+            return new ZLinkAggregateInventoryStore(provider)
+                    .load(fence, -1, digest, cancellation::isCancellationRequested);
+        }
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("aggregate inventory is not supported"));
+    }
+
+    default CompletionStage<Void> deleteAggregateInventory(
+            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+        if (this instanceof systems.zlink.framework.locationprovider.ZLinkLocationStore provider) {
+            return new ZLinkAggregateInventoryStore(provider)
+                    .delete(fence, cancellation::isCancellationRequested);
+        }
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("aggregate inventory is not supported"));
+    }
 
     /** Reads the private committed aggregate marker, if one exists. */
     default CompletionStage<Optional<ZLinkAggregateProgressSnapshot>> readAggregateProgress(

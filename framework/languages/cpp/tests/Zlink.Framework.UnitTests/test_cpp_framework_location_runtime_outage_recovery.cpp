@@ -40,11 +40,49 @@
 #include <stop_token>
 #include <thread>
 #include "../support/location_runtime_outage_fixture.hpp"
+#include <gtest/gtest-spi.h>
 
 namespace zlink::framework::runtime
 {
 namespace
 {
+TEST (StoreOutageObservation, AuthorityKeyLookupRejectsUnknownKey)
+{
+    const std::array keys{actor_authority_key ("early").value, actor_authority_key ("late").value,
+                          spot_authority_key ("registered-spot").value};
+    for (std::size_t i = 0; i < keys.size (); ++i)
+        EXPECT_EQ (1u << i, outage_authority_bit (keys[i], keys));
+    EXPECT_NONFATAL_FAILURE (outage_authority_bit ("unexpected-key", keys),
+                             "CAS submission: unknown authority key \"unexpected-key\"");
+}
+
+TEST (StoreOutageObservation, OperationWaitReportsFirstPendingQueueForEachLoss)
+{
+    using operation_t = serial_execution_queue_t::execution_operation_t;
+    using status_t = serial_execution_queue_t::execution_status_t;
+    for (const auto loss : {-34, -42}) {
+        test::manual_internal_scheduler_t scheduler;
+        auto queue = std::make_shared<serial_execution_queue_t> (scheduler);
+        queue->cancel_pending (status_t::ownership_lost);
+        scheduler.run_all ();
+        task_completion_source_t<operation_t> pending;
+        const auto completed = result_t<operation_t>::success ({status_t::allowed, {}});
+        std::vector<outage_operation_t> operations;
+        operations.push_back ({"early Actor", queue, task_t<operation_t> (completed)});
+        operations.push_back ({"late Actor", queue, pending.task ()});
+        operations.push_back ({"Spot", queue, pending.task ()});
+        const char *stage = loss == -42 ? "renew recovery operation" : "recovery operation";
+        const auto result = wait_outage_operations (operations, loss, stage, 0ms);
+        EXPECT_FALSE (result);
+        const std::string message = result.message ();
+        EXPECT_NE (std::string::npos, message.find (std::string (stage) + ": late Actor"));
+        EXPECT_NE (std::string::npos, message.find ("execution_status=ownership_lost"));
+        EXPECT_NE (std::string::npos, message.find ("loss=" + std::to_string (loss)));
+        pending.complete (completed);
+        EXPECT_TRUE (wait_outage_operations (operations, loss, stage, 0ms));
+    }
+}
+
 TEST_P (StoreOutageRetention, NewClaimRecoveryPreservesAfterPublishAndCasPerActor)
 {
     registered_owner (false, true, -13);
@@ -177,6 +215,11 @@ TEST_P (StoreOutageRetention, NewClaimCasFailureRetriesOnRenewSpotWide)
 TEST_P (StoreOutageRetention, NewClaimCasTimeoutRemainsFailedPerActor)
 {
     registered_owner (false, true, -43);
+}
+
+TEST_P (StoreOutageRetention, NewClaimCasResponseBeforeTimeoutResumesPerActor)
+{
+    registered_owner (false, true, -40);
 }
 
 TEST_P (StoreOutageRetention, NewClaimCasTimeoutRemainsFailedSpotWide)

@@ -375,6 +375,7 @@ export class DefaultZLinkSpotManager {
   >();
   readonly closeOperations = new Map<string, ZLinkTargetSpotCloseOperation>();
   private readonly pendingInstanceTerminals = new Map<string, number>();
+  private readonly discardDisposals = new Map<string, Set<Promise<void>>>();
   private readonly pendingInstanceTerminalGenerations = new Map<string, Map<string, number>>();
   private readonly deferredInstanceAuthorityReleases = new Map<string, Set<bigint>>();
   private idleSweepTimer?: ReturnType<typeof setTimeout>;
@@ -514,6 +515,7 @@ export class DefaultZLinkSpotManager {
             activation.discardLocalMembers((actor) => lifecycle.discardSteadyExecution(actor));
             await this.activationLifecycle.discard(activation);
           });
+          this.trackDiscardDisposal(activation.meshName, disposal);
           this.options.detachedTaskRunner.runDetached('Discard Spot execution', () => disposal);
           return disposal;
         });
@@ -1192,12 +1194,29 @@ export class DefaultZLinkSpotManager {
       .filter(({ spotId }) => !this.isSpotClosing(meshName, spotId));
   }
 
+  private trackDiscardDisposal(meshName: string, disposal: Promise<void>): void {
+    let set = this.discardDisposals.get(meshName);
+    if (set === undefined) {
+      set = new Set();
+      this.discardDisposals.set(meshName, set);
+    }
+    const pending = set;
+    pending.add(disposal);
+    const forget = () => {
+      pending.delete(disposal);
+      if (pending.size === 0 && this.discardDisposals.get(meshName) === pending) {
+        this.discardDisposals.delete(meshName);
+      }
+    };
+    disposal.then(forget, forget);
+  }
+
   async drainForShutdown(meshName: string, signal?: AbortSignal, deadline?: Date): Promise<void> {
     // The host bounds observation of the whole Close, including lifecycle admission.
     // The owned operation keeps the gate and scopes until its running turns settle.
     const results = await awaitWithAbort(
-      Promise.allSettled(
-        this.activations
+      Promise.allSettled([
+        ...this.activations
           .activeActivations()
           .filter((activation) => activation.meshName === meshName)
           .map((activation) =>
@@ -1208,8 +1227,16 @@ export class DefaultZLinkSpotManager {
               ZLinkSpotCloseReason.HostShutdown,
               deadline
             )
+          ),
+        // A confirmed discard already left the active list; its disposal still uses the backend.
+        // The detached task reports its failure, so the drain only waits for it.
+        ...[...(this.discardDisposals.get(meshName) ?? [])].map((disposal) =>
+          disposal.then(
+            () => undefined,
+            () => undefined
           )
-      ),
+        )
+      ]),
       signal
     );
     const errors = results
@@ -1989,7 +2016,8 @@ export class DefaultZLinkSpotManager {
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord,
-    admit?: ZLinkMeshDispatchAdmission
+    admit?: ZLinkMeshDispatchAdmission,
+    relocationAdmission?: import('../foundation/service-stateful-runtime').ServiceSpotTargetAdmission
   ): Promise<void> {
     const spotId = owner.spotId as unknown as RoutingId | null;
     if (spotId === null) {
@@ -2020,14 +2048,19 @@ export class DefaultZLinkSpotManager {
       );
       try {
         const dispatch = async () => {
-          await this.ensureInstanceApplicationActivation(meshName, spotId);
-          const activation = this.resolveApplicationActivation(spotId, meshName);
+          if (relocationAdmission === undefined)
+            await this.ensureInstanceApplicationActivation(meshName, spotId);
+          const activation =
+            relocationAdmission?.activation ?? this.resolveApplicationActivation(spotId, meshName);
           if (activation === undefined || activation.domain.kind !== 'instance') {
             throw new ZLinkConfigurationException(
               `MeshNode Instance Spot target '${String(spotId)}' is not active.`
             );
           }
-          const target = this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId);
+          const target =
+            relocationAdmission === undefined
+              ? this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId)
+              : undefined;
           if (
             target !== undefined &&
             activation.domain.objectGeneration !== target.objectGeneration
@@ -2048,6 +2081,10 @@ export class DefaultZLinkSpotManager {
             contentType: envelope.header.contentType,
             awaitFirstHandlerTurn: record.kind === ReceiveKind.InstanceSpotActivation,
             activationRecord: record,
+            relocationAdmission,
+            ...(relocationAdmission !== undefined && envelope.header.deadline !== null
+              ? { relocationDeadlineUnixMs: Date.parse(envelope.header.deadline) }
+              : {}),
             onOneWayError:
               this.options.dispatchErrors?.captureEnabled() === true
                 ? (error: unknown) =>

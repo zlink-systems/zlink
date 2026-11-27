@@ -2658,10 +2658,14 @@ internal sealed class ZLinkSpotNodeCatalog(
 
     internal async ValueTask DiscardLocationExecutionAsync(
         ZLinkSpotActivation activation,
-        Func<ValueTask> discardMembers
+        Func<ValueTask> discardMembers,
+        CancellationToken generationShutdown
     )
     {
-        var completion = activation.DiscardLocationExecutionAsync(discardMembers);
+        var completion = activation.DiscardLocationExecutionAsync(
+            discardMembers,
+            generationShutdown
+        );
         await _lane.RunAsync(() => RemoveActivationLocked(activation)).ConfigureAwait(false);
         await completion.ConfigureAwait(false);
     }

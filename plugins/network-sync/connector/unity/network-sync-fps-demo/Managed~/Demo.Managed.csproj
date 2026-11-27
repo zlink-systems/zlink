@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../com.zlink.network-sync/Runtime/Zlink.NetworkSync.csproj" />
+    <Compile Include="../Assets/Scripts/DemoClient.cs" />
+  </ItemGroup>
+  <Target Name="InstallUnityDependencies" AfterTargets="Build">
+    <ItemGroup>
+      <!-- Unity imports Network Sync as source and provides these .NET Standard assemblies. -->
+      <UnityDependency Include="$(TargetDir)*.dll"
+                       Exclude="$(TargetPath);$(TargetDir)Zlink.NetworkSync.dll;$(TargetDir)System.Buffers.dll;$(TargetDir)System.Memory.dll;$(TargetDir)System.Numerics.Vectors.dll;$(TargetDir)System.Threading.Tasks.Extensions.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(UnityDependency)" DestinationFolder="../Assets/Plugins" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

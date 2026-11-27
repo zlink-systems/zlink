@@ -32,4 +32,6 @@ drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판�
 
 ## 포그라운드 서버
 
-Linux 또는 WSL에서는 `./run-server.sh`, Windows에서는 `.\run-server.cmd`로 서버를 시작합니다. `Server ready`가 출력되면 다른 터미널에서 `./run-e2e.sh` 또는 `.\run-e2e.cmd`를 실행합니다. e2e는 `.logs/server.json`의 주소를 읽어 실행 중인 서버에 접속하고 `table`, `reconnect`, `match`, `match-cancel`, `persist`를 검증합니다. `reconnect`의 전체 재시작 검사와 `update`의 노드 교체는 격리 실행에서 수행합니다. 서버 터미널에서 Ctrl+C를 누르면 노드와 Redis를 종료하고 `.logs/server.json`을 삭제합니다.
+Linux 또는 WSL에서는 `./run-server.sh`, Windows에서는 `.\run-server.cmd`로 서버를 시작합니다. `Server ready`가 출력되면 다른 터미널에서 `./run-e2e.sh` 또는 `.\run-e2e.cmd`를 실행합니다. e2e는 `.logs/server.json`의 주소를 읽어 실행 중인 서버에 접속하고 `table`, `reconnect`, `match`, `match-cancel`, `persist`를 검증합니다. `reconnect`의 전체 재시작 검사와 `update`의 노드 교체는 격리 실행에서 수행합니다. 서버 터미널에서 Ctrl+C를 누르면 노드와 실행기가 시작한 Redis를 종료하고 `.logs/server.json`을 삭제합니다.
+
+기본값으로 Redis는 Docker에서 실행합니다. 로컬 격리 실행(`--local` 또는 `-Local`)이나 포그라운드 실행에서 `ZLINK_REDIS_TEST_ENDPOINT=host:port`를 설정하면 기존 Redis 인스턴스를 사용합니다. 각 실행은 고유한 key prefix를 사용합니다.
