@@ -175,7 +175,7 @@ interface CapacityUsage {
 }
 
 interface AggregateRecord {
-  readonly state: 'staging' | 'prepared' | 'committed' | 'aborted';
+  readonly state: 'preparing' | 'prepared' | 'committed' | 'aborted';
   readonly requestFingerprint: string;
   readonly participantCount: number;
   readonly inventoryDigestSha256: string;
@@ -718,11 +718,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         return reconciled;
       }
     } else {
-      const staging = aggregateRecord(request, fingerprint, digest, 'staging');
+      const preparing = aggregateRecord(request, fingerprint, digest, 'preparing');
       const claimed = await this.provider.write(
         {
           conditions: [{ kind: 'missing', key: rowKey }],
-          mutations: [{ kind: 'put', key: rowKey, bytes: encodeJson(staging) }]
+          mutations: [{ kind: 'put', key: rowKey, bytes: encodeJson(preparing) }]
         },
         signal
       );
@@ -737,12 +737,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           (value) => value.key.value === rowKey.value
         )?.version;
         if (version === undefined) {
-          throw new Error('Aggregate staging did not return a Store version.');
+          throw new Error('Preparing aggregate did not return a Store version.');
         }
         aggregateRead = {
           kind: 'found',
           value: {
-            bytes: encodeJson(staging),
+            bytes: encodeJson(preparing),
             version,
             storeNow: claimed.storeNow
           }
@@ -750,7 +750,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
     }
     const aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
-    if (aggregate.state !== 'staging' || aggregate.requestFingerprint !== fingerprint) {
+    if (aggregate.state !== 'preparing' || aggregate.requestFingerprint !== fingerprint) {
       return { kind: 'conflict' };
     }
     try {
@@ -934,14 +934,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             continue;
           }
           // A peer can be in the middle of publishing this same aggregate.
-          // Do not abort its shared staging row merely because this attempt
+          // Do not abort its shared aggregate row merely because this attempt
           // lost a marker CAS; re-enter and adopt its terminal state.
           const aggregateRaced = await this.provider.read(rowKey, signal);
           if (aggregateRaced.kind === 'found') {
             const aggregateRecord = decodeJson<AggregateRecord>(aggregateRaced.value.bytes);
             if (
               aggregateRecord.requestFingerprint === fingerprint &&
-              (aggregateRecord.state === 'staging' || aggregateRecord.state === 'prepared')
+              (aggregateRecord.state === 'preparing' || aggregateRecord.state === 'prepared')
             ) {
               return await this.prepareAggregateRequest(request, signal, deadlineUnixMs);
             }
@@ -992,7 +992,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         );
         if (reserved.kind === 'applied') return { kind: 'prepared', fence };
 
-        // The staging row keeps its participant fences while capacity is re-evaluated.
+        // The aggregate row keeps its participant fences while capacity is re-evaluated.
         // Preserve or abort changes that row and prevents the next publication.
         capacity = undefined;
       }
@@ -1077,13 +1077,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       let aggregateRead = await this.provider.read(rowKey, signal);
       if (aggregateRead.kind === 'missing') return { kind: 'stale' };
       let aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
-      if (aggregate.state === 'aborted' || aggregate.state === 'staging') {
-        return { kind: 'stale' };
-      }
       if (aggregate.state === 'committed') {
         await this.normalizeCommittedAggregate(fence, aggregate, signal);
         return { kind: 'alreadyCommitted' };
       }
+      if (aggregate.state !== 'prepared') return { kind: 'stale' };
       const entries = await this.aggregateInventory.read(
         fence,
         Buffer.from(aggregate.inventoryDigestSha256, 'hex'),
@@ -3636,9 +3634,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       aggregate.state !== 'committed' ||
       isPreparedAuthorityRelocation(record.snapshot.relocation, marker.aggregateId)
     ) {
+      if (record.visibleStoreVersion === undefined) {
+        throw new Error('Aggregate participant is missing visibleStoreVersion.');
+      }
       return authoritySnapshot(
         record.snapshot,
-        { value: record.visibleStoreVersion ?? marker.expectedStoreVersion } as ZLinkStoreVersion,
+        { value: record.visibleStoreVersion } as ZLinkStoreVersion,
         storeNow
       );
     }
@@ -3762,7 +3763,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         await this.clearAggregateMarkersByScan(fence, signal);
         return;
       }
-      if (record.state !== 'staging') return;
+      if (record.state !== 'preparing') return;
       const result = await this.provider.write(
         {
           conditions: [{ kind: 'version', key, expected: current.value.version }],
