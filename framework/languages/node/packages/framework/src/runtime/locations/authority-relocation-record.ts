@@ -1,4 +1,8 @@
 import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} from '../../contracts/Errors/ZLinkFrameworkException';
 
 /** Location runtime §2.3, §9.1: the authority record owns durable relocation progress. */
 export interface AuthorityRelocationFence {
@@ -152,7 +156,10 @@ export function decodeAuthorityAggregate(value: unknown): {
     applicationVersion: integer(state.applicationVersion)
   };
   if (Object.keys(state).length !== Object.keys(relocation).length)
-    throw new TypeError('Authority relocation contains unknown fields.');
+    throw new ZLinkFrameworkException(
+      ZLinkFrameworkErrorKind.DataLost,
+      'DataLost: Authority relocation contains unknown fields.'
+    );
   return { marker, relocation };
 }
 

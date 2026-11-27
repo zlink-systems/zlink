@@ -28,7 +28,7 @@ function deliver(runtime, sourceNodeRid, frames) {
   });
 }
 
-function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled = false) {
+async function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled = false) {
   let submitted;
   const requester = new ServiceStatefulRuntime(
     {
@@ -124,7 +124,7 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
     ownerId: coordinator.ownerId,
     leaseGeneration: coordinator.leaseGeneration
   });
-  void replies.setWriter(replies.writer);
+  await replies.setWriter(replies.writer);
   const targetStore = { ...store, relocationReplies: replies.store };
   const targetOptions = {
     registration: { messageSerializers: undefined },
@@ -197,7 +197,7 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
     },
     offer: { prepare: { targetAttemptGeneration: 1n } }
   };
-  void replies.seed({
+  await replies.seed({
     relocationId: stage.staging.envelope.aggregateId,
     objectKey: stage.staging.envelope.participants[0].key,
     operationId: packet.messageFollowContext.operationId,
@@ -232,7 +232,7 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
 for (const mode of ['off', 'errors', 'normal', 'detailed']) {
   test(`relocated Actor reply respects current tracing mode ${mode}`, async () => {
     const enabled = mode === 'normal' || mode === 'detailed';
-    const f = fixture('C', false, 'A', enabled);
+    const f = await fixture('C', false, 'A', enabled);
     const requestHeader = protocol.decodeStreamHeader(Buffer.from(f.packet.header, 'base64'));
     f.packet.header = Buffer.from(
       protocol.encodeStreamHeader({
@@ -267,7 +267,7 @@ for (const mode of ['off', 'errors', 'normal', 'detailed']) {
 
 for (const targetRid of ['C', 'D']) {
   test(`original requester A accepts the terminal from ${targetRid} after previous owner B ended`, async () => {
-    const f = fixture(targetRid);
+    const f = await fixture(targetRid);
     try {
       await f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
         index: 0,
@@ -315,7 +315,7 @@ for (const targetRid of ['C', 'D']) {
 
 test('command 33 and 46 preserve the original requester binary RID', async () => {
   const rid = routingIds.decodeRoutingId('\ufffd', 'ff');
-  const f = fixture('C', false, rid);
+  const f = await fixture('C', false, rid);
   void f.pending.promise.catch(() => {});
   try {
     await f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
@@ -333,7 +333,7 @@ test('command 33 and 46 preserve the original requester binary RID', async () =>
 });
 
 test('the target clears an expired original source lease without consulting B', async () => {
-  const f = fixture('C', true);
+  const f = await fixture('C', true);
   try {
     const delivery = await f.target.sendReplyRelay(
       'mesh',
@@ -358,7 +358,7 @@ test('the target clears an expired original source lease without consulting B', 
 });
 
 test('the target rejects an ACK whose original source generation changed', async () => {
-  const f = fixture();
+  const f = await fixture();
   let sent;
   const admission = new Promise((resolve) => {
     sent = resolve;
@@ -532,7 +532,7 @@ for (const local of [false, true]) {
 }
 
 test('result CAS rejection forbids reply and leaves the row accepted', async () => {
-  const f = fixture();
+  const f = await fixture();
   f.replies.provider.write = async () => {
     throw new TypeError('injected result CAS failure');
   };
@@ -554,7 +554,7 @@ test('result CAS rejection forbids reply and leaves the row accepted', async () 
 });
 
 test('lost ACK CAS response rereads the terminal row without a second relay', async () => {
-  const f = fixture();
+  const f = await fixture();
   const write = f.replies.provider.write.bind(f.replies.provider);
   let lost = 0;
   f.replies.provider.write = async (batch, signal) => {
@@ -597,7 +597,7 @@ for (const lease of [
   }
 ])
   test(`exact requester lease terminal: ${lease.kind}-${lease.token?.leaseGeneration}`, async () => {
-    const f = fixture();
+    const f = await fixture();
     f.targetStore.readOwnerLease = async () => lease;
     try {
       await f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
@@ -614,7 +614,7 @@ for (const lease of [
   });
 
 test('Relocate deadline ends the caller while durable terminal delivery continues', async () => {
-  const f = fixture();
+  const f = await fixture();
   const deadline = new AbortController();
   deadline.abort(new Error('Relocate deadline'));
   try {

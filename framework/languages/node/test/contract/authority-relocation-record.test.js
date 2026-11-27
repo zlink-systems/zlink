@@ -1,6 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} = require('../../packages/framework/dist/contracts/Errors/ZLinkFrameworkException');
+const {
   encodeAuthorityAggregate,
   decodeAuthorityAggregate
 } = require('../../packages/framework/dist/runtime/locations/authority-relocation-record.js');
@@ -170,11 +174,20 @@ test('authority relocation accepts the maximum RID length and full uint64 fence 
   );
 });
 
-const vectors = require('./helpers/authority-relocation-golden');
+const {
+  cases: vectors
+} = require('../../../../runtime/protocol/golden/authority-aggregate-relocation-v1.json');
 for (const vector of vectors) {
   test(`common aggregate golden: ${vector.name} (${vector.expect})`, () => {
     if (vector.expect === 'reject') {
-      assert.throws(() => decodeAuthorityAggregate(vector.aggregate));
+      if (vector.name === 'relocation-with-completion-field') {
+        assert.throws(() => decodeAuthorityAggregate(vector.aggregate), {
+          name: ZLinkFrameworkException.name,
+          kind: ZLinkFrameworkErrorKind.DataLost
+        });
+      } else {
+        assert.throws(() => decodeAuthorityAggregate(vector.aggregate), TypeError);
+      }
       return;
     }
     const decoded = decodeAuthorityAggregate(vector.aggregate);
