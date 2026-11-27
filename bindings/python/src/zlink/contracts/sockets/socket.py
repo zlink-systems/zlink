@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MPL-2.0
 
-from typing import Protocol, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
+
+from ..eventing.codes import MonitorEventMask
+from .codes import ReceiveFlowState
 
 
 @runtime_checkable
@@ -11,6 +14,25 @@ class _SocketContract(Protocol):
         """Bind to a local transport address (for example ``tcp://*:5555``) to
         accept connections there."""
         ...
+
+    def unbind(self, endpoint: str): ...
+
+    def set_tls_server(
+        self, cert: str, key: str, require_client_cert: bool = False
+    ): ...
+
+    def set_tls_client(
+        self,
+        ca_cert: Optional[str],
+        hostname: Optional[str],
+        trust_system: bool = False,
+    ): ...
+
+    def monitor_open(
+        self, events: MonitorEventMask = MonitorEventMask.ALL, monitor_hwm_bytes: int = 0
+    ): ...
+
+    def set_receive_flow_state(self, state: ReceiveFlowState): ...
 
     def close(self):
         """Close the socket and release its native resources."""
@@ -24,6 +46,25 @@ class _SocketContract(Protocol):
     def options(self):
         """The typed options facade for this socket."""
         ...
+
+
+@runtime_checkable
+class _DisconnectRidContract(_SocketContract, Protocol):
+    """Sockets that can disconnect a peer by its routing id."""
+
+    def disconnect_rid(self, peer_rid):
+        """Disconnect the peer identified by ``peer_rid`` rather than by
+        address."""
+        ...
+
+
+@runtime_checkable
+class _RoutingIdContract(_SocketContract, Protocol):
+    """Sockets whose own routing id can be set and read."""
+
+    def set_routing_id(self, routing_id): ...
+
+    def get_routing_id(self): ...
 
 
 def __getattr__(name):
