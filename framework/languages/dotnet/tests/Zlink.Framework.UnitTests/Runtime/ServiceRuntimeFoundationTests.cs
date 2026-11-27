@@ -1924,19 +1924,20 @@ public sealed class ServiceRuntimeFoundationTests
             .Select(static index => checked((byte)(index % 251)))
             .ToArray();
         using var requestPart = Message.From(requestPayload);
-        var started = Stopwatch.GetTimestamp();
-        long submitStarted = 0;
-        long submitReturned = 0;
-        long requestReady = 0;
-        long requestReceived = 0;
-        long replyStarted = 0;
-        long replyReturned = 0;
-        long completionReady = 0;
-        long completionReceived = 0;
+        var timeline = new FailureTimeline(
+            "submitStarted",
+            "submitReturned",
+            "requestReady",
+            "requestReceived",
+            "replyStarted",
+            "replyReturned",
+            "completionReady",
+            "completionReceived"
+        );
         try
         {
             MeshOperationId operationId;
-            submitStarted = Stopwatch.GetTimestamp();
+            timeline.Mark("submitStarted");
             var submit = channelRequest
                 ? source
                     .EntrySpot()
@@ -1952,7 +1953,7 @@ public sealed class ServiceRuntimeFoundationTests
                     out operationId,
                     TimeSpan.FromSeconds(3)
                 );
-            submitReturned = Stopwatch.GetTimestamp();
+            timeline.Mark("submitReturned");
             Assert.Equal(SubmitResult.Ok, submit);
 
             using var targetReady = new MeshReadyBatch();
@@ -1962,11 +1963,11 @@ public sealed class ServiceRuntimeFoundationTests
                 target.DrainReady(MeshReadyDomains.Application, targetReady, RecvFlags.DontWait);
                 return targetReady.Count == 1;
             });
-            requestReady = Stopwatch.GetTimestamp();
+            timeline.Mark("requestReady");
             using var targetClaim = targetReady.TakeClaim(0);
             using var targetBatch = new MeshReceiveBatch();
             Assert.True(targetClaim.Receive(targetBatch, RecvFlags.DontWait));
-            requestReceived = Stopwatch.GetTimestamp();
+            timeline.Mark("requestReceived");
             Assert.Equal(1, targetBatch.Count);
             var request = targetBatch[0];
             Assert.Equal(
@@ -1993,9 +1994,9 @@ public sealed class ServiceRuntimeFoundationTests
             }
 
             using var replyPart = Message.From(new byte[] { 9, 8, 7 });
-            replyStarted = Stopwatch.GetTimestamp();
+            timeline.Mark("replyStarted");
             var replySubmit = request.Reply([replyPart]);
-            replyReturned = Stopwatch.GetTimestamp();
+            timeline.Mark("replyReturned");
             Assert.Equal(SubmitResult.Ok, replySubmit);
             Assert.Equal(SubmitResult.InvalidState, request.Reply([replyPart]));
 
@@ -2006,11 +2007,11 @@ public sealed class ServiceRuntimeFoundationTests
                 source.DrainReady(MeshReadyDomains.Infrastructure, sourceReady, RecvFlags.DontWait);
                 return sourceReady.Count == 1;
             });
-            completionReady = Stopwatch.GetTimestamp();
+            timeline.Mark("completionReady");
             using var sourceClaim = sourceReady.TakeClaim(0);
             using var sourceBatch = new MeshReceiveBatch();
             Assert.True(sourceClaim.Receive(sourceBatch, RecvFlags.DontWait));
-            completionReceived = Stopwatch.GetTimestamp();
+            timeline.Mark("completionReceived");
             Assert.Equal(1, sourceBatch.Count);
             var completion = sourceBatch[0];
             Assert.Equal(MeshRecordKind.Completion, completion.Kind);
@@ -2035,26 +2036,10 @@ public sealed class ServiceRuntimeFoundationTests
             sourceBatch.Reset();
             Assert.False(sourceClaim.Receive(sourceBatch, RecvFlags.DontWait));
         }
-        catch (Exception error) when (error is TimeoutException or Xunit.Sdk.XunitException)
+        catch (Exception error) when (FailureTimeline.IsTimingFailure(error))
         {
-            var message =
-                $"{error.Message}\nTimeline (ms since observation started) "
-                + $"submitStarted={Elapsed(submitStarted)}, submitReturned={Elapsed(submitReturned)}, "
-                + $"requestReady={Elapsed(requestReady)}, requestReceived={Elapsed(requestReceived)}, "
-                + $"replyStarted={Elapsed(replyStarted)}, replyReturned={Elapsed(replyReturned)}, "
-                + $"completionReady={Elapsed(completionReady)}, completionReceived={Elapsed(completionReceived)}, "
-                + $"failed={Elapsed(Stopwatch.GetTimestamp())}.";
-            if (error is TimeoutException)
-                throw new TimeoutException(message, error);
-            throw new Xunit.Sdk.XunitException(message, error);
+            throw timeline.Rethrow(error);
         }
-
-        string Elapsed(long timestamp) =>
-            timestamp == 0
-                ? "unobserved"
-                : FormattableString.Invariant(
-                    $"{Stopwatch.GetElapsedTime(started, timestamp).TotalMilliseconds:F3}"
-                );
     }
 
     [Fact]
