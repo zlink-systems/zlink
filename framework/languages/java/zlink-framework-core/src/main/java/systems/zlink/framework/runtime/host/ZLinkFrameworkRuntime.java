@@ -454,6 +454,19 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             this.meshNodes.nodesByName(), this::recordDescriptorOptionChange);
             runtimeHandlers.add(ZLinkRouteMeshRuntimeOptions.class, this.routeMeshRuntimeOptions);
 
+            var admissionQueueHost =
+                    systems.zlink.framework.runtime.streams.ZLinkAdmissionQueueHost.create(
+                            this.registration.streamNodes(),
+                            this.registration.meshNodes(),
+                            locationSubsystem.enabled(),
+                            locationSubsystem.enabled()
+                                    ? locationSubsystem.liveLocationRows()::ownerLeaseLive
+                                    : null);
+            if (admissionQueueHost != null) {
+                runtimeHandlers.add(
+                        systems.zlink.framework.runtime.streams.ZLinkAdmissionQueueHost.class,
+                        admissionQueueHost);
+            }
             ZLinkFrameworkSpotSubsystem spotSubsystem =
                     ZLinkFrameworkSpotSubsystem.create(
                             options,
@@ -549,6 +562,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             prepareConstruction(runtimeHandlers);
             this.streams = streamSubsystem.streams();
             if (this.streams != null) {
+                this.streams.attachAdmissionQueue(channelCalls, this.locationRuntime);
 
                 this.meshNodes
                         .nodesByName()
