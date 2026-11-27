@@ -110,8 +110,7 @@ internal static partial class ZLinkRelocationTreeStore
         Stream input,
         ReadOnlyMemory<byte> inventoryDigest,
         TimeSpan retention,
-        CancellationToken cancellationToken,
-        string? completionReference = null
+        CancellationToken cancellationToken
     )
     {
         var logicalLength = input.Length;
@@ -150,15 +149,7 @@ internal static partial class ZLinkRelocationTreeStore
 
             var storedBatch = await Task.WhenAll(
                     batch.Select(chunk =>
-                        PutVerifiedAsync(
-                                store,
-                                chunk.Encoded,
-                                retention,
-                                cancellationToken,
-                                completionReference is null
-                                    ? null
-                                    : CompletionChunkReference(completionReference, chunk.Order)
-                            )
+                        PutVerifiedAsync(store, chunk.Encoded, retention, cancellationToken)
                             .AsTask()
                     )
                 )
@@ -184,13 +175,7 @@ internal static partial class ZLinkRelocationTreeStore
             inventoryDigest.Span,
             chunks
         );
-        var root = await PutVerifiedAsync(
-                store,
-                manifest,
-                retention,
-                cancellationToken,
-                completionReference
-            )
+        var root = await PutVerifiedAsync(store, manifest, retention, cancellationToken)
             .ConfigureAwait(false);
         return new ZLinkRelocationTreeStored(root, logicalLength, logicalChecksum, chunks.Length);
     }
@@ -404,11 +389,6 @@ internal static partial class ZLinkRelocationTreeStore
         CancellationToken cancellationToken
     )
     {
-        // Completion chunks use references scoped to this immutable manifest.
-        if (rootReference.EndsWith(CompletionReferenceSuffix, StringComparison.Ordinal))
-            await DeleteCompletionChunksAsync(store, rootReference, cancellationToken)
-                .ConfigureAwait(false);
-
         // Other trees may share chunks. Their retention removes orphaned data.
         _ = await store
             .DeleteRelocationAsync(rootReference, cancellationToken)
@@ -436,19 +416,12 @@ internal static partial class ZLinkRelocationTreeStore
         IZLinkRelocationRepository store,
         ReadOnlyMemory<byte> encoded,
         TimeSpan retention,
-        CancellationToken cancellationToken,
-        string? reference = null
+        CancellationToken cancellationToken
     )
     {
-        var stored = reference is null
-            ? await store
-                .PutRelocationAsync(encoded, retention, cancellationToken)
-                .ConfigureAwait(false)
-            : await store
-                .PutRelocationAtAsync(reference, encoded, retention, cancellationToken)
-                .ConfigureAwait(false);
-        if (reference is not null && !StringComparer.Ordinal.Equals(stored.Reference, reference))
-            throw new IOException("Relocation completion reference conflicted.");
+        var stored = await store
+            .PutRelocationAsync(encoded, retention, cancellationToken)
+            .ConfigureAwait(false);
         var checksum = ZLinkCrc32C.Compute(encoded.Span);
         if (
             string.IsNullOrWhiteSpace(stored.Reference)

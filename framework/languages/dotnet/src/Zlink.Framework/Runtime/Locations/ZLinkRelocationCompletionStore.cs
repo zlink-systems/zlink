@@ -1,528 +1,70 @@
-using System.Text.Json.Serialization;
-using Microsoft.Extensions.Logging;
-using Systems.Zlink.Framework.Runtime.Protocol;
-using Zlink.Framework.Contracts.Locations;
-using Zlink.Framework.Runtime.Messaging;
-
 namespace Zlink.Framework.Runtime.Locations;
 
-internal sealed record ZLinkRelocationCompletionProgress(
-    [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
-        ulong AcceptedRequests,
-    [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
-        ulong CompletedResults,
-    [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
-        ulong PendingDeliveries,
-    string? Reference,
-    string? Sha256
-)
+internal sealed class ZLinkRelocationCompletionStore(IZLinkLocationRepository authorities)
 {
-    internal static ZLinkRelocationCompletionProgress Start(ulong acceptedRequests) =>
-        new(acceptedRequests, 0, 0, null, null);
-
-    internal bool IsReady => AcceptedRequests == CompletedResults && PendingDeliveries == 0;
-}
-
-internal sealed class ZLinkRelocationCompletionStore(
-    IZLinkLocationRepository authorities,
-    IZLinkRelocationRepository blobs,
-    ZLinkRelocationCompletionBudget? budget = null,
-    TimeSpan? pollingInterval = null
-)
-{
-    internal static string? CompletionBlocker(ZLinkAuthoritySnapshot source, ILogger? logger = null)
-    {
-        if (source.Relocation is not { Completion: { IsReady: false } completion } active)
-            return null;
-        var reason =
-            completion.PendingDeliveries > 0 ? "pending_delivery" : "completion_in_progress";
-        logger?.LogWarning(
-            "zlink.runtime.relocation.blocked reason={Reason} relocationId={RelocationId} pendingDeliveries={PendingDeliveries}",
-            reason,
-            active.RelocationId,
-            completion.PendingDeliveries
-        );
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"relocation_blocked reason={reason} relocation={active.RelocationId:N} pendingDeliveries={completion.PendingDeliveries}"
-        );
-        return $"Relocation '{active.RelocationId:N}' is completing with "
-            + $"{completion.PendingDeliveries} pending deliveries and "
-            + $"{completion.CompletedResults}/{completion.AcceptedRequests} stored results.";
-    }
-
-    internal static void RequireCompletionSettled(ZLinkAuthoritySnapshot source)
-    {
-        if (CompletionBlocker(source) is { } blocker)
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, blocker);
-    }
-
-    internal static ZLinkRelocationCompletionProgress RequireProgress(
-        ZLinkAuthorityRelocation? relocation
-    )
-    {
-        var progress = relocation?.Completion ?? throw DataLost("Completion authority is missing.");
-        if (
-            progress.CompletedResults > progress.AcceptedRequests
-            || progress.PendingDeliveries > progress.CompletedResults
-            || (progress.CompletedResults == 0) != (progress.Reference is null)
-            || (progress.Reference is null) != (progress.Sha256 is null)
-        )
-            throw DataLost("Completion authority reference or counts disagree.");
-        return progress;
-    }
-
-    internal static ZLinkRelocationCompletionProgress RequireAcceptedRequests(
-        ZLinkAuthorityRelocation relocation,
-        ulong acceptedRequests
-    )
-    {
-        var progress = RequireProgress(relocation);
-        if (progress.AcceptedRequests != acceptedRequests)
-            throw DataLost("Relocation completion reservation differs from accepted requests.");
-        return progress;
-    }
-
-    internal async ValueTask<ZLinkRelocationCompletionRecord> ReadAsync(
-        ZLinkAuthorityRelocation relocation,
-        CancellationToken cancellationToken,
-        bool renew = false
-    )
-    {
-        var progress = RequireProgress(relocation);
-        if (progress.Reference is null)
-            return new(relocation.RelocationId, []);
-
-        var record = await ZLinkRelocationTreeStore
-            .ReadCompletionAsync(
-                blobs,
-                progress.Reference,
-                progress.Sha256!,
-                Convert.FromHexString(relocation.SourceInventorySha256),
-                renew && progress.PendingDeliveries != 0,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (
-            record.RelocationId != relocation.RelocationId
-            || (ulong)record.Entries.Count != progress.CompletedResults
-            || (ulong)record.PendingDeliveries != progress.PendingDeliveries
-        )
-            throw DataLost(
-                "Relocation completion payload identity or counts differ from authority."
-            );
-        return record;
-    }
-
-    internal ValueTask<(
-        ZLinkAuthoritySnapshot Authority,
-        ZLinkRelocationCompletionEntry Entry
-    )> AppendAsync(
-        ZLinkAuthorityKey key,
-        ZLinkAuthoritySnapshot expected,
-        ZLinkRelocationCompletionEntry entry,
+    internal ValueTask<ZLinkRelocationReplyRow?> PublishAsync(
+        ZLinkRelocationReplyRow result,
+        Func<string> failureReply,
         CancellationToken cancellationToken
     ) =>
-        UpdateAsync(
-            key,
-            expected,
-            entry,
-            ZLinkRelocationCompletionDelivery.Pending,
+        authorities.UpdateRelocationReplyAsync(
+            result,
+            current =>
+            {
+                if (current.Entry.Delivery != ZLinkRelocationCompletionDelivery.Accepted)
+                    return current;
+                var pending = current with
+                {
+                    Entry = current.Entry with
+                    {
+                        Delivery = ZLinkRelocationCompletionDelivery.Pending,
+                        Reply = result.Entry.Reply,
+                    },
+                };
+                var terminal = pending with
+                {
+                    Entry = pending.Entry with
+                    {
+                        Delivery = ZLinkRelocationCompletionDelivery.SourceLeaseExpired,
+                    },
+                };
+                return terminal.Encode().Length <= ZLinkRelocationReplyRow.MaximumBytes
+                    ? pending
+                    : pending with
+                    {
+                        Entry = pending.Entry with { Reply = failureReply() },
+                    };
+            },
             cancellationToken
         );
 
-    internal async Task PublishReplayResultsAsync(
-        ZLinkAuthorityKey key,
-        ZLinkAuthoritySnapshot current,
-        IAsyncEnumerable<ZLinkRelocationCompletionEntry> results,
-        Func<
-            ZLinkAuthoritySnapshot,
-            ZLinkRelocationCompletionEntry,
-            CancellationToken,
-            ValueTask<ZLinkRelocationCompletionDelivery>
-        > deliver,
+    internal ValueTask<ZLinkRelocationReplyRow?> AcknowledgeAsync(
+        ZLinkRelocationReplyRow row,
+        ZLinkRelocationCompletionDelivery evidence,
         CancellationToken cancellationToken
     )
     {
-        // A single reader appends in replay order. Each delivery waits for its
-        // CAS, and later appends can proceed while a reply waits for its source.
-        var deliveries = new List<Task>();
-        try
-        {
-            await foreach (
-                var entry in results.WithCancellation(cancellationToken).ConfigureAwait(false)
-            )
-            {
-                ZLinkRelocationCompletionEntry stored;
-                (current, stored) = await AppendAsync(key, current, entry, cancellationToken)
-                    .ConfigureAwait(false);
-                if (stored.Delivery == ZLinkRelocationCompletionDelivery.Pending)
-                    deliveries.Add(DeliverAndAcknowledgeAsync(current, stored));
-            }
-        }
-        finally
-        {
-            await Task.WhenAll(deliveries).ConfigureAwait(false);
-        }
-
-        async Task DeliverAndAcknowledgeAsync(
-            ZLinkAuthoritySnapshot published,
-            ZLinkRelocationCompletionEntry entry
-        )
-        {
-            var acknowledged = await deliver(published, entry, cancellationToken)
-                .ConfigureAwait(false);
-            await AcknowledgeAsync(key, published, entry, acknowledged, cancellationToken)
-                .ConfigureAwait(false);
-        }
-    }
-
-    internal async ValueTask<ZLinkAuthoritySnapshot> AcknowledgeAsync(
-        ZLinkAuthorityKey key,
-        ZLinkAuthoritySnapshot expected,
-        ZLinkRelocationCompletionEntry entry,
-        ZLinkRelocationCompletionDelivery delivery,
-        CancellationToken cancellationToken
-    )
-    {
-        if (delivery == ZLinkRelocationCompletionDelivery.Pending)
-            throw new ArgumentOutOfRangeException(nameof(delivery));
-        var update = await UpdateAsync(key, expected, entry, delivery, cancellationToken)
-            .ConfigureAwait(false);
-        return update.Authority;
-    }
-
-    internal async ValueTask<ZLinkAuthoritySnapshot> RedeliverPendingAsync(
-        ZLinkAuthorityKey key,
-        ZLinkAuthoritySnapshot current,
-        Func<
-            ZLinkAuthoritySnapshot,
-            ZLinkRelocationCompletionEntry,
-            CancellationToken,
-            ValueTask<ZLinkRelocationCompletionDelivery>
-        > deliver,
-        CancellationToken cancellationToken
-    )
-    {
-        var relocation = current.Relocation ?? throw DataLost("Completion authority is missing.");
-        var record = await ReadAsync(relocation, cancellationToken, renew: true)
-            .ConfigureAwait(false);
-        if (record.Entries.Any(entry => entry.ObjectKey != key.Value))
-            throw DataLost("Relocation completion references a different authority key.");
-        foreach (
-            var entry in record.Entries.Where(entry =>
-                entry.Delivery == ZLinkRelocationCompletionDelivery.Pending
-            )
-        )
-        {
-            var delivery = await deliver(current, entry, cancellationToken).ConfigureAwait(false);
-            if (delivery != ZLinkRelocationCompletionDelivery.Pending)
-                current = await AcknowledgeAsync(key, current, entry, delivery, cancellationToken)
-                    .ConfigureAwait(false);
-        }
-        return current;
-    }
-
-    internal static void RequireCompleted(ZLinkAuthorityRelocation relocation)
-    {
-        if (!RequireProgress(relocation).IsReady)
-            throw DataLost("Relocation still has incomplete requests or pending delivery.");
-    }
-
-    internal async ValueTask<ZLinkAuthoritySnapshot> MarkCompletedAsync(
-        ZLinkAuthorityKey key,
-        ZLinkAuthoritySnapshot authority,
-        CancellationToken cancellationToken
-    )
-    {
-        while (true)
-        {
-            var relocation =
-                authority.Relocation ?? throw DataLost("Completion authority is missing.");
-            RequireCompleted(relocation);
-            if (
-                relocation.Phase == ServiceWireCodec.RelocationPhase.Completed
-                || relocation.Completion!.AcceptedRequests == 0
-            )
-                return authority;
-
-            try
-            {
-                var updated = await authorities
-                    .CompareExchangeAuthorityAsync(
-                        key,
-                        authority.StoreVersion,
-                        new ZLinkAuthorityMutation.Put(
-                            authority.Payload,
-                            ZLinkAuthorityGenerationTransition.Preserve,
-                            null,
-                            null
-                        )
-                        {
-                            Relocation = relocation with
-                            {
-                                Phase = ServiceWireCodec.RelocationPhase.Completed,
-                            },
-                        },
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                if (updated is ZLinkAuthorityCompareExchangeResult.Stored stored)
-                    return stored.Snapshot;
-                if (updated is not ZLinkAuthorityCompareExchangeResult.Conflict)
-                    throw DataLost("Relocation completion phase CAS was rejected.");
-            }
-            catch (Exception error)
-                when (ZLinkLocationStoreFailure.IsIndeterminate(error, cancellationToken))
-            {
-                // The authority read below settles a possible applied CAS.
-            }
-            var observed = await ReadCurrentAsync(key, authority, cancellationToken)
-                .ConfigureAwait(false);
-            if (observed.StoreVersion == authority.StoreVersion)
-                await WaitForStoreAsync(cancellationToken).ConfigureAwait(false);
-            authority = observed;
-        }
-    }
-
-    private async ValueTask<(
-        ZLinkAuthoritySnapshot Authority,
-        ZLinkRelocationCompletionEntry Entry
-    )> UpdateAsync(
-        ZLinkAuthorityKey key,
-        ZLinkAuthoritySnapshot expected,
-        ZLinkRelocationCompletionEntry entry,
-        ZLinkRelocationCompletionDelivery delivery,
-        CancellationToken cancellationToken
-    )
-    {
-        if (entry.ObjectKey != key.Value)
-            throw DataLost("Relocation completion references a different authority key.");
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                var result = await UpdateAtVersionAsync(
-                        key,
-                        expected,
-                        entry,
-                        delivery,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                if (result is not null)
-                    return result.Value;
-
-                expected = await ReadCurrentAsync(key, expected, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception error)
-                when (ZLinkLocationStoreFailure.IsUnavailable(error, cancellationToken))
-            {
-                await RetainIfPendingAsync(expected.Relocation!, cancellationToken)
-                    .ConfigureAwait(false);
-                await WaitForStoreAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
-    }
-
-    internal async ValueTask<ZLinkAuthoritySnapshot> ReadCurrentAsync(
-        ZLinkAuthorityKey key,
-        ZLinkAuthoritySnapshot expected,
-        CancellationToken cancellationToken
-    )
-    {
-        var fence = expected.Relocation ?? throw DataLost("Completion authority is missing.");
-        ZLinkAuthorityReadResult read;
-        try
-        {
-            read = await authorities
-                .ReadAuthorityAsync(key, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (InvalidDataException)
-        {
-            throw DataLost("Relocation completion authority is malformed.");
-        }
         if (
-            read is not ZLinkAuthorityReadResult.Found found
-            || found.Snapshot.Relocation is not { } current
-            || current.RelocationId != fence.RelocationId
-            || current.Target != fence.Target
-            || fence.Target is not { } target
-            || !ZLinkAuthorityRelocation.MatchesCommittedTarget(
-                found.Snapshot,
-                fence.RelocationId,
-                target.AttemptGeneration
-            )
-            || current.SourceInventorySha256 != fence.SourceInventorySha256
-            || found.Snapshot.ObjectGeneration != expected.ObjectGeneration
-            || found.Snapshot.AuthorityOwnerGeneration != expected.AuthorityOwnerGeneration
-            || found.Snapshot.OwnerId != expected.OwnerId
-            || found.Snapshot.OwnerLeaseGeneration != expected.OwnerLeaseGeneration
+            evidence
+            is ZLinkRelocationCompletionDelivery.Accepted
+                or ZLinkRelocationCompletionDelivery.Pending
         )
-            throw DataLost("Relocation completion authority changed its target fence.");
-        return found.Snapshot;
-    }
-
-    private async ValueTask<(
-        ZLinkAuthoritySnapshot Authority,
-        ZLinkRelocationCompletionEntry Entry
-    )?> UpdateAtVersionAsync(
-        ZLinkAuthorityKey key,
-        ZLinkAuthoritySnapshot expected,
-        ZLinkRelocationCompletionEntry entry,
-        ZLinkRelocationCompletionDelivery delivery,
-        CancellationToken cancellationToken
-    )
-    {
-        var relocation = expected.Relocation ?? throw DataLost("Completion authority is missing.");
-        var record = await ReadAsync(relocation, cancellationToken).ConfigureAwait(false);
-        var entries = record.Entries.ToList();
-        var index = entries.FindIndex(entry.MatchesRequest);
-        var progress = relocation.Completion!;
-        if (index >= 0)
-        {
-            var previous = entries[index];
-            if (
-                previous != (entry with { Delivery = previous.Delivery })
-                && (
-                    delivery != ZLinkRelocationCompletionDelivery.Pending
-                    || budget?.GetFallback(entry) is not { } fallback
-                    || previous != (fallback with { Delivery = previous.Delivery })
-                )
-            )
-                throw DataLost("Relocation completion result differs from the stored request.");
-            if (
-                delivery == ZLinkRelocationCompletionDelivery.Pending
-                || previous.Delivery != ZLinkRelocationCompletionDelivery.Pending
-            )
-                return (expected, previous);
-            entry = previous with { Delivery = delivery };
-            entries[index] = entry;
-        }
-        else
-        {
-            if (
-                delivery != ZLinkRelocationCompletionDelivery.Pending
-                || (ulong)entries.Count >= progress.AcceptedRequests
-            )
-                throw DataLost("Relocation completion has no matching accepted request.");
-            if (budget is not null)
-            {
-                RequireAcceptedRequests(relocation, budget.AcceptedRequests);
-                entry = budget.SelectReply(entries, entry);
-            }
-            var successor = entries.FindIndex(value =>
-                ZLinkRelocationCompletionRecord.CompareObjectKeys(value.ObjectKey, entry.ObjectKey)
-                > 0
-            );
-            entries.Insert(successor < 0 ? entries.Count : successor, entry);
-        }
-
-        record = record with { Entries = entries };
-        var (reference, sha256) = await ZLinkRelocationTreeStore
-            .PutCompletionAsync(
-                blobs,
-                record,
-                Convert.FromHexString(relocation.SourceInventorySha256),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        var replacement = progress with
-        {
-            Reference = reference,
-            Sha256 = sha256,
-            CompletedResults = (ulong)entries.Count,
-            PendingDeliveries = (ulong)record.PendingDeliveries,
-        };
-        var mutation = new ZLinkAuthorityMutation.Put(
-            expected.Payload,
-            ZLinkAuthorityGenerationTransition.Preserve,
-            null,
-            null
-        )
-        {
-            Relocation = relocation with { Completion = replacement },
-        };
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                var exchanged = await authorities
-                    .CompareExchangeAuthorityAsync(
-                        key,
-                        expected.StoreVersion,
-                        mutation,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                if (exchanged is ZLinkAuthorityCompareExchangeResult.Stored stored)
-                    return (stored.Snapshot, entry);
-                if (exchanged is ZLinkAuthorityCompareExchangeResult.Conflict)
-                    return null;
-                throw DataLost("Relocation completion CAS was rejected.");
-            }
-            catch (Exception error)
-                when (ZLinkLocationStoreFailure.IsIndeterminate(error, cancellationToken))
-            {
-                ZLinkAuthoritySnapshot observed;
-                while (true)
-                {
-                    try
+            throw new ArgumentOutOfRangeException(nameof(evidence));
+        return authorities.UpdateRelocationReplyAsync(
+            row,
+            current =>
+                current.Entry.Delivery == ZLinkRelocationCompletionDelivery.Pending
+                    ? current with
                     {
-                        observed = await ReadCurrentAsync(key, expected, cancellationToken)
-                            .ConfigureAwait(false);
-                        break;
+                        Entry = current.Entry with { Delivery = evidence },
                     }
-                    catch (Exception readError)
-                        when (ZLinkLocationStoreFailure.IsUnavailable(readError, cancellationToken))
-                    {
-                        await RetainIfPendingAsync(relocation, cancellationToken)
-                            .ConfigureAwait(false);
-                        await RetainIfPendingAsync(mutation.Relocation!, cancellationToken)
-                            .ConfigureAwait(false);
-                        await WaitForStoreAsync(cancellationToken).ConfigureAwait(false);
-                    }
-                }
-                if (observed.Relocation!.Completion == replacement)
-                {
-                    _ = await ReadAsync(observed.Relocation, cancellationToken)
-                        .ConfigureAwait(false);
-                    return (observed, entry);
-                }
-                if (observed.StoreVersion != expected.StoreVersion)
-                    return null;
-            }
-        }
+                    : current,
+            cancellationToken
+        );
     }
 
-    internal async ValueTask RetainIfPendingAsync(
-        ZLinkAuthorityRelocation relocation,
+    internal ValueTask<ZLinkRelocationReplyRow?> RenewAsync(
+        ZLinkRelocationReplyRow row,
         CancellationToken cancellationToken
-    )
-    {
-        if (relocation.Completion is not { PendingDeliveries: > 0 })
-            return;
-        try
-        {
-            _ = await ReadAsync(relocation, cancellationToken, renew: true).ConfigureAwait(false);
-        }
-        catch (Exception error)
-            when (error is ZLinkRelocationDataLostException
-                || ZLinkLocationStoreFailure.IsUnavailable(error, cancellationToken)
-            )
-        {
-            // A reference from an uncertain or superseded CAS does not establish data loss.
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"relocation_completion_renew_failed relocation={relocation.RelocationId:N} error={error.Message}"
-            );
-        }
-    }
-
-    private Task WaitForStoreAsync(CancellationToken cancellationToken) =>
-        Task.Delay(pollingInterval ?? TimeSpan.FromSeconds(1), cancellationToken);
-
-    private static ZLinkRelocationDataLostException DataLost(string message) => new(message);
+    ) => authorities.UpdateRelocationReplyAsync(row, static current => current, cancellationToken);
 }

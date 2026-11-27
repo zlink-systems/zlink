@@ -137,7 +137,6 @@
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
         <Compile Include="Runtime/ActorHandoffDrainTests.cs"/>
-        <Compile Include="Runtime/ActorDrainCompletionPreflightTests.cs"/>
         <Compile Include="Runtime/JoinCallbackSendTests.cs"/>
         <Compile Include="Runtime/JoinCommitGenerationTests.cs"/>
         <Compile Include="Runtime/RemoteActorSourceLeaveTests.cs"/>
@@ -340,7 +339,6 @@
         <Compile Include="Runtime/ReconciliationRunnerTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.AggregatePublicationProbe.cs"/>
-        <Compile Include="Runtime/RelocationRuntimeTests.AggregateCompletion.cs"/>
         <Compile Include="Runtime/AuditRuntimeFailureReporter.cs"/>
         <Compile Include="Runtime/ActorMembershipOwnershipTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>
@@ -359,7 +357,6 @@
         <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationPrecommitTests.cs"/>
-        <Compile Include="Runtime/RelocationCompletionRecordTests.cs"/>
         <Compile Include="Runtime/RelocationCompletionStoreTests.cs"/>
         <Compile Include="Runtime/AuthorityAggregateRelocationTests.cs"/>
         <Compile Include="Runtime/CanonicalActorAcceptedJournalTests.cs"/>

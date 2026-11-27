@@ -441,14 +441,18 @@ public class ShutdownSettlementRepository : DispatchProxy
                     ),
                 (CancellationToken)args![3]!
             );
-        if (method.Name == nameof(IZLinkLocationRepository.CommitAggregateAsync))
+        if (
+            method.Name == nameof(IZLinkLocationRepository.CommitAggregateAsync)
+            && args
+                is [
+                    ZLinkAggregateFence fence,
+                    IReadOnlyList<ZLinkRelocationCompletionEntry> replies,
+                    CancellationToken cancellationToken,
+                ]
+        )
             return CommitAsync(
-                () =>
-                    _inner.CommitAggregateAsync(
-                        (ZLinkAggregateFence)args![0]!,
-                        (CancellationToken)args[1]!
-                    ),
-                (CancellationToken)args![1]!
+                () => _inner.CommitAggregateAsync(fence, replies, cancellationToken),
+                cancellationToken
             );
         if (method.Name == nameof(IZLinkLocationRepository.ReadAuthorityAsync))
             return ReadAsync((ZLinkAuthorityKey)args![0]!, (CancellationToken)args[1]!);

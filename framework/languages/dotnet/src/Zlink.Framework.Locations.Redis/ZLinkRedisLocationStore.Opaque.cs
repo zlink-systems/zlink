@@ -886,7 +886,6 @@ public sealed partial class ZLinkRedisLocationStore
 
     private static ZLinkStoreKey[] ValidateWriteRequest(ZLinkStoreWriteRequest request)
     {
-        var encodedBytes = 0L;
         var conditionKeys = request
             .Conditions.SelectMany(ZLinkStoreBatchKeys.ForCondition)
             .ToArray();
@@ -912,7 +911,6 @@ public sealed partial class ZLinkRedisLocationStore
         foreach (var key in conditionKeys.Concat(mutationKeys))
         {
             ValidateOpaqueKey(key, nameof(request));
-            encodedBytes += Encoding.UTF8.GetByteCount(key.Value);
         }
         foreach (var condition in request.Conditions)
         {
@@ -925,7 +923,6 @@ public sealed partial class ZLinkRedisLocationStore
                             $"Store versions must be non-empty UTF-8 values of at most {MaximumVersionBytes} bytes.",
                             nameof(request)
                         );
-                    encodedBytes += length;
                     break;
                 case ZLinkStoreCondition.Value value:
                     if (value.Expected.Length > MaximumValueBytes)
@@ -933,10 +930,6 @@ public sealed partial class ZLinkRedisLocationStore
                             "A Location Store value condition exceeds its value bound.",
                             nameof(request)
                         );
-                    encodedBytes += value.Expected.Length;
-                    break;
-                case ZLinkStoreCondition.SumAtMost:
-                    encodedBytes += 16;
                     break;
             }
         }
@@ -952,14 +945,13 @@ public sealed partial class ZLinkRedisLocationStore
                         );
                     if (put.Retention is { } retention && retention <= TimeSpan.Zero)
                         throw new ArgumentException("Retention must be positive.", nameof(request));
-                    encodedBytes += put.Bytes.Length;
-                    break;
-                case ZLinkStoreMutation.Add:
-                    encodedBytes += 8;
                     break;
             }
         }
-        if (encodedBytes > MaximumEncodedBatchBytes)
+        if (
+            ZLinkStoreBatchKeys.EncodedBytes(request, conditionKeys, mutationKeys)
+            > MaximumEncodedBatchBytes
+        )
             throw new ArgumentException(
                 $"The encoded Store batch exceeds {MaximumEncodedBatchBytes} bytes.",
                 nameof(request)

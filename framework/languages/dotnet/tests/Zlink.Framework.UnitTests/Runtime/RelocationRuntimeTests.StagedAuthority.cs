@@ -77,8 +77,18 @@ public sealed partial class RelocationRuntimeTests
         StagedAuthorityPublication publication
     )
     {
+        using var stopAfterConfirmation = new CancellationTokenSource();
         var authorityReads = new ConcurrentQueue<ZLinkAuthorityKey>();
-        var authority = new RecordingAuthorityStore { AuthorityReads = authorityReads };
+        var authority = new RecordingAuthorityStore
+        {
+            AuthorityReads = authorityReads,
+            BeforeRead = _ =>
+            {
+                if (publication == StagedAuthorityPublication.Complete && authorityReads.Count == 2)
+                    stopAfterConfirmation.Cancel();
+                return Task.CompletedTask;
+            },
+        };
         var provider = new ZLinkInMemoryProviderLocationStore();
         var leaseStore = new ZLinkProviderLocationRepository(provider);
         var registration = new ZLinkFrameworkRegistration();
@@ -188,15 +198,17 @@ public sealed partial class RelocationRuntimeTests
             );
             Assert.True(target.TryTrackStage(fence, stage));
 
-            // Stop after authority confirmation and before application dispatch.
-            stage.AdmissionDrainTask = Task.FromCanceled(new CancellationToken(canceled: true));
             if (publication == StagedAuthorityPublication.Complete)
             {
                 // The live cutover owns its verified root while source completion is absent.
                 stage.RememberFinalRoot("published-root", 37);
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                     target
-                        .PublishInboundAsync(fence, stage.SourceNodeRid, CancellationToken.None)
+                        .PublishInboundAsync(
+                            fence,
+                            stage.SourceNodeRid,
+                            stopAfterConfirmation.Token
+                        )
                         .AsTask()
                 );
                 Assert.Equal(1, Volatile.Read(ref stage.AuthorityPublished));

@@ -263,12 +263,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 //  accepted turn wait for the relocation marker that can only be
                 //  published after this preflight returns.
                 preflightStage = "initial_actor_handoff_wait";
-                if (
-                    await _actorDrainCoordinator
-                        .HasCompletionBlockerAsync(cancellationToken)
-                        .ConfigureAwait(false)
-                )
-                    return ZLinkFrameworkRelocationReason.OperationInProgress;
                 await WaitForAcceptedActorHandoffsAsync(cancellationToken).ConfigureAwait(false);
 
                 var operationBaseline = SnapshotOperationAdmissions();
@@ -1121,9 +1115,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRemoteActorJoinRequest request,
         ZLinkActorRelocationRecoveryRecord recovery,
         string targetMeshName,
-        Func<ValueTask> clearPublication,
         Func<Task> admitPrefix,
-        Func<Task, Func<ValueTask>, ValueTask> settleCompletion,
+        Func<ValueTask> releasePublication,
         CancellationToken cancellationToken,
         Action finishTargetStage
     )
@@ -1154,14 +1147,13 @@ internal sealed partial class ZLinkFrameworkRuntime
             // session route commit is held by the session seal and released
             // when the route update lands (spec 15 §4.2 step 8).
             _ = ResolveActorHandoffTarget(spotId);
-            Task prefix = Task.CompletedTask;
             await ZLinkActorTargetActivation
                 .CompleteAsync(
-                    clearPublication,
+                    static () => ValueTask.CompletedTask,
                     () =>
                     {
                         actorState.Handoff.PrepareImportedReplay([]);
-                        prefix = admitPrefix();
+                        _ = admitPrefix();
                         return ValueTask.CompletedTask;
                     },
                     async () =>
@@ -1220,14 +1212,14 @@ internal sealed partial class ZLinkFrameworkRuntime
                         await _actorHandoffAdmissions
                             .RecordCompletionAsync(completion, spotId)
                             .ConfigureAwait(false);
+                        actorState.Handoff.OpenTransferredActorDispatch(request.HandoffId);
+                        await releasePublication().ConfigureAwait(false);
+                        await _actorHandoffAdmissions
+                            .CompleteAsync(request.HandoffId)
+                            .ConfigureAwait(false);
                         finishTargetStage();
                         actorState.Handoff.Complete(request.HandoffId);
                     }
-                )
-                .ConfigureAwait(false);
-            await settleCompletion(
-                    prefix,
-                    () => _actorHandoffAdmissions.CompleteAsync(request.HandoffId)
                 )
                 .ConfigureAwait(false);
         }
@@ -1492,8 +1484,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             ZLinkRelocationEnvelope? replayIdentity = null;
             ZLinkLocationOwnerToken replayOwner = default;
             ZLinkStandaloneActorRelocationProgressCoordinator? replayCoordinator = null;
-            var replayHasAcceptedRequests = false;
-            Task? durablePrefix = null;
             await ZLinkActorTargetActivation
                 .CompleteAsync(
                     async () =>
@@ -1517,22 +1507,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                             );
                             replayProgress = await replayCoordinator
                                 .ReadAsync(replayIdentity, replayOwner, cancellationToken)
-                                .ConfigureAwait(false);
-                            replayHasAcceptedRequests =
-                                ZLinkRelocationCompletionStore
-                                    .RequireProgress(replayProgress.Authority.Relocation)
-                                    .AcceptedRequests != 0;
-                            if (replayHasAcceptedRequests)
-                                return;
-                            var steady = await replayCoordinator
-                                .NormalizeSteadyAsync(
-                                    replayIdentity,
-                                    replayOwner,
-                                    cancellationToken
-                                )
-                                .ConfigureAwait(false);
-                            await actorLocations
-                                .UpdateTrackedSnapshotAsync(request.ActorId, steady)
                                 .ConfigureAwait(false);
                             return;
                         }
@@ -1559,10 +1533,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                             _ = actorState.Handoff.PrepareCanonicalMaintenanceReplay(
                                 request.HandoffId
                             );
-                            actorState.TrackRelocationCompletion(
-                                replayProgress!.Authority.Relocation
-                            );
-                            var prefix = QueueCanonicalStandaloneActorFrames(
+                            _ = QueueCanonicalStandaloneActorFrames(
                                 actorState,
                                 publishedActorAuthority,
                                 replayIdentity!,
@@ -1575,8 +1546,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                                     .Select(record => record.Frame)
                                     .ToArray()
                             );
-                            if (replayHasAcceptedRequests)
-                                durablePrefix = prefix;
                         }
                         else
                         {
@@ -1647,20 +1616,23 @@ internal sealed partial class ZLinkFrameworkRuntime
                         await _actorHandoffAdmissions
                             .RecordCompletionAsync(request, spotId)
                             .ConfigureAwait(false);
-                        if (
-                            durablePrefix is null
-                            || !TryFinishDurableActorCompletion(
-                                actorState,
-                                durablePrefix,
-                                replayIdentity!,
-                                replayOwner,
-                                replayCoordinator!,
-                                () => _actorHandoffAdmissions.CompleteAsync(request.HandoffId)
-                            )
-                        )
-                            await _actorHandoffAdmissions
-                                .CompleteAsync(request.HandoffId)
+                        if (canonicalMaintenance)
+                        {
+                            actorState.Handoff.OpenTransferredActorDispatch(request.HandoffId);
+                            var steady = await replayCoordinator!
+                                .NormalizeSteadyAsync(
+                                    replayIdentity!,
+                                    replayOwner,
+                                    cancellationToken
+                                )
                                 .ConfigureAwait(false);
+                            await actorLocations
+                                .UpdateTrackedSnapshotAsync(request.ActorId, steady)
+                                .ConfigureAwait(false);
+                        }
+                        await _actorHandoffAdmissions
+                            .CompleteAsync(request.HandoffId)
+                            .ConfigureAwait(false);
                         actorState.Handoff.Complete(request.HandoffId);
                     }
                 )

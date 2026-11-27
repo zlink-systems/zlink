@@ -137,12 +137,15 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 $"Actor '{actorState.ActorId}' authority changed before maintenance relocation."
             );
 
-        if (ZLinkRelocationCompletionStore.CompletionBlocker(found.Snapshot) is { } blocker)
+        if (found.Snapshot.Relocation is not null)
             throw new ZLinkActorRelocationFailureException(
                 ZLinkFrameworkRelocationReason.OperationInProgress,
                 ZLinkRelocationCommitKnowledge.NotCommitted,
                 false,
-                new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, blocker)
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "Actor authority still has an active handoff publication."
+                )
             );
 
         var relocationId = Guid.NewGuid();
@@ -1363,20 +1366,20 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     {
                         try
                         {
-                            var completion =
-                                ZLinkFrameworkRuntime.CreateStandaloneActorCompletionBudget(
-                                    stage.Envelope,
-                                    stage.AcceptedFrames,
-                                    new(
-                                        stage.TargetAuthority.OwnerId,
-                                        stage.TargetAuthority.OwnerLeaseGeneration,
-                                        stage.TargetAuthority.NodeRid,
-                                        stage.TargetAuthority.NodeGeneration,
-                                        stage.Prepare.Coordinator.ExpectedAuthorityStoreVersion
-                                    ),
-                                    stage.Prepare.TargetAttemptGeneration
-                                );
-                            completion.EnsureFitsBeforeCommit();
+                            var acceptedReplies = stage
+                                .AcceptedFrames.Where(frame => frame.RelocationReplyRouteId != 0)
+                                .Select(frame =>
+                                    ZLinkFrameworkRuntime.CreateAcceptedRelocationReply(
+                                        stage.Participant.AuthorityKey,
+                                        frame.RouteContext.OperationId,
+                                        frame.RelocationReplyRouteId,
+                                        frame.RequestSource
+                                            ?? throw DataLost(
+                                                "Accepted request source fence is missing."
+                                            )
+                                    )
+                                )
+                                .ToArray();
                             committed =
                                 await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store)
                                     .CommitTargetAsync(
@@ -1387,14 +1390,14 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                         () => IsTargetOwnerLeaseValid(stage.TargetAuthority),
                                         registration.Locations.Options.PollingInterval,
                                         cancellationToken,
-                                        completion.AcceptedRequests
+                                        acceptedReplies
                                     )
                                     .ConfigureAwait(false);
                         }
                         catch (Exception failure)
                             when ((
                                     failure
-                                    is ZLinkRelocationCompletionReservationException
+                                    is ZLinkRelocationReplyBatchLimitException
                                         or ZLinkFrameworkException
                                         {
                                             Kind: ZLinkFrameworkErrorKind.NotFound
@@ -1413,8 +1416,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                         stage.RemoteJoinRecovery.TargetSpotId,
                                         stage.RemoteJoinRecovery
                                     ),
-                                    failure
-                                        is ZLinkRelocationCompletionReservationException reservation
+                                    failure is ZLinkRelocationReplyBatchLimitException reservation
                                         ? reservation.ToFrameworkException()
                                         : failure,
                                     cancellationToken
@@ -1437,7 +1439,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         catch (Exception failure)
                             when (failure
                                     is ZLinkRelocationTargetSettledException
-                                        or ZLinkRelocationCompletionReservationException
+                                        or ZLinkRelocationReplyBatchLimitException
                             )
                         {
                             // The target fence settled or precommit reservation refused the move.
@@ -1453,9 +1455,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                     stage,
                                     previousPhase
                                 );
-                            if (
-                                failure is ZLinkRelocationCompletionReservationException reservation
-                            )
+                            if (failure is ZLinkRelocationReplyBatchLimitException reservation)
                                 throw reservation.ToFrameworkException();
                             throw;
                         }
@@ -2206,7 +2206,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     {
         if (stage.AuthorityPublished)
             return;
-        stage.ActorState.TrackRelocationCompletion(publication.Relocation);
         // The target commit ends the Restore (MeshNode §5.1).
         stage.Admission.Release();
         var actorRef =
@@ -2290,10 +2289,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 )
                 .ConfigureAwait(false);
 
-        var hasDurableRequests =
-            ZLinkRelocationCompletionStore
-                .RequireProgress(progress.Authority.Relocation)
-                .AcceptedRequests != 0;
         await runtime
             .CompleteDirectCanonicalRoutedActorJoinAsync(
                 recovery.TargetSpotId,
@@ -2301,13 +2296,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 request,
                 recovery,
                 stage.TargetAuthority.MeshName,
-                async () =>
-                {
-                    if (!hasDurableRequests)
-                        await coordinator
-                            .NormalizeSteadyAsync(stage.Envelope, owner, cancellationToken)
-                            .ConfigureAwait(false);
-                },
                 () =>
                     runtime.QueueCanonicalStandaloneActorFrames(
                         stage.ActorState,
@@ -2317,21 +2305,11 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         progress.Authority,
                         stage.AcceptedFrames
                     ),
-                async (prefix, releaseAdmission) =>
+                async () =>
                 {
-                    if (
-                        hasDurableRequests
-                        && runtime.TryFinishDurableActorCompletion(
-                            stage.ActorState,
-                            prefix,
-                            stage.Envelope,
-                            owner,
-                            coordinator,
-                            releaseAdmission
-                        )
-                    )
-                        return;
-                    await releaseAdmission().ConfigureAwait(false);
+                    await coordinator
+                        .NormalizeSteadyAsync(stage.Envelope, owner, cancellationToken)
+                        .ConfigureAwait(false);
                 },
                 cancellationToken,
                 () => RemoveTargetStage(key, slot, stage)
@@ -3754,17 +3732,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.DataLost,
                 $"Actor '{actorState.ActorId}' target completion phase is not recoverable."
             );
-        var hasDurableRequests =
-            ZLinkRelocationCompletionStore
-                .RequireProgress(progress.Authority.Relocation)
-                .AcceptedRequests != 0;
-        Task prefix = Task.CompletedTask;
         await ZLinkActorTargetActivation
             .CompleteAsync(
                 static () => ValueTask.CompletedTask,
                 () =>
                 {
-                    prefix = QueueCanonicalStandaloneActorFrames(
+                    _ = QueueCanonicalStandaloneActorFrames(
                         actorState,
                         targetAuthority,
                         relocationIdentity,
@@ -3788,26 +3761,17 @@ internal sealed partial class ZLinkFrameworkRuntime
                         handoffId,
                         cancellationToken
                     ),
-                () =>
+                async () =>
                 {
+                    actorState.Handoff.OpenTransferredActorDispatch(handoffId);
+                    await coordinator
+                        .NormalizeSteadyAsync(relocationIdentity, targetOwner, cancellationToken)
+                        .ConfigureAwait(false);
                     finishTargetStage?.Invoke();
                     actorState.Handoff.Complete(handoffId);
-                    return ValueTask.CompletedTask;
                 }
             )
             .ConfigureAwait(false);
-        if (hasDurableRequests)
-            _ = TryFinishDurableActorCompletion(
-                actorState,
-                prefix,
-                relocationIdentity,
-                targetOwner,
-                coordinator
-            );
-        else
-            await coordinator
-                .NormalizeSteadyAsync(relocationIdentity, targetOwner, cancellationToken)
-                .ConfigureAwait(false);
     }
 
     internal ZLinkStandaloneActorRelocationProgressCoordinator CreateStandaloneActorProgressCoordinator(

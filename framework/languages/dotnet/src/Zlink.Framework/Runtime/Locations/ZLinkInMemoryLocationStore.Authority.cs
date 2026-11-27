@@ -1154,7 +1154,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 {
                     StoreVersion = Next(ref _authorityRevision).ToString(),
                     Payload = participant.AuthorityPayload.ToArray(),
-                    Relocation = aggregate.Request.ApplyRelocation(current.Relocation, participant),
+                    Relocation = aggregate.Request.ApplyRelocation(current.Relocation),
                     AuthorityOwnerGeneration = changesOwner
                         ? aggregate.TargetAuthorityOwnerGenerations[participant.Key]
                         : current.AuthorityOwnerGeneration,
@@ -1590,7 +1590,6 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 || !leftParticipant.AuthorityPayload.Span.SequenceEqual(
                     rightParticipant.AuthorityPayload.Span
                 )
-                || leftParticipant.AcceptedRequests != rightParticipant.AcceptedRequests
                 || !leftParticipant.MembershipMutation.Span.SequenceEqual(
                     rightParticipant.MembershipMutation.Span
                 )

@@ -15,17 +15,14 @@ public sealed partial class ZLinkEtcdLocationStore
             throw new ArgumentException("Store batch lists are required.");
         var conditions = new HashSet<ZLinkStoreKey>();
         var mutations = new HashSet<ZLinkStoreKey>();
-        long size = 0;
         foreach (var condition in request.Conditions)
         {
             foreach (var key in ZLinkStoreBatchKeys.ForCondition(condition))
             {
-                size += EtcdEncoding.ValidateKey(key.Value).Length;
+                EtcdEncoding.ValidateKey(key.Value);
                 if (!conditions.Add(key))
                     throw new ArgumentException("Duplicate condition key.");
             }
-            if (condition is ZLinkStoreCondition.SumAtMost)
-                size += 16;
             if (condition is ZLinkStoreCondition.Version version)
             {
                 if (string.IsNullOrEmpty(version.Expected.Value))
@@ -33,23 +30,19 @@ public sealed partial class ZLinkEtcdLocationStore
                 var count = EtcdEncoding.Utf8.GetByteCount(version.Expected.Value);
                 if (count > 4096)
                     throw new ArgumentException("A Store version exceeds its bound.");
-                size += count;
             }
             if (condition is ZLinkStoreCondition.Value value)
             {
                 if (value.Expected.Length > EtcdEncoding.MaxPayload)
                     throw new ArgumentException("A Store value exceeds its bound.");
-                size += value.Expected.Length;
             }
         }
         foreach (var mutation in request.Mutations)
         {
             var key = ZLinkStoreBatchKeys.ForMutation(mutation);
-            size += EtcdEncoding.ValidateKey(key.Value).Length;
+            EtcdEncoding.ValidateKey(key.Value);
             if (!mutations.Add(key))
                 throw new ArgumentException("Duplicate mutation key.");
-            if (mutation is ZLinkStoreMutation.Add)
-                size += 8;
             if (mutation is ZLinkStoreMutation.Put put)
             {
                 if (put.Bytes.Length > EtcdEncoding.MaxPayload)
@@ -59,10 +52,13 @@ public sealed partial class ZLinkEtcdLocationStore
                     && (retention <= TimeSpan.Zero || Retention(retention) > EtcdEncoding.MaxTime)
                 )
                     throw new ArgumentException("Invalid Store retention.");
-                size += put.Bytes.Length;
             }
         }
-        if (conditions.Union(mutations).Count() > 2048 || size > EtcdEncoding.MaxPageBytes)
+        if (
+            conditions.Union(mutations).Count() > 2048
+            || ZLinkStoreBatchKeys.EncodedBytes(request, conditions, mutations)
+                > EtcdEncoding.MaxPageBytes
+        )
             throw new ArgumentException("The Store batch exceeds its encoded size or key bound.");
     }
 

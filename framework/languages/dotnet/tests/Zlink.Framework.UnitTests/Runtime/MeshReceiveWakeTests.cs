@@ -399,6 +399,22 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task RelayForUnknownOperationAcknowledgesAlreadyTerminal()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "relocation-unknown-operation");
+        var source = SetRequestSource(node);
+        var payload = new[] { Message.From("late") };
+
+        var result = node.TryCompleteRelocationReply(Relay(node.AllocateOperationId()), payload);
+
+        Assert.Equal(ZLinkRelocationReplyCompletionState.AlreadyTerminal, result.State);
+        Assert.Equal(source, result.RequestSource);
+        Assert.Throws<ObjectDisposedException>(() => payload[0].AsReadOnlySpan());
+        Assert.Equal(0, node.PendingOperationCount);
+    }
+
+    [Fact]
     public async Task DuplicateRelocationRegistrationPreservesTheOriginalReference()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -415,13 +431,13 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         var id = Assert.Single(DrainApplicationRequests(node));
         Assert.False(first.IsCompleted);
         Assert.Equal(1, node.PendingOperationCount);
+        Assert.Throws<InvalidOperationException>(() =>
+            node.RequestToActor(actor, [request], id, RegistrationTimeout)
+        );
         cancellation.Cancel();
         var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
         Assert.Equal(cancellation.Token, canceled.CancellationToken);
         Assert.Equal(0, node.PendingOperationCount);
-        Assert.Throws<InvalidOperationException>(() =>
-            node.RequestToActor(actor, [request], id, RegistrationTimeout)
-        );
         var payload = new[] { Message.From("late") };
         var result = node.TryCompleteRelocationReply(Relay(id), payload);
         Assert.Equal(ZLinkRelocationReplyCompletionState.AlreadyTerminal, result.State);

@@ -129,6 +129,7 @@ internal abstract record ZLinkAuthorityMutation
     {
         internal Zlink.Framework.Runtime.Locations.ZLinkAuthorityRelocation? Relocation { get; init; }
         internal bool ClearRelocation { get; init; }
+        internal IReadOnlyList<ZLinkRelocationCompletionEntry> AcceptedReplies { get; init; } = [];
 
         internal Zlink.Framework.Runtime.Locations.ZLinkAuthorityRelocation? ApplyRelocation(
             ZLinkAuthoritySnapshot current
@@ -370,8 +371,7 @@ internal sealed record ZLinkAggregateParticipant(
     string ExpectedStoreVersion,
     ZLinkAuthorityGenerationTransition OwnerTransition,
     ReadOnlyMemory<byte> AuthorityPayload,
-    ReadOnlyMemory<byte> MembershipMutation,
-    ulong? AcceptedRequests = null
+    ReadOnlyMemory<byte> MembershipMutation
 );
 
 internal sealed record ZLinkAggregatePrepareRequest(
@@ -389,13 +389,8 @@ internal sealed record ZLinkAggregatePrepareRequest(
     internal ZLinkAuthorityRelocation? Relocation { get; init; }
     internal bool ClearRelocation { get; init; }
 
-    internal ZLinkAuthorityRelocation? ApplyRelocation(
-        ZLinkAuthorityRelocation? current,
-        ZLinkAggregateParticipant participant
-    ) =>
-        ClearRelocation
-            ? null
-            : Relocation?.WithAcceptedRequests(participant.AcceptedRequests) ?? current;
+    internal ZLinkAuthorityRelocation? ApplyRelocation(ZLinkAuthorityRelocation? current) =>
+        ClearRelocation ? null : Relocation ?? current;
 }
 
 internal readonly record struct ZLinkAggregateFence(Guid AggregateId, ulong AggregateGeneration);

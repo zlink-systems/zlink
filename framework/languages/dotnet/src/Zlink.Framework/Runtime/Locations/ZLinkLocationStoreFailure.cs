@@ -10,7 +10,7 @@ internal static class ZLinkLocationStoreFailure
             is not (
                 ArgumentException
                 or ZLinkRelocationTargetSettledException
-                or ZLinkRelocationCompletionReservationException
+                or ZLinkRelocationReplyBatchLimitException
                 or ZLinkRelocationDataLostException
                 or ZLinkAuthorityGenerationExhaustedException
             );

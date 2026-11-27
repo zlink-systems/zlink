@@ -62,15 +62,16 @@ internal sealed class ZLinkActorHandoffState(
         return AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                if (
-                    !string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
-                    || _targetPhase != ZLinkActorTargetHandoffPhase.Replaying
-                )
+                if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal))
                     throw new InvalidOperationException(
                         "Actor durable prefix has no active target."
                     );
                 if (_canonicalMaintenanceDrain is { } previous)
                     return previous.Terminal;
+                if (_targetPhase != ZLinkActorTargetHandoffPhase.Replaying)
+                    throw new InvalidOperationException(
+                        "Actor durable prefix has no replay phase."
+                    );
                 var terminals = new List<Task>(_frames.Count);
                 foreach (var frame in _frames)
                     terminals.Add(admit(frame));
@@ -159,11 +160,9 @@ internal sealed class ZLinkActorHandoffState(
                         is ZLinkActorSourceHandoffPhase.Capturing
                             or ZLinkActorSourceHandoffPhase.AbortRestoring
                             or ZLinkActorSourceHandoffPhase.MessageFollowCommitted
+                    || IsTargetHandoffActiveLocked()
                     || _targetPhase
-                        is ZLinkActorTargetHandoffPhase.Importing
-                            or ZLinkActorTargetHandoffPhase.Replaying
-                            or ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
-                            or ZLinkActorTargetHandoffPhase.Failed
+                        is ZLinkActorTargetHandoffPhase.Failed
                             or ZLinkActorTargetHandoffPhase.Quarantined
                 )
                     throw new InvalidOperationException(
@@ -302,7 +301,9 @@ internal sealed class ZLinkActorHandoffState(
 
     private bool IsTargetHandoffActiveLocked() =>
         IsTargetAdmissionClosedLocked()
-        || _targetPhase == ZLinkActorTargetHandoffPhase.AdmissionOpenDraining;
+        || _targetPhase == ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
+        || _targetPhase == ZLinkActorTargetHandoffPhase.Completed
+            && _targetCompletion is { Task.IsCompleted: false };
 
     private bool IsTargetAdmissionClosedLocked() =>
         _targetPhase
@@ -1285,7 +1286,31 @@ internal sealed class ZLinkActorHandoffState(
         );
     }
 
+    internal void OpenTransferredActorDispatch(string handoffId)
+    {
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (
+                    !string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
+                    || !TryOpenTargetDispatchLocked()
+                )
+                    throw new InvalidOperationException(
+                        $"Actor '{actorId}' has no dispatch to open."
+                    );
+            })
+        );
+    }
+
     private bool TryCompleteTargetHandoffLocked(string handoffId)
+    {
+        if (!TryOpenTargetDispatchLocked())
+            return false;
+        ReleaseTargetCompletionLocked(handoffId);
+        return true;
+    }
+
+    private bool TryOpenTargetDispatchLocked()
     {
         if (_targetPhase == ZLinkActorTargetHandoffPhase.Completed)
         {
@@ -1293,7 +1318,6 @@ internal sealed class ZLinkActorHandoffState(
                 _canonicalMaintenanceDrain = null;
             _canonicalMaintenanceReplayReservations.Clear();
             _targetReplayCompletion?.TrySetResult();
-            ReleaseTargetCompletionLocked(handoffId);
             return true;
         }
         if (
@@ -1312,7 +1336,6 @@ internal sealed class ZLinkActorHandoffState(
         _sourceTrailingImported = false;
         _canonicalMaintenanceReplayReservations.Clear();
         _targetReplayCompletion?.TrySetResult();
-        ReleaseTargetCompletionLocked(handoffId);
         return true;
     }
 
@@ -1610,11 +1633,14 @@ internal sealed class ZLinkActorHandoffState(
                         is not (
                             ZLinkActorTargetHandoffPhase.AuthorityCommitted
                             or ZLinkActorTargetHandoffPhase.Replaying
+                            or ZLinkActorTargetHandoffPhase.Completed
                         )
                 )
                     throw new InvalidOperationException(
                         $"Actor '{actorId}' has no committed canonical maintenance import."
                     );
+                if (_targetPhase == ZLinkActorTargetHandoffPhase.Completed)
+                    return [];
                 _targetPhase = ZLinkActorTargetHandoffPhase.Replaying;
                 return _frames.ToArray();
             })

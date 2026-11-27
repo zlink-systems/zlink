@@ -759,7 +759,8 @@ public sealed partial class HostRelocationSealStageTests
     private sealed class CommitResponseGateStore(
         IZLinkLocationStore inner,
         string actorId,
-        Func<ZLinkAuthoritySnapshot, bool> shouldHold
+        Func<ZLinkAuthoritySnapshot, bool> shouldHold,
+        Func<ZLinkStoreWriteRequest, bool>? selectBatch = null
     ) : IZLinkLocationStore
     {
         private readonly ZLinkProviderLocationRepository reader = new(inner);
@@ -785,7 +786,11 @@ public sealed partial class HostRelocationSealStageTests
         )
         {
             var result = await inner.WriteAsync(request, cancellationToken);
-            if (result is ZLinkStoreWriteResult.Applied && !Release.Task.IsCompleted)
+            if (
+                result is ZLinkStoreWriteResult.Applied
+                && !Release.Task.IsCompleted
+                && (selectBatch is null || selectBatch(request))
+            )
             {
                 var authority = await reader.ReadAuthorityAsync(
                     ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),

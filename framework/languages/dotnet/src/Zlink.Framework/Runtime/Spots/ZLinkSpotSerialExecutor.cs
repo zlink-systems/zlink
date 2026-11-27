@@ -1239,6 +1239,33 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         return (admission, Task.CompletedTask);
     }
 
+    internal ValueTask<Task> ImportAcceptedRelocationAsync(
+        ZLinkSpotExecutionRelocationSeal seal,
+        ReadOnlyMemory<byte> acceptedJournalRecord,
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
+        Action relocationRelease
+    ) =>
+        RunBarrierStateAsync(
+            () =>
+            {
+                if (
+                    _relocationBarrier?.Generation != seal.Generation
+                    || _queue.TryImportAcceptedRelocation(
+                        seal.QueueSeal,
+                        acceptedJournalRecord,
+                        CreateAcceptedOperation(operation, relocationRelease),
+                        relocationRelease,
+                        out var admitted
+                    ) != ZLinkAcceptedWorkAdmission.Accepted
+                )
+                    throw new ZLinkRelocationDataLostException(
+                        "Target Spot cannot admit its captured work."
+                    );
+                return admitted.Completion;
+            },
+            gateTurn: true
+        );
+
     private Func<CancellationToken, ValueTask> CreateAcceptedOperation(
         Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
         Action relocationRelease

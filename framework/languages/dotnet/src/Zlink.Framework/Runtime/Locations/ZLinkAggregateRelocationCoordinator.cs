@@ -10,8 +10,7 @@ internal sealed record ZLinkAggregateRelocationParticipant(
     string ExpectedStoreVersion,
     ZLinkAuthorityGenerationTransition OwnerTransition,
     ReadOnlyMemory<byte> ApplicationAuthorityPayload,
-    ReadOnlyMemory<byte> MembershipMutation,
-    ZLinkRelocationCompletionBudget? CompletionBudget = null
+    ReadOnlyMemory<byte> MembershipMutation
 );
 
 internal sealed record ZLinkAggregateRelocationRequest(
@@ -25,7 +24,10 @@ internal sealed record ZLinkAggregateRelocationRequest(
     ZLinkLocationOwnerToken TargetOwner,
     ZLinkAuthorityRelocation.CoordinatorFence Source,
     ZLinkRelocationEnvelope? CanonicalEnvelope = null
-);
+)
+{
+    internal IReadOnlyList<ZLinkRelocationCompletionEntry> AcceptedReplies { get; init; } = [];
+}
 
 internal sealed record ZLinkAggregateRelocationPublished(
     ZLinkAggregateFence Fence,
@@ -47,7 +49,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         ZLinkRelocationStored Relocation,
         ZLinkRelocationEnvelope Envelope,
         IReadOnlyList<ZLinkAggregateRelocationParticipant> Participants,
-        ZLinkAuthorityRelocation AuthorityRelocation
+        ZLinkAuthorityRelocation AuthorityRelocation,
+        IReadOnlyList<ZLinkRelocationCompletionEntry> AcceptedReplies
     );
 
     private const int MaxPublicationProbeConcurrency = 64;
@@ -77,8 +80,6 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         ArgumentNullException.ThrowIfNull(request);
         Validate(request);
         cancellationToken.ThrowIfCancellationRequested();
-        foreach (var participant in request.Participants)
-            participant.CompletionBudget?.EnsureFitsBeforeCommit();
 
         // Canonical wire envelopes carry the source-captured inventory digest.
         // Their target-local participant recovery is reconstructed from the
@@ -150,8 +151,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     participant.ExpectedStoreVersion,
                     participant.OwnerTransition,
                     participant.ApplicationAuthorityPayload,
-                    participant.MembershipMutation,
-                    participant.CompletionBudget?.AcceptedRequests
+                    participant.MembershipMutation
                 ))
                 .ToArray();
             var prepare = await authorityStore
@@ -190,7 +190,14 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     );
             }
 
-            return new PublicationState(fence, stored, envelope, request.Participants, relocation);
+            return new PublicationState(
+                fence,
+                stored,
+                envelope,
+                request.Participants,
+                relocation,
+                request.AcceptedReplies
+            );
         }
         catch
         {
@@ -206,7 +213,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     stored,
                     envelope,
                     request.Participants,
-                    relocation
+                    relocation,
+                    request.AcceptedReplies
                 );
             if (publication.State == AggregatePublicationProbe.Unknown)
                 throw;
@@ -261,7 +269,11 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                 )
                 .ConfigureAwait(false);
             var commit = await authorityStore
-                .CommitAggregateAsync(publication.Fence, cancellationToken)
+                .CommitAggregateAsync(
+                    publication.Fence,
+                    publication.AcceptedReplies,
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             if (commit == ZLinkAggregateCommitResult.GenerationExhausted)
                 throw new ZLinkAuthorityGenerationExhaustedException(
