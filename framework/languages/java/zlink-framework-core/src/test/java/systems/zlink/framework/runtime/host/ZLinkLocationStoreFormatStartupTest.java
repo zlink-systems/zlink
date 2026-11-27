@@ -397,7 +397,9 @@ final class ZLinkLocationStoreFormatStartupTest {
         ProbeStore store = new ProbeStore();
         put(store.inner, legacy("a"), legacyUsage("{}", "{}", 0, 0));
         store.loseNextResponse = true;
-        try (var host = start(store)) { startup(host); }
+        try (var host = start(store)) {
+            startup(host);
+        }
         assertNull(value(store.inner, legacy("a")));
         assertEquals("converted", value(store.inner, FORMAT));
     }
@@ -407,7 +409,9 @@ final class ZLinkLocationStoreFormatStartupTest {
         ProbeStore store = new ProbeStore();
         put(store.inner, legacy("a"), legacyUsage("{}", "{}", 2, 0));
         store.deleteBeforeConflict = true;
-        try (var host = start(store)) { startup(host); }
+        try (var host = start(store)) {
+            startup(host);
+        }
         assertNull(value(store.inner, legacy("a")));
         assertNull(value(store.inner, capacity("61", "actors", "active")));
         assertEquals("converted", value(store.inner, FORMAT));
@@ -418,7 +422,9 @@ final class ZLinkLocationStoreFormatStartupTest {
         ProbeStore store = new ProbeStore();
         put(store.inner, legacy("a"), legacyUsage("{}", "{}", 2, 0));
         store.conflictOnce = true;
-        try (var host = start(store)) { startup(host); }
+        try (var host = start(store)) {
+            startup(host);
+        }
         assertNull(value(store.inner, legacy("a")));
         assertEquals("2", value(store.inner, capacity("61", "actors", "active")));
         assertEquals(2, store.conversionAttempts.get());
@@ -429,7 +435,9 @@ final class ZLinkLocationStoreFormatStartupTest {
         ProbeStore store = new ProbeStore();
         put(store.inner, legacy("a"), legacyUsage("{}", "{}", 2, 0));
         store.replaceBeforeConflict = true;
-        try (var host = start(store)) { startup(host); }
+        try (var host = start(store)) {
+            startup(host);
+        }
         assertNull(value(store.inner, legacy("a")));
         assertEquals("3", value(store.inner, capacity("61", "actors", "active")));
         assertEquals(2, store.conversionAttempts.get());
@@ -634,15 +642,21 @@ final class ZLinkLocationStoreFormatStartupTest {
                 if (limitConversionAttempts && attempt > 1)
                     return CompletableFuture.failedFuture(
                             new ZLinkConfigurationException("unexpected repeated conversion"));
-                if (attempt == 1 && (conflictOnce || deleteBeforeConflict || replaceBeforeConflict)) {
+                if (attempt == 1
+                        && (conflictOnce || deleteBeforeConflict || replaceBeforeConflict)) {
                     if (deleteBeforeConflict) {
-                        inner.write(new ZLinkStoreWriteRequest(List.of(),
-                                List.of(new ZLinkStoreDelete(legacy("a")))), cancellation)
-                                .toCompletableFuture().join();
+                        inner.write(
+                                        new ZLinkStoreWriteRequest(
+                                                List.of(),
+                                                List.of(new ZLinkStoreDelete(legacy("a")))),
+                                        cancellation)
+                                .toCompletableFuture()
+                                .join();
                     } else if (replaceBeforeConflict) {
                         put(inner, legacy("a"), legacyUsage("{}", "{}", 3, 0));
                     }
-                    return CompletableFuture.completedFuture(new ZLinkStoreWriteConflict(Instant.now()));
+                    return CompletableFuture.completedFuture(
+                            new ZLinkStoreWriteConflict(Instant.now()));
                 }
             }
             if (convertsRecord && interruptAfterFirstRecord && moved.get() > 0) {

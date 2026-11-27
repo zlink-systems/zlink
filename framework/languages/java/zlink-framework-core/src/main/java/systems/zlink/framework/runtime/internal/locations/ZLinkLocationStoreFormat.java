@@ -236,8 +236,11 @@ final class ZLinkLocationStoreFormat {
                                     .thenComposeAsync(
                                             ignored -> {
                                                 if (destinations.stream()
-                                                        .anyMatch(result -> result.join()
-                                                                instanceof ZLinkStoreReadFound))
+                                                        .anyMatch(
+                                                                result ->
+                                                                        result.join()
+                                                                                instanceof
+                                                                                ZLinkStoreReadFound))
                                                     return CompletableFuture.<Void>failedFuture(
                                                             new ZLinkConfigurationException(
                                                                     "Existing Location Store counter for "
