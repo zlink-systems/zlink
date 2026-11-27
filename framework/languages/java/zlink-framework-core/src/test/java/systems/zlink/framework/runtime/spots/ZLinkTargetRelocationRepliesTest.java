@@ -271,9 +271,9 @@ final class ZLinkTargetRelocationRepliesTest {
         int expectedRelays = sourceExpired ? 0 : requests;
         assertEquals(expectedRelays, relays.get());
         assertEquals(
-                java.util.Collections.nCopies(expectedRelays, journalRid),
+                java.util.Collections.nCopies(expectedRelays, sourceRid),
                 relayDestinations,
-                "command 33 must reach the original requester");
+                "command 33 must reach the relocation source");
         assertEquals(expectedRelays, relayExpectedSources.size());
         relayExpectedSources.forEach(
                 expected ->

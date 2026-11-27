@@ -347,7 +347,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private volatile Function<String, Optional<ZLinkStreamCodec>> applicationStreamCodecResolver =
             ZLinkJavaRawMeshNode::defaultApplicationStreamCodec;
     private volatile ZLinkInternalMeshNode.RelocationReplyRelayHandler relocationReplyRelayHandler;
-    private final ZLinkRelocationRequesterReplies requesterReplies;
     private final Map<ReplyRelayPendingKey, ReplyRelayPending> pendingReplyRelays =
             new ConcurrentHashMap<>();
     private volatile ZLinkInternalMeshNode.SessionRelocationRouteHandler
@@ -561,7 +560,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         this.messageMetrics = ZLinkMeshMessageMetrics.forMesh(meshName);
         this.currentTimeMillis = Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
-        this.requesterReplies = new ZLinkRelocationRequesterReplies(this.nanoTime);
         this.port = Objects.requireNonNull(port, "port");
         this.transportStateLane = port.stateLane();
         this.operations = port.operationRegistry();
@@ -2853,27 +2851,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
             frames.add(applicationFrame);
             var completion = operationOwner.<ZLinkBackendReceived>prepareOperation(operationId);
-            if (localAuthorityFence != null) {
-                requesterReplies.register(
-                        operationId,
-                        correlation,
-                        completion,
-                        (relay, reply) -> {
-                            var response =
-                                    new ZLinkBackendReceived(
-                                            backendResult(relay.terminalResult()),
-                                            relay.failureCode(),
-                                            Optional.of(targetNodeRid),
-                                            Optional.of(targetSpotId),
-                                            Optional.of(correlation),
-                                            reply.isEmpty()
-                                                    ? List.of()
-                                                    : List.of(Message.from(reply.getFirst())));
-                            if (operationOwner.complete(operationId, response)) return true;
-                            response.close();
-                            return false;
-                        });
-            }
             operationOwner
                     .submitTerminal(
                             operationId,
@@ -3968,37 +3945,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         target.targetNodeGeneration(),
                         false);
         UUID operationId = completion.id();
-        if (localAuthorityFence != null) {
-            requesterReplies.register(
-                    operationId,
-                    correlation,
-                    completion,
-                    (relay, reply) -> {
-                        if (relay.terminalResult() != 0) {
-                            var result = backendResult(relay.terminalResult());
-                            return operations.completeExceptionally(
-                                    operationId,
-                                    mapFailure.apply(
-                                            ZLinkRequestFailureMapping.receivedFailure(
-                                                    result.toFrameworkErrorKind(
-                                                            relay.failureCode()),
-                                                    "Actor request failed: " + result,
-                                                    relay.failureCode(),
-                                                    Map.of())));
-                        }
-                        T value;
-                        try {
-                            value = decodeReply.apply(List.of(Message.from(reply.getFirst())));
-                        } catch (RuntimeException failure) {
-                            operations.completeExceptionally(
-                                    operationId, mapFailure.apply(failure));
-                            return false;
-                        }
-                        if (operations.complete(operationId, value)) return true;
-                        if (value != null) discardReply.accept(value);
-                        return false;
-                    });
-        }
         RouterSocket current = requireStarted();
         List<Message> frames =
                 encodeApplicationFrames(
@@ -4610,55 +4556,30 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         Objects.requireNonNull(timeout, "timeout");
         var relocationWire = new ZLinkServiceRelocationWireCodec();
         var relay = relocationWire.decodeReplyRelay(command);
-        if (landingNodeRid.equals(routingId) && expectedSource.nodeRid().equals(routingId)) {
-            var local = localAuthorityFence;
-            var coordinator = relay.coordinator();
-            if (local == null
-                    || !local.identifies(
-                            expectedSource.nodeRid(),
-                            expectedSource.nodeGeneration(),
-                            expectedSource.ownerId(),
-                            expectedSource.leaseGeneration())) {
-                return CompletableFuture.failedFuture(
-                        new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                "Original requester lease differs."));
-            }
+        //  The landing node owns the reply capability after relocation. It is
+        //  not required to equal the request-source fence: the command 46 ACK
+        //  is validated against the exact expected source below.
+        if (landingNodeRid.equals(routingId)) {
             var handler = relocationReplyRelayHandler;
-            CompletionStage<byte[]> acknowledgement;
-            if (requesterReplies.contains(relay)) {
-                acknowledgement =
-                        local.identifies(
-                                        coordinator.nodeRid(),
-                                        coordinator.nodeGeneration(),
-                                        coordinator.ownerId(),
-                                        coordinator.leaseGeneration())
-                                ? requesterAcknowledgement(
-                                        local, relay, application, relocationWire)
-                                : CompletableFuture.completedFuture(null);
-            } else {
-                acknowledgement =
-                        handler == null
-                                ? CompletableFuture.completedFuture(null)
-                                : handler.handle(routingId, command, application);
+            if (handler == null) {
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException("local relocation reply relay is unavailable"));
             }
-            return acknowledgement.thenApply(
-                    reply -> {
-                        if (reply == null) {
-                            throw new ZLinkFrameworkException(
-                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                    "Original requester did not acknowledge the relocation reply.");
-                        }
-                        validateReplyRelayAck(
-                                relay, expectedSource, relocationWire.decodeReplyRelayAck(reply));
-                        return reply.clone();
-                    });
+            return handler.handle(routingId, command, application)
+                    .thenApply(
+                            reply -> {
+                                validateReplyRelayAck(
+                                        relay,
+                                        expectedSource,
+                                        relocationWire.decodeReplyRelayAck(reply));
+                                return reply.clone();
+                            });
         }
         List<byte[]> frames = new ArrayList<>(application.size() + 1);
         frames.add(command);
         frames.addAll(application);
         requireStarted();
-        ReplyRelayPendingKey key = ReplyRelayPendingKey.from(expectedSource.nodeRid(), relay);
+        ReplyRelayPendingKey key = ReplyRelayPendingKey.from(landingNodeRid, relay);
         var pending = new ReplyRelayPending(relay, expectedSource);
         if (pendingReplyRelays.putIfAbsent(key, pending) != null) {
             return CompletableFuture.failedFuture(
@@ -4689,22 +4610,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             return pending.completion;
         }
         try {
-            var handler = relocationReplyRelayHandler;
-            var submission =
-                    landingNodeRid.equals(routingId) && handler != null
-                            ? handler.handle(routingId, command, application)
-                                    .thenAccept(ignored -> {})
-                            : port.send(requireStarted(), landingNodeRid, frames);
-            submission.whenComplete(
-                    (ignored, failure) -> {
-                        if (failure == null) {
-                            return;
-                        }
-                        if (pendingReplyRelays.remove(key, pending)) {
-                            pending.cancelTimeout();
-                            pending.completion.completeExceptionally(unwrap(failure));
-                        }
-                    });
+            port.send(requireStarted(), landingNodeRid, frames)
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure == null) {
+                                    return;
+                                }
+                                if (pendingReplyRelays.remove(key, pending)) {
+                                    pending.cancelTimeout();
+                                    pending.completion.completeExceptionally(unwrap(failure));
+                                }
+                            });
         } catch (RuntimeException failure) {
             if (pendingReplyRelays.remove(key, pending)) {
                 pending.cancelTimeout();
@@ -5777,7 +5693,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                             new IllegalStateException("MeshNode is closed"));
                                 });
                 pendingReplyRelays.clear();
-                requesterReplies.clear();
                 knownPeerChannels.clear();
                 port.inStateLane(
                         () -> {
@@ -6982,7 +6897,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private void dispatchRelocationReplyRelay(ZLinkJavaRawServicePort.Inbound inbound) {
-        if (inbound.requestSequence() != null || inbound.frames().isEmpty()) {
+        var handler = relocationReplyRelayHandler;
+        if (handler == null || inbound.requestSequence() != null || inbound.frames().isEmpty()) {
             return;
         }
         byte[] command33 = inbound.frames().getFirst();
@@ -6995,9 +6911,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             return;
         }
         List<byte[]> payload = cloneFrames(inbound.frames(), 1);
-        if (acceptRequesterReply(inbound.source(), relay, payload, relocationWire)) return;
-        var handler = relocationReplyRelayHandler;
-        if (handler == null) return;
         CompletionStage<byte[]> completion;
         try {
             completion =
@@ -7009,7 +6922,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
         completion.whenComplete(
                 (ack, failure) -> {
-                    if (failure != null) {
+                    if (failure != null || ack == null) {
                         Throwable cause = failure == null ? null : unwrap(failure);
                         String diagnostic =
                                 "relocation-reply-relay-failed source="
@@ -7023,7 +6936,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         LOGGER.warning(diagnostic);
                         return;
                     }
-                    if (ack == null) return;
                     try {
                         relocationWire.decodeReplyRelayAck(ack);
                         port.send(requireStarted(), inbound.source(), List.of(ack.clone()));
@@ -7031,74 +6943,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         // Invalid ACKs are never published as terminal evidence.
                     }
                 });
-    }
-
-    private boolean acceptRequesterReply(
-            RoutingId writerRid,
-            ZLinkServiceRelocationWireCodec.ReplyRelay relay,
-            List<byte[]> payload,
-            ZLinkServiceRelocationWireCodec codec) {
-        if (!requesterReplies.contains(relay)) return false;
-        var local = localAuthorityFence;
-        var resolver = peerAuthorityResolver;
-        var coordinator = relay.coordinator();
-        if (local == null
-                || resolver == null
-                || !writerRid.equals(coordinator.nodeRid())
-                || nodeLifecycleGeneration(writerRid) != coordinator.nodeGeneration()
-                || !topology.isReady(writerRid)) {
-            return true;
-        }
-        resolveSourceAuthority(writerRid, coordinator.nodeGeneration())
-                .thenCompose(
-                        authority ->
-                                authority
-                                                .filter(
-                                                        writer ->
-                                                                writer.identifies(
-                                                                        writerRid,
-                                                                        coordinator
-                                                                                .nodeGeneration(),
-                                                                        coordinator.ownerId(),
-                                                                        coordinator
-                                                                                .leaseGeneration()))
-                                                .isPresent()
-                                        ? requesterAcknowledgement(local, relay, payload, codec)
-                                        : CompletableFuture.<byte[]>completedFuture(null))
-                .thenAccept(
-                        ack -> {
-                            if (ack != null) port.send(requireStarted(), writerRid, List.of(ack));
-                        });
-        return true;
-    }
-
-    private CompletionStage<byte[]> requesterAcknowledgement(
-            ZLinkInternalMeshNode.PeerAuthorityFence requester,
-            ZLinkServiceRelocationWireCodec.ReplyRelay relay,
-            List<byte[]> payload,
-            ZLinkServiceRelocationWireCodec codec) {
-        var resolver = peerAuthorityResolver;
-        if (resolver == null) return CompletableFuture.completedFuture(null);
-        return resolver.confirmsRelocationReply(requester, relay, payload)
-                .thenApply(
-                        confirmed -> {
-                            if (!confirmed || !requester.equals(localAuthorityFence)) return null;
-                            int outcome = requesterReplies.receive(relay, payload);
-                            if (outcome == 0) return null;
-                            var source =
-                                    new ZLinkServiceRelocationWireCodec.RequestSourceFence(
-                                            requester.ownerId(), requester.ownerLeaseGeneration(),
-                                            requester.sourceNodeRid(),
-                                                    requester.sourceNodeGeneration());
-                            return codec.encodeReplyRelayAck(
-                                    new ZLinkServiceRelocationWireCodec.ReplyRelayAck(
-                                            relay.relocation(),
-                                            relay.coordinator(),
-                                            relay.operation(),
-                                            relay.replyRouteId(),
-                                            source,
-                                            outcome));
-                        });
     }
 
     private void dispatchRelocationReplyRelayAck(ZLinkJavaRawServicePort.Inbound inbound) {
@@ -7110,52 +6954,31 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         ZLinkServiceRelocationWireCodec.ReplyRelayAck ack;
         try {
             ack = relocationWire.decodeReplyRelayAck(encoded);
-            var peer = topology.peerFromOwner(inbound.source()).orElseThrow();
-            if (!inbound.source().equals(ack.requestSource().nodeRid())
-                    || peer.descriptor().lifecycleGeneration()
-                            != ack.requestSource().nodeGeneration()) {
-                return;
-            }
+            //  The ACK is sent by the landing node that owns the relocated
+            //  reply capability, which may differ from the request-source
+            //  fence inside the ACK. The pending key below pins the ACK to
+            //  the exact addressed landing node and validateReplyRelayAck
+            //  pins the full expected request-source fence.
+            topology.peerFromOwner(inbound.source()).orElseThrow();
         } catch (RuntimeException invalid) {
             return;
         }
-        acceptRelocationReplyAck(inbound.source(), ack, encoded);
-    }
-
-    private void acceptRelocationReplyAck(
-            RoutingId transportSource,
-            ZLinkServiceRelocationWireCodec.ReplyRelayAck ack,
-            byte[] encoded) {
-        ReplyRelayPendingKey key = ReplyRelayPendingKey.from(transportSource, ack);
+        ReplyRelayPendingKey key = ReplyRelayPendingKey.from(inbound.source(), ack);
         ReplyRelayPending pending = pendingReplyRelays.get(key);
         if (pending == null) {
             return;
         }
         try {
             validateReplyRelayAck(pending.relay, pending.expectedSource, ack);
-        } catch (IllegalArgumentException invalid) {
-            return;
+            if (!pendingReplyRelays.remove(key, pending)) {
+                return;
+            }
+            pending.cancelTimeout();
+            pending.completion.complete(encoded.clone());
+        } catch (RuntimeException invalid) {
+            // A forged or stale ACK cannot close or poison a valid pending
+            // relay. A later exact ACK may still complete it before timeout.
         }
-        var source = ack.requestSource();
-        resolveSourceAuthority(source.nodeRid(), source.nodeGeneration())
-                .whenComplete(
-                        (authority, failure) -> {
-                            if (failure == null
-                                    && authority
-                                            .filter(
-                                                    fence ->
-                                                            fence.identifies(
-                                                                    source.nodeRid(),
-                                                                            source.nodeGeneration(),
-                                                                    source.ownerId(),
-                                                                            source
-                                                                                    .leaseGeneration()))
-                                            .isPresent()
-                                    && pendingReplyRelays.remove(key, pending)) {
-                                pending.cancelTimeout();
-                                pending.completion.complete(encoded.clone());
-                            }
-                        });
     }
 
     static void validateReplyRelayPayload(

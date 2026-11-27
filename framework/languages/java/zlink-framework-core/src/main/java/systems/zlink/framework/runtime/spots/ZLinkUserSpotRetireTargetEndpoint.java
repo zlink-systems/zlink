@@ -1038,7 +1038,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                         ServiceWireConstants
                                                                 .FRAMEWORK_ERROR_REQUEST_FAILED,
                                                 null)),
-                        this::sendStored);
+                        stored -> sendStored(request, stored));
         return delivery.whenComplete(
                 (ignored, relayFailure) -> {
                     if (relayFailure != null
@@ -1139,10 +1139,12 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 reply);
     }
 
-    private CompletionStage<String> sendStored(ZLinkRelocationReplyRow entry) {
+    private CompletionStage<String> sendStored(
+            ZLinkSpotRetireControl.StageRequest request, ZLinkRelocationReplyRow entry) {
         var stored = relocationWire.decodeStoredReply(entry.reply());
         var source = entry.source();
         return sendReply(
+                request,
                 stored.relay(),
                 new ZLinkServiceRelocationWireCodec.RequestSourceFence(
                         source.ownerId(), Long.parseUnsignedLong(source.leaseGeneration()),
@@ -1152,14 +1154,16 @@ final class ZLinkUserSpotRetireTargetEndpoint
     }
 
     private CompletionStage<String> sendReply(
+            ZLinkSpotRetireControl.StageRequest request,
             ZLinkServiceRelocationWireCodec.ReplyRelay relay,
             ZLinkServiceRelocationWireCodec.RequestSourceFence expectedSource,
             List<byte[]> payload) {
         byte[] command = relocationWire.encodeReplyRelay(relay);
-        // Command 33 carries the original reply route to its requester.
+        // The relocation source owns the original reply capability. Its ACK
+        // closes the request-source fence, which can identify another node.
         return relocationClient
                 .relayCanonicalReply(
-                        expectedSource.nodeRid(), expectedSource, command, payload, routeTimeout)
+                        request.sourceNodeRid(), expectedSource, command, payload, routeTimeout)
                 .thenApply(
                         encoded -> {
                             var ack = relocationWire.decodeReplyRelayAck(encoded);
@@ -1179,9 +1183,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     new IllegalStateException("relocation reply runtime is unavailable"));
         }
         var route = sourceReplies.canonicalRelocationReplyRoute(relay, transportSource);
-        if (route == null
-                || !localNodeRid.equals(route.sourceNodeRid())
-                || localNodeGeneration != route.sourceNodeGeneration()) {
+        if (route == null) {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("canonical reply capability fence differs"));
         }

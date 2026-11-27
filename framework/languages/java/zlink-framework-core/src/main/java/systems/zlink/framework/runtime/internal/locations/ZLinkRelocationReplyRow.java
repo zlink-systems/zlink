@@ -55,10 +55,7 @@ public record ZLinkRelocationReplyRow(
     public record Source(
             String ownerId, String leaseGeneration, String nodeRid, String nodeGeneration) {
         public Source {
-            if (ownerId.isEmpty()
-                    || ownerId.indexOf(0) >= 0
-                    || !RID.matcher(nodeRid).matches()
-                    || Long.parseLong(leaseGeneration) <= 0) {
+            if (ownerId.isEmpty() || ownerId.indexOf(0) >= 0 || !RID.matcher(nodeRid).matches()) {
                 throw new IllegalArgumentException("Invalid relocation reply source.");
             }
             positiveToken(leaseGeneration);
@@ -71,7 +68,7 @@ public record ZLinkRelocationReplyRow(
         ZLinkAuthorityKeyCodec.decode(objectKey);
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(writer, "writer");
-        if (writer.ownerId().isEmpty() || writer.leaseGeneration() <= 0) {
+        if (writer.ownerId().isEmpty() || writer.leaseGeneration() == 0) {
             throw new IllegalArgumentException("Invalid relocation reply writer.");
         }
         if (!OPERATION.matcher(operationId).matches()

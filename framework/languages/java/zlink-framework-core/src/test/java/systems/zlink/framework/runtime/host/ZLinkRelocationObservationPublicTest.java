@@ -222,8 +222,8 @@ final class ZLinkRelocationObservationPublicTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
-    void capturedActorRequestDefersCrossNodeJoinWhileItsReplyIsPending(boolean remoteRequester)
-            throws Exception {
+    void capturedActorRequestReturnsTerminalToOriginalRequesterAcrossDeferredCrossNodeJoin(
+            boolean remoteRequester) throws Exception {
         var locations = new ReplyTerminalGate();
         var relocations = new InMemoryRelocationStore();
         var captured = new CompletableFuture<Void>();

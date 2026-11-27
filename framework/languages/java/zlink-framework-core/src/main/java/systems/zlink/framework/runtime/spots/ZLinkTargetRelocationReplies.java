@@ -66,7 +66,8 @@ final class ZLinkTargetRelocationReplies {
                                 lease instanceof ZLinkOwnerLeaseFound found
                                                 && found.isLiveFor(
                                                         source.ownerId(),
-                                                        Long.parseLong(source.leaseGeneration()))
+                                                        Long.parseUnsignedLong(
+                                                                source.leaseGeneration()))
                                         ? send.apply(stored)
                                         : CompletableFuture.completedFuture(
                                                 ZLinkRelocationReplyRow.SOURCE_LEASE_EXPIRED))
