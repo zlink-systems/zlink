@@ -1735,52 +1735,65 @@ binding §4](../04-session/02-session-actor-binding.ko.md#4-binding이-잇는-�
 owner가 수락할 때 이 값을 한 번 읽어 기록한다. Relay나 relocation으로 넘겨받은 request는 기록한 값을 그대로 쓰고
 Store를 다시 읽지 않는다. Peer admission은 Store에서 이 descriptor를 읽을 때까지 기다리지 않는다.
 
-Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같은 source request 정보와
-`OperationId`를 중복해서 넣지 않는다. **새 완료 결과와 payload를 Relocation Store에 먼저
-저장한 뒤 Location Store의 payload 위치, checksum, 완료 수와 전달 대기 수를 CAS 한 번으로
-바꾼다.**
+**완료 결과는 request마다 Location Store row 하나로 저장한다.** Relocation Store blob과 authority의 집계 필드
+(완료 수, 전달 대기 수, payload reference·checksum)는 쓰지 않는다.
 
-완료 기록 payload는 [Relocation Store 공통 blob 형식](03-relocation-store-redis.ko.md)으로 저장하는 JSON object이며
-[RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical 형식으로 직렬화한다. 정수는 부호와 선행 0이 없는 10진수 문자열로 쓴다. `OperationId`는 §3.4 creation terminal key와 같이 big-endian 16 bytes를 소문자 16진수 32자로 쓰고, `ReplyRouteId`(`u64`)는 10진수 문자열로 쓴다. `nodeRid`는 RoutingId raw bytes를 소문자 16진수로 쓴다. `reply`는 [RFC 4648 §4](https://www.rfc-editor.org/rfc/rfc4648#section-4) 표준 base64(padding 포함, 줄바꿈 없음)다. Object 순서는 [Relocation flow §4.2](04-relocation-flow.ko.md#42-source는-실행을-멈추지만-message-수신은-멈추지-않는다)의 UTF-8 authority-key byte 순서다.
+**Row key와 값.** Row의 logical key는 `$zlink/relocation-reply/<relocationId>/<ownerId>.<leaseGeneration>.<nodeRid>.<nodeGeneration>/<operationId>`이다.
+`<relocationId>/`까지가 한 relocation의 prefix이고, 끝의 `/`까지 포함해 prefix snapshot scan에 쓴다. 정수는 부호와 선행 0이 없는
+10진수, `nodeRid`는 RoutingId raw bytes의 소문자 16진수, `operationId`는 §3.4 creation terminal key와 같은 32자 소문자 16진수다.
+값은 [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical JSON object이며 Location Store value 상한(1 MiB,
+[Location Store Redis](02-location-store-redis.ko.md))을 따른다.
 
 | Field | 의미 |
 |---|---|
 | `formatVersion` | 현재 값은 `1`이다. 다른 값은 읽지 않고 `DataLost`로 처리한다. |
-| `relocationId` | 이 기록이 속한 relocation이다. Location Store의 `aggregate.relocation.relocationId`와 같아야 한다. |
-| `entries` | 완료 결과 배열이다. Object 순서, 같은 object 안에서는 source가 request를 수락한 순서로 둔다. |
-| `entries[].objectKey` | 결과를 낸 object의 authority logical key다. |
-| `entries[].source` | 위 표의 source request 정보(`ownerId`, `leaseGeneration`, `nodeRid`, `nodeGeneration`)다. |
-| `entries[].operationId`, `entries[].replyRouteId` | 위 표의 값이다. |
-| `entries[].reply` | 기존 reply 직렬화가 만든 최종 reply bytes를 base64로 쓴 값이다. 성공·실패 결과 모두 여기에 담는다. |
-| `entries[].delivery` | `pending`, `terminalReceived`, `alreadyTerminal`, `sourceLeaseExpired` 중 하나다. 아래 표의 확인 근거를 얻으면 `pending`에서 해당 값으로 한 번만 바뀐다. |
+| `relocationId`, `objectKey`, `source`, `operationId`, `replyRouteId` | Key와 위 표의 값이다. Key와 다르면 `DataLost`다. |
+| `writer` | 이 row를 바꿀 수 있는 target owner lease(`ownerId`, `leaseGeneration`)다. |
+| `state` | `accepted`, `pending`, `terminalReceived`, `alreadyTerminal`, `sourceLeaseExpired` 중 하나다. |
+| `reply` | `pending` 이후의 최종 reply bytes(기존 reply 직렬화, [RFC 4648 §4](https://www.rfc-editor.org/rfc/rfc4648#section-4) base64)다. `accepted`에는 없다. 한 번 쓰면 바꾸지 않는다. |
 
-완료 결과를 추가하거나 `delivery`를 바꿀 때는 기존 payload를 고치지 않는다. 새 reference로 전체 payload를 저장하고
-다시 확인한 뒤 `reference`, `sha256`, `completedResults`, `pendingDeliveries`를 CAS 한 번으로 바꾼다. 여러 결과나 확인
-근거를 한 번의 교체로 묶을 수 있다. `completedResults`는 `entries` 수, `pendingDeliveries`는 `delivery`가 `pending`인
-항목 수와 같아야 한다. 다르면 `DataLost`다. 원래 requester에게 reply를 보내는 일은 그 결과를 담은 CAS가 끝난 뒤에만
-한다. 교체로 더 이상 가리키지 않는 이전 payload는 보관 기한 뒤 삭제한다.
+**수락 집합은 target commit에서 확정한다.** Target commit CAS는 authority·membership 변경과 같은 batch에서 capture와
+boundary 전 relay request마다 `accepted` row를 하나씩 `Missing` 조건으로 만든다. Boundary 뒤의 일반 request, send, event와
+timer는 집합에 넣지 않는다. 이 batch는 Location Store batch 상한(2,048 key, encoded 4 MiB)을 authority·membership key와
+함께 쓴다. 상한을 넘으면 commit하지 않고 그 relocation을 `InternalFailure`로 abort한다. 이 상한은
+[Relocation flow §5.3](04-relocation-flow.ko.md#53-relocation-전용-capacity-제한을-두지-않는다)이 유지하는 relocation 밖의 제한이다.
 
-전달 중 Store 오류나 연결 끊김이 있으면 target은 같은 실행 안에서 `reference`가 가리키는 payload의 `pending` 항목을 현재 route로 다시 보낸다. Target 실행이 끝난 뒤의 처리는 [Host relocation와 shutdown](05-host-relocation-flow.ko.md)의 장애 계약을 따른다. Target 실행이 끝나면 [실패 정책 §5](06-failure-failover-policy.ko.md#5-host-relocation-장애)대로 다른 runtime이 이 relocation을 이어받지 않으며, 저장한 완료 기록은 그 정책이 object를 다시 활성화하는 경우에만 쓰인다. 그때 그 runtime은 활성화 전에 `pending` 항목의 reply bytes만 다시 보내고, handler, Restore, 끝나지 않은 queue와 target 재선택은 다시 하지 않는다.
+**결과는 row CAS 한 번으로 받는다.** Request가 끝나면 writer는 그 row를 `accepted`에서 `pending`으로 바꾸며 `reply`를 쓴다
+(`Version` 조건). 이미 `pending` 이후이면 그 결과를 버린다. 같은 request의 결과는 한 번만 받는다. Reply bytes를 넣은 row가
+value 상한을 넘으면 그 reply 대신 `InternalFailure`(failure code `requestFailed`,
+[Framework error model §2](../00-foundation/07-framework-error-model.ko.md)) 실패 reply를 넣는다. Request는 이미 실행됐고 결과
+bytes만 보관하지 못한 것이므로 새 error kind를 두지 않고 relocation도 실패로 바꾸지 않는다. 원래 requester에게 reply를 보내는
+일은 `pending` CAS가 끝난 뒤에만 한다.
 
-**완료 기록의 크기는 마지막에 도달할 수 있는 크기로 판정한다.** 결과를 더할 때 Framework는 encoded payload 크기를 모든 항목의 `delivery`를 가장 긴 값인 `sourceLeaseExpired`로 두고, 아직 결과가 없는 수락 request(`acceptedRequests`에서 이번 결과까지의 항목 수를 뺀 수)마다 아래 실패 reply를 담은 항목 하나를 더한 크기로 계산한다. 이 판정을 통과한 payload에서는 이후의 `delivery` 전이와 남은 결과의 실패 reply가 항상 상한 안에 저장되므로, `pendingDeliveries`를 줄이는 CAS가 크기 때문에 막히지 않는다. 이 크기가 [Relocation Store](03-relocation-store-redis.ko.md)의 공통 blob 상한을 넘을 때는 그 request의 reply bytes 대신 `InternalFailure`(failure code `requestFailed`, [Framework error model §2](../00-foundation/07-framework-error-model.ko.md)) 실패 reply를 그 항목의 `reply`로 저장한다. Request는 이미 실행됐고 결과 bytes만 보관하지 못한 것이므로 새 error kind를 두지 않는다. 이미 저장한 항목은 바꾸지 않고 relocation도 실패로 바꾸지 않는다. Target은 target commit CAS 전에 결과가 하나도 없는 상태로 같은 크기를 계산한다. 이 크기가 상한을 넘으면 commit하지 않고 그 relocation을 `InternalFailure`로 abort한다. 이 상한은 Relocation Store의 제한이며, [Relocation flow §5.3](04-relocation-flow.ko.md#53-relocation-전용-capacity-제한을-두지-않는다)이 유지하는 relocation 밖의 제한이다.
-
-수락한 request 수와 완료 결과 수가 같고 전달 대기 수가 0일 때만 `Completed`를 기록한다.
-다르면 복구 오류다.
+**전달 확인도 row CAS다.** 아래 표의 근거를 얻으면 writer는 그 row를 `pending`에서 해당 상태로 한 번 바꾼다. 이미 같은 상태면
+멱등으로 성공이고, 다른 terminal 상태면 바꾸지 않는다.
 
 | 상태 | 완료를 확인하는 근거 |
 |---|---|
-| `TerminalReceived` | 원래 request를 보낸 source가 첫 완료 결과를 받았다고 응답했다. |
-| `AlreadyTerminal` | Source가 같은 완료 결과를 이미 받았다고 응답했다. |
-| `SourceLeaseExpired` | Location Store에서 source owner lease가 끝났음을 확인했다. |
+| `terminalReceived` | 원래 request를 보낸 source가 첫 완료 결과를 받았다고 응답했다. |
+| `alreadyTerminal` | Source가 같은 완료 결과를 이미 받았다고 응답했다. |
+| `sourceLeaseExpired` | Location Store에서 row의 source owner lease가 끝났음을 확인했다. |
 
-Connection 종료나 재연결만으로 완료 결과를 받았다고 판단하지 않는다. Target은 현재 route로
-전달을 계속한다. `Relocate` deadline은 `Relocate` 호출만 끝내며 전달을 멈추지 않는다. Framework는
-`pendingDeliveries`가 0이 될 때까지 — 위 표의 확인 근거를 모든 항목이 얻을 때까지 — `aggregate.relocation.completion`과
-`reference`가 가리키는 payload를 유지하고, payload의 data chunk와 맨 앞 목록은 [Relocation Store](03-relocation-store-redis.ko.md)의
-renew 규칙으로 보관 기간을 연장한다. `pendingDeliveries`가 0보다 큰 동안 그 object의 다음 `Relocate`는
-`Blocked/OperationInProgress`로 끝나며, Framework는 그 사유가 전달 대기(pending delivery)임을 `RelocationId`,
-`pendingDeliveries`와 함께 runtime log에 남긴다. 결과에 설명 문자열을 담는 언어는 같은 사유를 그 문자열에도 넣는다.
-`pendingDeliveries`가 0이 되면 기존 terminal cleanup으로 relocation 진행 정보와 payload를 정리한다.
+Connection 종료나 재연결, 중간 node의 submit 성공만으로 완료 결과를 받았다고 판단하지 않는다. Target은 `pending` row를
+현재 route로 계속 보낸다. `Relocate` deadline은 `Relocate` 호출만 끝내며 전달을 멈추지 않는다.
+
+**Writer.** Row를 바꾸는 CAS는 row의 `writer`가 가리키는 owner lease가 유효할 때만 한다. Writer는 그 relocation의 target
+owner lease이며, dispatch가 열려 relocation publication을 해제한 뒤에도 같은 lease로 결과와 확인을 기록한다. 새 relocation이
+object owner를 바꿔도 이전 relocation의 row writer는 바뀌지 않는다. Writer lease가 끝난 row는 아래 보관 기한이 지나면
+사라지고, 다른 runtime이 그 row를 이어받지 않는다.
+
+**보관 기한.** Row는 Location Store expiry로 보관한다. `accepted`와 `pending` row는 24시간이며 writer가 만료 전에 같은 값으로
+다시 써서 연장한다. Terminal 상태 row는 그 CAS에서 5분으로 줄인다(creation terminal과 같다). Store가 만료한 row를 지우므로
+별도 삭제 주체를 두지 않는다.
+
+**Relocation 종료와 다음 relocation.** Dispatch가 열리면 relocation publication을 해제하고 `Completed`를 기록한다. `Completed`는
+row 상태를 기다리지 않는다. `pending` row가 남아 있어도 그 object의 다음 `Relocate`를 막지 않는다. 다음 relocation은 진행 중인
+handoff만 기다린다.
+
+**Target 실행이 끝난 뒤.** [실패 정책 §5](06-failure-failover-policy.ko.md#5-host-relocation-장애)대로 다른 runtime이 이 relocation을
+이어받지 않는다. 그 정책이 object를 다시 활성화하는 경우에만, 그 runtime은 활성화 전에 relocation prefix snapshot으로 row를 찾아
+`pending` row의 reply bytes만 다시 보낸다. Handler, Restore, 끝나지 않은 queue와 target 재선택은 다시 하지 않는다. 결과 CAS 전에
+target이 끝나 `accepted`로 남은 row는 보내지 않고 만료로 사라진다. 그 request의 caller는 자기 deadline으로 끝난다.
 
 ### 9.4 Relay-ready accepted 전 취소
 
