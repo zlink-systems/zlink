@@ -29,10 +29,10 @@ def destroy_fields(body):
 
 
 class Observer:
-    def __init__(self, root, run_id, hold_admission):
+    def __init__(self, root, control, run_id, hold_admission):
         self.run_id = run_id
         self.paths = {role: root / f"{run_id}.{role}.wire" for role in ("owner", "caller")}
-        self.allow = root / f"{run_id}.caller.admission" if hold_admission else None
+        self.allow = control / f"{run_id}.caller.admission" if hold_admission else None
         self.forwarded_admit = False
         self.correlations = set()
         self.connection_count = 0
@@ -131,8 +131,8 @@ class Observer:
             downstream.close()
 
 
-async def run(root, run_id, scenario, owner_port, caller_port):
-    observer = Observer(root, run_id, scenario == "admissionCheck")
+async def run(root, run_id, scenario, owner_port, caller_port, control=None):
+    observer = Observer(root, control or root, run_id, scenario == "admissionCheck")
     async with (
         await asyncio.start_server(
             lambda reader, writer: observer.forward(reader, writer, "owner", owner_port),
@@ -148,5 +148,6 @@ async def run(root, run_id, scenario, owner_port, caller_port):
 
 
 if __name__ == "__main__":
-    root, run_id, scenario, owner_port, caller_port = sys.argv[1:]
-    asyncio.run(run(Path(root), run_id, scenario, int(owner_port), int(caller_port)))
+    root, run_id, scenario, owner_port, caller_port, *control = sys.argv[1:]
+    asyncio.run(run(Path(root), run_id, scenario, int(owner_port), int(caller_port),
+                    Path(control[0]) if control else None))

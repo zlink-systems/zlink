@@ -226,7 +226,6 @@ class store_t final : public fw::location_store_t
                         if (!valid_closing.exchange (true))
                             events.emit ("callerObservedClosingWithValidLease");
                     } else if (!invalid_closing.exchange (true)) {
-                        events.emit ("ownerLeaseEnded");
                         events.emit ("callerObservedClosingForRelease");
                     }
                 }
@@ -244,6 +243,7 @@ class store_t final : public fw::location_store_t
     {
         bool authority_put = false;
         bool authority_delete = false;
+        bool lease_delete = false;
         const auto suspended_lease = blocked_lease.load ();
         for (const auto &mutation : request.mutations) {
             if (const auto *put = std::get_if<fw::store_put_t> (&mutation)) {
@@ -253,8 +253,10 @@ class store_t final : public fw::location_store_t
                     authority_put = true;
             }
             const auto *remove = std::get_if<fw::store_delete_t> (&mutation);
-            if (remove && remove->key.value == key.value)
-                authority_delete = true;
+            if (remove) {
+                authority_delete |= remove->key.value == key.value;
+                lease_delete |= suspended_lease && remove->key.value == suspended_lease->value;
+            }
         }
 
         // The owner arms this after the initial Actor's Entry handoff has completed.
@@ -279,6 +281,8 @@ class store_t final : public fw::location_store_t
 
         auto result = co_await backend->write (std::move (request));
         if (const auto *applied = std::get_if<fw::store_write_applied_t> (&result)) {
+            if (lease_delete)
+                events.emit ("ownerLeaseEnded", {}, applied->store_now);
             if (authority_put || authority_delete)
                 events.emit ("authorityWritten", {}, applied->store_now);
             if (authority_delete && owner)
@@ -303,7 +307,9 @@ class store_t final : public fw::location_store_t
         runtime::provider_location_repository_t codecs (observer);
         codecs.read_owner_lease (row.owner.owner_id).result ().value ();
         blocked_lease.store (std::make_shared<const fw::store_key_t> (observer.observed_key));
-        const auto released = repository.release_owner_lease (row.owner).result ().value ();
+        runtime::provider_location_repository_t observed_repository (*this);
+        const auto released =
+          observed_repository.release_owner_lease (row.owner).result ().value ();
         if (!std::holds_alternative<fw::owner_lease_released_t> (released))
             throw std::runtime_error ("could not end the original owner lease");
     }

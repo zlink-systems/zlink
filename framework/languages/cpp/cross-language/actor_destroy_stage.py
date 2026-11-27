@@ -17,9 +17,10 @@ def expect(actual, expected, context):
 
 
 class Host:
-    def __init__(self, root, run_id, role):
+    def __init__(self, root, run_id, role, control=None):
         self.prefix = root / f"{run_id}.{role}"
         self.events = Path(f"{self.prefix}.events")
+        self.command = (control or root) / f"{run_id}.{role}.command"
         self.run_id = run_id
         self.sequence = 0
         self.role = role
@@ -34,7 +35,7 @@ class Host:
                  (field.split("=", 1) for field in line[len(prefix):].split("|"))}
                 for line in lines if line.startswith(prefix)]
 
-    def wait(self, name, **fields):
+    def wait(self, name, *, before=None, **fields):
         limit = time.monotonic() + 90
         while time.monotonic() < limit:
             events = self.read()
@@ -44,15 +45,24 @@ class Host:
             for event in events:
                 if event["event"] == name and all(event.get(k) == v for k, v in fields.items()):
                     return event
+            if before is not None:
+                host, terminal, match = before
+                for row in events if host is self else host.read():
+                    if row["event"] == "error":
+                        raise ValueError(f"{host.role}: {row['message']}")
+                    if row["event"] == terminal and all(row.get(k) == v for k, v in match.items()):
+                        details = " ".join(f"{key}={value.splitlines()[0]}"
+                                           for key, value in row.items() if key != "event" and value)
+                        raise ValueError(f"{host.role}: {terminal} before {name}: {details}")
             time.sleep(0.02)
         raise ValueError(f"{self.role}: timed out waiting for {name} {fields}")
 
     def send(self, command, *args):
         self.sequence += 1
-        temporary = Path(f"{self.prefix}.next")
+        temporary = self.command.with_suffix(".next")
         temporary.write_text("\t".join((self.run_id, str(self.sequence), command, *args)) + "\n",
                              encoding="utf-8")
-        temporary.replace(Path(f"{self.prefix}.command"))
+        temporary.replace(self.command)
         self.wait("ack", seq=str(self.sequence))
 
     def result(self, command, event, label, **fields):
@@ -109,7 +119,7 @@ def verify_new(caller, ready, fixture, expected_kind):
     expect(result["kind"], expected_kind, "GetOrCreate result")
     generation = result["generation"]
     if int(generation) <= int(ready["generation"]):
-        raise ValueError("recreation must advance object generation")
+        raise ValueError(f"recreation must advance object generation: {ready['generation']} -> {generation}")
     replacement = snapshot(caller, "replacement")
     verify_ready(replacement, "caller", caller.run_id, fixture)
     expect(replacement["generation"], generation, "new authority generation")
@@ -140,8 +150,8 @@ def wire(host, ready, run_id, sent, submissions=None, after=0):
             raise ValueError("command 27 correlation is zero")
 
 
-def verify_release(caller, closing, expected):
-    release = caller.wait("releaseCommitted")
+def verify_release(caller, closing, expected, terminal, **terminal_fields):
+    release = caller.wait("releaseCommitted", before=(caller, terminal, terminal_fields))
     for key, expected in dict(version=closing["version"], invalidLease="true",
                               descriptorCondition="true", capacityCondition="true",
                               membershipRemoved=str(expected["oldMembershipRemoved"]).lower(),
@@ -173,9 +183,9 @@ def stop_owner(owner):
             raise ValueError(f"owner process {pid} did not exit")
 
 
-def run(fixture, root, run_id, scenario):
-    owner = Host(root, run_id, "owner")
-    caller = Host(root, run_id, "caller")
+def run(fixture, root, run_id, scenario, control=None):
+    owner = Host(root, run_id, "owner", control)
+    caller = Host(root, run_id, "caller", control)
     case = dict(zip("abcdef", fixture["scenarios"]))
     case["admissionCheck"] = fixture["admissionCheck"]
     steps = [step["expect"] for step in case[scenario]["steps"]]
@@ -210,7 +220,7 @@ def run(fixture, root, run_id, scenario):
     elif scenario == "e":
         owner.send("hold-cas")
         owner.send("destroy", "fail")
-        owner.wait("closingCasHeld")
+        owner.wait("closingCasHeld", before=(owner, "failedDestroyReturned", {"label": "fail"}))
         expect(snapshot(owner, "cas-held"), ready, "held CAS authority")
         owner.count("closingCommitted", steps[0]["closingCommitsByA"])
         owner.result("probe", "probeReturned", "pending-cas", kind=steps[1]["kind"], retryable=str(steps[1]["retryable"]).lower())
@@ -226,7 +236,7 @@ def run(fixture, root, run_id, scenario):
         owner.count("probeHandled", 1, label="retry")
         owner.send("hold-delete")
         owner.send("destroy", "retry")
-        owner.wait("ownerDeleteHeld")
+        owner.wait("ownerDeleteHeld", before=(owner, "destroyReturned", {"label": "retry"}))
         verify_closing(snapshot(owner, "cas-retry"), ready, fixture)
         owner.result("probe", "probeReturned", "post-commit", kind=steps[5]["kind"])
         owner.count("probeHandled", 0, label="post-commit")
@@ -245,7 +255,7 @@ def run(fixture, root, run_id, scenario):
             caller.send("peer-placement", "0")
         owner.send("hold-delete")
         caller.send("destroy", "remote")
-        owner.wait("ownerDeleteHeld")
+        owner.wait("ownerDeleteHeld", before=(caller, "destroyReturned", {"label": "remote"}))
         closing = snapshot(caller, "closing")
         verify_closing(closing, ready, fixture)
         owner.count("closingCommitted", 1)
@@ -254,7 +264,7 @@ def run(fixture, root, run_id, scenario):
         if scenario == "a":
             caller.result("find", "found", "closing", generation="none")
             caller.send("get-or-create")
-            caller.wait("createObservedClosing")
+            caller.wait("createObservedClosing", before=(caller, "getOrCreateReturned", {}))
             caller.send("pending-create")
             caller.count("newFactoryStarted", 0)
         if scenario == "b":
@@ -271,17 +281,13 @@ def run(fixture, root, run_id, scenario):
             caller.count("releaseCommitted", 0)
         if scenario == "a":
             replacement = verify_new(caller, ready, fixture, steps[4]["value"]["getOrCreate"]["kind"])
-            owner.result("find", "found", "replacement", generation=replacement["generation"])
-            stale_begin = time.time_ns() // 1000
-            for index, host in enumerate((caller, owner), 1):
-                stale = case["c"]["steps"][index]["expect"]
-                host.result("destroy", "destroyReturned", "stale", kind=stale["kind"])
-                host.count("authorityWritten", stale["authorityWrites"], after=stale_begin)
-            caller.result("find", "found", "after-stale", generation=replacement["generation"])
-            caller.result("probe", "probeReturned", "after-stale", kind="return",
-                          generation=replacement["generation"])
-            caller.count("probeHandled", 1, label="after-stale")
-            expect(snapshot(caller, "after-stale"), replacement, "stale Destroy authority")
+            order(case["a"], owner, caller)
+            wire(caller, ready, run_id, steps[1]["command27Sends"])
+            print(f"{run_id}: PASS", flush=True)
+            try:
+                stale_begin = verify_stale(owner, caller, replacement, case["c"])
+            except (ValueError, OSError, KeyError) as error:
+                raise ValueError(f"c: {error}") from error
         if scenario == "b":
             duplicate = owner.wait("ownerDuplicateReturned", label="duplicate")
             expect(duplicate["kind"], str(steps[1]["value"]["ownerDuplicateDestroy"]).lower(),
@@ -301,7 +307,7 @@ def run(fixture, root, run_id, scenario):
             expect(snapshot(caller, "expired"), closing, "Find preserves expired authority")
             caller.count("releaseCommitted", 0)
             caller.send("get-or-create")
-            verify_release(caller, closing, steps[4]["releaseBatch"])
+            verify_release(caller, closing, steps[4]["releaseBatch"], "getOrCreateReturned")
             verify_new(caller, ready, fixture, steps[5]["value"]["getOrCreate"]["kind"])
             owner.count("ownerDeleteCommitted", 0)
         if scenario == "f":
@@ -309,7 +315,10 @@ def run(fixture, root, run_id, scenario):
             caller.send("pending-destroy", "remote")
             caller.count("releaseCommitted", 0)
             owner.send("end-lease")
-            verify_release(caller, closing, steps[1]["releaseBatch"])
+            verify_release(caller, closing, steps[1]["releaseBatch"],
+                           "destroyReturned", label="remote")
+            owner.count("ownerLeaseEnded", 1)
+            caller.count("ownerLeaseEnded", 0)
             remote = caller.wait("destroyReturned", label="remote")
             expect(remote["kind"], str(steps[2]["value"]).lower(), "ended-owner Destroy result")
             expect(snapshot(caller, "released"), {"read": "Missing"}, "release removes authority")
@@ -318,22 +327,44 @@ def run(fixture, root, run_id, scenario):
     if scenario != "d":
         owner.send("finish")
     caller.send("finish")
-    order(case[scenario], owner, caller)
-    if scenario != "e":
-        wire(caller, ready, run_id, steps[1 if scenario == "a" else 0].get("command27Sends", 1),
+    if scenario == "a":
+        try:
+            for host, step in zip((caller, owner), case["c"]["steps"][1:3]):
+                wire(host, replacement, run_id, step["expect"]["command27Sends"],
+                     after=stale_begin)
+        except (ValueError, OSError, KeyError) as error:
+            raise ValueError(f"c: {error}") from error
+        wire(caller, ready, run_id, steps[1]["command27Sends"])
+    else:
+        order(case[scenario], owner, caller)
+    if scenario not in ("a", "e"):
+        wire(caller, ready, run_id, steps[0].get("command27Sends", 1),
              submissions=steps[0].get("command27Submissions"))
-        if scenario == "a":
-            wire(owner, ready, run_id, 0, after=stale_begin)
-            wire(caller, ready, run_id, 0, after=stale_begin)
-            print(f"{run_id} c: PASS", flush=True)
         if scenario == "b":
             owner.count("command27Sent", 0)
-    print(f"{run_id}: PASS", flush=True)
+    print(f"{run_id}{' c' if scenario == 'a' else ''}: PASS", flush=True)
+
+
+def verify_stale(owner, caller, replacement, case):
+    owner.result("find", "found", "replacement", generation=replacement["generation"])
+    owner.send("peer")
+    started = time.time_ns() // 1000
+    for host, step in zip((caller, owner), case["steps"][1:3]):
+        host.result("destroy", "destroyReturned", "stale", kind=step["expect"]["kind"])
+    caller.result("find", "found", "after-stale", generation=replacement["generation"])
+    caller.result("probe", "probeReturned", "after-stale", kind="return",
+                  generation=replacement["generation"])
+    caller.count("probeHandled", 1, label="after-stale")
+    expect(snapshot(caller, "after-stale"), replacement, "stale Destroy authority")
+    for host, step in zip((caller, owner), case["steps"][1:3]):
+        host.count("authorityWritten", step["expect"]["authorityWrites"], after=started)
+    return started
 
 
 if __name__ == "__main__":
-    fixture_path, root, run_id, scenario = sys.argv[1:]
+    fixture_path, root, run_id, scenario, *control = sys.argv[1:]
     try:
-        run(json.loads(Path(fixture_path).read_text(encoding="utf-8")), Path(root), run_id, scenario)
+        run(json.loads(Path(fixture_path).read_text(encoding="utf-8")), Path(root),
+            run_id, scenario, Path(control[0]) if control else None)
     except (ValueError, OSError, KeyError) as error:
         sys.exit(f"{run_id}: {error}")

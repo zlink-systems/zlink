@@ -126,6 +126,7 @@ if [[ "${IS_WINDOWS_NATIVE}" -eq 1 ]]; then
 fi
 
 RUN_DIR="$(mktemp -d)"
+ACTOR_DESTROY_CONTROL_DIR=""
 PIDS=()
 REDIS_PIDS=()
 REDIS_CONTAINERS=()
@@ -157,6 +158,9 @@ stop_all() {
 cleanup() {
   local code=$?
   stop_all
+  if [[ -n "${ACTOR_DESTROY_CONTROL_DIR:-}" ]]; then
+    rm -rf "${ACTOR_DESTROY_CONTROL_DIR}"
+  fi
   if [[ "${ZLINK_CPP_CROSS_KEEP_RUN_DIR:-}" == "1" ]]; then
     echo "runDir=${RUN_DIR}"
   else
@@ -248,9 +252,13 @@ start_cpp() {
 start_dotnet() {
   local name="$1"
   shift
+  local command=(dotnet run --project "${DOTNET_TEST_HOST}" --framework net8.0 --)
+  if [[ "${DOTNET_TEST_HOST}" == *.dll ]]; then
+    command=(dotnet "${DOTNET_TEST_HOST}")
+  fi
   # --framework net8.0 matches the TestHost target the Node smoke uses; the
   # stop file is the host's own graceful-stop contract.
-  dotnet run --project "${DOTNET_TEST_HOST}" --framework net8.0 -- \
+  "${command[@]}" \
     --ready-file "${RUN_DIR}/${name}.ready" \
     --stop-file "${RUN_DIR}/${name}.stop" \
     "$@" >"${RUN_DIR}/${name}.log" 2>&1 &
@@ -289,10 +297,15 @@ start_java() {
 wait_for_ready() {
   local file="$1"
   local timeout_seconds="${2:-60}"
+  local pid="${3:-}"
   local deadline=$((SECONDS + timeout_seconds))
   while ((SECONDS < deadline)); do
     if [[ -f "${file}" ]]; then
       return 0
+    fi
+    if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
+      echo "host exited before writing ready file ${file}" >&2
+      return 1
     fi
     sleep 0.2
   done
