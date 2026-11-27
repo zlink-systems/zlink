@@ -370,6 +370,14 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/host/framework_runtime.cpp
   framework/src/runtime/mesh/mesh_metadata_codec.cpp
   framework/src/runtime/mesh/mesh_node_host_service.cpp
+  framework/src/runtime/mesh/mesh_node_host_actor_creation_completion.cpp
+  framework/src/runtime/mesh/mesh_node_host_actor_creation_target.cpp
+  framework/src/runtime/mesh/mesh_node_host_actor_lifecycle.cpp
+  framework/src/runtime/mesh/mesh_node_host_descriptors.cpp
+  framework/src/runtime/mesh/mesh_node_host_dispatch.cpp
+  framework/src/runtime/mesh/mesh_node_host_operations.cpp
+  framework/src/runtime/mesh/mesh_node_host_placement.cpp
+  framework/src/runtime/mesh/mesh_node_host_user_spot.cpp
   framework/src/runtime/mesh/mesh_node_runtime.cpp
   framework/src/runtime/mesh/route_mesh_runtime_service.cpp
   framework/src/runtime/mesh/route_mesh_runtime_options_service.cpp
