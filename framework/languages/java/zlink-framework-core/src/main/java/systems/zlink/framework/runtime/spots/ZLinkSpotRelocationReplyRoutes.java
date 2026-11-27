@@ -13,7 +13,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMappi
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 
@@ -256,40 +255,20 @@ final class ZLinkSpotRelocationReplyRoutes {
                 targetAttemptGeneration);
     }
 
-    void bindCommitted(
-            List<byte[]> acceptedRecords,
-            RoutingId targetNodeRid,
-            long targetNodeGeneration,
-            CommittedFence fence) {
-        inStateLane(
-                () ->
-                        bindCommittedWithFenceOnLane(
-                                acceptedRecords, targetNodeRid, targetNodeGeneration, fence));
-    }
-
     CompletionStage<Void> bindCommittedAsync(
             List<byte[]> acceptedRecords,
             RoutingId targetNodeRid,
             long targetNodeGeneration,
-            CommittedFence fence) {
+            long targetAttemptGeneration) {
         return stateLane.runNowOrQueue(
-                () ->
-                        bindCommittedWithFenceOnLane(
-                                acceptedRecords, targetNodeRid, targetNodeGeneration, fence));
-    }
-
-    private Void bindCommittedWithFenceOnLane(
-            List<byte[]> acceptedRecords,
-            RoutingId targetNodeRid,
-            long targetNodeGeneration,
-            CommittedFence fence) {
-        bindCommittedOnLane(
-                acceptedRecords,
-                targetNodeRid,
-                targetNodeGeneration,
-                fence.targetAttemptGeneration());
-        attachCanonicalFence(acceptedRecords, false, fence);
-        return null;
+                () -> {
+                    bindCommittedOnLane(
+                            acceptedRecords,
+                            targetNodeRid,
+                            targetNodeGeneration,
+                            targetAttemptGeneration);
+                    return null;
+                });
     }
 
     void bindCommitted(
@@ -414,127 +393,20 @@ final class ZLinkSpotRelocationReplyRoutes {
         }
     }
 
-    void bindActorCommitted(
-            List<byte[]> acceptedRecords,
-            RoutingId targetNodeRid,
-            long targetNodeGeneration,
-            CommittedFence fence) {
-        inStateLane(
-                () ->
-                        bindActorCommittedWithFenceOnLane(
-                                acceptedRecords, targetNodeRid, targetNodeGeneration, fence));
-    }
-
     CompletionStage<Void> bindActorCommittedAsync(
             List<byte[]> acceptedRecords,
             RoutingId targetNodeRid,
             long targetNodeGeneration,
-            CommittedFence fence) {
+            long targetAttemptGeneration) {
         return stateLane.runNowOrQueue(
-                () ->
-                        bindActorCommittedWithFenceOnLane(
-                                acceptedRecords, targetNodeRid, targetNodeGeneration, fence));
-    }
-
-    private Void bindActorCommittedWithFenceOnLane(
-            List<byte[]> acceptedRecords,
-            RoutingId targetNodeRid,
-            long targetNodeGeneration,
-            CommittedFence fence) {
-        bindActorCommittedOnLane(
-                acceptedRecords,
-                targetNodeRid,
-                targetNodeGeneration,
-                fence.targetAttemptGeneration());
-        attachCanonicalFence(acceptedRecords, true, fence);
-        return null;
-    }
-
-    private void attachCanonicalFence(
-            List<byte[]> acceptedRecords, boolean actor, CommittedFence fence) {
-        Objects.requireNonNull(fence, "fence");
-        for (byte[] acceptedRecord : acceptedRecords) {
-            long operationHigh;
-            long operationLow;
-            boolean hasReply;
-            if (actor) {
-                var frozen = ZLinkServiceFrozenRecordCodec.decodeActor(acceptedRecord);
-                operationHigh = frozen.operationHigh();
-                operationLow = frozen.operationLow();
-                hasReply = frozen.replyRouteId().isPresent();
-            } else {
-                var frozen = ZLinkServiceFrozenRecordCodec.decodeSpot(acceptedRecord);
-                operationHigh = frozen.operationHigh();
-                operationLow = frozen.operationLow();
-                hasReply = frozen.replyRouteId().isPresent();
-            }
-            if (!hasReply) {
-                continue;
-            }
-            Route route = routes.get(new OperationId(operationHigh, operationLow));
-            if (route == null || !route.committed) {
-                throw new IllegalStateException(
-                        "canonical relocation reply capability is unavailable");
-            }
-            route.authorityKey = fence.authorityKey();
-            route.participantId = fence.participantId();
-        }
-    }
-
-    CanonicalRoute lookupCanonical(
-            ZLinkServiceRelocationWireCodec.ReplyRelay relay, RoutingId transportSource) {
-        return inStateLane(() -> lookupCanonicalOnLane(relay, transportSource));
-    }
-
-    private CanonicalRoute lookupCanonicalOnLane(
-            ZLinkServiceRelocationWireCodec.ReplyRelay relay, RoutingId transportSource) {
-        Objects.requireNonNull(relay, "relay");
-        Objects.requireNonNull(transportSource, "transportSource");
-        removeExpired(Instant.now());
-        Route route =
-                routes.get(new OperationId(relay.operation().high(), relay.operation().low()));
-        if (route == null
-                || !route.committed
-                || route.authorityKey == null
-                || route.participantId == 0
-                || route.replyRouteId != relay.replyRouteId()
-                || route.participantId != relay.participantId()
-                || route.targetAttemptGeneration != relay.targetAttemptGeneration()
-                || !transportSource.equals(route.targetNodeRid)
-                || !transportSource.equals(relay.coordinator().nodeRid())
-                || route.targetNodeGeneration != relay.coordinator().nodeGeneration()) {
-            return null;
-        }
-        return new CanonicalRoute(
-                new OperationId(relay.operation().high(), relay.operation().low()),
-                route.authorityKey,
-                route.spotId,
-                route.objectGeneration,
-                route.sourceOwnerId,
-                route.sourceOwnerLeaseGeneration,
-                route.sourceNodeRid,
-                route.sourceNodeGeneration,
-                route.replyRouteId,
-                route.participantId);
-    }
-
-    CompletionStage<Ack> deliverCanonical(
-            CanonicalRoute selected, List<byte[]> parts, int terminalResult, int failureCode) {
-        Objects.requireNonNull(selected, "selected");
-        Objects.requireNonNull(parts, "parts");
-        RouteSelection selection =
-                inStateLane(
-                        () -> {
-                            Route route = routes.get(selected.operation());
-                            if (route == null
-                                    || !route.committed
-                                    || !Objects.equals(route.authorityKey, selected.authorityKey())
-                                    || route.participantId != selected.participantId()) {
-                                return RouteSelection.notAcknowledged();
-                            }
-                            return claimTerminal(route);
-                        });
-        return deliverTerminal(selection, parts, terminalResult, failureCode);
+                () -> {
+                    bindActorCommittedOnLane(
+                            acceptedRecords,
+                            targetNodeRid,
+                            targetNodeGeneration,
+                            targetAttemptGeneration);
+                    return null;
+                });
     }
 
     /**
@@ -695,27 +567,6 @@ final class ZLinkSpotRelocationReplyRoutes {
             }
         }
     }
-
-    record CommittedFence(String authorityKey, long participantId, long targetAttemptGeneration) {
-        CommittedFence {
-            Objects.requireNonNull(authorityKey, "authorityKey");
-            if (authorityKey.isBlank() || participantId == 0 || targetAttemptGeneration == 0) {
-                throw new IllegalArgumentException("canonical committed reply fence is invalid");
-            }
-        }
-    }
-
-    record CanonicalRoute(
-            OperationId operation,
-            String authorityKey,
-            String objectId,
-            long objectGeneration,
-            String sourceOwnerId,
-            long sourceOwnerLeaseGeneration,
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
-            long replyRouteId,
-            long participantId) {}
 
     record Relay(
             OperationId operation,
@@ -878,8 +729,6 @@ final class ZLinkSpotRelocationReplyRoutes {
         private boolean committed;
         private boolean relayInProgress;
         private boolean delivered;
-        private String authorityKey;
-        private long participantId;
 
         private Route(
                 boolean actor,

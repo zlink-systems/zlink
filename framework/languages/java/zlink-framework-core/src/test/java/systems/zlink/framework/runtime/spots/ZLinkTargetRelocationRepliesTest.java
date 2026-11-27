@@ -46,9 +46,9 @@ final class ZLinkTargetRelocationRepliesTest {
     private static final ZLinkStoreCancellation OPEN = () -> false;
 
     @ParameterizedTest
-    @CsvSource({"1, false", "2, false", "1, true"})
+    @CsvSource({"1, false, true", "2, false, true", "1, true, true", "1, false, false"})
     void persistsRepliesAndSettlesFromAcknowledgementOrExpiredLease(
-            int requests, boolean sourceExpired) {
+            int requests, boolean sourceExpired, boolean acknowledge) {
         // The original requester and the relocation source use different routing IDs.
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId journalRid = RoutingId.from("journal-node");
@@ -150,6 +150,23 @@ final class ZLinkTargetRelocationRepliesTest {
                         relayDestinations,
                         relayExpectedSources,
                         relayAttempts);
+        if (!acknowledge) {
+            ZLinkInternalMeshNode delegate = peer;
+            peer =
+                    (ZLinkInternalMeshNode)
+                            java.lang.reflect.Proxy.newProxyInstance(
+                                    ZLinkInternalMeshNode.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkInternalMeshNode.class},
+                                    (proxy, method, args) -> {
+                                        Object result = method.invoke(delegate, args);
+                                        return method.getName()
+                                                        .equals("requestRelocationReplyRelay")
+                                                ? CompletableFuture.failedFuture(
+                                                        new java.util.concurrent.TimeoutException(
+                                                                "command 46 ACK was not received"))
+                                                : result;
+                                    });
+        }
         var endpoint =
                 new ZLinkUserSpotRetireTargetEndpoint(
                         targetRid,
@@ -248,7 +265,7 @@ final class ZLinkTargetRelocationRepliesTest {
 
         assertEquals(0, resubmissions.get(), "independent rows do not conflict");
         assertEquals(requests, trace.stream().filter("pending-cas"::equals).count());
-        assertEquals(requests, trace.stream().filter("ack-cas"::equals).count());
+        assertEquals(acknowledge ? requests : 0, trace.stream().filter("ack-cas"::equals).count());
         if (requests == 2) {
             assertTrue(trace.indexOf("completed") < trace.lastIndexOf("ack-cas"), trace::toString);
         }
@@ -260,20 +277,22 @@ final class ZLinkTargetRelocationRepliesTest {
                         .sorted()
                         .toList();
         var expectedStates =
-                sourceExpired
-                        ? List.of(ZLinkRelocationReplyRow.SOURCE_LEASE_EXPIRED)
-                        : requests == 1
-                                ? List.of(ZLinkRelocationReplyRow.TERMINAL_RECEIVED)
-                                : List.of(
-                                        ZLinkRelocationReplyRow.ALREADY_TERMINAL,
-                                        ZLinkRelocationReplyRow.TERMINAL_RECEIVED);
+                !acknowledge
+                        ? List.of(ZLinkRelocationReplyRow.PENDING)
+                        : sourceExpired
+                                ? List.of(ZLinkRelocationReplyRow.SOURCE_LEASE_EXPIRED)
+                                : requests == 1
+                                        ? List.of(ZLinkRelocationReplyRow.TERMINAL_RECEIVED)
+                                        : List.of(
+                                                ZLinkRelocationReplyRow.ALREADY_TERMINAL,
+                                                ZLinkRelocationReplyRow.TERMINAL_RECEIVED);
         assertEquals(expectedStates, states);
         int expectedRelays = sourceExpired ? 0 : requests;
         assertEquals(expectedRelays, relays.get());
         assertEquals(
-                java.util.Collections.nCopies(expectedRelays, sourceRid),
+                java.util.Collections.nCopies(expectedRelays, journalRid),
                 relayDestinations,
-                "command 33 must reach the relocation source");
+                "command 33 must reach the original requester");
         assertEquals(expectedRelays, relayExpectedSources.size());
         relayExpectedSources.forEach(
                 expected ->

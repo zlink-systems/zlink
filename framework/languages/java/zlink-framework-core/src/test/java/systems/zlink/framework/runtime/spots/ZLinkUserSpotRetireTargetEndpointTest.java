@@ -209,50 +209,6 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
     }
 
     @Test
-    void command46MustCloseTheExactRequestSourceFence() {
-        var relay =
-                new systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec
-                        .ReplyRelay(
-                        new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceRelocationWireCodec.Operation(1, 2),
-                        3,
-                        new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceRelocationWireCodec.RelocationId(4, 5),
-                        6,
-                        new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceRelocationWireCodec.CoordinatorFence(
-                                "target-owner",
-                                7,
-                                RoutingId.from("target-node"),
-                                8,
-                                "store-version"),
-                        9,
-                        10,
-                        0,
-                        0);
-        var expectedSource =
-                new systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec
-                        .RequestSourceFence("source-owner", 11, RoutingId.from("source-node"), 12);
-        var wrongLease =
-                new systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec
-                        .ReplyRelayAck(
-                        relay.relocation(),
-                        relay.coordinator(),
-                        relay.operation(),
-                        relay.replyRouteId(),
-                        new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceRelocationWireCodec.RequestSourceFence(
-                                "source-owner", 13, RoutingId.from("source-node"), 12),
-                        1);
-
-        assertThrows(
-                IllegalArgumentException.class,
-                () ->
-                        ZLinkUserSpotRetireTargetEndpoint.validateCanonicalAck(
-                                relay, expectedSource, wrongLease));
-    }
-
-    @Test
     void publishedStandaloneActorOpensFifoBeforeNormalization() {
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
@@ -851,44 +807,6 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         recoveredBackend.drainActorOnComplete = eagerActorDrain;
         var handlerTerminal = new CompletableFuture<List<byte[]>>();
         if (failHandler) recoveredBackend.requestReplay = handlerTerminal;
-        var sourceCapabilities = new ZLinkSpotRelocationReplyRoutes();
-        var sourceFailures =
-                new ArrayList<systems.zlink.framework.errors.ZLinkFrameworkException>();
-        var capturedRelays =
-                new ArrayList<
-                        systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceRelocationWireCodec.ReplyRelay>();
-        if (failHandler) {
-            byte[] accepted = acceptedSpotRequest(spotId, 4);
-            var received =
-                    new systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived(
-                            systems.zlink.framework.runtime.internal.backend
-                                    .ZLinkBackendRequestResult.OK,
-                            Optional.of(RoutingId.from("journal-node")),
-                            Optional.of(spotId),
-                            Optional.of(44L),
-                            new byte[0],
-                            accepted,
-                            List.of(),
-                            parts -> {
-                                var failure =
-                                        systems.zlink.framework.runtime.messaging
-                                                .ZLinkFrameworkErrorReply.failure(parts);
-                                assertNotNull(
-                                        failure,
-                                        "failure terminal must use the retained source failure"
-                                                + " capability");
-                                sourceFailures.add(failure);
-                                parts.forEach(Message::close);
-                            },
-                            () -> {});
-            sourceCapabilities.register(accepted, received, spotId, 3).releaseForRelocation();
-            sourceCapabilities.bindCommitted(
-                    List.of(accepted),
-                    targetRid,
-                    targetNodeGeneration,
-                    new ZLinkSpotRelocationReplyRoutes.CommittedFence(authorityKey, 2, 1));
-        }
         var recoveredStaging = new ZLinkUserSpotAggregateStagingOwner(recoveredBackend);
         ZLinkInternalMeshNode recoveryPeer =
                 recoveryNode(
@@ -897,9 +815,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         relays,
                         new ArrayList<>(),
                         new ArrayList<>(),
-                        new ArrayList<>(),
-                        failHandler ? sourceCapabilities : null,
-                        capturedRelays);
+                        new ArrayList<>());
         var recoveredEndpoint =
                 new ZLinkUserSpotRetireTargetEndpoint(
                         targetRid,
@@ -1007,7 +923,6 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         handlerTerminal.isDone(),
                         "publication must finish while adopted handler terminal is pending");
                 assertEquals(0, relays.get());
-                assertTrue(sourceFailures.isEmpty());
                 assertTrue(recoveredBackend.operations.contains("replay-request:4"));
                 assertFalse(
                         recoveredBackend.operations.contains("replay-request:5"),
@@ -1027,32 +942,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         recoveredBackend.queuedTerminals.toArray(
                                                 CompletableFuture[]::new))
                                 .handle((ignored, failure) -> null));
-                assertEquals(1, sourceFailures.size());
-                assertEquals(
-                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
-                        sourceFailures.getFirst().kind());
                 assertTrue(
                         recoveredBackend.queuedTerminals.stream()
                                 .anyMatch(CompletableFuture::isCompletedExceptionally),
                         "the original accepted handler terminal must remain failed after its error"
                                 + " relay");
-                var delivered = capturedRelays.getFirst();
-                var selected = sourceCapabilities.lookupCanonical(delivered, targetRid);
-                assertNotNull(
-                        selected,
-                        "source capability remains addressable for duplicate terminal"
-                                + " acknowledgement");
-                assertEquals(
-                        ZLinkSpotRelocationReplyRoutes.Ack.ALREADY_TERMINAL,
-                        sourceCapabilities
-                                .deliverCanonical(
-                                        selected,
-                                        List.of(),
-                                        delivered.terminalResult(),
-                                        delivered.failureCode())
-                                .toCompletableFuture()
-                                .join());
-                assertEquals(1, sourceFailures.size());
             }
 
             assertTrue(
@@ -1286,9 +1180,9 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 relays.get(),
                 "the preserved request reply must relay once without an ACK journal retry");
         assertEquals(
-                List.of(sourceRid),
+                List.of(journalRid),
                 relayDestinations,
-                "command 33 must be addressed to the relocation source node");
+                "command 33 must be addressed to the original requester");
         assertEquals(1, relayExpectedSources.size());
         relayExpectedSources.forEach(
                 expected ->
@@ -1371,32 +1265,6 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                     .ZLinkServiceRelocationWireCodec.RequestSourceFence>
                     relayExpectedSources,
             List<Long> relayAttempts) {
-        return recoveryNode(
-                wire,
-                operations,
-                relays,
-                relayDestinations,
-                relayExpectedSources,
-                relayAttempts,
-                null,
-                new ArrayList<>());
-    }
-
-    private static ZLinkInternalMeshNode recoveryNode(
-            ZLinkServiceM6BWireCodec wire,
-            List<String> operations,
-            AtomicInteger relays,
-            List<RoutingId> relayDestinations,
-            List<
-                            systems.zlink.framework.runtime.internal.service
-                                    .ZLinkServiceRelocationWireCodec.RequestSourceFence>
-                    relayExpectedSources,
-            List<Long> relayAttempts,
-            ZLinkSpotRelocationReplyRoutes sourceCapabilities,
-            List<
-                            systems.zlink.framework.runtime.internal.service
-                                    .ZLinkServiceRelocationWireCodec.ReplyRelay>
-                    capturedRelays) {
         var relocationWire =
                 new systems.zlink.framework.runtime.internal.service
                         .ZLinkServiceRelocationWireCodec();
@@ -1421,39 +1289,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                 relayExpectedSources.add(expected);
                                 var relay = relocationWire.decodeReplyRelay((byte[]) arguments[2]);
                                 relayAttempts.add(relay.targetAttemptGeneration());
-                                capturedRelays.add(relay);
-                                int attempt = relays.incrementAndGet();
-                                int status = attempt == 1 ? 1 : 2;
-                                if (sourceCapabilities != null) {
-                                    var selected =
-                                            sourceCapabilities.lookupCanonical(
-                                                    relay, relay.coordinator().nodeRid());
-                                    assertNotNull(
-                                            selected,
-                                            "publication must preserve the real source reply"
-                                                    + " capability");
-                                    @SuppressWarnings("unchecked")
-                                    var payload = (List<byte[]>) arguments[3];
-                                    var ack =
-                                            sourceCapabilities
-                                                    .deliverCanonical(
-                                                            selected,
-                                                            payload,
-                                                            relay.terminalResult(),
-                                                            relay.failureCode())
-                                                    .toCompletableFuture()
-                                                    .join();
-                                    assertTrue(
-                                            ack
-                                                    != ZLinkSpotRelocationReplyRoutes.Ack
-                                                            .NOT_ACKNOWLEDGED);
-                                    status =
-                                            ack
-                                                            == ZLinkSpotRelocationReplyRoutes.Ack
-                                                                    .ALREADY_TERMINAL
-                                                    ? 2
-                                                    : 1;
-                                }
+                                int status = relays.incrementAndGet() == 1 ? 1 : 2;
                                 return CompletableFuture.completedFuture(
                                         relocationWire.encodeReplyRelayAck(
                                                 new systems.zlink.framework.runtime.internal.service

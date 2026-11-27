@@ -2329,79 +2329,43 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return relocationReplyRoutes.failUnavailable(actor, objectId, objectGeneration);
     }
 
-    CompletionStage<Void> bindCanonicalRelocationRepliesAsync(
+    CompletionStage<Void> bindRelocationRepliesAsync(
             Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal,
             RoutingId targetNodeRid,
             long targetNodeGeneration,
-            Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence> fences) {
+            long targetAttemptGeneration) {
         List<CompletionStage<Void>> pending = new ArrayList<>();
-        forEachCanonicalReplyBinding(
-                journal,
-                fences,
-                (records, fence) ->
+        journal.forEach(
+                (lane, queued) -> {
+                    var records =
+                            queued.stream()
+                                    .map(ZLinkSerialExecutionQueue.QueuedRecord::payload)
+                                    .toList();
+                    if (lane.equals("spot")) {
                         pending.add(
                                 relocationReplyRoutes.bindCommittedAsync(
-                                        records, targetNodeRid, targetNodeGeneration, fence)),
-                (records, fence) ->
+                                        records,
+                                        targetNodeRid,
+                                        targetNodeGeneration,
+                                        targetAttemptGeneration));
+                    } else if (lane.startsWith("actor:")) {
                         pending.add(
                                 relocationReplyRoutes.bindActorCommittedAsync(
-                                        records, targetNodeRid, targetNodeGeneration, fence)));
+                                        records,
+                                        targetNodeRid,
+                                        targetNodeGeneration,
+                                        targetAttemptGeneration));
+                    }
+                });
         return CompletableFuture.allOf(
                 pending.stream()
                         .map(CompletionStage::toCompletableFuture)
                         .toArray(CompletableFuture[]::new));
     }
 
-    private void forEachCanonicalReplyBinding(
-            Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal,
-            Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence> fences,
-            java.util.function.BiConsumer<
-                            List<byte[]>, ZLinkSpotRelocationReplyRoutes.CommittedFence>
-                    spotBinding,
-            java.util.function.BiConsumer<
-                            List<byte[]>, ZLinkSpotRelocationReplyRoutes.CommittedFence>
-                    actorBinding) {
-        if (journal.containsKey("spot")) {
-            spotBinding.accept(
-                    journal.get("spot").stream()
-                            .map(ZLinkSerialExecutionQueue.QueuedRecord::payload)
-                            .toList(),
-                    Objects.requireNonNull(fences.get("spot"), "Spot canonical reply fence"));
-        }
-        journal.forEach(
-                (lane, queued) -> {
-                    if (!lane.startsWith("actor:")) {
-                        return;
-                    }
-                    String actorId = lane.substring("actor:".length());
-                    actorBinding.accept(
-                            queued.stream()
-                                    .map(ZLinkSerialExecutionQueue.QueuedRecord::payload)
-                                    .toList(),
-                            Objects.requireNonNull(
-                                    fences.get(actorId), "Actor canonical reply fence"));
-                });
-    }
-
     CompletionStage<ZLinkSpotRelocationReplyRoutes.Ack> relayRelocationReply(
             ZLinkSpotRelocationReplyRoutes.Relay relay, RoutingId transportSource) {
         return relocationReplyRoutes.relay(relay, transportSource);
-    }
-
-    ZLinkSpotRelocationReplyRoutes.CanonicalRoute canonicalRelocationReplyRoute(
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec
-                            .ReplyRelay
-                    relay,
-            RoutingId transportSource) {
-        return relocationReplyRoutes.lookupCanonical(relay, transportSource);
-    }
-
-    CompletionStage<ZLinkSpotRelocationReplyRoutes.Ack> deliverCanonicalRelocationReply(
-            ZLinkSpotRelocationReplyRoutes.CanonicalRoute route,
-            List<byte[]> parts,
-            int terminalResult,
-            int failureCode) {
-        return relocationReplyRoutes.deliverCanonical(route, parts, terminalResult, failureCode);
     }
 
     public String userSpotMeshName(String spotId) {

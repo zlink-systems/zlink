@@ -18,6 +18,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -43,6 +44,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private final ZLinkStateLane owner;
     private final ConcurrentHashMap<UUID, Entry<?>> pending;
     private final Throwable closeFailure;
+    private static final long RELOCATION_TERMINAL_RETENTION = Duration.ofHours(24).toNanos();
+    private final ConcurrentHashMap<UUID, RelocationReplyRoute> relocationReplies =
+            new ConcurrentHashMap<>();
+    private final ConcurrentLinkedQueue<RelocationReplyRoute> relocationTerminals =
+            new ConcurrentLinkedQueue<>();
     private static final long DEADLINE_TICK_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
     private static final int DEADLINE_SLOTS = 256;
     private static final int BITMAP_WORD_BITS = Long.SIZE;
@@ -469,6 +475,102 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         }
     }
 
+    /** Associates a wire reply route with the already registered requester operation. */
+    public <T> void registerRelocationReply(
+            ZLinkServiceOperationRegistry operationOwner,
+            Operation<T> operation,
+            long replyRoute,
+            ZLinkServiceRelocationWireCodec.RequestSourceFence source,
+            Function<ZLinkServiceRelocationWireCodec.StoredReply, T> decode) {
+        @SuppressWarnings("unchecked")
+        Entry<T> entry = (Entry<T>) operationOwner.pending.get(operation.id());
+        if (closed || entry == null) return;
+        var route =
+                new RelocationReplyRoute(
+                        operation.id(),
+                        replyRoute,
+                        source,
+                        reply -> {
+                            boolean accepted =
+                                    operationOwner.completeRelocationReply(entry, reply, decode);
+                            return operation.handle((value, failure) -> accepted);
+                        },
+                        0);
+        if (relocationReplies.putIfAbsent(operation.id(), route) != null) {
+            throw new IllegalStateException("relocation reply route is already registered");
+        }
+        operation.whenComplete(
+                (value, failure) -> {
+                    long now = nanoTime.getAsLong();
+                    var terminal =
+                            new RelocationReplyRoute(
+                                    route.operation(),
+                                    route.replyRoute(),
+                                    route.source(),
+                                    null,
+                                    now + RELOCATION_TERMINAL_RETENTION);
+                    if (relocationReplies.replace(route.operation(), route, terminal)) {
+                        relocationTerminals.add(terminal);
+                        expireRelocationTerminals(now);
+                    }
+                });
+    }
+
+    public CompletionStage<ZLinkServiceRelocationWireCodec.ReplyRelayAck> acceptRelocationReply(
+            ZLinkServiceRelocationWireCodec.StoredReply reply,
+            ZLinkServiceRelocationWireCodec.RequestSourceFence localSource) {
+        long now = nanoTime.getAsLong();
+        expireRelocationTerminals(now);
+        var relay = reply.relay();
+        var route =
+                relocationReplies.get(new UUID(relay.operation().high(), relay.operation().low()));
+        if (route == null
+                || route.replyRoute() != relay.replyRouteId()
+                || !route.source().equals(localSource)
+                || route.receive() == null && now - route.expiresAt() >= 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+        var received =
+                route.receive() == null
+                        ? CompletableFuture.completedFuture(false)
+                        : route.receive().apply(reply);
+        return received.thenApply(
+                first ->
+                        new ZLinkServiceRelocationWireCodec.ReplyRelayAck(
+                                relay.relocation(),
+                                relay.coordinator(),
+                                relay.operation(),
+                                relay.replyRouteId(),
+                                route.source(),
+                                first ? 1 : 2));
+    }
+
+    private <T> boolean completeRelocationReply(
+            Entry<T> entry,
+            ZLinkServiceRelocationWireCodec.StoredReply reply,
+            Function<ZLinkServiceRelocationWireCodec.StoredReply, T> decode) {
+        if (take(entry) == null) return false;
+        entry.completeWithRelocationReply(() -> decode.apply(reply));
+        completions.post(entry);
+        return true;
+    }
+
+    private void expireRelocationTerminals(long now) {
+        RelocationReplyRoute terminal;
+        while ((terminal = relocationTerminals.peek()) != null && now - terminal.expiresAt() >= 0) {
+            if (relocationTerminals.remove(terminal)) {
+                relocationReplies.remove(terminal.operation(), terminal);
+            }
+        }
+    }
+
+    private record RelocationReplyRoute(
+            UUID operation,
+            long replyRoute,
+            ZLinkServiceRelocationWireCodec.RequestSourceFence source,
+            Function<ZLinkServiceRelocationWireCodec.StoredReply, CompletionStage<Boolean>> receive,
+            long expiresAt) {}
+
     public <T> boolean complete(UUID id, T value) {
         @SuppressWarnings("unchecked")
         Entry<T> entry = (Entry<T>) pending.get(Objects.requireNonNull(id, "id"));
@@ -559,6 +661,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         if (closed) return null;
         closed = true;
         LockSupport.unpark(maintenance);
+        relocationReplies.clear();
+        relocationTerminals.clear();
         cancelPendingOnOwner();
         Arrays.fill(deadlineHeads, null);
         Arrays.fill(deadlineTails, null);
@@ -826,7 +930,15 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     /** Prepares the final receiver; owner registration accepts it before physical submission. */
     public static <T> Operation<T> prepareOperation(UUID id) {
-        return prepareOperation(id, null);
+        return new Operation<>(true, Objects.requireNonNull(id, "id"));
+    }
+
+    /** Preserves the caller's failure boundary on a request whose values are already decoded. */
+    public static <T> Operation<T> prepareOperation(
+            UUID id, Function<Throwable, Throwable> failureMapper) {
+        Operation<T> operation = prepareOperation(id);
+        operation.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
+        return operation;
     }
 
     private static <T> Operation<T> prepareOperation(
@@ -1056,6 +1168,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private static final int VALUE = 1;
         private static final int FAILURE = 2;
         private static final int CANCELLATION = 3;
+        private static final int RELOCATION_REPLY = 4;
 
         private CompletableFuture<?> completion;
         private Consumer<? super T> discardValue;
@@ -1090,6 +1203,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             terminalValue = value;
         }
 
+        void completeWithRelocationReply(Supplier<T> decode) {
+            terminalKind = RELOCATION_REPLY;
+            terminalValue = decode;
+        }
+
         void completeWithFailure(Throwable failure) {
             completeWithoutValue(FAILURE, failure);
         }
@@ -1116,13 +1234,25 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                             ? null
                             : ZLinkFlowContext.enter(flow)) {
                 switch (terminalKind) {
-                    case VALUE -> {
+                    case VALUE, RELOCATION_REPLY -> {
+                        T value;
+                        try {
+                            value =
+                                    terminalKind == VALUE
+                                            ? (T) terminalValue
+                                            : ((Supplier<T>) terminalValue).get();
+                        } catch (RuntimeException | Error failure) {
+                            ((Operation<?>) completion).receiveFailure(failure);
+                            return;
+                        }
                         if (completion instanceof Operation<?> operation
                                 && operation.receiver != null) {
-                            operation.receiveValue((T) terminalValue, discardValue);
-                        } else if (!((CompletableFuture<T>) completion).complete((T) terminalValue)
-                                && terminalValue != null
-                                && discardValue != null) discardValue.accept((T) terminalValue);
+                            operation.receiveValue(value, discardValue);
+                        } else if (!((CompletableFuture<T>) completion).complete(value)
+                                && value != null
+                                && discardValue != null) {
+                            discardValue.accept(value);
+                        }
                     }
                     case FAILURE -> {
                         if (completion instanceof Operation<?> operation)

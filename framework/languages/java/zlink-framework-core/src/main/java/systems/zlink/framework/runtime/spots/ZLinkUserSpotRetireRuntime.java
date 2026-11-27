@@ -297,7 +297,6 @@ public final class ZLinkUserSpotRetireRuntime {
                             spots.dispatchErrors);
             machines.add(relocationClient);
             new ZLinkCanonicalRelocationTransitionOwner(relocationClient).install(node);
-            node.setRelocationReplyRelayHandler(target::relayCanonicalReply);
             node.spotNode().setRelocationStagingIngressHandler(target);
             if (relocatesSpots) {
                 configured.put(

@@ -1056,7 +1056,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                         ServiceWireConstants
                                                                 .FRAMEWORK_ERROR_REQUEST_FAILED,
                                                 null)),
-                        stored -> sendStored(request, stored));
+                        this::sendStored);
         return delivery.whenComplete(
                 (ignored, relayFailure) -> {
                     if (relayFailure != null
@@ -1157,8 +1157,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 reply);
     }
 
-    private CompletionStage<String> sendStored(
-            ZLinkSpotRetireControl.StageRequest request, ZLinkRelocationReplyRow entry) {
+    private CompletionStage<String> sendStored(ZLinkRelocationReplyRow entry) {
         var stored = relocationWire.decodeStoredReply(entry.reply());
         var source = entry.source();
         var frames = relocationWire.encodeReplyRelayFrames(stored.relay(), stored.payload());
@@ -1168,11 +1167,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         Long.parseUnsignedLong(source.leaseGeneration()),
                         RoutingId.fromHex(source.nodeRid()),
                         Long.parseUnsignedLong(source.nodeGeneration()));
-        // The relocation source owns the original reply capability. Its ACK
-        // closes the request-source fence, which can identify another node.
         return relocationClient
                 .relayCanonicalReply(
-                        request.sourceNodeRid(),
+                        expectedSource.nodeRid(),
                         expectedSource,
                         frames.getFirst(),
                         frames.subList(1, frames.size()),
@@ -1180,93 +1177,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 .thenApply(
                         encoded -> {
                             var ack = relocationWire.decodeReplyRelayAck(encoded);
-                            validateCanonicalAck(stored.relay(), expectedSource, ack);
                             return ack.status() == 1
                                     ? ZLinkRelocationReplyRow.TERMINAL_RECEIVED
                                     : ZLinkRelocationReplyRow.ALREADY_TERMINAL;
                         });
-    }
-
-    CompletionStage<byte[]> relayCanonicalReply(
-            RoutingId transportSource, byte[] command33, List<byte[]> payload) {
-        var frames = new ArrayList<byte[]>(1 + payload.size());
-        frames.add(command33);
-        frames.addAll(payload);
-        var received = relocationWire.decodeReplyRelayFrames(frames);
-        var relay = received.relay();
-        if (sourceReplies == null) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("relocation reply runtime is unavailable"));
-        }
-        var route = sourceReplies.canonicalRelocationReplyRoute(relay, transportSource);
-        if (route == null) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("canonical reply capability fence differs"));
-        }
-        return sourceReplies
-                .deliverCanonicalRelocationReply(
-                        route,
-                        decodeReplyParts(received.payload()),
-                        relay.terminalResult(),
-                        relay.failureCode())
-                .thenApply(
-                        ack -> {
-                            if (ack == ZLinkSpotRelocationReplyRoutes.Ack.NOT_ACKNOWLEDGED) {
-                                throw new IllegalStateException(
-                                        "canonical reply capability is busy");
-                            }
-                            int status =
-                                    ack == ZLinkSpotRelocationReplyRoutes.Ack.ALREADY_TERMINAL
-                                            ? 2
-                                            : 1;
-                            return relocationWire.encodeReplyRelayAck(
-                                    new ZLinkServiceRelocationWireCodec.ReplyRelayAck(
-                                            relay.relocation(),
-                                            relay.coordinator(),
-                                            relay.operation(),
-                                            relay.replyRouteId(),
-                                            new ZLinkServiceRelocationWireCodec.RequestSourceFence(
-                                                    route.sourceOwnerId(),
-                                                    route.sourceOwnerLeaseGeneration(),
-                                                    route.sourceNodeRid(),
-                                                    route.sourceNodeGeneration()),
-                                            status));
-                        });
-    }
-
-    private static List<byte[]> decodeReplyParts(
-            ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1 payload) {
-        if (payload == null) return List.of();
-        if (!ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME.equals(payload.packetName())
-                || !ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE.equals(
-                        payload.contentType())) {
-            return List.of(payload.payload());
-        }
-        var parts =
-                ZLinkServiceM6AWireCodec.decodeFrameworkMultipart(
-                        new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                                payload.packetName(), payload.contentType(), payload.payload()));
-        try {
-            return parts.stream().map(Message::toByteArray).toList();
-        } finally {
-            parts.forEach(Message::close);
-        }
-    }
-
-    static void validateCanonicalAck(
-            ZLinkServiceRelocationWireCodec.ReplyRelay relay,
-            ZLinkServiceRelocationWireCodec.RequestSourceFence expectedSource,
-            ZLinkServiceRelocationWireCodec.ReplyRelayAck ack) {
-        if (!ack.relocation().equals(relay.relocation())
-                || !ack.coordinator().equals(relay.coordinator())
-                || !ack.operation().equals(relay.operation())
-                || ack.replyRouteId() != relay.replyRouteId()
-                || !ack.requestSource().ownerId().equals(expectedSource.ownerId())
-                || ack.requestSource().leaseGeneration() != expectedSource.leaseGeneration()
-                || !ack.requestSource().nodeRid().equals(expectedSource.nodeRid())
-                || ack.requestSource().nodeGeneration() != expectedSource.nodeGeneration()) {
-            throw new IllegalArgumentException("command 46 fence differs from command 33");
-        }
     }
 
     private static ParticipantSlot participant(

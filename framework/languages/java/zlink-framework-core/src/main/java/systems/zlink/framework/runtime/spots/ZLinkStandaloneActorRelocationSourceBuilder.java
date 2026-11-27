@@ -1455,17 +1455,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         }
 
         private CompletionStage<Void> bindCommittedReplies() {
-            ZLinkSpotRetireControl.ParticipantFence participant =
-                    stageRequest.participants().stream()
-                            .filter(value -> value.objectId().equals(owned.actorId()))
-                            .findFirst()
-                            .orElseThrow(
-                                    () ->
-                                            new IllegalStateException(
-                                                    "Actor relocation participant is missing"));
             return captureCompletion.thenCompose(
                     journal ->
-                            relocationReplies.bindCanonicalRelocationRepliesAsync(
+                            relocationReplies.bindRelocationRepliesAsync(
                                     Map.of(
                                             "actor:" + owned.actorId(),
                                             java.util.stream.Stream.concat(
@@ -1474,12 +1466,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                     .toList()),
                                     stageRequest.targetNodeRid(),
                                     stageRequest.targetNodeGeneration(),
-                                    Map.of(
-                                            owned.actorId(),
-                                            new ZLinkSpotRelocationReplyRoutes.CommittedFence(
-                                                    participant.authorityKey(),
-                                                    1L,
-                                                    stageRequest.fence().aggregateGeneration()))));
+                                    stageRequest.fence().aggregateGeneration()));
         }
 
         CompletionStage<Void> completeSourceQueueCommit() {

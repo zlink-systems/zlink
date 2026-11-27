@@ -1580,27 +1580,14 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
         private CompletionStage<Void> bindCommittedReplies(
                 Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal) {
-            Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence> replyFences =
-                    new LinkedHashMap<>();
-            for (int index = 0; index < stageRequest.participants().size(); index++) {
-                var participant = stageRequest.participants().get(index);
-                replyFences.put(
-                        participant.objectKind() == ZLinkPlacementObjectKind.ACTOR.value()
-                                ? participant.objectId()
-                                : "spot",
-                        new ZLinkSpotRelocationReplyRoutes.CommittedFence(
-                                participant.authorityKey(),
-                                index + 1L,
-                                stageRequest.fence().aggregateGeneration()));
-            }
             if (relocationReplies == null) {
                 throw new IllegalStateException("relocation reply runtime is unavailable");
             }
-            return relocationReplies.bindCanonicalRelocationRepliesAsync(
+            return relocationReplies.bindRelocationRepliesAsync(
                     journal,
                     stageRequest.targetNodeRid(),
                     stageRequest.targetNodeGeneration(),
-                    Map.copyOf(replyFences));
+                    stageRequest.fence().aggregateGeneration());
         }
 
         CompletionStage<Void> completeSourceBarrierCommit() {

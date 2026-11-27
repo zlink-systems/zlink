@@ -866,7 +866,7 @@ governs validation by the transport, target, and Session owner and defines their
 ### Terminal Completion Tracking
 
 - The target sends `replyRelay` only after it records the terminal result in that request's row of [Location runtime §9.3](../05-location-relocation/01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed) by a CAS (`accepted` → `pending`).
-- `replyRelay` uses the original reply route and the source lease fence that identifies that request. Its destination is the relocation source node that first accepted the request and holds the reply capability, not the original requester node. The source node forwards the result on the original reply route to the original requester, and the requester authenticates the relay with the existing peer authority fence (it doesn't read the Store again).
+- `replyRelay` uses the original reply route and the source lease fence that identifies that request. Its destination is the row's request source node (the original requester node). That node uses its own request registry to decide whether the result was received (`terminalReceived`) or had already ended (`alreadyTerminal`) and sends `replyRelayAck` (command 46) to the target that sent the relay. The relay is authenticated with the existing peer authority fence (coordinator RID, generation, owner lease) without reading the Store again.
 - The source sends an authenticated `replyRelayAck` only after the original requester accepts the terminal result or it confirms the result is already terminal. A submit success on an intermediate node isn't evidence. The target moves the row to a terminal state on this ACK.
 - A closed physical connection is not evidence of terminal delivery.
 
