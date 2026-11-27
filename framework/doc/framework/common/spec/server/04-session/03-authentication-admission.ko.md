@@ -307,6 +307,9 @@ Connector는 다음과 같이 처리한다.
 | `Connection` | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `streamName` string · `sessionRid` b64 |
 | `Delivery` | `streamName` string · `sessionRid` b64 · `kind` `"position"`\|`"ticket"` · `position?` int32(1부터) · `estimatedWaitMs?` int32 · `ticket?` b64(66자) · `expiresInMs?` int32. `kind`가 `position`이면 `position`·`estimatedWaitMs`, `ticket`이면 `ticket`·`expiresInMs`가 필수다 |
 
+응답은 요청과 같은 application payload envelope로 가며 packet name은 요청 이름 뒤에 `.reply`를 붙인다
+(`$zlink.admission-queue.enqueue.reply`·`.report.reply`·`.admit-permit.reply`). `release-permit`은 send라 응답이 없다.
+
 | 메시지 | 종류 | 요청 | 응답 |
 |---|---|---|---|
 | `$zlink.admission-queue.enqueue` | request | `connection` Connection | `epoch` dec · `delivery` Delivery |
