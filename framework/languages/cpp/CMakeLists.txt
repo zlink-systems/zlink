@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(zlink_framework_cpp VERSION 0.34.1 LANGUAGES C CXX)
+# TEMP diag (#5845): PDBs so Windows allocation-site frames resolve to symbols. Not for merge.
+if(MSVC)
+  add_compile_options($<$<CONFIG:Release>:/Zi>)
+  add_link_options($<$<CONFIG:Release>:/DEBUG>)
+endif()
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 # Reject an installable instrumented build before the defaults fetch any dependency.
@@ -4193,7 +4198,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/support/allocation_counter.cpp)
   target_link_libraries(test_cpp_stream_connector_request_allocations PRIVATE zlink::cpp)
   # TEMP diag (#5845): print allocation sites in CI. Not for merge.
-  set_tests_properties(test_cpp_stream_connector_request_allocations PROPERTIES ENVIRONMENT "ZLINK_TEST_ALLOCATION_SITES=1")
+  set_tests_properties(test_cpp_stream_connector_request_allocations PROPERTIES ENVIRONMENT "ZLINK_TEST_ALLOCATION_SITES=1;_NT_SYMBOL_PATH=$<TARGET_FILE_DIR:test_cpp_stream_connector_request_allocations>")
   add_zlink_connector_test(
     test_cpp_stream_revision
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp
