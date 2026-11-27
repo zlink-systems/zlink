@@ -442,6 +442,7 @@ struct spot_execution_snapshot_t
 {
     std::vector<std::shared_ptr<spot_context_state_t>> contexts;
     std::vector<task_t<void>> creations;
+    std::vector<task_t<void>> join_deliveries;
 };
 
 spot_execution_snapshot_t snapshot_spot_execution_owned (spot_node_builder_state_t &node)
@@ -462,6 +463,9 @@ spot_execution_snapshot_t snapshot_spot_execution_owned (spot_node_builder_state
         if (creation.completion)
             result.creations.push_back (creation.completion->task ());
     }
+    result.join_deliveries.reserve (node.pending_join_delivery_work.size ());
+    for (const auto &delivery : node.pending_join_delivery_work)
+        result.join_deliveries.push_back (delivery->task ());
     return result;
 }
 } // namespace
@@ -480,6 +484,7 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
         };
         std::vector<context_t> contexts;
         std::vector<task_t<void>> creations;
+        std::vector<task_t<void>> join_deliveries;
         std::shared_ptr<runtime::offload_executor_t> deadline_executor;
         std::shared_ptr<runtime::offload_executor_t> worker_executor;
         std::stop_source cancellation;
@@ -489,6 +494,7 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
         node.stopping.store (true, std::memory_order_release);
         auto execution = snapshot_spot_execution_owned (node);
         result.creations = std::move (execution.creations);
+        result.join_deliveries = std::move (execution.join_deliveries);
         result.contexts.reserve (execution.contexts.size ());
         for (const auto &state : execution.contexts) {
             result.contexts.push_back (drain_plan_t::context_t{
@@ -508,19 +514,27 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
         return result;
     });
 
-    // Host relocation §14: accepted callbacks retain their execution resources
-    // until the host deadline. Only deadline expiry cancels their owned waits.
-    bool expired = false;
-    for (const auto &context : plan.contexts) {
+    // Host relocation §14: accepted work retains its execution resources
+    // until it settles, including cancellation after the host deadline.
+    const auto wait_until_deadline = [deadline] (const task_t<void> &terminal) {
         const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
           deadline - std::chrono::steady_clock::now ());
-        if (!context.admitted_callbacks.result_for (
-              std::max (remaining, std::chrono::milliseconds::zero ()))) {
-            expired = true;
-            break;
-        }
-    }
-    if (expired || std::chrono::steady_clock::now () >= deadline) {
+        return terminal.result_for (std::max (remaining, std::chrono::milliseconds::zero ()))
+          .has_value ();
+    };
+    const bool deliveries_settled =
+      std::ranges::all_of (plan.join_deliveries, [&] (const auto &terminal) {
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+          if (!terminal.await_ready () && node.join_delivery_drain_wait_probe)
+              node.join_delivery_drain_wait_probe ();
+#endif
+          return wait_until_deadline (terminal);
+      });
+    const bool callbacks_settled =
+      deliveries_settled
+      && std::ranges::all_of (plan.contexts, wait_until_deadline,
+                              &drain_plan_t::context_t::admitted_callbacks);
+    if (!callbacks_settled || std::chrono::steady_clock::now () >= deadline) {
         plan.cancellation.request_stop ();
         if (plan.worker_executor)
             plan.worker_executor->request_stop ();
@@ -533,7 +547,20 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
             if (context.serial_queue)
                 context.serial_queue->cancel_pending ();
         }
+        // Host relocation §14 waits for cancellation to settle without a time limit;
+        // report what is still pending past the deadline so a stuck drain names its cause.
+        const auto pending =
+          std::ranges::count_if (plan.join_deliveries, [] (const task_t<void> &terminal) {
+              return !terminal.await_ready ();
+          });
+        if (pending != 0)
+            node.runtime_failures ()->report (std::make_exception_ptr (
+              std::runtime_error ("Spot drain passed its deadline with " + std::to_string (pending)
+                                  + " Actor Join deliveries still settling")));
     }
+    // Join ready can still publish controls until its claim or cancellation settles.
+    for (const auto &delivery : plan.join_deliveries)
+        (void) detail::task_result_access_t::read (delivery);
     for (const auto &context : plan.contexts) {
         for (const auto &queue : context.retained_queues)
             if (queue)
@@ -2880,7 +2907,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
            actor_execution_spot_id = std::move (actor_execution_spot_id),
            before_invoke = std::move (before_invoke), trace_message_kind, trace_packet_name,
            trace_actor_id, trace_spot_id, admission_terminal, retained_message, application_record,
-           actor_queue_dispatch] (auto complete) mutable {
+           actor_queue_dispatch, kind] (auto complete) mutable {
               runtime::flow_context_t::scope_t callback_flow (std::move (dispatch_flow));
               // incarnation을 넘길 때는 원본 activation record를 그대로 사용한다.
               if (state->closed) {
@@ -3028,8 +3055,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                     spot, actor, services, serializers, carrier->first, carrier->second);
                   detail::observe_task_completion (
                     handler_task, [state, finish_handler, carrier, trace_message_kind,
-                                   trace_packet_name, trace_spot_id, trace_actor_id] (
-                                    const result_t<zlink::message_t> &result) mutable {
+                                   trace_packet_name, trace_spot_id, trace_actor_id,
+                                   kind] (const result_t<zlink::message_t> &result) mutable {
                         if (state->node
                             && detail::message_flow_tracer_t (state->node->dispatch)
                                  .enabled (message_flow_log_mode_t::detailed)) {
@@ -3041,13 +3068,16 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                                          + (result ? "true" : "false");
                               });
                         }
-                        result_t<zlink::message_t> final_result =
-                          result ? result_t<zlink::message_t>::success (result.value ())
-                                 : result_t<zlink::message_t>::failure (result.error_kind (),
-                                                                        result.error () != nullptr
-                                                                          ? result.error ()->what ()
-                                                                          : "spot handler failed");
-                        finish_handler (std::move (final_result));
+                        if (result) {
+                            finish_handler (result);
+                        } else if (kind == spot_handler_kind_t::packet) {
+                            finish_handler (detail::result_access_t::failure<zlink::message_t> (
+                              spot_application_failure (result)));
+                        } else {
+                            finish_handler (result_t<zlink::message_t>::failure (
+                              result.error_kind (),
+                              result.error () ? result.error ()->what () : "spot handler failed"));
+                        }
                     });
               }
               catch (const framework_exception_t &error) {

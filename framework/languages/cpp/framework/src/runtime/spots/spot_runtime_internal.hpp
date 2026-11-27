@@ -170,6 +170,12 @@ void report_spot_dispatch_trace (const std::shared_ptr<detail::spot_node_builder
                                  std::string_view detail_result = {},
                                  std::exception_ptr error = {});
 
+framework_exception_t spot_application_failure (const result_t<zlink::message_t> &result);
+void report_spot_handler_completed (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
+                                    dispatch_message_kind_t message_kind,
+                                    std::string_view packet_name,
+                                    std::string_view spot_id,
+                                    std::string_view correlation_id);
 void report_actor_leave_failure (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
                                  const result_t<void> &result,
                                  std::string_view spot_id,

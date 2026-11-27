@@ -809,7 +809,8 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
   std::optional<std::string> flow_id,
   std::optional<flow_origin_t> flow_origin,
   std::function<void ()> *accepted_turn_terminal,
-  std::shared_ptr<const instance_spot_retained_message_t> retained_message)
+  std::shared_ptr<const instance_spot_retained_message_t> retained_message,
+  std::optional<runtime::flow_value_t> *terminal_flow)
 {
     const auto received_at = std::chrono::system_clock::now ();
     if (accepted_turn_terminal)
@@ -869,6 +870,14 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
      * while tracing is fully off (spec 26 §4: no allocation before the gate). */
     const bool activation_trace_enabled =
       message_flow_tracer_t (_state->dispatch).capture_enabled ();
+    if (activation_trace_enabled && terminal_flow) {
+        try {
+            *terminal_flow = runtime::flow_context_t::current ();
+        }
+        catch (...) {
+            message_flow_tracer_t::record_observer_failure ();
+        }
+    }
     std::string trace_packet_name;
     std::string trace_spot_id;
     std::string trace_correlation_id;
@@ -881,9 +890,16 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
     auto handler_task = [&] {
         try {
             return spot_handler_registry_t (state).invoke_erased (
-              [state, accept_activation = std::move (accept_activation)] {
+              [node = _state, state, accept_activation = std::move (accept_activation),
+               activation_trace_enabled, message_kind, trace_packet_name, trace_spot_id,
+               trace_correlation_id] {
                   accept_activation ();
                   state->spot_serial_executor->open_preparation_admission ();
+                  if (activation_trace_enabled)
+                      report_spot_dispatch_trace (node, message_flow_outcome_t::dispatched,
+                                                  dispatch_error_surface_t::spot_route,
+                                                  message_kind, trace_packet_name, {},
+                                                  trace_spot_id, {}, trace_correlation_id);
               },
               spot_handler_kind_t::packet, packet_name, {}, std::type_index (typeid (void)),
               state->spot_instance.get (), nullptr, services, serializers,
@@ -905,22 +921,19 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
         }
     }();
     detail::observe_task_completion (
-      handler_task, [node = _state, state, request, message_kind, trace_packet_name, trace_spot_id,
-                     trace_correlation_id] (const result_t<zlink::message_t> &result) {
+      handler_task,
+      [node = _state, state, message_kind, activation_trace_enabled,
+       trace_packet_name = std::move (trace_packet_name), trace_spot_id = std::move (trace_spot_id),
+       trace_correlation_id =
+         std::move (trace_correlation_id)] (const result_t<zlink::message_t> &result) {
           state->last_application_work_completed_ns.store (
             std::chrono::duration_cast<std::chrono::nanoseconds> (
               std::chrono::steady_clock::now ().time_since_epoch ())
               .count (),
             std::memory_order_relaxed);
-          if (result) {
-              report_spot_dispatch_trace (
-                node,
-                request ? message_flow_outcome_t::replied : message_flow_outcome_t::dispatched,
-                dispatch_error_surface_t::spot_route,
-                request ? dispatch_message_kind_t::response : message_kind, trace_packet_name, {},
-                trace_spot_id, {}, trace_correlation_id);
-              return;
-          }
+          if (result && activation_trace_enabled)
+              report_spot_handler_completed (node, message_kind, trace_packet_name, trace_spot_id,
+                                             trace_correlation_id);
       });
     return handler_task;
 }
@@ -1162,6 +1175,7 @@ void spot_node_runtime_t::cancel_pending_work (
         detail::drain_spot_node_executors (*_state, deadline);
     }
     catch (...) {
+        _state->runtime_failures ()->report (std::current_exception ());
     }
 }
 

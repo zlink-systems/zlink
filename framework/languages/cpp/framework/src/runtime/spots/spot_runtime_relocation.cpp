@@ -306,6 +306,40 @@ std::string actor_request_dedup_prefix (std::string_view actor_key)
     return std::to_string (actor_key.size ()) + ":" + std::string (actor_key);
 }
 
+framework_exception_t spot_application_failure (const result_t<zlink::message_t> &result)
+{
+    const auto application_error = [] (framework_error_kind_t kind, std::string message) {
+        return detail::with_error_origin (framework_exception_t (kind, std::move (message)),
+                                          detail::error_origin_t::application);
+    };
+    if (const auto *error = result.error ())
+        return application_error (error->kind (), error->what ());
+    try {
+        std::rethrow_exception (result.exception ());
+    }
+    catch (const std::exception &error) {
+        return application_error (framework_error_kind_t::internal_failure, error.what ());
+    }
+    catch (...) {
+        return application_error (framework_error_kind_t::internal_failure,
+                                  "Spot handler threw a non-standard exception");
+    }
+}
+
+void report_spot_handler_completed (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
+                                    dispatch_message_kind_t message_kind,
+                                    std::string_view packet_name,
+                                    std::string_view spot_id,
+                                    std::string_view correlation_id)
+{
+    const bool request = message_kind == dispatch_message_kind_t::request;
+    report_spot_dispatch_trace (
+      state, request ? message_flow_outcome_t::replied : message_flow_outcome_t::completed,
+      dispatch_error_surface_t::spot_route,
+      request ? dispatch_message_kind_t::response : message_kind, packet_name, {}, spot_id, {},
+      correlation_id);
+}
+
 void report_actor_leave_failure (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
                                  const result_t<void> &result,
                                  std::string_view spot_id,

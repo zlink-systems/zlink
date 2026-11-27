@@ -2160,47 +2160,61 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                                         : "Spot request envelope body is invalid"));
                     return true;
                 }
-                report_spot_dispatch_trace (_state, message_flow_outcome_t::received,
-                                            dispatch_error_surface_t::spot_route,
-                                            record.kind == service::record_kind_t::spot_request
-                                              ? dispatch_message_kind_t::request
-                                              : dispatch_message_kind_t::send,
-                                            header.message_name, {}, owner.spot_id);
+                const bool request = record.kind == service::record_kind_t::spot_request;
+                const auto message_kind =
+                  request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send;
+                report_spot_dispatch_trace (
+                  _state, message_flow_outcome_t::received, dispatch_error_surface_t::spot_route,
+                  message_kind, header.message_name, {}, owner.spot_id, {}, header.correlation_id);
                 using terminal_t = std::function<void (const result_t<zlink::message_t> &)>;
                 std::shared_ptr<terminal_t> terminal;
-                if (record.kind == service::record_kind_t::spot_request
-                    || runtime::flow_context_t::tracing (flow_mode)) {
+                if (request
+                    || detail::message_flow_tracer_t (_state->dispatch).capture_enabled ()) {
                     terminal = std::make_shared<terminal_t> (
-                      [state = _state, header, spot_id = owner.spot_id, kind = record.kind,
+                      [state = _state, header, spot_id = owner.spot_id, message_kind,
                        reply_token =
                          record.reply_token] (const result_t<zlink::message_t> &result) {
-                          if (kind == service::record_kind_t::spot_request) {
+                          auto action = dispatch_error_action_t::drop;
+                          if (message_kind == dispatch_message_kind_t::request) {
                               detail::channel_reply_writer_t writer;
-                              auto reply =
-                                result ? writer.reply_raw_envelope (
-                                           writer.create_reply_header (
-                                             runtime::messaging::message_kind_t::response,
-                                             header.channel_name, header),
-                                           result.value ().copy ())
-                                       : writer.reply_raw_envelope (
-                                           writer.create_error_header (
-                                             header.channel_name, header,
-                                             result.error ()
-                                               ? *result.error ()
-                                               : framework_exception_t (result.error_kind (),
-                                                                        "Spot handler failed")),
-                                           zlink::message_t::from (""));
-                              (void) service::reply (reply_token, reply.items ());
+                              auto reply = result
+                                             ? writer.reply_raw_envelope (
+                                                 writer.create_reply_header (
+                                                   runtime::messaging::message_kind_t::response,
+                                                   header.channel_name, header),
+                                                 result.value ().copy ())
+                                             : writer.reply_raw_envelope (
+                                                 writer.create_error_header (
+                                                   header.channel_name, header,
+                                                   result.error ()
+                                                     ? *result.error ()
+                                                     : framework_exception_t (
+                                                         framework_error_kind_t::internal_failure,
+                                                         "Spot handler failed")),
+                                                 zlink::message_t::from (""));
+                              if (service::reply (reply_token, reply.items ())
+                                  == zlink::submit_result_t::ok)
+                                  action = dispatch_error_action_t::reply_error;
                           }
-                          report_spot_dispatch_trace (state,
-                                                      kind == service::record_kind_t::spot_request
-                                                        ? message_flow_outcome_t::replied
-                                                        : message_flow_outcome_t::dispatched,
-                                                      dispatch_error_surface_t::spot_route,
-                                                      kind == service::record_kind_t::spot_request
-                                                        ? dispatch_message_kind_t::response
-                                                        : dispatch_message_kind_t::send,
-                                                      header.message_name, {}, spot_id);
+                          if (!result) {
+                              detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
+                                  message_dispatch_error_event_t event{
+                                    .surface = dispatch_error_surface_t::spot_route,
+                                    .message_kind = message_kind,
+                                    .reason = detail::spot_handler_failure_reason (result.error ()),
+                                    .action = action,
+                                    .packet_name = header.message_name,
+                                    .spot_id = spot_id,
+                                    .exception = result.exception (),
+                                    .mesh_name = state->snapshot.name};
+                                  if (!header.correlation_id.empty ())
+                                      event.correlation_id = header.correlation_id;
+                                  return event;
+                              });
+                              return;
+                          }
+                          report_spot_handler_completed (state, message_kind, header.message_name,
+                                                         spot_id, header.correlation_id);
                       });
                 }
                 const auto release_target = [weak = std::weak_ptr (record.application_record)] {
