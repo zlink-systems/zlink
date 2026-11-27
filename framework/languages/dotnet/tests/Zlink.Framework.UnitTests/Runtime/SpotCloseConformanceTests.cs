@@ -2884,7 +2884,9 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         bool clientOnly = false,
         Action<IServiceCollection, IZLinkMeshObjectServerBuilder>? configureServer = null,
         int actorLimit = 100,
-        bool actorRelocationEnabled = false
+        bool actorRelocationEnabled = false,
+        IZLinkRelocationStore? relocationStore = null,
+        bool relocateInstances = false
     )
     {
         var store =
@@ -2905,7 +2907,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
             if (timeProvider is not null)
                 options.UseTestTimeProvider(timeProvider);
             options.AddLocationStore(store);
-            options.AddRelocationStore(new InMemoryRelocationStore());
+            options.AddRelocationStore(relocationStore ?? new InMemoryRelocationStore());
             options.ConfigureLocations().PollingInterval = TimeSpan.FromMilliseconds(10);
             if (clientOnly)
             {
@@ -2950,7 +2952,13 @@ internal sealed class SpotCloseHost : IAsyncDisposable
             if (registerInstanceFactory)
                 server.AddInstanceSpotFactory<SpotCloseInstance>(
                     InstanceType,
-                    static factory => factory.DisableRelocation()
+                    factory =>
+                    {
+                        if (relocateInstances)
+                            factory.RecreateOnRelocation();
+                        else
+                            factory.DisableRelocation();
+                    }
                 );
         });
         services.Replace(

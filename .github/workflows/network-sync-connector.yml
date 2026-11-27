@@ -2,20 +2,10 @@ name: Network sync connector
 
 # network-sync Unity connector plugin의 managed 런타임을 빌드하고 Unity 없이 도는 시험을 돌린다(#3774).
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "plugins/network-sync/connector/**"
-      - "plugins/network-sync/protocol/**"
-      - ".github/workflows/network-sync-connector.yml"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "plugins/network-sync/connector/**"
-      - "plugins/network-sync/protocol/**"
-      - ".github/workflows/network-sync-connector.yml"
+  # 사용자 결정(11-27): Actions는 C++ 빌드 검증과 릴리스·데일리만. PR 검증은 로컬 실행.
+  schedule:
+    - cron: "37 18 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read

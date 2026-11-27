@@ -1,5 +1,6 @@
 import { awaitWithAbort } from '../abort';
 import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
+import type { ServiceSpotTargetAdmission } from '../foundation/service-stateful-runtime';
 import {
   bindLifecycleCallerSpotTurn,
   captureZLinkSpotSerialTurn,
@@ -165,9 +166,9 @@ export class ZLinkSpotSerialTurnExecutor {
   executeRelocationRequest<T>(
     operation: () => Promise<T> | T,
     workOptions: ZLinkSerialWorkOptions | undefined,
-    confirm: Promise<boolean>
+    admission: Pick<ServiceSpotTargetAdmission, 'confirmed' | 'preparePermit'>
   ): Promise<T> {
-    return this.enqueueApplicationTurn(operation, workOptions, undefined, true, confirm);
+    return this.enqueueApplicationTurn(operation, workOptions, undefined, true, admission);
   }
 
   /**
@@ -308,7 +309,7 @@ export class ZLinkSpotSerialTurnExecutor {
     workOptions?: ZLinkSerialWorkOptions,
     replay?: (failure?: unknown) => Promise<T>,
     retainWhilePreparing = false,
-    confirm?: Promise<boolean>
+    admission?: Pick<ServiceSpotTargetAdmission, 'confirmed' | 'preparePermit'>
   ): Promise<T> {
     this.lastActivityAtMs = performance.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
@@ -320,7 +321,7 @@ export class ZLinkSpotSerialTurnExecutor {
         this.scheduler.retainsApplicationForLifecycle
       ) {
         try {
-          return await this.submitQueuedTurn(operation, workOptions, entry, confirm);
+          return await this.submitQueuedTurn(operation, workOptions, entry, admission);
         } catch (error) {
           (await entry).release();
           throw error;
@@ -332,7 +333,7 @@ export class ZLinkSpotSerialTurnExecutor {
       if (barrierClaim !== undefined && replay !== undefined) {
         Object.assign(barrierClaim, { replay: bindApplicationJobPermit(replay) });
       }
-      return await this.submitQueuedTurn(operation, workOptions, barrierClaim, confirm);
+      return await this.submitQueuedTurn(operation, workOptions, barrierClaim, admission);
     } catch (error) {
       barrierClaim?.release();
       throw error;
@@ -364,16 +365,17 @@ export class ZLinkSpotSerialTurnExecutor {
     operation: () => Promise<T> | T,
     workOptions: ZLinkSerialWorkOptions | undefined,
     barrierClaim?: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim>,
-    confirm?: Promise<boolean>
+    admission?: Pick<ServiceSpotTargetAdmission, 'confirmed' | 'preparePermit'>
   ): Promise<T> {
-    if (barrierClaim instanceof Promise || confirm !== undefined) {
+    if (barrierClaim instanceof Promise || admission !== undefined) {
       const context: Partial<ZLinkExecutionBarrierClaim> = {};
-      const permit = confirm === undefined ? undefined : currentApplicationJobPermit();
+      const permit = admission === undefined ? undefined : currentApplicationJobPermit();
+      const acquire = admission?.preparePermit ?? permit?.reacquire?.bind(permit);
       let prepared: ApplicationJobPermitPort | undefined;
       const queued = this.scheduler.admitDurablePrefix(
         bindApplicationJobPermit(
           operation,
-          permit === undefined ? undefined : () => prepared ?? permit
+          acquire === undefined ? undefined : () => prepared ?? permit
         ),
         workOptions,
         context,
@@ -381,14 +383,14 @@ export class ZLinkSpotSerialTurnExecutor {
           prepare: async (signal) => {
             const claim = await barrierClaim;
             try {
-              if (confirm !== undefined && !(await awaitWithAbort(confirm, signal))) {
+              if (admission !== undefined && !(await awaitWithAbort(admission.confirmed, signal))) {
                 throw createInternalFrameworkException(
                   ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
                   'The relocation target rejected the Spot request.'
                 );
               }
-              if (permit?.reacquire !== undefined) {
-                prepared = await permit.reacquire(signal);
+              if (acquire !== undefined) {
+                prepared = await acquire(signal);
                 prepared.markApplicationQueued();
               }
               signal.throwIfAborted();

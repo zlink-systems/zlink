@@ -13,12 +13,74 @@ function validTerminalFailure(terminal: number, failure: number): boolean { if (
 const encoder = new TextEncoder(); const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 function utf8(value: unknown): Uint8Array { const text = value as string; for (let index = 0; index < text.length; ++index) { const unit = text.charCodeAt(index); if (unit >= 0xd800 && unit <= 0xdbff) { const next = text.charCodeAt(++index); if (!(next >= 0xdc00 && next <= 0xdfff)) fail("lone UTF-16 surrogate"); } else if (unit >= 0xdc00 && unit <= 0xdfff) fail("lone UTF-16 surrogate"); } return encoder.encode(text); }
 function decodeUtf8(bytes: Uint8Array, label: string): string { try { return decoder.decode(bytes); } catch { return fail(label + " UTF-8"); } }
-class Reader { offset = 0; constructor(readonly bytes: Uint8Array, readonly end = bytes.length) {} get remaining(): number { return this.end - this.offset; } take(length: number): Uint8Array { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("truncated service-wire value"); const value = this.bytes.subarray(this.offset, this.offset + length); this.offset += length; return value; } bounded(length: number): Reader { return new Reader(this.take(length)); } u(width: number): bigint { let value = 0n; for (const byte of this.take(width)) value = (value << 8n) | BigInt(byte); return value; } i64(): bigint { const value = this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " trailing bytes"); } }
-interface IncrementalInput { readonly offset: number; readonly remaining: number; take(length: number): Generator<void, Uint8Array, void>; bytes(length: number): Generator<void, Uint8Array, void>; text(length: number, forbidNul: boolean, label: string): Generator<void, string, void>; bounded(length: number): IncrementalInput; u(width: number): Generator<void, bigint, void>; i64(): Generator<void, bigint, void>; done(label: string): void; }
-class IncrementalReader implements IncrementalInput { offset = 0; private chunk: Uint8Array = new Uint8Array(); private chunkOffset = 0; bufferedInputByteCount = 0; get remaining(): number { return this.chunk.length - this.chunkOffset; } supply(chunk: Uint8Array): void { if (this.remaining) throw new Error("incremental reader still owns caller input"); this.chunk = chunk; this.chunkOffset = 0; } release(): void { if (this.remaining) throw new Error("incremental reader did not consume caller input"); this.discard(); } discard(): void { this.chunk = new Uint8Array(); this.chunkOffset = 0; } *take(length: number): Generator<void, Uint8Array, void> { if (!Number.isSafeInteger(length) || length < 0 || length > 8) fail("invalid incremental scalar read length"); const value = new Uint8Array(length); let filled = 0; while (filled < length) { const available = this.remaining; if (available === 0) { this.bufferedInputByteCount = filled; yield; continue; } const count = Math.min(length - filled, available); value.set(this.chunk.subarray(this.chunkOffset, this.chunkOffset + count), filled); this.chunkOffset += count; this.offset += count; filled += count; } this.bufferedInputByteCount = 0; return value; } *bytes(length: number): Generator<void, Uint8Array, void> { if (!Number.isSafeInteger(length) || length < 0) fail("invalid incremental content length"); let value: Uint8Array; try { value = new Uint8Array(length); } catch { return capacityFail("incremental content capacity"); } let filled = 0; while (filled < length) { const available = this.remaining; if (available === 0) { this.bufferedInputByteCount = 0; yield; continue; } const count = Math.min(length - filled, available); value.set(this.chunk.subarray(this.chunkOffset, this.chunkOffset + count), filled); this.chunkOffset += count; this.offset += count; filled += count; } return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { if (!Number.isSafeInteger(length) || length < 0) fail("invalid incremental text length"); let value = "", remaining = length, codePoint = 0, needed = 0, minimum = 0; while (remaining > 0) { if (this.remaining === 0) { this.bufferedInputByteCount = 0; yield; continue; } const byte = this.chunk[this.chunkOffset++]; ++this.offset; --remaining; if (needed === 0) { if (byte <= 0x7f) { if (forbidNul && byte === 0) fail(label + " NUL"); try { value += String.fromCodePoint(byte); } catch { return capacityFail(label + " capacity"); } continue; } if (byte >= 0xc2 && byte <= 0xdf) { codePoint = byte & 0x1f; needed = 1; minimum = 0x80; continue; } if (byte >= 0xe0 && byte <= 0xef) { codePoint = byte & 0x0f; needed = 2; minimum = 0x800; continue; } if (byte >= 0xf0 && byte <= 0xf4) { codePoint = byte & 0x07; needed = 3; minimum = 0x10000; continue; } fail(label + " UTF-8"); } if ((byte & 0xc0) !== 0x80) fail(label + " UTF-8"); codePoint = (codePoint << 6) | (byte & 0x3f); if (--needed === 0) { if (codePoint < minimum || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff) || (forbidNul && codePoint === 0)) fail(label + " UTF-8"); try { value += String.fromCodePoint(codePoint); } catch { return capacityFail(label + " capacity"); } } } if (needed !== 0) fail(label + " UTF-8"); return value; } bounded(length: number): IncrementalInput { if (!Number.isSafeInteger(length) || length < 0) fail("invalid bounded read length"); return new IncrementalBoundedReader(this, length); } *u(width: number): Generator<void, bigint, void> { let value = 0n; for (const byte of yield* this.take(width)) value = (value << 8n) | BigInt(byte); return value; } *i64(): Generator<void, bigint, void> { const value = yield* this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
-class IncrementalBoundedReader implements IncrementalInput { offset = 0; constructor(private readonly source: IncrementalReader, public remaining: number) {} private check(length: number): void { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("bounded service-wire value overflow"); } private consumed(length: number): void { this.remaining -= length; this.offset += length; } *take(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.source.take(length); this.consumed(length); return value; } *bytes(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.source.bytes(length); this.consumed(length); return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { this.check(length); const value = yield* this.source.text(length, forbidNul, label); this.consumed(length); return value; } bounded(length: number): IncrementalInput { this.check(length); return new IncrementalNestedBoundedReader(this, length); } *u(width: number): Generator<void, bigint, void> { let value = 0n; for (const byte of yield* this.take(width)) value = (value << 8n) | BigInt(byte); return value; } *i64(): Generator<void, bigint, void> { const value = yield* this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
-class IncrementalNestedBoundedReader implements IncrementalInput { offset = 0; constructor(private readonly parent: IncrementalInput, public remaining: number) {} private check(length: number): void { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("bounded service-wire value overflow"); } private consumed(length: number): void { this.remaining -= length; this.offset += length; } *take(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.parent.take(length); this.consumed(length); return value; } *bytes(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.parent.bytes(length); this.consumed(length); return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { this.check(length); const value = yield* this.parent.text(length, forbidNul, label); this.consumed(length); return value; } bounded(length: number): IncrementalInput { this.check(length); return new IncrementalNestedBoundedReader(this, length); } *u(width: number): Generator<void, bigint, void> { let value = 0n; for (const byte of yield* this.take(width)) value = (value << 8n) | BigInt(byte); return value; } *i64(): Generator<void, bigint, void> { const value = yield* this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
-class Writer { readonly chunks: Uint8Array[] = []; length = 0; put(bytes: Iterable<number>): void { const chunk = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes); if (!chunk.length) return; this.chunks.push(chunk); this.length += chunk.length; } u(value: bigint, width: number): void { const bytes = new Uint8Array(width); for (let index = width - 1; index >= 0; --index) { bytes[index] = Number(value & 255n); value >>= 8n; } this.put(bytes); } i64(value: bigint): void { this.u(BigInt.asUintN(64, value), 8); } result(): Uint8Array { if (!this.chunks.length) return new Uint8Array(); if (this.chunks.length === 1) return this.chunks[0]; const result = new Uint8Array(this.length); let offset = 0; for (const chunk of this.chunks) { result.set(chunk, offset); offset += chunk.length; } return result; } }
+function narrowInteger(value: number): number {
+  return Number.isInteger(value) ? value : Number(numeric(value));
+}
+function byteView(bytes: Uint8Array): DataView {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+}
+function readInt64(view: DataView, offset: number, signed: boolean): bigint {
+  const high = signed ? view.getInt32(offset) : view.getUint32(offset);
+  const low = view.getUint32(offset + 4);
+  return (BigInt(high) << 32n) | BigInt(low);
+}
+class Reader {
+  offset = 0;
+  private readonly view: DataView;
+  constructor(readonly bytes: Uint8Array) { this.view = byteView(bytes); }
+  get remaining(): number { return this.bytes.length - this.offset; }
+  private advance(length: number): number {
+    if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("truncated service-wire value");
+    const offset = this.offset;
+    this.offset += length;
+    return offset;
+  }
+  take(length: number): Uint8Array { const offset = this.advance(length); return this.bytes.subarray(offset, this.offset); }
+  bounded(length: number): Reader { return new Reader(this.take(length)); }
+  u8(): number { return this.view.getUint8(this.advance(1)); }
+  u16(): number { return this.view.getUint16(this.advance(2)); }
+  u32(): number { return this.view.getUint32(this.advance(4)); }
+  int64(signed: boolean): bigint { return readInt64(this.view, this.advance(8), signed); }
+  done(label: string): void { if (this.remaining) fail(label + " trailing bytes"); }
+}
+interface IncrementalInput { readonly offset: number; readonly remaining: number; take(length: number): Generator<void, Uint8Array, void>; bytes(length: number): Generator<void, Uint8Array, void>; text(length: number, forbidNul: boolean, label: string): Generator<void, string, void>; bounded(length: number): IncrementalInput; done(label: string): void; }
+class IncrementalReader implements IncrementalInput { offset = 0; private chunk: Uint8Array = new Uint8Array(); private chunkOffset = 0; bufferedInputByteCount = 0; get remaining(): number { return this.chunk.length - this.chunkOffset; } supply(chunk: Uint8Array): void { if (this.remaining) throw new Error("incremental reader still owns caller input"); this.chunk = chunk; this.chunkOffset = 0; } release(): void { if (this.remaining) throw new Error("incremental reader did not consume caller input"); this.discard(); } discard(): void { this.chunk = new Uint8Array(); this.chunkOffset = 0; } *take(length: number): Generator<void, Uint8Array, void> { if (!Number.isSafeInteger(length) || length < 0 || length > 8) fail("invalid incremental scalar read length"); const value = new Uint8Array(length); let filled = 0; while (filled < length) { const available = this.remaining; if (available === 0) { this.bufferedInputByteCount = filled; yield; continue; } const count = Math.min(length - filled, available); value.set(this.chunk.subarray(this.chunkOffset, this.chunkOffset + count), filled); this.chunkOffset += count; this.offset += count; filled += count; } this.bufferedInputByteCount = 0; return value; } *bytes(length: number): Generator<void, Uint8Array, void> { if (!Number.isSafeInteger(length) || length < 0) fail("invalid incremental content length"); let value: Uint8Array; try { value = new Uint8Array(length); } catch { return capacityFail("incremental content capacity"); } let filled = 0; while (filled < length) { const available = this.remaining; if (available === 0) { this.bufferedInputByteCount = 0; yield; continue; } const count = Math.min(length - filled, available); value.set(this.chunk.subarray(this.chunkOffset, this.chunkOffset + count), filled); this.chunkOffset += count; this.offset += count; filled += count; } return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { if (!Number.isSafeInteger(length) || length < 0) fail("invalid incremental text length"); let value = "", remaining = length, codePoint = 0, needed = 0, minimum = 0; while (remaining > 0) { if (this.remaining === 0) { this.bufferedInputByteCount = 0; yield; continue; } const byte = this.chunk[this.chunkOffset++]; ++this.offset; --remaining; if (needed === 0) { if (byte <= 0x7f) { if (forbidNul && byte === 0) fail(label + " NUL"); try { value += String.fromCodePoint(byte); } catch { return capacityFail(label + " capacity"); } continue; } if (byte >= 0xc2 && byte <= 0xdf) { codePoint = byte & 0x1f; needed = 1; minimum = 0x80; continue; } if (byte >= 0xe0 && byte <= 0xef) { codePoint = byte & 0x0f; needed = 2; minimum = 0x800; continue; } if (byte >= 0xf0 && byte <= 0xf4) { codePoint = byte & 0x07; needed = 3; minimum = 0x10000; continue; } fail(label + " UTF-8"); } if ((byte & 0xc0) !== 0x80) fail(label + " UTF-8"); codePoint = (codePoint << 6) | (byte & 0x3f); if (--needed === 0) { if (codePoint < minimum || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff) || (forbidNul && codePoint === 0)) fail(label + " UTF-8"); try { value += String.fromCodePoint(codePoint); } catch { return capacityFail(label + " capacity"); } } } if (needed !== 0) fail(label + " UTF-8"); return value; } bounded(length: number): IncrementalInput { if (!Number.isSafeInteger(length) || length < 0) fail("invalid bounded read length"); return new IncrementalBoundedReader(this, length); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
+class IncrementalBoundedReader implements IncrementalInput { offset = 0; constructor(private readonly source: IncrementalReader, public remaining: number) {} private check(length: number): void { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("bounded service-wire value overflow"); } private consumed(length: number): void { this.remaining -= length; this.offset += length; } *take(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.source.take(length); this.consumed(length); return value; } *bytes(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.source.bytes(length); this.consumed(length); return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { this.check(length); const value = yield* this.source.text(length, forbidNul, label); this.consumed(length); return value; } bounded(length: number): IncrementalInput { this.check(length); return new IncrementalNestedBoundedReader(this, length); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
+class IncrementalNestedBoundedReader implements IncrementalInput { offset = 0; constructor(private readonly parent: IncrementalInput, public remaining: number) {} private check(length: number): void { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("bounded service-wire value overflow"); } private consumed(length: number): void { this.remaining -= length; this.offset += length; } *take(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.parent.take(length); this.consumed(length); return value; } *bytes(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.parent.bytes(length); this.consumed(length); return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { this.check(length); const value = yield* this.parent.text(length, forbidNul, label); this.consumed(length); return value; } bounded(length: number): IncrementalInput { this.check(length); return new IncrementalNestedBoundedReader(this, length); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
+function writeUint32(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = value >>> 24;
+  bytes[offset + 1] = value >>> 16;
+  bytes[offset + 2] = value >>> 8;
+  bytes[offset + 3] = value;
+}
+class Writer {
+  readonly chunks: Uint8Array[] = [];
+  length = 0;
+  put(bytes: Iterable<number>): void { const chunk = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes); if (!chunk.length) return; this.chunks.push(chunk); this.length += chunk.length; }
+  u8(value: number): void {
+    const bytes = new Uint8Array(1);
+    bytes[0] = value;
+    this.put(bytes);
+  }
+  u16(value: number): void {
+    const bytes = new Uint8Array(2);
+    bytes[0] = value >>> 8;
+    bytes[1] = value;
+    this.put(bytes);
+  }
+  u32(value: number): void {
+    const bytes = new Uint8Array(4);
+    writeUint32(bytes, 0, value);
+    this.put(bytes);
+  }
+  u64(value: bigint): void {
+    const bytes = new Uint8Array(8);
+    writeUint32(bytes, 0, Number(value >> 32n));
+    writeUint32(bytes, 4, Number(BigInt.asUintN(32, value)));
+    this.put(bytes);
+  }
+  result(): Uint8Array { if (!this.chunks.length) return new Uint8Array(); if (this.chunks.length === 1) return this.chunks[0]; const result = new Uint8Array(this.length); let offset = 0; for (const chunk of this.chunks) { result.set(chunk, offset); offset += chunk.length; } return result; }
+}
 function compareBytes(left: Uint8Array, right: Uint8Array): number { const count = Math.min(left.length, right.length); for (let index = 0; index < count; ++index) if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1; return left.length === right.length ? 0 : left.length < right.length ? -1 : 1; }
 function compareBigint(left: bigint, right: bigint): number { return left < right ? -1 : left > right ? 1 : 0; }
 function compareResults(results: readonly number[]): number { for (const result of results) if (result) return result; return 0; }
@@ -29,15 +91,15 @@ export type U8 = number;
 
 function readU8(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): U8 {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); if (raw < 0n || raw > 255n) fail("u8 range"); return Number(raw);
+  const raw = reader.u8(); if (raw < 0 || raw > 255) fail("u8 range"); return raw;
 }
 function* readIncrementalU8(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, U8, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); if (raw < 0n || raw > 255n) fail("u8 range"); return Number(raw);
+  const raw = byteView(yield* reader.take(1)).getUint8(0); if (raw < 0 || raw > 255) fail("u8 range"); return raw;
 }
 function writeU8(input: U8, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 0n || raw > 255n) fail("u8 range"); writer.u(raw, 1);
+  const raw = narrowInteger(value); if (raw < 0 || raw > 255) fail("u8 range"); writer.u8(raw);
 }
 export function decodeU8(bytes: Uint8Array, context: ServiceWireDecoderContext): U8 { const reader = new Reader(bytes); const value = readU8(reader, context, {}, 0); reader.done("u8"); return value; }
 export function encodeU8(value: U8, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeU8(value, writer, context, {}, 0); return writer.result(); }
@@ -46,15 +108,15 @@ export type U16 = number;
 
 function readU16(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): U16 {
   void context; void enclosing; void flags;
-  const raw = reader.u(2); if (raw < 0n || raw > 65535n) fail("u16 range"); return Number(raw);
+  const raw = reader.u16(); if (raw < 0 || raw > 65535) fail("u16 range"); return raw;
 }
 function* readIncrementalU16(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, U16, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(2); if (raw < 0n || raw > 65535n) fail("u16 range"); return Number(raw);
+  const raw = byteView(yield* reader.take(2)).getUint16(0); if (raw < 0 || raw > 65535) fail("u16 range"); return raw;
 }
 function writeU16(input: U16, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 0n || raw > 65535n) fail("u16 range"); writer.u(raw, 2);
+  const raw = narrowInteger(value); if (raw < 0 || raw > 65535) fail("u16 range"); writer.u16(raw);
 }
 export function decodeU16(bytes: Uint8Array, context: ServiceWireDecoderContext): U16 { const reader = new Reader(bytes); const value = readU16(reader, context, {}, 0); reader.done("u16"); return value; }
 export function encodeU16(value: U16, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeU16(value, writer, context, {}, 0); return writer.result(); }
@@ -63,15 +125,15 @@ export type U32 = number;
 
 function readU32(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): U32 {
   void context; void enclosing; void flags;
-  const raw = reader.u(4); if (raw < 0n || raw > 4294967295n) fail("u32 range"); return Number(raw);
+  const raw = reader.u32(); if (raw < 0 || raw > 4294967295) fail("u32 range"); return raw;
 }
 function* readIncrementalU32(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, U32, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(4); if (raw < 0n || raw > 4294967295n) fail("u32 range"); return Number(raw);
+  const raw = byteView(yield* reader.take(4)).getUint32(0); if (raw < 0 || raw > 4294967295) fail("u32 range"); return raw;
 }
 function writeU32(input: U32, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 0n || raw > 4294967295n) fail("u32 range"); writer.u(raw, 4);
+  const raw = narrowInteger(value); if (raw < 0 || raw > 4294967295) fail("u32 range"); writer.u32(raw);
 }
 export function decodeU32(bytes: Uint8Array, context: ServiceWireDecoderContext): U32 { const reader = new Reader(bytes); const value = readU32(reader, context, {}, 0); reader.done("u32"); return value; }
 export function encodeU32(value: U32, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeU32(value, writer, context, {}, 0); return writer.result(); }
@@ -80,12 +142,12 @@ export type NonzeroU32 = number;
 
 function readNonzeroU32(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): NonzeroU32 {
   void context; void enclosing; void flags;
-  const raw = reader.u(4); if (raw < 1n || raw > 4294967295n) fail("nonzero-u32 range"); return Number(raw);
+  const raw = reader.u32(); if (raw < 1 || raw > 4294967295) fail("nonzero-u32 range"); return raw;
 }
 
 function writeNonzeroU32(input: NonzeroU32, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 1n || raw > 4294967295n) fail("nonzero-u32 range"); writer.u(raw, 4);
+  const raw = narrowInteger(value); if (raw < 1 || raw > 4294967295) fail("nonzero-u32 range"); writer.u32(raw);
 }
 export function decodeNonzeroU32(bytes: Uint8Array, context: ServiceWireDecoderContext): NonzeroU32 { const reader = new Reader(bytes); const value = readNonzeroU32(reader, context, {}, 0); reader.done("nonzero-u32"); return value; }
 export function encodeNonzeroU32(value: NonzeroU32, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeNonzeroU32(value, writer, context, {}, 0); return writer.result(); }
@@ -94,15 +156,15 @@ export type U64 = bigint;
 
 function readU64(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): U64 {
   void context; void enclosing; void flags;
-  const raw = reader.u(8); if (raw < 0n || raw > 18446744073709551615n) fail("u64 range"); return raw;
+  const raw = reader.int64(false); if (raw < 0n || raw > 18446744073709551615n) fail("u64 range"); return raw;
 }
 function* readIncrementalU64(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, U64, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(8); if (raw < 0n || raw > 18446744073709551615n) fail("u64 range"); return raw;
+  const raw = readInt64(byteView(yield* reader.take(8)), 0, false); if (raw < 0n || raw > 18446744073709551615n) fail("u64 range"); return raw;
 }
 function writeU64(input: U64, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 0n || raw > 18446744073709551615n) fail("u64 range"); writer.u(raw, 8);
+  const raw = numeric(value); if (raw < 0n || raw > 18446744073709551615n) fail("u64 range"); writer.u64(raw);
 }
 export function decodeU64(bytes: Uint8Array, context: ServiceWireDecoderContext): U64 { const reader = new Reader(bytes); const value = readU64(reader, context, {}, 0); reader.done("u64"); return value; }
 export function encodeU64(value: U64, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeU64(value, writer, context, {}, 0); return writer.result(); }
@@ -111,15 +173,15 @@ export type NonzeroU64 = bigint;
 
 function readNonzeroU64(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): NonzeroU64 {
   void context; void enclosing; void flags;
-  const raw = reader.u(8); if (raw < 1n || raw > 9223372036854775807n) fail("nonzero-u64 range"); return raw;
+  const raw = reader.int64(false); if (raw < 1n || raw > 9223372036854775807n) fail("nonzero-u64 range"); return raw;
 }
 function* readIncrementalNonzeroU64(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, NonzeroU64, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(8); if (raw < 1n || raw > 9223372036854775807n) fail("nonzero-u64 range"); return raw;
+  const raw = readInt64(byteView(yield* reader.take(8)), 0, false); if (raw < 1n || raw > 9223372036854775807n) fail("nonzero-u64 range"); return raw;
 }
 function writeNonzeroU64(input: NonzeroU64, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 1n || raw > 9223372036854775807n) fail("nonzero-u64 range"); writer.u(raw, 8);
+  const raw = numeric(value); if (raw < 1n || raw > 9223372036854775807n) fail("nonzero-u64 range"); writer.u64(raw);
 }
 export function decodeNonzeroU64(bytes: Uint8Array, context: ServiceWireDecoderContext): NonzeroU64 { const reader = new Reader(bytes); const value = readNonzeroU64(reader, context, {}, 0); reader.done("nonzero-u64"); return value; }
 export function encodeNonzeroU64(value: NonzeroU64, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeNonzeroU64(value, writer, context, {}, 0); return writer.result(); }
@@ -128,15 +190,15 @@ export type OrdinalOrZero = bigint;
 
 function readOrdinalOrZero(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): OrdinalOrZero {
   void context; void enclosing; void flags;
-  const raw = reader.u(8); if (raw < 0n || raw > 9223372036854775807n) fail("ordinal-or-zero range"); return raw;
+  const raw = reader.int64(false); if (raw < 0n || raw > 9223372036854775807n) fail("ordinal-or-zero range"); return raw;
 }
 function* readIncrementalOrdinalOrZero(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, OrdinalOrZero, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(8); if (raw < 0n || raw > 9223372036854775807n) fail("ordinal-or-zero range"); return raw;
+  const raw = readInt64(byteView(yield* reader.take(8)), 0, false); if (raw < 0n || raw > 9223372036854775807n) fail("ordinal-or-zero range"); return raw;
 }
 function writeOrdinalOrZero(input: OrdinalOrZero, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 0n || raw > 9223372036854775807n) fail("ordinal-or-zero range"); writer.u(raw, 8);
+  const raw = numeric(value); if (raw < 0n || raw > 9223372036854775807n) fail("ordinal-or-zero range"); writer.u64(raw);
 }
 export function decodeOrdinalOrZero(bytes: Uint8Array, context: ServiceWireDecoderContext): OrdinalOrZero { const reader = new Reader(bytes); const value = readOrdinalOrZero(reader, context, {}, 0); reader.done("ordinal-or-zero"); return value; }
 export function encodeOrdinalOrZero(value: OrdinalOrZero, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeOrdinalOrZero(value, writer, context, {}, 0); return writer.result(); }
@@ -145,12 +207,12 @@ export type RelocationLogicalLength = bigint;
 
 function readRelocationLogicalLength(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationLogicalLength {
   void context; void enclosing; void flags;
-  const raw = reader.u(8); if (raw < 0n || raw > 274877906944n) fail("relocation-logical-length range"); return raw;
+  const raw = reader.int64(false); if (raw < 0n || raw > 274877906944n) fail("relocation-logical-length range"); return raw;
 }
 
 function writeRelocationLogicalLength(input: RelocationLogicalLength, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 0n || raw > 274877906944n) fail("relocation-logical-length range"); writer.u(raw, 8);
+  const raw = numeric(value); if (raw < 0n || raw > 274877906944n) fail("relocation-logical-length range"); writer.u64(raw);
 }
 export function decodeRelocationLogicalLength(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationLogicalLength { const reader = new Reader(bytes); const value = readRelocationLogicalLength(reader, context, {}, 0); reader.done("relocation-logical-length"); return value; }
 export function encodeRelocationLogicalLength(value: RelocationLogicalLength, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationLogicalLength(value, writer, context, {}, 0); return writer.result(); }
@@ -159,12 +221,12 @@ export type RelocationChunkCount = number;
 
 function readRelocationChunkCount(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationChunkCount {
   void context; void enclosing; void flags;
-  const raw = reader.u(4); if (raw < 0n || raw > 4096n) fail("relocation-chunk-count range"); return Number(raw);
+  const raw = reader.u32(); if (raw < 0 || raw > 4096) fail("relocation-chunk-count range"); return raw;
 }
 
 function writeRelocationChunkCount(input: RelocationChunkCount, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 0n || raw > 4096n) fail("relocation-chunk-count range"); writer.u(raw, 4);
+  const raw = narrowInteger(value); if (raw < 0 || raw > 4096) fail("relocation-chunk-count range"); writer.u32(raw);
 }
 export function decodeRelocationChunkCount(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationChunkCount { const reader = new Reader(bytes); const value = readRelocationChunkCount(reader, context, {}, 0); reader.done("relocation-chunk-count"); return value; }
 export function encodeRelocationChunkCount(value: RelocationChunkCount, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationChunkCount(value, writer, context, {}, 0); return writer.result(); }
@@ -173,15 +235,15 @@ export type ApplicationVersion = bigint;
 
 function readApplicationVersion(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ApplicationVersion {
   void context; void enclosing; void flags;
-  const raw = reader.i64(); if (raw < 0n || raw > 9223372036854775807n) fail("application-version range"); return raw;
+  const raw = reader.int64(true); if (raw < 0n || raw > 9223372036854775807n) fail("application-version range"); return raw;
 }
 function* readIncrementalApplicationVersion(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, ApplicationVersion, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.i64(); if (raw < 0n || raw > 9223372036854775807n) fail("application-version range"); return raw;
+  const raw = readInt64(byteView(yield* reader.take(8)), 0, true); if (raw < 0n || raw > 9223372036854775807n) fail("application-version range"); return raw;
 }
 function writeApplicationVersion(input: ApplicationVersion, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 0n || raw > 9223372036854775807n) fail("application-version range"); writer.i64(raw);
+  const raw = numeric(value); if (raw < 0n || raw > 9223372036854775807n) fail("application-version range"); writer.u64(raw);
 }
 export function decodeApplicationVersion(bytes: Uint8Array, context: ServiceWireDecoderContext): ApplicationVersion { const reader = new Reader(bytes); const value = readApplicationVersion(reader, context, {}, 0); reader.done("application-version"); return value; }
 export function encodeApplicationVersion(value: ApplicationVersion, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeApplicationVersion(value, writer, context, {}, 0); return writer.result(); }
@@ -193,7 +255,7 @@ export function enumWireBool8(value: Bool8): number { switch (value) {
 } }
 function readBool8(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Bool8 {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 0: return "false";
     case 1: return "true";
     default: fail("bool8 enum");
@@ -201,7 +263,7 @@ function readBool8(reader: Reader, context: ServiceWireDecoderContext, enclosing
 }
 function* readIncrementalBool8(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, Bool8, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(1)).getUint8(0); switch (raw) {
     case 0: return "false";
     case 1: return "true";
     default: fail("bool8 enum");
@@ -209,7 +271,7 @@ function* readIncrementalBool8(reader: IncrementalInput, context: ServiceWireDec
 }
 function writeBool8(input: Bool8, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireBool8(value)), 1);
+  writer.u8(narrowInteger(enumWireBool8(value)));
 }
 export function decodeBool8(bytes: Uint8Array, context: ServiceWireDecoderContext): Bool8 { const reader = new Reader(bytes); const value = readBool8(reader, context, {}, 0); reader.done("bool8"); return value; }
 export function encodeBool8(value: Bool8, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeBool8(value, writer, context, {}, 0); return writer.result(); }
@@ -294,12 +356,12 @@ export type CreationRequestSize = number;
 
 function readCreationRequestSize(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): CreationRequestSize {
   void context; void enclosing; void flags;
-  const raw = reader.u(4); if (raw < 0n || raw > 1048576n) fail("creation-request-size range"); return Number(raw);
+  const raw = reader.u32(); if (raw < 0 || raw > 1048576) fail("creation-request-size range"); return raw;
 }
 
 function writeCreationRequestSize(input: CreationRequestSize, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 0n || raw > 1048576n) fail("creation-request-size range"); writer.u(raw, 4);
+  const raw = narrowInteger(value); if (raw < 0 || raw > 1048576) fail("creation-request-size range"); writer.u32(raw);
 }
 export function decodeCreationRequestSize(bytes: Uint8Array, context: ServiceWireDecoderContext): CreationRequestSize { const reader = new Reader(bytes); const value = readCreationRequestSize(reader, context, {}, 0); reader.done("creation-request-size"); return value; }
 export function encodeCreationRequestSize(value: CreationRequestSize, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeCreationRequestSize(value, writer, context, {}, 0); return writer.result(); }
@@ -608,7 +670,7 @@ export function enumWireRuntimeState(value: RuntimeState): number { switch (valu
 } }
 function readRuntimeState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RuntimeState {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 0: return "preparing";
     case 1: return "serving";
     case 2: return "draining";
@@ -620,7 +682,7 @@ function readRuntimeState(reader: Reader, context: ServiceWireDecoderContext, en
 
 function writeRuntimeState(input: RuntimeState, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireRuntimeState(value)), 1);
+  writer.u8(narrowInteger(enumWireRuntimeState(value)));
 }
 export function decodeRuntimeState(bytes: Uint8Array, context: ServiceWireDecoderContext): RuntimeState { const reader = new Reader(bytes); const value = readRuntimeState(reader, context, {}, 0); reader.done("runtime-state"); return value; }
 export function encodeRuntimeState(value: RuntimeState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRuntimeState(value, writer, context, {}, 0); return writer.result(); }
@@ -633,7 +695,7 @@ export function enumWireStatefulObjectKind(value: StatefulObjectKind): number { 
 } }
 function readStatefulObjectKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): StatefulObjectKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "actor";
     case 2: return "userSpot";
     case 3: return "instanceSpot";
@@ -642,7 +704,7 @@ function readStatefulObjectKind(reader: Reader, context: ServiceWireDecoderConte
 }
 function* readIncrementalStatefulObjectKind(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, StatefulObjectKind, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(1)).getUint8(0); switch (raw) {
     case 1: return "actor";
     case 2: return "userSpot";
     case 3: return "instanceSpot";
@@ -651,7 +713,7 @@ function* readIncrementalStatefulObjectKind(reader: IncrementalInput, context: S
 }
 function writeStatefulObjectKind(input: StatefulObjectKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireStatefulObjectKind(value)), 1);
+  writer.u8(narrowInteger(enumWireStatefulObjectKind(value)));
 }
 export function decodeStatefulObjectKind(bytes: Uint8Array, context: ServiceWireDecoderContext): StatefulObjectKind { const reader = new Reader(bytes); const value = readStatefulObjectKind(reader, context, {}, 0); reader.done("stateful-object-kind"); return value; }
 export function encodeStatefulObjectKind(value: StatefulObjectKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeStatefulObjectKind(value, writer, context, {}, 0); return writer.result(); }
@@ -664,7 +726,7 @@ export function enumWireObjectRole(value: ObjectRole): number { switch (value) {
 } }
 function readObjectRole(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ObjectRole {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 0: return "none";
     case 1: return "client";
     case 2: return "server";
@@ -674,7 +736,7 @@ function readObjectRole(reader: Reader, context: ServiceWireDecoderContext, encl
 
 function writeObjectRole(input: ObjectRole, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireObjectRole(value)), 1);
+  writer.u8(narrowInteger(enumWireObjectRole(value)));
 }
 export function decodeObjectRole(bytes: Uint8Array, context: ServiceWireDecoderContext): ObjectRole { const reader = new Reader(bytes); const value = readObjectRole(reader, context, {}, 0); reader.done("object-role"); return value; }
 export function encodeObjectRole(value: ObjectRole, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeObjectRole(value, writer, context, {}, 0); return writer.result(); }
@@ -683,12 +745,12 @@ export type ObjectCapacityLimit = number;
 
 function readObjectCapacityLimit(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ObjectCapacityLimit {
   void context; void enclosing; void flags;
-  const raw = reader.u(4); if (raw < 1n || raw > 2147483647n) fail("object-capacity-limit range"); return Number(raw);
+  const raw = reader.u32(); if (raw < 1 || raw > 2147483647) fail("object-capacity-limit range"); return raw;
 }
 
 function writeObjectCapacityLimit(input: ObjectCapacityLimit, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 1n || raw > 2147483647n) fail("object-capacity-limit range"); writer.u(raw, 4);
+  const raw = narrowInteger(value); if (raw < 1 || raw > 2147483647) fail("object-capacity-limit range"); writer.u32(raw);
 }
 export function decodeObjectCapacityLimit(bytes: Uint8Array, context: ServiceWireDecoderContext): ObjectCapacityLimit { const reader = new Reader(bytes); const value = readObjectCapacityLimit(reader, context, {}, 0); reader.done("object-capacity-limit"); return value; }
 export function encodeObjectCapacityLimit(value: ObjectCapacityLimit, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeObjectCapacityLimit(value, writer, context, {}, 0); return writer.result(); }
@@ -697,12 +759,12 @@ export type ObjectPendingCapacityLimit = number;
 
 function readObjectPendingCapacityLimit(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ObjectPendingCapacityLimit {
   void context; void enclosing; void flags;
-  const raw = reader.u(4); if (raw < 0n || raw > 2147483647n) fail("object-pending-capacity-limit range"); return Number(raw);
+  const raw = reader.u32(); if (raw < 0 || raw > 2147483647) fail("object-pending-capacity-limit range"); return raw;
 }
 
 function writeObjectPendingCapacityLimit(input: ObjectPendingCapacityLimit, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const raw = numeric(value); if (raw < 0n || raw > 2147483647n) fail("object-pending-capacity-limit range"); writer.u(raw, 4);
+  const raw = narrowInteger(value); if (raw < 0 || raw > 2147483647) fail("object-pending-capacity-limit range"); writer.u32(raw);
 }
 export function decodeObjectPendingCapacityLimit(bytes: Uint8Array, context: ServiceWireDecoderContext): ObjectPendingCapacityLimit { const reader = new Reader(bytes); const value = readObjectPendingCapacityLimit(reader, context, {}, 0); reader.done("object-pending-capacity-limit"); return value; }
 export function encodeObjectPendingCapacityLimit(value: ObjectPendingCapacityLimit, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeObjectPendingCapacityLimit(value, writer, context, {}, 0); return writer.result(); }
@@ -714,7 +776,7 @@ export function enumWireAuthorityObjectKind(value: AuthorityObjectKind): number 
 } }
 function readAuthorityObjectKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): AuthorityObjectKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "actor";
     case 2: return "spot";
     default: fail("authority-object-kind enum");
@@ -723,7 +785,7 @@ function readAuthorityObjectKind(reader: Reader, context: ServiceWireDecoderCont
 
 function writeAuthorityObjectKind(input: AuthorityObjectKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireAuthorityObjectKind(value)), 1);
+  writer.u8(narrowInteger(enumWireAuthorityObjectKind(value)));
 }
 export function decodeAuthorityObjectKind(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityObjectKind { const reader = new Reader(bytes); const value = readAuthorityObjectKind(reader, context, {}, 0); reader.done("authority-object-kind"); return value; }
 export function encodeAuthorityObjectKind(value: AuthorityObjectKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityObjectKind(value, writer, context, {}, 0); return writer.result(); }
@@ -736,7 +798,7 @@ export function enumWireSpotKind(value: SpotKind): number { switch (value) {
 } }
 function readSpotKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): SpotKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "entry";
     case 2: return "user";
     case 3: return "instance";
@@ -746,7 +808,7 @@ function readSpotKind(reader: Reader, context: ServiceWireDecoderContext, enclos
 
 function writeSpotKind(input: SpotKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireSpotKind(value)), 1);
+  writer.u8(narrowInteger(enumWireSpotKind(value)));
 }
 export function decodeSpotKind(bytes: Uint8Array, context: ServiceWireDecoderContext): SpotKind { const reader = new Reader(bytes); const value = readSpotKind(reader, context, {}, 0); reader.done("spot-kind"); return value; }
 export function encodeSpotKind(value: SpotKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSpotKind(value, writer, context, {}, 0); return writer.result(); }
@@ -760,7 +822,7 @@ export function enumWireEntryUserSpotAuthorityState(value: EntryUserSpotAuthorit
 } }
 function readEntryUserSpotAuthorityState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): EntryUserSpotAuthorityState {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 0: return "creating";
     case 1: return "ready";
     case 2: return "closing";
@@ -771,7 +833,7 @@ function readEntryUserSpotAuthorityState(reader: Reader, context: ServiceWireDec
 
 function writeEntryUserSpotAuthorityState(input: EntryUserSpotAuthorityState, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireEntryUserSpotAuthorityState(value)), 1);
+  writer.u8(narrowInteger(enumWireEntryUserSpotAuthorityState(value)));
 }
 export function decodeEntryUserSpotAuthorityState(bytes: Uint8Array, context: ServiceWireDecoderContext): EntryUserSpotAuthorityState { const reader = new Reader(bytes); const value = readEntryUserSpotAuthorityState(reader, context, {}, 0); reader.done("entry-user-spot-authority-state"); return value; }
 export function encodeEntryUserSpotAuthorityState(value: EntryUserSpotAuthorityState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeEntryUserSpotAuthorityState(value, writer, context, {}, 0); return writer.result(); }
@@ -784,7 +846,7 @@ export function enumWireActorAuthorityState(value: ActorAuthorityState): number 
 } }
 function readActorAuthorityState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ActorAuthorityState {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 0: return "creating";
     case 1: return "ready";
     case 2: return "closing";
@@ -794,7 +856,7 @@ function readActorAuthorityState(reader: Reader, context: ServiceWireDecoderCont
 
 function writeActorAuthorityState(input: ActorAuthorityState, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireActorAuthorityState(value)), 1);
+  writer.u8(narrowInteger(enumWireActorAuthorityState(value)));
 }
 export function decodeActorAuthorityState(bytes: Uint8Array, context: ServiceWireDecoderContext): ActorAuthorityState { const reader = new Reader(bytes); const value = readActorAuthorityState(reader, context, {}, 0); reader.done("actor-authority-state"); return value; }
 export function encodeActorAuthorityState(value: ActorAuthorityState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorAuthorityState(value, writer, context, {}, 0); return writer.result(); }
@@ -807,7 +869,7 @@ export function enumWireRelocationPolicyKind(value: RelocationPolicyKind): numbe
 } }
 function readRelocationPolicyKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationPolicyKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 0: return "disabled";
     case 1: return "recreate";
     case 2: return "snapshot";
@@ -817,7 +879,7 @@ function readRelocationPolicyKind(reader: Reader, context: ServiceWireDecoderCon
 
 function writeRelocationPolicyKind(input: RelocationPolicyKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireRelocationPolicyKind(value)), 1);
+  writer.u8(narrowInteger(enumWireRelocationPolicyKind(value)));
 }
 export function decodeRelocationPolicyKind(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationPolicyKind { const reader = new Reader(bytes); const value = readRelocationPolicyKind(reader, context, {}, 0); reader.done("relocation-policy-kind"); return value; }
 export function encodeRelocationPolicyKind(value: RelocationPolicyKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationPolicyKind(value, writer, context, {}, 0); return writer.result(); }
@@ -830,7 +892,7 @@ export function enumWireTimerOverrunPolicyKind(value: TimerOverrunPolicyKind): n
 } }
 function readTimerOverrunPolicyKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): TimerOverrunPolicyKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "skipLateTicks";
     case 2: return "catchUpBounded";
     case 3: return "delayNextTick";
@@ -839,7 +901,7 @@ function readTimerOverrunPolicyKind(reader: Reader, context: ServiceWireDecoderC
 }
 function* readIncrementalTimerOverrunPolicyKind(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, TimerOverrunPolicyKind, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(1)).getUint8(0); switch (raw) {
     case 1: return "skipLateTicks";
     case 2: return "catchUpBounded";
     case 3: return "delayNextTick";
@@ -848,7 +910,7 @@ function* readIncrementalTimerOverrunPolicyKind(reader: IncrementalInput, contex
 }
 function writeTimerOverrunPolicyKind(input: TimerOverrunPolicyKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireTimerOverrunPolicyKind(value)), 1);
+  writer.u8(narrowInteger(enumWireTimerOverrunPolicyKind(value)));
 }
 export function decodeTimerOverrunPolicyKind(bytes: Uint8Array, context: ServiceWireDecoderContext): TimerOverrunPolicyKind { const reader = new Reader(bytes); const value = readTimerOverrunPolicyKind(reader, context, {}, 0); reader.done("timer-overrun-policy-kind"); return value; }
 export function encodeTimerOverrunPolicyKind(value: TimerOverrunPolicyKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeTimerOverrunPolicyKind(value, writer, context, {}, 0); return writer.result(); }
@@ -860,7 +922,7 @@ export function enumWireActorSpotKind(value: ActorSpotKind): number { switch (va
 } }
 function readActorSpotKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ActorSpotKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "entry";
     case 2: return "user";
     default: fail("actor-spot-kind enum");
@@ -869,7 +931,7 @@ function readActorSpotKind(reader: Reader, context: ServiceWireDecoderContext, e
 
 function writeActorSpotKind(input: ActorSpotKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireActorSpotKind(value)), 1);
+  writer.u8(narrowInteger(enumWireActorSpotKind(value)));
 }
 export function decodeActorSpotKind(bytes: Uint8Array, context: ServiceWireDecoderContext): ActorSpotKind { const reader = new Reader(bytes); const value = readActorSpotKind(reader, context, {}, 0); reader.done("actor-spot-kind"); return value; }
 export function encodeActorSpotKind(value: ActorSpotKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorSpotKind(value, writer, context, {}, 0); return writer.result(); }
@@ -882,7 +944,7 @@ export function enumWireRelocationRole(value: RelocationRole): number { switch (
 } }
 function readRelocationRole(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationRole {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "source";
     case 2: return "target";
     case 3: return "coordinator";
@@ -891,7 +953,7 @@ function readRelocationRole(reader: Reader, context: ServiceWireDecoderContext, 
 }
 function* readIncrementalRelocationRole(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, RelocationRole, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(1)).getUint8(0); switch (raw) {
     case 1: return "source";
     case 2: return "target";
     case 3: return "coordinator";
@@ -900,7 +962,7 @@ function* readIncrementalRelocationRole(reader: IncrementalInput, context: Servi
 }
 function writeRelocationRole(input: RelocationRole, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireRelocationRole(value)), 1);
+  writer.u8(narrowInteger(enumWireRelocationRole(value)));
 }
 export function decodeRelocationRole(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationRole { const reader = new Reader(bytes); const value = readRelocationRole(reader, context, {}, 0); reader.done("relocation-role"); return value; }
 export function encodeRelocationRole(value: RelocationRole, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationRole(value, writer, context, {}, 0); return writer.result(); }
@@ -912,7 +974,7 @@ export function enumWireActorJoinResult(value: ActorJoinResult): number { switch
 } }
 function readActorJoinResult(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ActorJoinResult {
   void context; void enclosing; void flags;
-  const raw = reader.u(4); switch (Number(raw)) {
+  const raw = reader.u32(); switch (raw) {
     case 0: return "accepted";
     case 1: return "rejected";
     default: fail("actor-join-result enum");
@@ -921,7 +983,7 @@ function readActorJoinResult(reader: Reader, context: ServiceWireDecoderContext,
 
 function writeActorJoinResult(input: ActorJoinResult, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireActorJoinResult(value)), 4);
+  writer.u32(narrowInteger(enumWireActorJoinResult(value)));
 }
 export function decodeActorJoinResult(bytes: Uint8Array, context: ServiceWireDecoderContext): ActorJoinResult { const reader = new Reader(bytes); const value = readActorJoinResult(reader, context, {}, 0); reader.done("actor-join-result"); return value; }
 export function encodeActorJoinResult(value: ActorJoinResult, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorJoinResult(value, writer, context, {}, 0); return writer.result(); }
@@ -1003,7 +1065,7 @@ export function enumWireMeshRecordKind(value: MeshRecordKind): number { switch (
 } }
 function readMeshRecordKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): MeshRecordKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "nodeSend";
     case 2: return "nodeRequest";
     case 3: return "channelSend";
@@ -1023,7 +1085,7 @@ function readMeshRecordKind(reader: Reader, context: ServiceWireDecoderContext, 
 }
 function* readIncrementalMeshRecordKind(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, MeshRecordKind, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(1)).getUint8(0); switch (raw) {
     case 1: return "nodeSend";
     case 2: return "nodeRequest";
     case 3: return "channelSend";
@@ -1043,7 +1105,7 @@ function* readIncrementalMeshRecordKind(reader: IncrementalInput, context: Servi
 }
 function writeMeshRecordKind(input: MeshRecordKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireMeshRecordKind(value)), 1);
+  writer.u8(narrowInteger(enumWireMeshRecordKind(value)));
 }
 export function decodeMeshRecordKind(bytes: Uint8Array, context: ServiceWireDecoderContext): MeshRecordKind { const reader = new Reader(bytes); const value = readMeshRecordKind(reader, context, {}, 0); reader.done("mesh-record-kind"); return value; }
 export function encodeMeshRecordKind(value: MeshRecordKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMeshRecordKind(value, writer, context, {}, 0); return writer.result(); }
@@ -1057,7 +1119,7 @@ export function enumWireFrozenSourceKind(value: FrozenSourceKind): number { swit
 } }
 function readFrozenSourceKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): FrozenSourceKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "node";
     case 2: return "spot";
     case 3: return "actor";
@@ -1067,7 +1129,7 @@ function readFrozenSourceKind(reader: Reader, context: ServiceWireDecoderContext
 }
 function* readIncrementalFrozenSourceKind(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, FrozenSourceKind, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(1)).getUint8(0); switch (raw) {
     case 1: return "node";
     case 2: return "spot";
     case 3: return "actor";
@@ -1077,7 +1139,7 @@ function* readIncrementalFrozenSourceKind(reader: IncrementalInput, context: Ser
 }
 function writeFrozenSourceKind(input: FrozenSourceKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireFrozenSourceKind(value)), 1);
+  writer.u8(narrowInteger(enumWireFrozenSourceKind(value)));
 }
 export function decodeFrozenSourceKind(bytes: Uint8Array, context: ServiceWireDecoderContext): FrozenSourceKind { const reader = new Reader(bytes); const value = readFrozenSourceKind(reader, context, {}, 0); reader.done("frozen-source-kind"); return value; }
 export function encodeFrozenSourceKind(value: FrozenSourceKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeFrozenSourceKind(value, writer, context, {}, 0); return writer.result(); }
@@ -1092,7 +1154,7 @@ export function enumWireMeshDestinationKind(value: MeshDestinationKind): number 
 } }
 function readMeshDestinationKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): MeshDestinationKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "node";
     case 2: return "channel";
     case 3: return "spot";
@@ -1103,7 +1165,7 @@ function readMeshDestinationKind(reader: Reader, context: ServiceWireDecoderCont
 }
 function* readIncrementalMeshDestinationKind(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, MeshDestinationKind, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(1)).getUint8(0); switch (raw) {
     case 1: return "node";
     case 2: return "channel";
     case 3: return "spot";
@@ -1114,7 +1176,7 @@ function* readIncrementalMeshDestinationKind(reader: IncrementalInput, context: 
 }
 function writeMeshDestinationKind(input: MeshDestinationKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireMeshDestinationKind(value)), 1);
+  writer.u8(narrowInteger(enumWireMeshDestinationKind(value)));
 }
 export function decodeMeshDestinationKind(bytes: Uint8Array, context: ServiceWireDecoderContext): MeshDestinationKind { const reader = new Reader(bytes); const value = readMeshDestinationKind(reader, context, {}, 0); reader.done("mesh-destination-kind"); return value; }
 export function encodeMeshDestinationKind(value: MeshDestinationKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMeshDestinationKind(value, writer, context, {}, 0); return writer.result(); }
@@ -1126,7 +1188,7 @@ export function enumWireServiceTopologyKind(value: ServiceTopologyKind): number 
 } }
 function readServiceTopologyKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ServiceTopologyKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "routeMesh";
     case 2: return "clientServer";
     default: fail("service-topology-kind enum");
@@ -1135,7 +1197,7 @@ function readServiceTopologyKind(reader: Reader, context: ServiceWireDecoderCont
 
 function writeServiceTopologyKind(input: ServiceTopologyKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireServiceTopologyKind(value)), 1);
+  writer.u8(narrowInteger(enumWireServiceTopologyKind(value)));
 }
 export function decodeServiceTopologyKind(bytes: Uint8Array, context: ServiceWireDecoderContext): ServiceTopologyKind { const reader = new Reader(bytes); const value = readServiceTopologyKind(reader, context, {}, 0); reader.done("service-topology-kind"); return value; }
 export function encodeServiceTopologyKind(value: ServiceTopologyKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeServiceTopologyKind(value, writer, context, {}, 0); return writer.result(); }
@@ -1147,7 +1209,7 @@ export function enumWireClientServerRole(value: ClientServerRole): number { swit
 } }
 function readClientServerRole(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ClientServerRole {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "client";
     case 2: return "server";
     default: fail("client-server-role enum");
@@ -1156,7 +1218,7 @@ function readClientServerRole(reader: Reader, context: ServiceWireDecoderContext
 
 function writeClientServerRole(input: ClientServerRole, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireClientServerRole(value)), 1);
+  writer.u8(narrowInteger(enumWireClientServerRole(value)));
 }
 export function decodeClientServerRole(bytes: Uint8Array, context: ServiceWireDecoderContext): ClientServerRole { const reader = new Reader(bytes); const value = readClientServerRole(reader, context, {}, 0); reader.done("client-server-role"); return value; }
 export function encodeClientServerRole(value: ClientServerRole, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeClientServerRole(value, writer, context, {}, 0); return writer.result(); }
@@ -1167,7 +1229,7 @@ export function enumWireClientServerDirection(value: ClientServerDirection): num
 } }
 function readClientServerDirection(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ClientServerDirection {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "clientToServer";
     default: fail("client-server-direction enum");
   }
@@ -1175,7 +1237,7 @@ function readClientServerDirection(reader: Reader, context: ServiceWireDecoderCo
 
 function writeClientServerDirection(input: ClientServerDirection, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireClientServerDirection(value)), 1);
+  writer.u8(narrowInteger(enumWireClientServerDirection(value)));
 }
 export function decodeClientServerDirection(bytes: Uint8Array, context: ServiceWireDecoderContext): ClientServerDirection { const reader = new Reader(bytes); const value = readClientServerDirection(reader, context, {}, 0); reader.done("client-server-direction"); return value; }
 export function encodeClientServerDirection(value: ClientServerDirection, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeClientServerDirection(value, writer, context, {}, 0); return writer.result(); }
@@ -1190,7 +1252,7 @@ export function enumWireActorLifecycleKind(value: ActorLifecycleKind): number { 
 } }
 function readActorLifecycleKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ActorLifecycleKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "created";
     case 2: return "joined";
     case 3: return "left";
@@ -1201,7 +1263,7 @@ function readActorLifecycleKind(reader: Reader, context: ServiceWireDecoderConte
 }
 function* readIncrementalActorLifecycleKind(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, ActorLifecycleKind, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(1)).getUint8(0); switch (raw) {
     case 1: return "created";
     case 2: return "joined";
     case 3: return "left";
@@ -1212,7 +1274,7 @@ function* readIncrementalActorLifecycleKind(reader: IncrementalInput, context: S
 }
 function writeActorLifecycleKind(input: ActorLifecycleKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireActorLifecycleKind(value)), 1);
+  writer.u8(narrowInteger(enumWireActorLifecycleKind(value)));
 }
 export function decodeActorLifecycleKind(bytes: Uint8Array, context: ServiceWireDecoderContext): ActorLifecycleKind { const reader = new Reader(bytes); const value = readActorLifecycleKind(reader, context, {}, 0); reader.done("actor-lifecycle-kind"); return value; }
 export function encodeActorLifecycleKind(value: ActorLifecycleKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorLifecycleKind(value, writer, context, {}, 0); return writer.result(); }
@@ -1224,7 +1286,7 @@ export function enumWireBoundSessionBindingState(value: BoundSessionBindingState
 } }
 function readBoundSessionBindingState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): BoundSessionBindingState {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "active";
     case 2: return "tombstone";
     default: fail("bound-session-binding-state enum");
@@ -1233,7 +1295,7 @@ function readBoundSessionBindingState(reader: Reader, context: ServiceWireDecode
 
 function writeBoundSessionBindingState(input: BoundSessionBindingState, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireBoundSessionBindingState(value)), 1);
+  writer.u8(narrowInteger(enumWireBoundSessionBindingState(value)));
 }
 export function decodeBoundSessionBindingState(bytes: Uint8Array, context: ServiceWireDecoderContext): BoundSessionBindingState { const reader = new Reader(bytes); const value = readBoundSessionBindingState(reader, context, {}, 0); reader.done("bound-session-binding-state"); return value; }
 export function encodeBoundSessionBindingState(value: BoundSessionBindingState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeBoundSessionBindingState(value, writer, context, {}, 0); return writer.result(); }
@@ -1245,7 +1307,7 @@ export function enumWireSessionRelocationRouteAction(value: SessionRelocationRou
 } }
 function readSessionRelocationRouteAction(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): SessionRelocationRouteAction {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "commit";
     case 2: return "abort";
     default: fail("session-relocation-route-action enum");
@@ -1254,7 +1316,7 @@ function readSessionRelocationRouteAction(reader: Reader, context: ServiceWireDe
 
 function writeSessionRelocationRouteAction(input: SessionRelocationRouteAction, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireSessionRelocationRouteAction(value)), 1);
+  writer.u8(narrowInteger(enumWireSessionRelocationRouteAction(value)));
 }
 export function decodeSessionRelocationRouteAction(bytes: Uint8Array, context: ServiceWireDecoderContext): SessionRelocationRouteAction { const reader = new Reader(bytes); const value = readSessionRelocationRouteAction(reader, context, {}, 0); reader.done("session-relocation-route-action"); return value; }
 export function encodeSessionRelocationRouteAction(value: SessionRelocationRouteAction, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSessionRelocationRouteAction(value, writer, context, {}, 0); return writer.result(); }
@@ -1274,7 +1336,7 @@ export function enumWireRelocationPhase(value: RelocationPhase): number { switch
 } }
 function readRelocationPhase(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationPhase {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 0: return "none";
     case 1: return "preparing";
     case 2: return "captured";
@@ -1290,7 +1352,7 @@ function readRelocationPhase(reader: Reader, context: ServiceWireDecoderContext,
 }
 function* readIncrementalRelocationPhase(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, RelocationPhase, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(1)).getUint8(0); switch (raw) {
     case 0: return "none";
     case 1: return "preparing";
     case 2: return "captured";
@@ -1306,7 +1368,7 @@ function* readIncrementalRelocationPhase(reader: IncrementalInput, context: Serv
 }
 function writeRelocationPhase(input: RelocationPhase, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireRelocationPhase(value)), 1);
+  writer.u8(narrowInteger(enumWireRelocationPhase(value)));
 }
 export function decodeRelocationPhase(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationPhase { const reader = new Reader(bytes); const value = readRelocationPhase(reader, context, {}, 0); reader.done("relocation-phase"); return value; }
 export function encodeRelocationPhase(value: RelocationPhase, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationPhase(value, writer, context, {}, 0); return writer.result(); }
@@ -1319,7 +1381,7 @@ export function enumWireSourceCleanupState(value: SourceCleanupState): number { 
 } }
 function readSourceCleanupState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): SourceCleanupState {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 0: return "pending";
     case 1: return "completed";
     case 2: return "sourceLeaseExpired";
@@ -1329,7 +1391,7 @@ function readSourceCleanupState(reader: Reader, context: ServiceWireDecoderConte
 
 function writeSourceCleanupState(input: SourceCleanupState, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireSourceCleanupState(value)), 1);
+  writer.u8(narrowInteger(enumWireSourceCleanupState(value)));
 }
 export function decodeSourceCleanupState(bytes: Uint8Array, context: ServiceWireDecoderContext): SourceCleanupState { const reader = new Reader(bytes); const value = readSourceCleanupState(reader, context, {}, 0); reader.done("source-cleanup-state"); return value; }
 export function encodeSourceCleanupState(value: SourceCleanupState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSourceCleanupState(value, writer, context, {}, 0); return writer.result(); }
@@ -1341,7 +1403,7 @@ export function enumWireSessionSealResult(value: SessionSealResult): number { sw
 } }
 function readSessionSealResult(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): SessionSealResult {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "sealed";
     case 2: return "bindingAbsent";
     default: fail("session-seal-result enum");
@@ -1350,7 +1412,7 @@ function readSessionSealResult(reader: Reader, context: ServiceWireDecoderContex
 
 function writeSessionSealResult(input: SessionSealResult, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireSessionSealResult(value)), 1);
+  writer.u8(narrowInteger(enumWireSessionSealResult(value)));
 }
 export function decodeSessionSealResult(bytes: Uint8Array, context: ServiceWireDecoderContext): SessionSealResult { const reader = new Reader(bytes); const value = readSessionSealResult(reader, context, {}, 0); reader.done("session-seal-result"); return value; }
 export function encodeSessionSealResult(value: SessionSealResult, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSessionSealResult(value, writer, context, {}, 0); return writer.result(); }
@@ -1362,7 +1424,7 @@ export function enumWireReplyRelayAckStatus(value: ReplyRelayAckStatus): number 
 } }
 function readReplyRelayAckStatus(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ReplyRelayAckStatus {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "terminalReceived";
     case 2: return "alreadyTerminal";
     default: fail("reply-relay-ack-status enum");
@@ -1371,7 +1433,7 @@ function readReplyRelayAckStatus(reader: Reader, context: ServiceWireDecoderCont
 
 function writeReplyRelayAckStatus(input: ReplyRelayAckStatus, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireReplyRelayAckStatus(value)), 1);
+  writer.u8(narrowInteger(enumWireReplyRelayAckStatus(value)));
 }
 export function decodeReplyRelayAckStatus(bytes: Uint8Array, context: ServiceWireDecoderContext): ReplyRelayAckStatus { const reader = new Reader(bytes); const value = readReplyRelayAckStatus(reader, context, {}, 0); reader.done("reply-relay-ack-status"); return value; }
 export function encodeReplyRelayAckStatus(value: ReplyRelayAckStatus, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeReplyRelayAckStatus(value, writer, context, {}, 0); return writer.result(); }
@@ -1385,7 +1447,7 @@ export function enumWireAuthorityOperationKind(value: AuthorityOperationKind): n
 } }
 function readAuthorityOperationKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): AuthorityOperationKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 0: return "steady";
     case 1: return "coldActivation";
     case 2: return "maintenanceRelocation";
@@ -1396,7 +1458,7 @@ function readAuthorityOperationKind(reader: Reader, context: ServiceWireDecoderC
 
 function writeAuthorityOperationKind(input: AuthorityOperationKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireAuthorityOperationKind(value)), 1);
+  writer.u8(narrowInteger(enumWireAuthorityOperationKind(value)));
 }
 export function decodeAuthorityOperationKind(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityOperationKind { const reader = new Reader(bytes); const value = readAuthorityOperationKind(reader, context, {}, 0); reader.done("authority-operation-kind"); return value; }
 export function encodeAuthorityOperationKind(value: AuthorityOperationKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityOperationKind(value, writer, context, {}, 0); return writer.result(); }
@@ -1422,7 +1484,7 @@ export function enumWireMeshOperationKind(value: MeshOperationKind): number { sw
 } }
 function readMeshOperationKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): MeshOperationKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(4); switch (Number(raw)) {
+  const raw = reader.u32(); switch (raw) {
     case 0: return "none";
     case 1: return "nodeRequest";
     case 2: return "channelRequest";
@@ -1444,7 +1506,7 @@ function readMeshOperationKind(reader: Reader, context: ServiceWireDecoderContex
 }
 function* readIncrementalMeshOperationKind(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, MeshOperationKind, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(4); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(4)).getUint32(0); switch (raw) {
     case 0: return "none";
     case 1: return "nodeRequest";
     case 2: return "channelRequest";
@@ -1466,7 +1528,7 @@ function* readIncrementalMeshOperationKind(reader: IncrementalInput, context: Se
 }
 function writeMeshOperationKind(input: MeshOperationKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireMeshOperationKind(value)), 4);
+  writer.u32(narrowInteger(enumWireMeshOperationKind(value)));
 }
 export function decodeMeshOperationKind(bytes: Uint8Array, context: ServiceWireDecoderContext): MeshOperationKind { const reader = new Reader(bytes); const value = readMeshOperationKind(reader, context, {}, 0); reader.done("mesh-operation-kind"); return value; }
 export function encodeMeshOperationKind(value: MeshOperationKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMeshOperationKind(value, writer, context, {}, 0); return writer.result(); }
@@ -1490,7 +1552,7 @@ export function enumWireRequestTerminalResult(value: RequestTerminalResult): num
 } }
 function readRequestTerminalResult(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RequestTerminalResult {
   void context; void enclosing; void flags;
-  const raw = reader.u(4); switch (Number(raw)) {
+  const raw = reader.u32(); switch (raw) {
     case 0: return "ok";
     case 101: return "timedOut";
     case 102: return "notFound";
@@ -1510,7 +1572,7 @@ function readRequestTerminalResult(reader: Reader, context: ServiceWireDecoderCo
 }
 function* readIncrementalRequestTerminalResult(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, RequestTerminalResult, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(4); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(4)).getUint32(0); switch (raw) {
     case 0: return "ok";
     case 101: return "timedOut";
     case 102: return "notFound";
@@ -1530,7 +1592,7 @@ function* readIncrementalRequestTerminalResult(reader: IncrementalInput, context
 }
 function writeRequestTerminalResult(input: RequestTerminalResult, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireRequestTerminalResult(value)), 4);
+  writer.u32(narrowInteger(enumWireRequestTerminalResult(value)));
 }
 export function decodeRequestTerminalResult(bytes: Uint8Array, context: ServiceWireDecoderContext): RequestTerminalResult { const reader = new Reader(bytes); const value = readRequestTerminalResult(reader, context, {}, 0); reader.done("request-terminal-result"); return value; }
 export function encodeRequestTerminalResult(value: RequestTerminalResult, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRequestTerminalResult(value, writer, context, {}, 0); return writer.result(); }
@@ -1566,7 +1628,7 @@ export function enumWireFrameworkErrorCode(value: FrameworkErrorCode): number { 
 } }
 function readFrameworkErrorCode(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): FrameworkErrorCode {
   void context; void enclosing; void flags;
-  const raw = reader.u(4); switch (Number(raw)) {
+  const raw = reader.u32(); switch (raw) {
     case 0: return "none";
     case 1: return "actorRouteNotFound";
     case 2: return "actorCreateFailed";
@@ -1598,7 +1660,7 @@ function readFrameworkErrorCode(reader: Reader, context: ServiceWireDecoderConte
 }
 function* readIncrementalFrameworkErrorCode(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, FrameworkErrorCode, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(4); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(4)).getUint32(0); switch (raw) {
     case 0: return "none";
     case 1: return "actorRouteNotFound";
     case 2: return "actorCreateFailed";
@@ -1630,7 +1692,7 @@ function* readIncrementalFrameworkErrorCode(reader: IncrementalInput, context: S
 }
 function writeFrameworkErrorCode(input: FrameworkErrorCode, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireFrameworkErrorCode(value)), 4);
+  writer.u32(narrowInteger(enumWireFrameworkErrorCode(value)));
 }
 export function decodeFrameworkErrorCode(bytes: Uint8Array, context: ServiceWireDecoderContext): FrameworkErrorCode { const reader = new Reader(bytes); const value = readFrameworkErrorCode(reader, context, {}, 0); reader.done("framework-error-code"); return value; }
 export function encodeFrameworkErrorCode(value: FrameworkErrorCode, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeFrameworkErrorCode(value, writer, context, {}, 0); return writer.result(); }
@@ -1642,7 +1704,7 @@ export function enumWireInstanceOperationKind(value: InstanceOperationKind): num
 } }
 function readInstanceOperationKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): InstanceOperationKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "send";
     case 2: return "request";
     default: fail("instance-operation-kind enum");
@@ -1650,7 +1712,7 @@ function readInstanceOperationKind(reader: Reader, context: ServiceWireDecoderCo
 }
 function* readIncrementalInstanceOperationKind(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, InstanceOperationKind, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(1)).getUint8(0); switch (raw) {
     case 1: return "send";
     case 2: return "request";
     default: fail("instance-operation-kind enum");
@@ -1658,7 +1720,7 @@ function* readIncrementalInstanceOperationKind(reader: IncrementalInput, context
 }
 function writeInstanceOperationKind(input: InstanceOperationKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireInstanceOperationKind(value)), 1);
+  writer.u8(narrowInteger(enumWireInstanceOperationKind(value)));
 }
 export function decodeInstanceOperationKind(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceOperationKind { const reader = new Reader(bytes); const value = readInstanceOperationKind(reader, context, {}, 0); reader.done("instance-operation-kind"); return value; }
 export function encodeInstanceOperationKind(value: InstanceOperationKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeInstanceOperationKind(value, writer, context, {}, 0); return writer.result(); }
@@ -1670,7 +1732,7 @@ export function enumWireInstanceRouteKind(value: InstanceRouteKind): number { sw
 } }
 function readInstanceRouteKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): InstanceRouteKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "ready";
     case 2: return "coldActivation";
     default: fail("instance-route-kind enum");
@@ -1678,7 +1740,7 @@ function readInstanceRouteKind(reader: Reader, context: ServiceWireDecoderContex
 }
 function* readIncrementalInstanceRouteKind(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, InstanceRouteKind, void> {
   void context; void enclosing; void flags;
-  const raw = yield* reader.u(1); switch (Number(raw)) {
+  const raw = byteView(yield* reader.take(1)).getUint8(0); switch (raw) {
     case 1: return "ready";
     case 2: return "coldActivation";
     default: fail("instance-route-kind enum");
@@ -1686,7 +1748,7 @@ function* readIncrementalInstanceRouteKind(reader: IncrementalInput, context: Se
 }
 function writeInstanceRouteKind(input: InstanceRouteKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireInstanceRouteKind(value)), 1);
+  writer.u8(narrowInteger(enumWireInstanceRouteKind(value)));
 }
 export function decodeInstanceRouteKind(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceRouteKind { const reader = new Reader(bytes); const value = readInstanceRouteKind(reader, context, {}, 0); reader.done("instance-route-kind"); return value; }
 export function encodeInstanceRouteKind(value: InstanceRouteKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeInstanceRouteKind(value, writer, context, {}, 0); return writer.result(); }
@@ -1699,7 +1761,7 @@ export function enumWireUserSpotCreateResult(value: UserSpotCreateResult): numbe
 } }
 function readUserSpotCreateResult(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): UserSpotCreateResult {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "existing";
     case 2: return "created";
     case 3: return "rejected";
@@ -1709,7 +1771,7 @@ function readUserSpotCreateResult(reader: Reader, context: ServiceWireDecoderCon
 
 function writeUserSpotCreateResult(input: UserSpotCreateResult, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireUserSpotCreateResult(value)), 1);
+  writer.u8(narrowInteger(enumWireUserSpotCreateResult(value)));
 }
 export function decodeUserSpotCreateResult(bytes: Uint8Array, context: ServiceWireDecoderContext): UserSpotCreateResult { const reader = new Reader(bytes); const value = readUserSpotCreateResult(reader, context, {}, 0); reader.done("user-spot-create-result"); return value; }
 export function encodeUserSpotCreateResult(value: UserSpotCreateResult, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeUserSpotCreateResult(value, writer, context, {}, 0); return writer.result(); }
@@ -1722,7 +1784,7 @@ export function enumWireActorCreateResult(value: ActorCreateResult): number { sw
 } }
 function readActorCreateResult(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ActorCreateResult {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "existing";
     case 2: return "created";
     case 3: return "rejected";
@@ -1732,7 +1794,7 @@ function readActorCreateResult(reader: Reader, context: ServiceWireDecoderContex
 
 function writeActorCreateResult(input: ActorCreateResult, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireActorCreateResult(value)), 1);
+  writer.u8(narrowInteger(enumWireActorCreateResult(value)));
 }
 export function decodeActorCreateResult(bytes: Uint8Array, context: ServiceWireDecoderContext): ActorCreateResult { const reader = new Reader(bytes); const value = readActorCreateResult(reader, context, {}, 0); reader.done("actor-create-result"); return value; }
 export function encodeActorCreateResult(value: ActorCreateResult, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorCreateResult(value, writer, context, {}, 0); return writer.result(); }
@@ -1746,7 +1808,7 @@ export function enumWireInstanceAuthorityState(value: InstanceAuthorityState): n
 } }
 function readInstanceAuthorityState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): InstanceAuthorityState {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "coldActivating";
     case 2: return "ready";
     case 3: return "closing";
@@ -1757,7 +1819,7 @@ function readInstanceAuthorityState(reader: Reader, context: ServiceWireDecoderC
 
 function writeInstanceAuthorityState(input: InstanceAuthorityState, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireInstanceAuthorityState(value)), 1);
+  writer.u8(narrowInteger(enumWireInstanceAuthorityState(value)));
 }
 export function decodeInstanceAuthorityState(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceAuthorityState { const reader = new Reader(bytes); const value = readInstanceAuthorityState(reader, context, {}, 0); reader.done("instance-authority-state"); return value; }
 export function encodeInstanceAuthorityState(value: InstanceAuthorityState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeInstanceAuthorityState(value, writer, context, {}, 0); return writer.result(); }
@@ -1769,7 +1831,7 @@ export function enumWireReplyRelayContextKind(value: ReplyRelayContextKind): num
 } }
 function readReplyRelayContextKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ReplyRelayContextKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "coldActivation";
     case 2: return "maintenanceRelocation";
     default: fail("reply-relay-context-kind enum");
@@ -1778,7 +1840,7 @@ function readReplyRelayContextKind(reader: Reader, context: ServiceWireDecoderCo
 
 function writeReplyRelayContextKind(input: ReplyRelayContextKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireReplyRelayContextKind(value)), 1);
+  writer.u8(narrowInteger(enumWireReplyRelayContextKind(value)));
 }
 export function decodeReplyRelayContextKind(bytes: Uint8Array, context: ServiceWireDecoderContext): ReplyRelayContextKind { const reader = new Reader(bytes); const value = readReplyRelayContextKind(reader, context, {}, 0); reader.done("reply-relay-context-kind"); return value; }
 export function encodeReplyRelayContextKind(value: ReplyRelayContextKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeReplyRelayContextKind(value, writer, context, {}, 0); return writer.result(); }
@@ -1790,7 +1852,7 @@ export function enumWireColdActivationCompletionKind(value: ColdActivationComple
 } }
 function readColdActivationCompletionKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ColdActivationCompletionKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "readyBarrier";
     case 2: return "activationFailure";
     default: fail("cold-activation-completion-kind enum");
@@ -1799,7 +1861,7 @@ function readColdActivationCompletionKind(reader: Reader, context: ServiceWireDe
 
 function writeColdActivationCompletionKind(input: ColdActivationCompletionKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireColdActivationCompletionKind(value)), 1);
+  writer.u8(narrowInteger(enumWireColdActivationCompletionKind(value)));
 }
 export function decodeColdActivationCompletionKind(bytes: Uint8Array, context: ServiceWireDecoderContext): ColdActivationCompletionKind { const reader = new Reader(bytes); const value = readColdActivationCompletionKind(reader, context, {}, 0); reader.done("cold-activation-completion-kind"); return value; }
 export function encodeColdActivationCompletionKind(value: ColdActivationCompletionKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeColdActivationCompletionKind(value, writer, context, {}, 0); return writer.result(); }
@@ -1821,7 +1883,7 @@ export function enumWireRejectReason(value: RejectReason): number { switch (valu
 } }
 function readRejectReason(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RejectReason {
   void context; void enclosing; void flags;
-  const raw = reader.u(4); switch (Number(raw)) {
+  const raw = reader.u32(); switch (raw) {
     case 1: return "protocolVersionUnsupported";
     case 2: return "topologyMismatch";
     case 3: return "identityMismatch";
@@ -1840,7 +1902,7 @@ function readRejectReason(reader: Reader, context: ServiceWireDecoderContext, en
 
 function writeRejectReason(input: RejectReason, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireRejectReason(value)), 4);
+  writer.u32(narrowInteger(enumWireRejectReason(value)));
 }
 export function decodeRejectReason(bytes: Uint8Array, context: ServiceWireDecoderContext): RejectReason { const reader = new Reader(bytes); const value = readRejectReason(reader, context, {}, 0); reader.done("reject-reason"); return value; }
 export function encodeRejectReason(value: RejectReason, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRejectReason(value, writer, context, {}, 0); return writer.result(); }
@@ -2819,7 +2881,7 @@ export function enumWireGenericReservationOperationKind(value: GenericReservatio
 } }
 function readGenericReservationOperationKind(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): GenericReservationOperationKind {
   void context; void enclosing; void flags;
-  const raw = reader.u(1); switch (Number(raw)) {
+  const raw = reader.u8(); switch (raw) {
     case 1: return "reserve";
     case 2: return "commit";
     case 3: return "abort";
@@ -2829,7 +2891,7 @@ function readGenericReservationOperationKind(reader: Reader, context: ServiceWir
 
 function writeGenericReservationOperationKind(input: GenericReservationOperationKind, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  writer.u(numeric(enumWireGenericReservationOperationKind(value)), 1);
+  writer.u8(narrowInteger(enumWireGenericReservationOperationKind(value)));
 }
 export function decodeGenericReservationOperationKind(bytes: Uint8Array, context: ServiceWireDecoderContext): GenericReservationOperationKind { const reader = new Reader(bytes); const value = readGenericReservationOperationKind(reader, context, {}, 0); reader.done("generic-reservation-operation-kind"); return value; }
 export function encodeGenericReservationOperationKind(value: GenericReservationOperationKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeGenericReservationOperationKind(value, writer, context, {}, 0); return writer.result(); }
@@ -7842,7 +7904,7 @@ export function decodeRelocationEnvelopeV1(bytes: Uint8Array, context: ServiceWi
 export function encodeRelocationEnvelopeV1(value: RelocationEnvelopeV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationEnvelopeV1(value, writer, context, {}, 0); return writer.result(); }
 
 export type HelloCommand = { readonly command: "hello"; readonly flags: number; readonly admission: ServiceAdmission; };
-export function decodeHelloCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): HelloCommand { if (!frames.length) fail("hello frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 1) fail("hello header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("hello flags"); const value: any = { command: "hello", flags };
+export function decodeHelloCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): HelloCommand { if (!frames.length) fail("hello frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 1) fail("hello header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("hello flags"); const value: any = { command: "hello", flags };
   value["admission"] = readServiceAdmission(reader, context, value, flags);
 
 
@@ -7862,7 +7924,7 @@ return frames; }
 export function validateHelloCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type AdmitCommand = { readonly command: "admit"; readonly flags: number; readonly admission: ServiceAdmission; };
-export function decodeAdmitCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): AdmitCommand { if (!frames.length) fail("admit frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 2) fail("admit header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("admit flags"); const value: any = { command: "admit", flags };
+export function decodeAdmitCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): AdmitCommand { if (!frames.length) fail("admit frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 2) fail("admit header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("admit flags"); const value: any = { command: "admit", flags };
   value["admission"] = readServiceAdmission(reader, context, value, flags);
 
 
@@ -7882,7 +7944,7 @@ return frames; }
 export function validateAdmitCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RejectCommand = { readonly command: "reject"; readonly flags: number; readonly reason: RejectReason; };
-export function decodeRejectCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RejectCommand { if (!frames.length) fail("reject frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 3) fail("reject header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("reject flags"); const value: any = { command: "reject", flags };
+export function decodeRejectCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RejectCommand { if (!frames.length) fail("reject frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 3) fail("reject header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("reject flags"); const value: any = { command: "reject", flags };
   value["reason"] = readRejectReason(reader, context, value, flags);
 
 
@@ -7902,7 +7964,7 @@ return frames; }
 export function validateRejectCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type UpdateCommand = { readonly command: "update"; readonly flags: number; readonly admission: ServiceAdmission; };
-export function decodeUpdateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): UpdateCommand { if (!frames.length) fail("update frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 4) fail("update header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("update flags"); const value: any = { command: "update", flags };
+export function decodeUpdateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): UpdateCommand { if (!frames.length) fail("update frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 4) fail("update header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("update flags"); const value: any = { command: "update", flags };
   value["admission"] = readServiceAdmission(reader, context, value, flags);
 
 
@@ -7922,7 +7984,7 @@ return frames; }
 export function validateUpdateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type LivenessProbeCommand = { readonly command: "livenessProbe"; readonly flags: number; readonly probeId: NonzeroU64; };
-export function decodeLivenessProbeCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): LivenessProbeCommand { if (!frames.length) fail("livenessProbe frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 5) fail("livenessProbe header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("livenessProbe flags"); const value: any = { command: "livenessProbe", flags };
+export function decodeLivenessProbeCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): LivenessProbeCommand { if (!frames.length) fail("livenessProbe frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 5) fail("livenessProbe header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("livenessProbe flags"); const value: any = { command: "livenessProbe", flags };
   value["probeId"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -7942,7 +8004,7 @@ return frames; }
 export function validateLivenessProbeCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type LivenessAckCommand = { readonly command: "livenessAck"; readonly flags: number; readonly probeId: NonzeroU64; };
-export function decodeLivenessAckCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): LivenessAckCommand { if (!frames.length) fail("livenessAck frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 6) fail("livenessAck header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("livenessAck flags"); const value: any = { command: "livenessAck", flags };
+export function decodeLivenessAckCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): LivenessAckCommand { if (!frames.length) fail("livenessAck frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 6) fail("livenessAck header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("livenessAck flags"); const value: any = { command: "livenessAck", flags };
   value["probeId"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -7962,7 +8024,7 @@ return frames; }
 export function validateLivenessAckCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type NodeSendCommand = { readonly command: "nodeSend"; readonly flags: number; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
-export function decodeNodeSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): NodeSendCommand { if (!frames.length) fail("nodeSend frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 16) fail("nodeSend header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("nodeSend flags"); const value: any = { command: "nodeSend", flags };
+export function decodeNodeSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): NodeSendCommand { if (!frames.length) fail("nodeSend frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 16) fail("nodeSend header"); const flags = reader.u8(); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("nodeSend flags"); const value: any = { command: "nodeSend", flags };
 
 reader.done("nodeSend"); let frameIndex = 1;
   if ((flags & 1) !== 0) { if (frameIndex >= frames.length) fail("nodeSend metadata"); value.metadata = decodeMetadataFrame(frames[frameIndex++], context); }
@@ -7979,7 +8041,7 @@ return frames; }
 export function validateNodeSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type NodeRequestCommand = { readonly command: "nodeRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
-export function decodeNodeRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): NodeRequestCommand { if (!frames.length) fail("nodeRequest frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 17) fail("nodeRequest header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("nodeRequest flags"); const value: any = { command: "nodeRequest", flags };
+export function decodeNodeRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): NodeRequestCommand { if (!frames.length) fail("nodeRequest frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 17) fail("nodeRequest header"); const flags = reader.u8(); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("nodeRequest flags"); const value: any = { command: "nodeRequest", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -8001,7 +8063,7 @@ return frames; }
 export function validateNodeRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ChannelSendCommand = { readonly command: "channelSend"; readonly flags: number; readonly channelName: Text8; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
-export function decodeChannelSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ChannelSendCommand { if (!frames.length) fail("channelSend frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 18) fail("channelSend header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("channelSend flags"); const value: any = { command: "channelSend", flags };
+export function decodeChannelSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ChannelSendCommand { if (!frames.length) fail("channelSend frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 18) fail("channelSend header"); const flags = reader.u8(); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("channelSend flags"); const value: any = { command: "channelSend", flags };
   value["channelName"] = readText8(reader, context, value, flags);
 
 
@@ -8023,7 +8085,7 @@ return frames; }
 export function validateChannelSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ChannelRequestCommand = { readonly command: "channelRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly channelName: Text8; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
-export function decodeChannelRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ChannelRequestCommand { if (!frames.length) fail("channelRequest frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 19) fail("channelRequest header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("channelRequest flags"); const value: any = { command: "channelRequest", flags };
+export function decodeChannelRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ChannelRequestCommand { if (!frames.length) fail("channelRequest frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 19) fail("channelRequest header"); const flags = reader.u8(); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("channelRequest flags"); const value: any = { command: "channelRequest", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -8052,7 +8114,7 @@ return frames; }
 export function validateChannelRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ReplyCommand = { readonly command: "reply"; readonly flags: number; readonly correlation: NonzeroU64; readonly terminalResult: RequestTerminalResult; readonly failureCode: FrameworkErrorCode; readonly tail: RequestSpecificTail; readonly payload?: ApplicationPayloadEnvelopeV1; };
-export function decodeReplyCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ReplyCommand { if (!frames.length) fail("reply frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 20) fail("reply header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("reply flags"); const value: any = { command: "reply", flags };
+export function decodeReplyCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ReplyCommand { if (!frames.length) fail("reply frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 20) fail("reply header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("reply flags"); const value: any = { command: "reply", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -8096,7 +8158,7 @@ export function validateReplyCommandRuntimePredicates(value: any, context: Servi
 if (!(validTerminalFailure(enumWireRequestTerminalResult(value["terminalResult"]), enumWireFrameworkErrorCode(value["failureCode"])))) fail("reply runtime predicate"); }
 
 export type SpotSendCommand = { readonly command: "spotSend"; readonly flags: number; readonly operation: OperationId; readonly messageFollowHopCount: U8; readonly sourceSpotId: Text8; readonly targetSpot: SpotRouteFence; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
-export function decodeSpotSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SpotSendCommand { if (!frames.length) fail("spotSend frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 21) fail("spotSend header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("spotSend flags"); const value: any = { command: "spotSend", flags };
+export function decodeSpotSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SpotSendCommand { if (!frames.length) fail("spotSend frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 21) fail("spotSend header"); const flags = reader.u8(); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("spotSend flags"); const value: any = { command: "spotSend", flags };
   value["operation"] = readOperationId(reader, context, value, flags);
 
 
@@ -8139,7 +8201,7 @@ return frames; }
 export function validateSpotSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type SpotRequestCommand = { readonly command: "spotRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly messageFollowHopCount: U8; readonly sourceSpotId: Text8; readonly targetSpot: SpotRouteFence; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
-export function decodeSpotRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SpotRequestCommand { if (!frames.length) fail("spotRequest frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 22) fail("spotRequest header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("spotRequest flags"); const value: any = { command: "spotRequest", flags };
+export function decodeSpotRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SpotRequestCommand { if (!frames.length) fail("spotRequest frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 22) fail("spotRequest header"); const flags = reader.u8(); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("spotRequest flags"); const value: any = { command: "spotRequest", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -8189,7 +8251,7 @@ return frames; }
 export function validateSpotRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type LogicalMulticastCommand = { readonly command: "logicalMulticast"; readonly flags: number; readonly channelName: Text8; readonly topic: Text8; readonly sourceSpotId: Text8; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
-export function decodeLogicalMulticastCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): LogicalMulticastCommand { if (!frames.length) fail("logicalMulticast frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 23) fail("logicalMulticast header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("logicalMulticast flags"); const value: any = { command: "logicalMulticast", flags };
+export function decodeLogicalMulticastCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): LogicalMulticastCommand { if (!frames.length) fail("logicalMulticast frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 23) fail("logicalMulticast header"); const flags = reader.u8(); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("logicalMulticast flags"); const value: any = { command: "logicalMulticast", flags };
   value["channelName"] = readText8(reader, context, value, flags);
 
 
@@ -8225,7 +8287,7 @@ return frames; }
 export function validateLogicalMulticastCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorSendCommand = { readonly command: "actorSend"; readonly flags: number; readonly operation: OperationId; readonly messageFollowHopCount: U8; readonly sourceActor: OptionalActorRef; readonly targetActor: ActorRouteFence; readonly boundSessionTail?: OptionalBoundSessionTail; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
-export function decodeActorSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorSendCommand { if (!frames.length) fail("actorSend frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 24) fail("actorSend header"); const flags = Number(reader.u(1)); if ((flags & ~7) !== 0 || (flags & 0) !== 0) fail("actorSend flags");
+export function decodeActorSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorSendCommand { if (!frames.length) fail("actorSend frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 24) fail("actorSend header"); const flags = reader.u8(); if ((flags & ~7) !== 0 || (flags & 0) !== 0) fail("actorSend flags");
 if ((flags & 6) !== 0 && (flags & 6) !== 6) fail("actorSend flags"); const value: any = { command: "actorSend", flags };
   value["operation"] = readOperationId(reader, context, value, flags);
 
@@ -8281,7 +8343,7 @@ return frames; }
 export function validateActorSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorRequestCommand = { readonly command: "actorRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly messageFollowHopCount: U8; readonly sourceActor: OptionalActorRef; readonly targetActor: ActorRouteFence; readonly boundSessionTail?: OptionalBoundSessionTail; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
-export function decodeActorRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorRequestCommand { if (!frames.length) fail("actorRequest frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 25) fail("actorRequest header"); const flags = Number(reader.u(1)); if ((flags & ~7) !== 0 || (flags & 0) !== 0) fail("actorRequest flags");
+export function decodeActorRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorRequestCommand { if (!frames.length) fail("actorRequest frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 25) fail("actorRequest header"); const flags = reader.u8(); if ((flags & ~7) !== 0 || (flags & 0) !== 0) fail("actorRequest flags");
 if ((flags & 6) !== 0 && (flags & 6) !== 6) fail("actorRequest flags"); const value: any = { command: "actorRequest", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
@@ -8344,7 +8406,7 @@ return frames; }
 export function validateActorRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorLookupCommand = { readonly command: "actorLookup"; readonly flags: number; readonly correlation: NonzeroU64; readonly actorId: Text8; };
-export function decodeActorLookupCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorLookupCommand { if (!frames.length) fail("actorLookup frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 26) fail("actorLookup header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorLookup flags"); const value: any = { command: "actorLookup", flags };
+export function decodeActorLookupCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorLookupCommand { if (!frames.length) fail("actorLookup frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 26) fail("actorLookup header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorLookup flags"); const value: any = { command: "actorLookup", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -8371,7 +8433,7 @@ return frames; }
 export function validateActorLookupCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorDestroyCommand = { readonly command: "actorDestroy"; readonly flags: number; readonly correlation: NonzeroU64; readonly actor: ActorRouteFence; };
-export function decodeActorDestroyCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorDestroyCommand { if (!frames.length) fail("actorDestroy frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 27) fail("actorDestroy header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorDestroy flags"); const value: any = { command: "actorDestroy", flags };
+export function decodeActorDestroyCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorDestroyCommand { if (!frames.length) fail("actorDestroy frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 27) fail("actorDestroy header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorDestroy flags"); const value: any = { command: "actorDestroy", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -8398,7 +8460,7 @@ return frames; }
 export function validateActorDestroyCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorJoinCommand = { readonly command: "actorJoin"; readonly flags: number; readonly correlation: NonzeroU64; readonly actor: ActorRouteFence; readonly entry: Bool8; readonly targetSpot: SpotRouteFence; readonly payload?: ApplicationPayloadEnvelopeV1; };
-export function decodeActorJoinCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorJoinCommand { if (!frames.length) fail("actorJoin frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 28) fail("actorJoin header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorJoin flags"); const value: any = { command: "actorJoin", flags };
+export function decodeActorJoinCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorJoinCommand { if (!frames.length) fail("actorJoin frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 28) fail("actorJoin header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorJoin flags"); const value: any = { command: "actorJoin", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -8439,7 +8501,7 @@ return frames; }
 export function validateActorJoinCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorLeftCommand = { readonly command: "actorLeft"; readonly flags: number; readonly actor: ActorRef; readonly previousMembership: SpotMembership; readonly currentAuthorityOwnerGeneration: NonzeroU64; };
-export function decodeActorLeftCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorLeftCommand { if (!frames.length) fail("actorLeft frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 29) fail("actorLeft header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorLeft flags"); const value: any = { command: "actorLeft", flags };
+export function decodeActorLeftCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorLeftCommand { if (!frames.length) fail("actorLeft frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 29) fail("actorLeft header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorLeft flags"); const value: any = { command: "actorLeft", flags };
   value["actor"] = readActorRef(reader, context, value, flags);
 
 
@@ -8473,7 +8535,7 @@ return frames; }
 export function validateActorLeftCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RelocationReadyCommand = { readonly command: "relocationReady"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly target: RelocationTargetFence; readonly object: RelocationObjectIdentity; readonly senderRole: RelocationRole; };
-export function decodeRelocationReadyCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationReadyCommand { if (!frames.length) fail("relocationReady frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 30) fail("relocationReady header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationReady flags"); const value: any = { command: "relocationReady", flags };
+export function decodeRelocationReadyCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationReadyCommand { if (!frames.length) fail("relocationReady frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 30) fail("relocationReady header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationReady flags"); const value: any = { command: "relocationReady", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
 
@@ -8528,7 +8590,7 @@ return frames; }
 export function validateRelocationReadyCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RelocationDataCommand = { readonly command: "relocationData"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly object: RelocationObjectIdentity; readonly record: FrozenRecord; };
-export function decodeRelocationDataCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationDataCommand { if (!frames.length) fail("relocationData frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 31) fail("relocationData header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationData flags"); const value: any = { command: "relocationData", flags };
+export function decodeRelocationDataCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationDataCommand { if (!frames.length) fail("relocationData frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 31) fail("relocationData header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationData flags"); const value: any = { command: "relocationData", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
 
@@ -8583,7 +8645,7 @@ return frames; }
 export function validateRelocationDataCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ReplyRelayCommand = { readonly command: "replyRelay"; readonly flags: number; readonly operation: OperationId; readonly replyRouteId: NonzeroU64; readonly context: ReplyRelayContext; readonly terminalResult: RequestTerminalResult; readonly failureCode: FrameworkErrorCode; readonly payload?: ApplicationPayloadEnvelopeV1; };
-export function decodeReplyRelayCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ReplyRelayCommand { if (!frames.length) fail("replyRelay frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 33) fail("replyRelay header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("replyRelay flags"); const value: any = { command: "replyRelay", flags };
+export function decodeReplyRelayCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ReplyRelayCommand { if (!frames.length) fail("replyRelay frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 33) fail("replyRelay header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("replyRelay flags"); const value: any = { command: "replyRelay", flags };
   value["operation"] = readOperationId(reader, context, value, flags);
 
 
@@ -8634,7 +8696,7 @@ export function validateReplyRelayCommandRuntimePredicates(value: any, context: 
 if (!(validTerminalFailure(enumWireRequestTerminalResult(value["terminalResult"]), enumWireFrameworkErrorCode(value["failureCode"])))) fail("replyRelay runtime predicate"); }
 
 export type RelocationCutoverCommand = { readonly command: "relocationCutover"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly object: RelocationObjectIdentity; readonly boundaryRecordCount: OrdinalOrZero; readonly boundaryChecksumCrc32c: U32; };
-export function decodeRelocationCutoverCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationCutoverCommand { if (!frames.length) fail("relocationCutover frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 34) fail("relocationCutover header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationCutover flags"); const value: any = { command: "relocationCutover", flags };
+export function decodeRelocationCutoverCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationCutoverCommand { if (!frames.length) fail("relocationCutover frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 34) fail("relocationCutover header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationCutover flags"); const value: any = { command: "relocationCutover", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
 
@@ -8696,7 +8758,7 @@ return frames; }
 export function validateRelocationCutoverCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type BoundSessionSendCommand = { readonly command: "boundSessionSend"; readonly flags: number; readonly actor: ActorRouteFence; readonly expectedBindingGeneration: NonzeroU64; readonly payload: ApplicationPayloadEnvelopeV1; };
-export function decodeBoundSessionSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionSendCommand { if (!frames.length) fail("boundSessionSend frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 36) fail("boundSessionSend header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionSend flags"); const value: any = { command: "boundSessionSend", flags };
+export function decodeBoundSessionSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionSendCommand { if (!frames.length) fail("boundSessionSend frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 36) fail("boundSessionSend header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionSend flags"); const value: any = { command: "boundSessionSend", flags };
   value["actor"] = readActorRouteFence(reader, context, value, flags);
 
 
@@ -8723,7 +8785,7 @@ return frames; }
 export function validateBoundSessionSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorJoinedCommand = { readonly command: "actorJoined"; readonly flags: number; readonly actor: ActorRef; readonly previousMembership: OptionalSpotMembership; readonly currentMembership: SpotMembership; readonly currentAuthorityOwnerGeneration: NonzeroU64; };
-export function decodeActorJoinedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorJoinedCommand { if (!frames.length) fail("actorJoined frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 37) fail("actorJoined header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorJoined flags"); const value: any = { command: "actorJoined", flags };
+export function decodeActorJoinedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorJoinedCommand { if (!frames.length) fail("actorJoined frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 37) fail("actorJoined header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorJoined flags"); const value: any = { command: "actorJoined", flags };
   value["actor"] = readActorRef(reader, context, value, flags);
 
 
@@ -8764,7 +8826,7 @@ return frames; }
 export function validateActorJoinedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type BoundSessionBindCommand = { readonly command: "boundSessionBind"; readonly flags: number; readonly correlation: NonzeroU64; readonly actor: ActorRouteFence; readonly sessionRid: Rid; readonly binding: BoundSessionBindingTransition; };
-export function decodeBoundSessionBindCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionBindCommand { if (!frames.length) fail("boundSessionBind frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 38) fail("boundSessionBind header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionBind flags"); const value: any = { command: "boundSessionBind", flags };
+export function decodeBoundSessionBindCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionBindCommand { if (!frames.length) fail("boundSessionBind frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 38) fail("boundSessionBind header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionBind flags"); const value: any = { command: "boundSessionBind", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -8805,7 +8867,7 @@ return frames; }
 export function validateBoundSessionBindCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type InstanceSpotCommand = { readonly command: "instanceSpot"; readonly flags: number; readonly route: InstanceRouteV1; readonly sourceNodeGeneration: NonzeroU64; readonly sourceNodeRid: Rid; readonly sourceSpotId: OptionalText8; readonly operationKind: InstanceOperationKind; readonly operation: OperationIdOrZero; readonly replyRoute: InstanceReplyRoute; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
-export function decodeInstanceSpotCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): InstanceSpotCommand { if (!frames.length) fail("instanceSpot frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 39) fail("instanceSpot header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("instanceSpot flags"); const value: any = { command: "instanceSpot", flags };
+export function decodeInstanceSpotCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): InstanceSpotCommand { if (!frames.length) fail("instanceSpot frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 39) fail("instanceSpot header"); const flags = reader.u8(); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("instanceSpot flags"); const value: any = { command: "instanceSpot", flags };
   value["route"] = readInstanceRouteV1(reader, context, value, flags);
 
 
@@ -8869,7 +8931,7 @@ return frames; }
 export function validateInstanceSpotCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RelocationPrepareCommand = { readonly command: "relocationPrepare"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly target: RelocationTargetFence; readonly initiatorRole: RelocationRole; readonly object: RelocationObjectIdentity; readonly sourceNodeRid: Rid; readonly sourceNodeGeneration: NonzeroU64; readonly payloadTotalLength: RelocationLogicalLength; readonly payloadChunkCount: RelocationChunkCount; readonly payloadChecksumCrc32c: U32; readonly applicationVersion: ApplicationVersion; readonly deadlineUnixMs: NonzeroU64; };
-export function decodeRelocationPrepareCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationPrepareCommand { if (!frames.length) fail("relocationPrepare frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 40) fail("relocationPrepare header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationPrepare flags"); const value: any = { command: "relocationPrepare", flags };
+export function decodeRelocationPrepareCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationPrepareCommand { if (!frames.length) fail("relocationPrepare frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 40) fail("relocationPrepare header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationPrepare flags"); const value: any = { command: "relocationPrepare", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
 
@@ -8973,7 +9035,7 @@ return frames; }
 export function validateRelocationPrepareCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type SessionRelocationSealCommand = { readonly command: "sessionRelocationSeal"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly actor: ActorRouteFence; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64; };
-export function decodeSessionRelocationSealCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationSealCommand { if (!frames.length) fail("sessionRelocationSeal frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 42) fail("sessionRelocationSeal header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationSeal flags"); const value: any = { command: "sessionRelocationSeal", flags };
+export function decodeSessionRelocationSealCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationSealCommand { if (!frames.length) fail("sessionRelocationSeal frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 42) fail("sessionRelocationSeal header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationSeal flags"); const value: any = { command: "sessionRelocationSeal", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
 
@@ -9070,7 +9132,7 @@ return frames; }
 export function validateSessionRelocationSealCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type SessionRelocationSealedCommand = { readonly command: "sessionRelocationSealed"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly actor: ActorRouteFence; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; readonly sealResult: SessionSealResult; };
-export function decodeSessionRelocationSealedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationSealedCommand { if (!frames.length) fail("sessionRelocationSealed frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 43) fail("sessionRelocationSealed header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationSealed flags"); const value: any = { command: "sessionRelocationSealed", flags };
+export function decodeSessionRelocationSealedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationSealedCommand { if (!frames.length) fail("sessionRelocationSealed frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 43) fail("sessionRelocationSealed header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationSealed flags"); const value: any = { command: "sessionRelocationSealed", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
 
@@ -9153,7 +9215,7 @@ return frames; }
 export function validateSessionRelocationSealedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type SessionRelocationRouteCommand = { readonly command: "sessionRelocationRoute"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly actor: ActorRef; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; readonly route: SessionRelocationRouteUpdate; };
-export function decodeSessionRelocationRouteCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationRouteCommand { if (!frames.length) fail("sessionRelocationRoute frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 44) fail("sessionRelocationRoute header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationRoute flags"); const value: any = { command: "sessionRelocationRoute", flags };
+export function decodeSessionRelocationRouteCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationRouteCommand { if (!frames.length) fail("sessionRelocationRoute frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 44) fail("sessionRelocationRoute header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationRoute flags"); const value: any = { command: "sessionRelocationRoute", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
 
@@ -9243,7 +9305,7 @@ return frames; }
 export function validateSessionRelocationRouteCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ReplyRelayAckCommand = { readonly command: "replyRelayAck"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly operation: OperationId; readonly replyRouteId: NonzeroU64; readonly requestSource: RequestSourceFence; readonly status: ReplyRelayAckStatus; };
-export function decodeReplyRelayAckCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ReplyRelayAckCommand { if (!frames.length) fail("replyRelayAck frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 46) fail("replyRelayAck header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("replyRelayAck flags"); const value: any = { command: "replyRelayAck", flags };
+export function decodeReplyRelayAckCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ReplyRelayAckCommand { if (!frames.length) fail("replyRelayAck frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 46) fail("replyRelayAck header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("replyRelayAck flags"); const value: any = { command: "replyRelayAck", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
 
@@ -9298,7 +9360,7 @@ return frames; }
 export function validateReplyRelayAckCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type UserSpotCreateCommand = { readonly command: "userSpotCreate"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly sourceNodeRid: Rid; readonly sourceNodeGeneration: NonzeroU64; readonly spotId: Text8; readonly stableType: Text8; readonly reservation: ObjectReservationFence; readonly deadlineUnixMs: NonzeroU64; };
-export function decodeUserSpotCreateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): UserSpotCreateCommand { if (!frames.length) fail("userSpotCreate frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 47) fail("userSpotCreate header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("userSpotCreate flags"); const value: any = { command: "userSpotCreate", flags };
+export function decodeUserSpotCreateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): UserSpotCreateCommand { if (!frames.length) fail("userSpotCreate frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 47) fail("userSpotCreate header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("userSpotCreate flags"); const value: any = { command: "userSpotCreate", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -9367,7 +9429,7 @@ return frames; }
 export function validateUserSpotCreateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type UserSpotCloseCommand = { readonly command: "userSpotClose"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly sourceNodeRid: Rid; readonly sourceNodeGeneration: NonzeroU64; readonly target: UserSpotCloseFenceV1; readonly deadlineUnixMs: NonzeroU64; };
-export function decodeUserSpotCloseCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): UserSpotCloseCommand { if (!frames.length) fail("userSpotClose frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 48) fail("userSpotClose header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("userSpotClose flags"); const value: any = { command: "userSpotClose", flags };
+export function decodeUserSpotCloseCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): UserSpotCloseCommand { if (!frames.length) fail("userSpotClose frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 48) fail("userSpotClose header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("userSpotClose flags"); const value: any = { command: "userSpotClose", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -9422,7 +9484,7 @@ return frames; }
 export function validateUserSpotCloseCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorCreateCommand = { readonly command: "actorCreate"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly sourceNodeRid: Rid; readonly sourceNodeGeneration: NonzeroU64; readonly actorId: Text8; readonly stableType: Text8; readonly reservation: ObjectReservationFence; readonly deadlineUnixMs: NonzeroU64; };
-export function decodeActorCreateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorCreateCommand { if (!frames.length) fail("actorCreate frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 49) fail("actorCreate header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorCreate flags"); const value: any = { command: "actorCreate", flags };
+export function decodeActorCreateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorCreateCommand { if (!frames.length) fail("actorCreate frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 49) fail("actorCreate header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorCreate flags"); const value: any = { command: "actorCreate", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -9491,7 +9553,7 @@ return frames; }
 export function validateActorCreateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type MessageFollowCommand = { readonly command: "messageFollow"; readonly flags: number; readonly route: MessageFollowRouteV1; };
-export function decodeMessageFollowCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): MessageFollowCommand { if (!frames.length) fail("messageFollow frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 50) fail("messageFollow header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("messageFollow flags"); const value: any = { command: "messageFollow", flags };
+export function decodeMessageFollowCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): MessageFollowCommand { if (!frames.length) fail("messageFollow frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 50) fail("messageFollow header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("messageFollow flags"); const value: any = { command: "messageFollow", flags };
   value["route"] = readMessageFollowRouteV1(reader, context, value, flags);
 
 
@@ -9511,7 +9573,7 @@ return frames; }
 export function validateMessageFollowCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type BoundSessionReplacedCommand = { readonly command: "boundSessionReplaced"; readonly flags: number; readonly actorAuthority: ActorRouteFence; readonly retiredSession: RetiredBoundSessionRouteFence; };
-export function decodeBoundSessionReplacedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionReplacedCommand { if (!frames.length) fail("boundSessionReplaced frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 51) fail("boundSessionReplaced header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionReplaced flags"); const value: any = { command: "boundSessionReplaced", flags };
+export function decodeBoundSessionReplacedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionReplacedCommand { if (!frames.length) fail("boundSessionReplaced frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 51) fail("boundSessionReplaced header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionReplaced flags"); const value: any = { command: "boundSessionReplaced", flags };
   value["actorAuthority"] = readActorRouteFence(reader, context, value, flags);
 
 
@@ -9538,7 +9600,7 @@ return frames; }
 export function validateBoundSessionReplacedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RelocationStateCommand = { readonly command: "relocationState"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly object: RelocationObjectIdentity; readonly chunkOrdinal: U32; readonly chunkData: DurableBlob; };
-export function decodeRelocationStateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationStateCommand { if (!frames.length) fail("relocationState frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 52) fail("relocationState header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationState flags"); const value: any = { command: "relocationState", flags };
+export function decodeRelocationStateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationStateCommand { if (!frames.length) fail("relocationState frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 52) fail("relocationState header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationState flags"); const value: any = { command: "relocationState", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
 
@@ -9600,7 +9662,7 @@ return frames; }
 export function validateRelocationStateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RelocationFailedCommand = { readonly command: "relocationFailed"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly target: RelocationTargetFence; readonly object: RelocationObjectIdentity; readonly senderRole: RelocationRole; readonly failureCode: FrameworkErrorCode; };
-export function decodeRelocationFailedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationFailedCommand { if (!frames.length) fail("relocationFailed frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 53) fail("relocationFailed header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationFailed flags"); const value: any = { command: "relocationFailed", flags };
+export function decodeRelocationFailedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationFailedCommand { if (!frames.length) fail("relocationFailed frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 53) fail("relocationFailed header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationFailed flags"); const value: any = { command: "relocationFailed", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
 
@@ -9662,7 +9724,7 @@ return frames; }
 export function validateRelocationFailedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type BoundSessionCloseCommand = { readonly command: "boundSessionClose"; readonly flags: number; readonly correlation: NonzeroU64; readonly actor: ActorRef; readonly session: RetiredBoundSessionRouteFence; };
-export function decodeBoundSessionCloseCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionCloseCommand { if (!frames.length) fail("boundSessionClose frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 54) fail("boundSessionClose header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionClose flags"); const value: any = { command: "boundSessionClose", flags };
+export function decodeBoundSessionCloseCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionCloseCommand { if (!frames.length) fail("boundSessionClose frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 54) fail("boundSessionClose header"); const flags = reader.u8(); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionClose flags"); const value: any = { command: "boundSessionClose", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -9695,19 +9757,83 @@ const frames: Uint8Array[] = [writer.result()];
 return frames; }
 export function validateBoundSessionCloseCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
-export type ServiceWireCommand = HelloCommand | AdmitCommand | RejectCommand | UpdateCommand | LivenessProbeCommand | LivenessAckCommand | NodeSendCommand | NodeRequestCommand | ChannelSendCommand | ChannelRequestCommand | ReplyCommand | SpotSendCommand | SpotRequestCommand | LogicalMulticastCommand | ActorSendCommand | ActorRequestCommand | ActorLookupCommand | ActorDestroyCommand | ActorJoinCommand | ActorLeftCommand | RelocationReadyCommand | RelocationDataCommand | ReplyRelayCommand | RelocationCutoverCommand | BoundSessionSendCommand | ActorJoinedCommand | BoundSessionBindCommand | InstanceSpotCommand | RelocationPrepareCommand | SessionRelocationSealCommand | SessionRelocationSealedCommand | SessionRelocationRouteCommand | ReplyRelayAckCommand | UserSpotCreateCommand | UserSpotCloseCommand | ActorCreateCommand | MessageFollowCommand | BoundSessionReplacedCommand | RelocationStateCommand | RelocationFailedCommand | BoundSessionCloseCommand;
+export type InstanceSpotFollowCommand = { readonly command: "instanceSpotFollow"; readonly flags: number; readonly operationHigh: U64; readonly operationLow: U64; readonly sourceNodeGeneration: NonzeroU64; readonly sourceNodeRid: Rid; readonly sourceSpotId: OptionalText8; readonly messageFollowHopCount: U8; readonly targetSpot: SpotRouteFence; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
+export function decodeInstanceSpotFollowCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): InstanceSpotFollowCommand { if (!frames.length) fail("instanceSpotFollow frames"); const reader = new Reader(frames[0]); if (reader.u8() !== 90 || reader.u8() !== 77 || reader.u8() !== 1 || reader.u8() !== 55) fail("instanceSpotFollow header"); const flags = reader.u8(); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("instanceSpotFollow flags"); const value: any = { command: "instanceSpotFollow", flags };
+  value["operationHigh"] = readU64(reader, context, value, flags);
+  if (numeric(value["operationHigh"]) > 0n) fail("operationHigh constraint");
 
-export function decodeAuthorityPayloadV1DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityPayloadV1 { if (bytes.length > 1048576) fail("authority-payload-v1 maximum"); const reader = new Reader(bytes); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 76 || Number(reader.u(1)) !== 65 || Number(reader.u(1)) !== 85 || Number(reader.u(1)) !== 1) fail("authority-payload-v1 header"); const flags = readU16(reader, context, {}, 0); if (!same(flags, 0)) fail("authority-payload-v1 flags"); const length = Number(readU32(reader, context, {}, 0)); const body = reader.take(length); const checksumOffset = reader.offset; const declared = Number(reader.u(4)); reader.done("authority-payload-v1"); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail("authority-payload-v1 checksum"); return decodeAuthorityPayloadV1(body, context); }
-export function encodeAuthorityPayloadV1DurableFormat(value: AuthorityPayloadV1, context: ServiceWireDecoderContext): Uint8Array { const body = encodeAuthorityPayloadV1(value, context); const writer = new Writer(); writer.put([90,76,65,85, 1]); writeU16(0, writer, context, {}, 0); writeU32(body.length, writer, context, {}, 0); writer.put(body); writer.u(BigInt(crc32c(writer.result())), 4); const bytes = writer.result(); if (bytes.length > 1048576) fail("authority-payload-v1 maximum"); return bytes; }
+  value["operationLow"] = readU64(reader, context, value, flags);
+  if (numeric(value["operationLow"]) > 0n) fail("operationLow constraint");
 
-export function decodeInstanceActivationRecoveryV1DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceActivationRecoveryV1 { if (bytes.length > 1048576) fail("instance-activation-recovery-v1 maximum"); const reader = new Reader(bytes); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 76 || Number(reader.u(1)) !== 73 || Number(reader.u(1)) !== 65 || Number(reader.u(1)) !== 1) fail("instance-activation-recovery-v1 header"); const flags = readU16(reader, context, {}, 0); if (!same(flags, 0)) fail("instance-activation-recovery-v1 flags"); const length = Number(readU32(reader, context, {}, 0)); const body = reader.take(length); const checksumOffset = reader.offset; const declared = Number(reader.u(4)); reader.done("instance-activation-recovery-v1"); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail("instance-activation-recovery-v1 checksum"); return decodeInstanceActivationRecoveryV1(body, context); }
-export function encodeInstanceActivationRecoveryV1DurableFormat(value: InstanceActivationRecoveryV1, context: ServiceWireDecoderContext): Uint8Array { const body = encodeInstanceActivationRecoveryV1(value, context); const writer = new Writer(); writer.put([90,76,73,65, 1]); writeU16(0, writer, context, {}, 0); writeU32(body.length, writer, context, {}, 0); writer.put(body); writer.u(BigInt(crc32c(writer.result())), 4); const bytes = writer.result(); if (bytes.length > 1048576) fail("instance-activation-recovery-v1 maximum"); return bytes; }
+  value["sourceNodeGeneration"] = readNonzeroU64(reader, context, value, flags);
 
-export function decodeRelocationDataChunkV1DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationDataChunkV1 { if (bytes.length > 67108887) fail("relocation-data-chunk-v1 maximum"); const reader = new Reader(bytes); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 76 || Number(reader.u(1)) !== 84 || Number(reader.u(1)) !== 67 || Number(reader.u(1)) !== 1) fail("relocation-data-chunk-v1 header"); const flags = readU16(reader, context, {}, 0); if (!same(flags, 0)) fail("relocation-data-chunk-v1 flags"); const length = Number(readU32(reader, context, {}, 0)); const body = reader.take(length); const checksumOffset = reader.offset; const declared = Number(reader.u(4)); reader.done("relocation-data-chunk-v1"); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail("relocation-data-chunk-v1 checksum"); return decodeRelocationDataChunkV1(body, context); }
-export function encodeRelocationDataChunkV1DurableFormat(value: RelocationDataChunkV1, context: ServiceWireDecoderContext): Uint8Array { const body = encodeRelocationDataChunkV1(value, context); const writer = new Writer(); writer.put([90,76,84,67, 1]); writeU16(0, writer, context, {}, 0); writeU32(body.length, writer, context, {}, 0); writer.put(body); writer.u(BigInt(crc32c(writer.result())), 4); const bytes = writer.result(); if (bytes.length > 67108887) fail("relocation-data-chunk-v1 maximum"); return bytes; }
 
-export function decodeRelocationManifestV1DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationManifestV1 { if (bytes.length > 33554432) fail("relocation-manifest-v1 maximum"); const reader = new Reader(bytes); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 76 || Number(reader.u(1)) !== 84 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1) fail("relocation-manifest-v1 header"); const flags = readU16(reader, context, {}, 0); if (!same(flags, 0)) fail("relocation-manifest-v1 flags"); const length = Number(readU32(reader, context, {}, 0)); const body = reader.take(length); const checksumOffset = reader.offset; const declared = Number(reader.u(4)); reader.done("relocation-manifest-v1"); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail("relocation-manifest-v1 checksum"); return decodeRelocationManifestV1(body, context); }
-export function encodeRelocationManifestV1DurableFormat(value: RelocationManifestV1, context: ServiceWireDecoderContext): Uint8Array { const body = encodeRelocationManifestV1(value, context); const writer = new Writer(); writer.put([90,76,84,77, 1]); writeU16(0, writer, context, {}, 0); writeU32(body.length, writer, context, {}, 0); writer.put(body); writer.u(BigInt(crc32c(writer.result())), 4); const bytes = writer.result(); if (bytes.length > 33554432) fail("relocation-manifest-v1 maximum"); return bytes; }
+  value["sourceNodeRid"] = readRid(reader, context, value, flags);
+
+
+  value["sourceSpotId"] = readOptionalText8(reader, context, value, flags);
+
+
+  value["messageFollowHopCount"] = readU8(reader, context, value, flags);
+  if (numeric(value["messageFollowHopCount"]) < 1n || numeric(value["messageFollowHopCount"]) > 8n) fail("messageFollowHopCount constraint");
+
+  value["targetSpot"] = readSpotRouteFence(reader, context, value, flags);
+
+
+reader.done("instanceSpotFollow"); let frameIndex = 1;
+  if ((flags & 1) !== 0) { if (frameIndex >= frames.length) fail("instanceSpotFollow metadata"); value.metadata = decodeMetadataFrame(frames[frameIndex++], context); }
+  if (frameIndex >= frames.length) fail("instanceSpotFollow payload"); value.payload = decodeApplicationPayloadEnvelopeV1(frames[frameIndex++], context);
+if (frameIndex !== frames.length) fail("instanceSpotFollow frames");
+
+return value; }
+export function encodeInstanceSpotFollowCommand(value: InstanceSpotFollowCommand, context: ServiceWireDecoderContext): readonly Uint8Array[] { if ((value.flags & ~1) !== 0 || (value.flags & 0) !== 0) fail("instanceSpotFollow flags");  const writer = new Writer(); writer.put([90,77, 1, 55, value.flags]);
+  if (value["operationHigh"] === undefined) fail("operationHigh required");
+  if (numeric(value["operationHigh"]) > 0n) fail("operationHigh constraint");
+
+  writeU64(numeric(value["operationHigh"]), writer, context, value, value.flags);
+  if (value["operationLow"] === undefined) fail("operationLow required");
+  if (numeric(value["operationLow"]) > 0n) fail("operationLow constraint");
+
+  writeU64(numeric(value["operationLow"]), writer, context, value, value.flags);
+  if (value["sourceNodeGeneration"] === undefined) fail("sourceNodeGeneration required");
+
+
+  writeNonzeroU64(numeric(value["sourceNodeGeneration"]), writer, context, value, value.flags);
+  if (value["sourceNodeRid"] === undefined) fail("sourceNodeRid required");
+
+
+  writeRid(value["sourceNodeRid"], writer, context, value, value.flags);
+  if (value["sourceSpotId"] === undefined) fail("sourceSpotId required");
+
+
+  writeOptionalText8(value["sourceSpotId"], writer, context, value, value.flags);
+  if (value["messageFollowHopCount"] === undefined) fail("messageFollowHopCount required");
+  if (numeric(value["messageFollowHopCount"]) < 1n || numeric(value["messageFollowHopCount"]) > 8n) fail("messageFollowHopCount constraint");
+
+  writeU8(value["messageFollowHopCount"], writer, context, value, value.flags);
+  if (value["targetSpot"] === undefined) fail("targetSpot required");
+
+
+  writeSpotRouteFence(value["targetSpot"], writer, context, value, value.flags);
+const frames: Uint8Array[] = [writer.result()];
+  if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("instanceSpotFollow metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("instanceSpotFollow metadata forbidden");
+  if (value.payload === undefined) fail("instanceSpotFollow payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
+return frames; }
+export function validateInstanceSpotFollowCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
+
+export type ServiceWireCommand = HelloCommand | AdmitCommand | RejectCommand | UpdateCommand | LivenessProbeCommand | LivenessAckCommand | NodeSendCommand | NodeRequestCommand | ChannelSendCommand | ChannelRequestCommand | ReplyCommand | SpotSendCommand | SpotRequestCommand | LogicalMulticastCommand | ActorSendCommand | ActorRequestCommand | ActorLookupCommand | ActorDestroyCommand | ActorJoinCommand | ActorLeftCommand | RelocationReadyCommand | RelocationDataCommand | ReplyRelayCommand | RelocationCutoverCommand | BoundSessionSendCommand | ActorJoinedCommand | BoundSessionBindCommand | InstanceSpotCommand | RelocationPrepareCommand | SessionRelocationSealCommand | SessionRelocationSealedCommand | SessionRelocationRouteCommand | ReplyRelayAckCommand | UserSpotCreateCommand | UserSpotCloseCommand | ActorCreateCommand | MessageFollowCommand | BoundSessionReplacedCommand | RelocationStateCommand | RelocationFailedCommand | BoundSessionCloseCommand | InstanceSpotFollowCommand;
+
+export function decodeAuthorityPayloadV1DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityPayloadV1 { if (bytes.length > 1048576) fail("authority-payload-v1 maximum"); const reader = new Reader(bytes); if (reader.u8() !== 90 || reader.u8() !== 76 || reader.u8() !== 65 || reader.u8() !== 85 || reader.u8() !== 1) fail("authority-payload-v1 header"); const flags = readU16(reader, context, {}, 0); if (!same(flags, 0)) fail("authority-payload-v1 flags"); const length = Number(readU32(reader, context, {}, 0)); const body = reader.take(length); const checksumOffset = reader.offset; const declared = reader.u32(); reader.done("authority-payload-v1"); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail("authority-payload-v1 checksum"); return decodeAuthorityPayloadV1(body, context); }
+export function encodeAuthorityPayloadV1DurableFormat(value: AuthorityPayloadV1, context: ServiceWireDecoderContext): Uint8Array { const body = encodeAuthorityPayloadV1(value, context); const writer = new Writer(); writer.put([90,76,65,85, 1]); writeU16(0, writer, context, {}, 0); writeU32(body.length, writer, context, {}, 0); writer.put(body); writer.u32(crc32c(writer.result())); const bytes = writer.result(); if (bytes.length > 1048576) fail("authority-payload-v1 maximum"); return bytes; }
+
+export function decodeInstanceActivationRecoveryV1DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceActivationRecoveryV1 { if (bytes.length > 1048576) fail("instance-activation-recovery-v1 maximum"); const reader = new Reader(bytes); if (reader.u8() !== 90 || reader.u8() !== 76 || reader.u8() !== 73 || reader.u8() !== 65 || reader.u8() !== 1) fail("instance-activation-recovery-v1 header"); const flags = readU16(reader, context, {}, 0); if (!same(flags, 0)) fail("instance-activation-recovery-v1 flags"); const length = Number(readU32(reader, context, {}, 0)); const body = reader.take(length); const checksumOffset = reader.offset; const declared = reader.u32(); reader.done("instance-activation-recovery-v1"); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail("instance-activation-recovery-v1 checksum"); return decodeInstanceActivationRecoveryV1(body, context); }
+export function encodeInstanceActivationRecoveryV1DurableFormat(value: InstanceActivationRecoveryV1, context: ServiceWireDecoderContext): Uint8Array { const body = encodeInstanceActivationRecoveryV1(value, context); const writer = new Writer(); writer.put([90,76,73,65, 1]); writeU16(0, writer, context, {}, 0); writeU32(body.length, writer, context, {}, 0); writer.put(body); writer.u32(crc32c(writer.result())); const bytes = writer.result(); if (bytes.length > 1048576) fail("instance-activation-recovery-v1 maximum"); return bytes; }
+
+export function decodeRelocationDataChunkV1DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationDataChunkV1 { if (bytes.length > 67108887) fail("relocation-data-chunk-v1 maximum"); const reader = new Reader(bytes); if (reader.u8() !== 90 || reader.u8() !== 76 || reader.u8() !== 84 || reader.u8() !== 67 || reader.u8() !== 1) fail("relocation-data-chunk-v1 header"); const flags = readU16(reader, context, {}, 0); if (!same(flags, 0)) fail("relocation-data-chunk-v1 flags"); const length = Number(readU32(reader, context, {}, 0)); const body = reader.take(length); const checksumOffset = reader.offset; const declared = reader.u32(); reader.done("relocation-data-chunk-v1"); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail("relocation-data-chunk-v1 checksum"); return decodeRelocationDataChunkV1(body, context); }
+export function encodeRelocationDataChunkV1DurableFormat(value: RelocationDataChunkV1, context: ServiceWireDecoderContext): Uint8Array { const body = encodeRelocationDataChunkV1(value, context); const writer = new Writer(); writer.put([90,76,84,67, 1]); writeU16(0, writer, context, {}, 0); writeU32(body.length, writer, context, {}, 0); writer.put(body); writer.u32(crc32c(writer.result())); const bytes = writer.result(); if (bytes.length > 67108887) fail("relocation-data-chunk-v1 maximum"); return bytes; }
+
+export function decodeRelocationManifestV1DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationManifestV1 { if (bytes.length > 33554432) fail("relocation-manifest-v1 maximum"); const reader = new Reader(bytes); if (reader.u8() !== 90 || reader.u8() !== 76 || reader.u8() !== 84 || reader.u8() !== 77 || reader.u8() !== 1) fail("relocation-manifest-v1 header"); const flags = readU16(reader, context, {}, 0); if (!same(flags, 0)) fail("relocation-manifest-v1 flags"); const length = Number(readU32(reader, context, {}, 0)); const body = reader.take(length); const checksumOffset = reader.offset; const declared = reader.u32(); reader.done("relocation-manifest-v1"); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail("relocation-manifest-v1 checksum"); return decodeRelocationManifestV1(body, context); }
+export function encodeRelocationManifestV1DurableFormat(value: RelocationManifestV1, context: ServiceWireDecoderContext): Uint8Array { const body = encodeRelocationManifestV1(value, context); const writer = new Writer(); writer.put([90,76,84,77, 1]); writeU16(0, writer, context, {}, 0); writeU32(body.length, writer, context, {}, 0); writer.put(body); writer.u32(crc32c(writer.result())); const bytes = writer.result(); if (bytes.length > 33554432) fail("relocation-manifest-v1 maximum"); return bytes; }
 
 export type RelocationEnvelopeV1LogicalDecodeStep =
   | { readonly state: "needMore"; readonly bufferedInputByteCount: number; readonly consumedByteCount: number; readonly continuationDepth: number }

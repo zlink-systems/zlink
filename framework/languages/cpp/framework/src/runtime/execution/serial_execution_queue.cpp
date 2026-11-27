@@ -1628,6 +1628,18 @@ bool serial_execution_queue_t::prepare_application_head_owned ()
     return true;
 }
 
+task_t<void>
+serial_execution_queue_t::dispatch_application_ready (std::function<task_t<void> ()> ready)
+{
+    return control_async<void> ([ready = std::move (ready)] {
+        auto context = detail::capture_ambient_context ();
+        context.wait_owner = {};
+        detail::serial_turn_scope_t turn (nullptr);
+        const auto ambient = detail::enter_ambient_context (context, false);
+        return ready ();
+    });
+}
+
 task_t<bool> serial_execution_queue_t::accept_application_ready (
   std::function<std::optional<serial_prefix_work_t> ()> take)
 {
@@ -1637,14 +1649,20 @@ task_t<bool> serial_execution_queue_t::accept_application_ready (
         std::unique_lock lock (_mutex, std::defer_lock);
         if (!owns_shared_gate ())
             lock.lock ();
-        while ((_closed.load (std::memory_order_acquire) == execution_status_t::allowed)) {
+        const auto claim_allowed = [this] {
+            constexpr auto allowed = execution_status_t::allowed;
+            return _closed.load (std::memory_order_acquire) == allowed
+                   && (!_spot_gate
+                       || _spot_gate->_closed.load (std::memory_order_acquire) == allowed);
+        };
+        while (claim_allowed ()) {
             auto item = take ();
             if (!item)
                 return true;
             if (owns_shared_gate ())
                 lock.lock ();
             const bool accepted =
-              (_closed.load (std::memory_order_acquire) == execution_status_t::allowed)
+              claim_allowed ()
               && enqueue_locked (lock, std::move (item->name), std::move (item->work),
                                  std::move (item->options), 0, item->cancel);
             if (lock.owns_lock () && owns_shared_gate ())
