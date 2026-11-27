@@ -60,7 +60,7 @@ class SubSocket(_socket_contract._ConnectSocketContract, Protocol):
 
     def subscription_at(self, index):
         """Return ``(filter, is_pattern)`` for a subscription index, or
-        ``None`` when the index is absent."""
+        ``None`` when the index is absent. Raise ``ConfigError`` for Core failures."""
         ...
 
     def subscribe_into(self, topic_message, *, flags=0):
@@ -127,7 +127,7 @@ class XSubSocket(_socket_contract._ConnectSocketContract, Protocol):
 
     def subscription_at(self, index):
         """Return ``(filter, is_pattern)`` for a subscription index, or
-        ``None`` when the index is absent."""
+        ``None`` when the index is absent. Raise ``ConfigError`` for Core failures."""
         ...
 
     def subscribe_into(self, topic_message, *, flags=0):

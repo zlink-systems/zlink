@@ -4,6 +4,7 @@ package native
 
 import "zlink.systems/zlink/contracts"
 
+type Subscription = contracts.Subscription
 type SocketType = contracts.SocketType
 type RidDuplicatePolicy = contracts.RidDuplicatePolicy
 type SubmitRetryMode = contracts.SubmitRetryMode

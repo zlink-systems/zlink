@@ -89,6 +89,9 @@ _native_subscribe_owner = (
 )
 
 
+_DEFAULT_OPTION_BUFFER_SIZE = 256
+
+
 def _new_topic_receive_buffer(initial_buffer=None):
     if initial_buffer is None:
         buffer = ctypes.create_string_buffer(256)
@@ -667,7 +670,7 @@ class _RouterOptionSocket(_Socket):
     def _set_router_bytes_option(self, option, value):
         self._set_router_option(option, bytes(_as_bytes_view(value)))
 
-    def _get_router_bytes_option(self, option, size: int = 256):
+    def _get_router_bytes_option(self, option, size: int = _DEFAULT_OPTION_BUFFER_SIZE):
         return self._get_router_option(option, size)
 
 
@@ -812,45 +815,25 @@ class _SubscriberSocket(_Socket):
     def subscription_at(self, index):
         if index < 0:
             raise ConfigError(ConfigResult.INVALID_ARGUMENT, _errno.EINVAL)
-        size = ctypes.c_size_t(0)
-        is_pattern = ctypes.c_int(0)
-        rc = lib().zlink_subscription_at(
-            self._handle,
-            ctypes.c_size_t(index),
-            None,
-            ctypes.byref(size),
-            ctypes.byref(is_pattern),
+        native = lib()
+        index = ctypes.c_size_t(index)
+        buffer = ctypes.create_string_buffer(_DEFAULT_OPTION_BUFFER_SIZE)
+        size = ctypes.c_size_t(len(buffer))
+        is_pattern = ctypes.c_int()
+        rc = native.zlink_subscription_at(
+            self._handle, index, buffer, ctypes.byref(size), ctypes.byref(is_pattern)
         )
-        if rc != 0 and size.value == 0:
-            if ConfigResult(rc) == ConfigResult.NOT_FOUND:
-                return None
-            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-        if size.value == 0:
-            rc = lib().zlink_subscription_at(
-                self._handle,
-                ctypes.c_size_t(index),
-                None,
-                ctypes.byref(size),
-                ctypes.byref(is_pattern),
+        if rc == ConfigResult.BUFFER_TOO_SMALL:
+            buffer = ctypes.create_string_buffer(size.value)
+            rc = native.zlink_subscription_at(
+                self._handle, index, buffer, ctypes.byref(size), ctypes.byref(is_pattern)
             )
-            if rc != 0:
-                if ConfigResult(rc) == ConfigResult.NOT_FOUND:
-                    return None
-                _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-            return ("", bool(is_pattern.value))
-        buffer = ctypes.create_string_buffer(size.value)
-        rc = lib().zlink_subscription_at(
-            self._handle,
-            ctypes.c_size_t(index),
-            buffer,
-            ctypes.byref(size),
-            ctypes.byref(is_pattern),
-        )
-        if rc != 0:
-            if ConfigResult(rc) == ConfigResult.NOT_FOUND:
-                return None
-            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-        return (buffer.raw[:size.value].decode("utf-8"), bool(is_pattern.value))
+        if rc == ConfigResult.NOT_FOUND:
+            return None
+        if rc != ConfigResult.OK:
+            _raise_result_error(ConfigError, ConfigResult, rc, native.zlink_errno())
+        return (ctypes.string_at(buffer, size.value).decode("utf-8"), bool(is_pattern.value))
+
 
 _BaseSocket._OPTION_SET_ROUTES = (
     ((5,), "routing IDs", _RoutingIdSocket,
