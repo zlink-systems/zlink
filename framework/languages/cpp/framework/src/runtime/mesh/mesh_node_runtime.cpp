@@ -3526,14 +3526,16 @@ task_t<void> mesh_node_runtime_t::settle_remote_application_actor_join_source (
                 spot.fail_remote_actor_transfer (s->actor, false);
             }
             (void) co_await abort_remote_actor_join_seal (s);
+        } else {
+            // Host relocation §14: no expired-owner cleanup and no Store change,
+            // but the stopping source ends its own pending Leave and active
+            // callback so the host drain can finish.
+            co_await spot.release_source_actor_leave_reservations (s->actor);
         }
         throw framework_exception_t (
-          data_lost ? framework_error_kind_t::data_lost
-          // A Join the stopping source could not settle before its deadline is
-          // unavailable to the caller, like one whose authority was lost.
-          : authority_lost || authority_unsettled_at_stop
-            ? framework_error_kind_t::unavailable
-            : framework_error_kind_t::internal_failure,
+          data_lost        ? framework_error_kind_t::data_lost
+          : authority_lost ? framework_error_kind_t::unavailable
+                           : framework_error_kind_t::internal_failure,
           "canonical Actor Join relocation did not complete (terminal="
             + std::to_string (static_cast<int> (relocated.terminal))
             + ", reason=" + std::to_string (static_cast<int> (relocated.reason)) + ")"

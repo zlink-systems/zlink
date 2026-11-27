@@ -6715,6 +6715,30 @@ task_t<std::size_t> spot_node_runtime_t::settle_abandoned_actor_leave_reservatio
     co_return sweep.first;
 }
 
+task_t<void> spot_node_runtime_t::release_source_actor_leave_reservations (actor_ref_t actor_ref)
+{
+    const auto state = _state;
+    const auto key = actor_key (actor_ref);
+    auto reservations = co_await state->lane.run_task ([state, &key] {
+        std::vector<std::function<void ()>> released;
+        for (auto found = state->pending_remote_actor_leaves.begin ();
+             found != state->pending_remote_actor_leaves.end ();) {
+            if (actor_key (found->source_actor) != key) {
+                ++found;
+                continue;
+            }
+            if (found->transfer_owner_reservation)
+                released.push_back (std::move (found->transfer_owner_reservation));
+            found = state->pending_remote_actor_leaves.erase (found);
+        }
+        return released;
+    });
+    for (auto &reservation : reservations) {
+        transferred_owner_reservation_guard_t abandoned (std::move (reservation));
+        abandoned.settle ();
+    }
+}
+
 task_t<void> spot_node_runtime_t::replay_actor_handoff_core (const actor_ref_t &actor_ref)
 {
     auto owner = std::make_shared<spot_node_runtime_t> (_state);

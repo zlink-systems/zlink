@@ -2467,6 +2467,11 @@ class spot_node_runtime_t
       actor_ref_t actor_ref,
       std::string actor_key,
       std::optional<runtime::protocol::actor_route_fence_t> source_fence = std::nullopt);
+    // Releases the early Leave reservations this actor's source holds, without
+    // touching its move, backlog or Store authority. A stopping source whose
+    // relocation authority stays unsettled still ends its own bookkeeping so the
+    // host drain can finish.
+    task_t<void> release_source_actor_leave_reservations (actor_ref_t actor_ref);
     task_t<void>
     complete_remote_actor_transfer (const actor_ref_t &source_actor,
                                     const actor_ref_t &target_actor,
