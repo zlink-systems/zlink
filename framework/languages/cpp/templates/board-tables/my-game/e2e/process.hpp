@@ -55,7 +55,8 @@ class Process
   public:
     Process (const std::vector<std::string> &arguments,
              const std::filesystem::path &out_log,
-             const std::filesystem::path &err_log)
+             const std::filesystem::path &err_log,
+             [[maybe_unused]] bool isolate_interrupt = false)
     {
         require (!arguments.empty (), "Empty child command");
 #ifdef _WIN32
@@ -129,6 +130,9 @@ class Process
         argv.push_back (nullptr);
         pid_ = fork ();
         if (pid_ == 0) {
+            // Keep terminal interrupts with the runner so it can shut down its children.
+            if (isolate_interrupt && setpgid (0, 0) != 0)
+                _exit (126);
             dup2 (in[0], STDIN_FILENO);
             dup2 (out[1], STDOUT_FILENO);
             dup2 (err, STDERR_FILENO);

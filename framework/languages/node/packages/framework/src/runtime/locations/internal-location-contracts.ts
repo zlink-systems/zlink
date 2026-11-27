@@ -60,8 +60,11 @@ export type ZLinkAggregateParticipant = AuthorityContract.ZLinkAggregateParticip
 };
 export type ZLinkAggregatePrepareRequest = Omit<
   AuthorityContract.ZLinkAggregatePrepareRequest,
-  'participants'
-> & { readonly participants: readonly ZLinkAggregateParticipant[] };
+  'participants' | 'inventoryDigest'
+> & {
+  readonly participants: readonly ZLinkAggregateParticipant[];
+  readonly sealedInventoryDigest?: string;
+};
 
 /** Target boundary counts are installed in the owner commit, never a later phase write. */
 export type ZLinkAggregateFence = AuthorityContract.ZLinkAggregateFence & {

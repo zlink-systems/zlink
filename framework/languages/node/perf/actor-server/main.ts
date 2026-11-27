@@ -44,7 +44,7 @@ runRole(
       mesh
         .objects()
         .server()
-        .addEntrySpot(PerfEntrySpot)
+        .addEntrySpot(PerfEntrySpot, PERF_ACTOR_TYPE)
         .addActorFactory(PERF_ACTOR_TYPE, PerfActorFactory, (factory) =>
           factory.disableRelocation()
         );

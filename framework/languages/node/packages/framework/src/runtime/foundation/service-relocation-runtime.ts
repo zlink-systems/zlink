@@ -1,11 +1,20 @@
-import { createHash } from 'node:crypto';
 import { AUTHORITY_ENVELOPE_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { decodeAuthorityKey } from '../locations/authority-key-codec';
 import type {
   ZLinkAuthorityKey,
   ZLinkPlacementObjectKind
 } from '../locations/internal-location-contracts';
-import { enumWireRelocationPhase } from '../protocol/service_wire_codec.generated';
+import {
+  decodeRelocationEnvelopeV1LogicalStream as decodeInstanceRelocationEnvelope,
+  encodeRelocationEnvelopeV1LogicalStream as encodeInstanceRelocationEnvelope,
+  enumWireRelocationPhase,
+  type TimerOverrunPolicyKind
+} from '../protocol/service_wire_codec.generated';
+import {
+  canonicalFrozenRecordBytes,
+  readCanonicalFrozenRecord,
+  STATEFUL_MESSAGE_CONTEXT
+} from './service-stateful-wire-codec';
 import {
   decodeRelocationEnvelopeV1 as decodeGeneratedRelocationEnvelopeV1,
   encodeRelocationEnvelopeV1 as encodeGeneratedRelocationEnvelopeV1,
@@ -294,7 +303,7 @@ export function decodeCanonicalRelocationSlot(
 ): CanonicalRelocationSlot | undefined {
   try {
     const reader = new CanonicalReader(payload);
-    const aggregateId = uuid(reader.u64(), reader.u64());
+    const aggregateId = serviceRelocationIdFromWire({ high: reader.u64(), low: reader.u64() });
     if (aggregateId === undefined) return undefined;
     const aggregateGeneration = reader.u64();
     const targetAttemptGeneration = reader.u64();
@@ -472,77 +481,84 @@ export function encodeServiceRelocationEnvelope(
       })
     )
     .sort(compareParticipantOrder);
-  return Buffer.from(
-    encodeGeneratedRelocationEnvelopeV1({
-      relocationHigh: aggregate.high,
-      relocationLow: aggregate.low,
-      object: toGeneratedRelocationObject(root, rootObjectKind),
-      applicationVersion: encodedApplicationVersion,
-      applicationStates,
-      savedWork: saved,
-      timerRegistrations: timers.map(({ participantId, timer }) => ({
-        participantId,
-        name: timer.timerId,
-        handlerType: timer.handlerType,
-        periodMilliseconds: BigInt(positiveInteger(timer.intervalMs, 'timer interval')),
-        overrunPolicy: timerPolicy(timer.overrunPolicy),
-        maxCatchUpTicks: BigInt(positiveInteger(timer.maxCatchUpTicks, 'timer catch-up limit')),
-        stopOnUnhandledException: requireBoolean(
-          timer.stopOnUnhandledException,
-          'timer stop-on-error flag'
-        ),
-        lastCompletedDeliveryIndex: nonNegativeBigInt(timer.deliveryIndex, 'timer delivery index'),
-        lastCompletedScheduledIndex: nonNegativeBigInt(
-          timer.lastScheduledIndex,
-          'timer scheduled index'
-        ),
-        nextScheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(
-          timer.dueAtUnixMs,
-          'timer due time'
-        )
-      })),
-      sessionBindings: participants.flatMap((participant, index) =>
-        participant.sessionBinding === undefined
-          ? []
-          : [{ ...participant.sessionBinding, participantId: BigInt(index + 1) }]
+  const wire: GeneratedRelocationEnvelopeV1 = {
+    relocationHigh: aggregate.high,
+    relocationLow: aggregate.low,
+    object: toGeneratedRelocationObject(root, rootObjectKind),
+    applicationVersion: encodedApplicationVersion,
+    applicationStates,
+    savedWork: saved,
+    timerRegistrations: timers.map(({ participantId, timer }) => ({
+      participantId,
+      name: timer.timerId,
+      handlerType: timer.handlerType,
+      periodMilliseconds: BigInt(positiveInteger(timer.intervalMs, 'timer interval')),
+      overrunPolicy: timerPolicy(timer.overrunPolicy),
+      maxCatchUpTicks: BigInt(positiveInteger(timer.maxCatchUpTicks, 'timer catch-up limit')),
+      stopOnUnhandledException: requireBoolean(
+        timer.stopOnUnhandledException,
+        'timer stop-on-error flag'
       ),
-      pendingTimerTicks: pending.map((value) => ({
-        participantId: value.participantId,
-        order: value.order,
-        timerName: value.timerName,
-        deliveryIndex: nonNegativeBigInt(value.tick.deliveryIndex, 'pending timer delivery index'),
-        scheduledIndex: nonNegativeBigInt(
-          value.tick.scheduledIndex,
-          'pending timer scheduled index'
-        ),
-        scheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(
-          value.tick.scheduledAtUnixMs,
-          'pending timer scheduled time'
-        ),
-        skippedTicks: nonNegativeBigInt(value.tick.skippedTicks, 'pending timer skipped ticks')
-      }))
-    })
+      lastCompletedDeliveryIndex: nonNegativeBigInt(timer.deliveryIndex, 'timer delivery index'),
+      lastCompletedScheduledIndex: nonNegativeBigInt(
+        timer.lastScheduledIndex,
+        'timer scheduled index'
+      ),
+      nextScheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(
+        timer.dueAtUnixMs,
+        'timer due time'
+      )
+    })),
+    sessionBindings: participants.flatMap((participant, index) =>
+      participant.sessionBinding === undefined
+        ? []
+        : [{ ...participant.sessionBinding, participantId: BigInt(index + 1) }]
+    ),
+    pendingTimerTicks: pending.map((value) => ({
+      participantId: value.participantId,
+      order: value.order,
+      timerName: value.timerName,
+      deliveryIndex: nonNegativeBigInt(value.tick.deliveryIndex, 'pending timer delivery index'),
+      scheduledIndex: nonNegativeBigInt(value.tick.scheduledIndex, 'pending timer scheduled index'),
+      scheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(
+        value.tick.scheduledAtUnixMs,
+        'pending timer scheduled time'
+      ),
+      skippedTicks: nonNegativeBigInt(value.tick.skippedTicks, 'pending timer skipped ticks')
+    }))
+  };
+  return Buffer.from(
+    wire.object.objectKind === 'instanceSpot'
+      ? encodeCanonicalInstanceEnvelope(wire, wire.object)
+      : encodeGeneratedRelocationEnvelopeV1(wire)
   );
 }
 
 export function decodeServiceRelocationEnvelope(
   payload: Uint8Array,
-  aggregateGeneration: bigint
+  aggregateGeneration: bigint,
+  objectKind?: GeneratedRelocationObjectIdentity['objectKind']
 ): ServiceRelocationEnvelope {
   let generated: GeneratedRelocationEnvelopeV1;
   try {
-    generated = decodeGeneratedRelocationEnvelopeV1([payload]);
+    generated =
+      objectKind === 'instanceSpot'
+        ? decodeCanonicalInstanceEnvelope(payload)
+        : decodeGeneratedRelocationEnvelopeV1([payload]);
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : '';
-    if (message === 'object kind') {
+    if (message === 'object kind' || message === 'relocation-object-identity enum') {
       throw new TypeError('relocation-envelope-v1 root object kind is invalid.', { cause });
     }
-    if (message === 'relocation envelope trailing') {
+    if (message === 'relocation envelope trailing' || message.includes('trailing bytes')) {
       throw new TypeError('Trailing relocation envelope bytes.', { cause });
     }
     throw new TypeError('Invalid relocation envelope.', { cause });
   }
-  const aggregateId = uuid(generated.relocationHigh, generated.relocationLow);
+  const aggregateId = serviceRelocationIdFromWire({
+    high: generated.relocationHigh,
+    low: generated.relocationLow
+  });
   if (aggregateId === undefined) throw new TypeError('Invalid relocation identity.');
   positiveBigInt(aggregateGeneration, 'aggregate generation');
   const bindings = new Map(
@@ -610,6 +626,84 @@ export function decodeServiceRelocationEnvelope(
       value === rootParticipant ? { ...value, ...rootProjection } : value
     ),
     memberships: []
+  };
+}
+
+// Instance relocation has one participant. The aggregate codec used by the
+// other roots supports existing inventories above the generated vector bound.
+function encodeCanonicalInstanceEnvelope(
+  wire: GeneratedRelocationEnvelopeV1,
+  object: Extract<GeneratedRelocationObjectIdentity, { objectKind: 'instanceSpot' }>
+): Uint8Array {
+  if (wire.applicationStates.length !== 1) {
+    throw new TypeError('Instance Spot relocation requires one participant.');
+  }
+  return encodeInstanceRelocationEnvelope(
+    {
+      relocation: { high: wire.relocationHigh, low: wire.relocationLow },
+      object,
+      applicationVersion: wire.applicationVersion,
+      applicationStates: wire.applicationStates.map(({ participantId, hasState, payload }) => ({
+        participantId,
+        applicationState: hasState ? { hasState: 'true', payload } : { hasState: 'false' }
+      })),
+      savedWork: wire.savedWork.map(({ participantId, order, frozenRecord }) => ({
+        participantId,
+        order,
+        record: readCanonicalFrozenRecord(frozenRecord)
+      })),
+      timerRegistrations: wire.timerRegistrations.map((timer) => ({
+        ...timer,
+        overrunPolicy: timerPolicyName(timer.overrunPolicy),
+        stopOnUnhandledException: timer.stopOnUnhandledException ? 'true' : 'false'
+      })),
+      pendingTimerTicks: wire.pendingTimerTicks,
+      sessionBindings: wire.sessionBindings
+    },
+    STATEFUL_MESSAGE_CONTEXT
+  );
+}
+
+function decodeCanonicalInstanceEnvelope(payload: Uint8Array): GeneratedRelocationEnvelopeV1 {
+  const wire = decodeInstanceRelocationEnvelope(payload, STATEFUL_MESSAGE_CONTEXT);
+  if (wire.object.objectKind !== 'instanceSpot') {
+    throw new TypeError('relocation-envelope-v1 root object kind is invalid.');
+  }
+  if (wire.applicationStates.length !== 1 || wire.applicationStates[0]?.participantId !== 1n) {
+    throw new TypeError('Instance Spot relocation requires one participant.');
+  }
+  if (
+    wire.savedWork.some(({ participantId }) => participantId !== 1n) ||
+    wire.timerRegistrations.some(({ participantId }) => participantId !== 1n) ||
+    wire.pendingTimerTicks.some(
+      ({ participantId, timerName }) =>
+        participantId !== 1n || !wire.timerRegistrations.some(({ name }) => name === timerName)
+    )
+  ) {
+    throw new TypeError('Instance Spot backlog names a missing participant or timer.');
+  }
+  return {
+    relocationHigh: wire.relocation.high,
+    relocationLow: wire.relocation.low,
+    object: wire.object,
+    applicationVersion: wire.applicationVersion,
+    applicationStates: wire.applicationStates.map(({ participantId, applicationState }) => ({
+      participantId,
+      hasState: applicationState.hasState === 'true',
+      payload: applicationState.hasState === 'true' ? applicationState.payload : Buffer.alloc(0)
+    })),
+    savedWork: wire.savedWork.map(({ participantId, order, record }) => ({
+      participantId,
+      order,
+      frozenRecord: canonicalFrozenRecordBytes(record)
+    })),
+    timerRegistrations: wire.timerRegistrations.map((timer) => ({
+      ...timer,
+      overrunPolicy: timerPolicy(timer.overrunPolicy),
+      stopOnUnhandledException: timer.stopOnUnhandledException === 'true'
+    })),
+    pendingTimerTicks: wire.pendingTimerTicks,
+    sessionBindings: wire.sessionBindings
   };
 }
 
@@ -703,9 +797,12 @@ function relocationId(value: string): { readonly high: bigint; readonly low: big
   return { high: BigInt(`0x${hex.slice(0, 16)}`), low: BigInt(`0x${hex.slice(16)}`) };
 }
 
-function uuid(high: bigint, low: bigint): string | undefined {
-  if (high === 0n && low === 0n) return undefined;
-  const hex = high.toString(16).padStart(16, '0') + low.toString(16).padStart(16, '0');
+export function serviceRelocationIdFromWire(value: {
+  readonly high: bigint;
+  readonly low: bigint;
+}): string | undefined {
+  if (value.high === 0n && value.low === 0n) return undefined;
+  const hex = value.high.toString(16).padStart(16, '0') + value.low.toString(16).padStart(16, '0');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
@@ -730,7 +827,7 @@ function timerPolicy(value: string): 1 | 2 | 3 {
   throw new TypeError('Timer overrun policy is invalid.');
 }
 
-function timerPolicyName(value: number): string {
+function timerPolicyName(value: number): TimerOverrunPolicyKind {
   if (value === 1) return 'skipLateTicks';
   if (value === 2) return 'catchUpBounded';
   if (value === 3) return 'delayNextTick';
@@ -770,50 +867,6 @@ function wireParticipant(
     queuedMessages: [],
     timers: []
   };
-}
-
-function objectKind(value: unknown): ZLinkPlacementObjectKind {
-  if (value !== 'actor' && value !== 'user_spot' && value !== 'instance_spot') {
-    throw new TypeError('Relocation object kind is invalid.');
-  }
-  return value;
-}
-
-export function inventoryDigest(
-  participants: readonly Pick<
-    ServiceRelocationParticipant,
-    'key' | 'objectKind' | 'stableType' | 'objectGeneration' | 'authorityOwnerGeneration'
-  >[],
-  memberships: readonly ServiceRelocationMembership[] = []
-): string {
-  const identities = participants
-    .map((participant) => ({
-      key: requireText(participant.key, 'participant key'),
-      objectKind: objectKind(participant.objectKind),
-      stableType: requireText(participant.stableType, 'participant stable type'),
-      objectGeneration: positiveBigInt(
-        participant.objectGeneration,
-        'object generation'
-      ).toString(),
-      authorityOwnerGeneration: positiveBigInt(
-        participant.authorityOwnerGeneration,
-        'authority owner generation'
-      ).toString()
-    }))
-    .sort((left, right) => left.key.localeCompare(right.key));
-  if (new Set(identities.map(({ key }) => key)).size !== identities.length) {
-    throw new TypeError('Relocation participants must have unique keys.');
-  }
-  const canonicalMemberships = encodeMemberships(memberships, participants);
-  return createHash('sha256')
-    .update(
-      JSON.stringify({
-        participants: identities,
-        memberships: canonicalMemberships
-      }),
-      'utf8'
-    )
-    .digest('hex');
 }
 
 function decodeAuthorityEnvelope(
@@ -857,59 +910,6 @@ function decodeAuthorityEnvelope(
     };
   } catch {
     return undefined;
-  }
-}
-
-function encodeMemberships(
-  memberships: readonly ServiceRelocationMembership[],
-  participants: readonly Pick<
-    ServiceRelocationParticipant,
-    'key' | 'objectKind' | 'objectGeneration'
-  >[]
-) {
-  validateMemberships(memberships, participants);
-  return memberships
-    .map((membership) => ({
-      actorKey: requireText(membership.actorKey, 'membership actor key'),
-      spotKey: requireText(membership.spotKey, 'membership spot key'),
-      spotObjectGeneration: positiveBigInt(
-        membership.spotObjectGeneration,
-        'membership Spot generation'
-      ).toString(),
-      membershipEpoch: positiveBigInt(membership.membershipEpoch, 'membership epoch').toString()
-    }))
-    .sort((left, right) => left.actorKey.localeCompare(right.actorKey));
-}
-
-function validateMemberships(
-  memberships: readonly ServiceRelocationMembership[],
-  participants: readonly Pick<
-    ServiceRelocationParticipant,
-    'key' | 'objectKind' | 'objectGeneration'
-  >[]
-): void {
-  const byKey = new Map(participants.map((participant) => [participant.key, participant]));
-  const actorKeys = new Set<string>();
-  for (const membership of memberships) {
-    const actorKey = requireText(membership.actorKey, 'membership actor key');
-    if (actorKeys.has(actorKey)) {
-      throw new TypeError('Relocation membership Actor keys must be unique.');
-    }
-    actorKeys.add(actorKey);
-    const actor = byKey.get(actorKey);
-    if (actor?.objectKind !== 'actor') {
-      throw new TypeError('Relocation membership must reference an Actor participant.');
-    }
-    const spot = byKey.get(requireText(membership.spotKey, 'membership spot key'));
-    if (
-      spot !== undefined &&
-      (spot.objectKind !== 'user_spot' ||
-        spot.objectGeneration !==
-          positiveBigInt(membership.spotObjectGeneration, 'membership Spot generation'))
-    ) {
-      throw new TypeError('Relocation membership Spot fence does not match its participant.');
-    }
-    positiveBigInt(membership.membershipEpoch, 'membership epoch');
   }
 }
 
