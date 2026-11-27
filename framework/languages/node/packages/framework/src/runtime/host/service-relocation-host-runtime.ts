@@ -3692,16 +3692,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           : error;
       throw new ServiceRelocationDataLostError(String(message));
     }
-<<<<<<< ours
     // Direct Join inventory uses generation 1 (§8.3); Restore attempt is independent.
-    const envelope = decodeServiceRelocationEnvelope(payload, 1n);
-=======
-    const envelope = decodeServiceRelocationEnvelope(
-      payload,
-      request.targetAttemptGeneration,
-      request.object.kind
-    );
->>>>>>> theirs
+    const envelope = decodeServiceRelocationEnvelope(payload, 1n, request.object.kind);
     const recovery = canonicalActorJoinRecovery(envelope.participants);
     const releaseJoinAdmission =
       recovery === undefined
