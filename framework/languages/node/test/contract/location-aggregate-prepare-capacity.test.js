@@ -155,8 +155,7 @@ test('source Preserve observes NewOwner if target commits before the pending cap
   const preserve = {
     kind: 'put',
     generationTransition: 'preserve',
-    payload: current.payload,
-    relocation: { ...current.relocation, phase: 'aborted' }
+    payload: current.payload
   };
   const unrelated = await repository.compareExchangeAuthority(
     participant.authorityKey,
