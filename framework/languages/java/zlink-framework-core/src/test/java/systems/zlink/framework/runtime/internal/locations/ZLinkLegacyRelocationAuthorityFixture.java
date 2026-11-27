@@ -41,7 +41,11 @@ final class ZLinkLegacyRelocationAuthorityFixture {
                                 previous.sourceNodeGeneration());
         byte[] projected =
                 ZLinkAggregateRelocationCoordinator.projectAuthorityPayload(
-                        application, request, transition);
+                        application,
+                        request.targetDescriptor(),
+                        request.targetDescriptorLifecycleGeneration(),
+                        request.targetOwner(),
+                        transition);
         return withRelocationSlot(
                 projected,
                 encodeState(
