@@ -1940,7 +1940,12 @@ public sealed class ServiceRuntimeFoundationTests
             var submit = channelRequest
                 ? source
                     .EntrySpot()
-                    .RequestToChannel("worker", [requestPart], out operationId, TimeSpan.FromSeconds(3))
+                    .RequestToChannel(
+                        "worker",
+                        [requestPart],
+                        out operationId,
+                        TimeSpan.FromSeconds(3)
+                    )
                 : source.RequestToNode(
                     targetRid,
                     [requestPart],

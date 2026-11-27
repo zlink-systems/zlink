@@ -894,7 +894,10 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
                 waitEnded = Stopwatch.GetTimestamp();
             }
             var record = Assert.Single(activities);
-            Assert.Equal(request ? "zlink.dispatch_error" : "zlink.message_flow", record.OperationName);
+            Assert.Equal(
+                request ? "zlink.dispatch_error" : "zlink.message_flow",
+                record.OperationName
+            );
             Assert.Equal("instance_spot", record.GetTagItem("surface"));
             Assert.Equal(request ? reason : "activation_rejected", record.GetTagItem("reason"));
             if (request)
