@@ -154,7 +154,21 @@ function targetAtCutover(f, entries) {
     phase: 'ready',
     cutoverReceived: true,
     boundaryRelay: [],
-    offer: { prepare: { target: {} }, reservation: { prepared: { fence: {}, plan: {} } } },
+    offer: {
+      prepare: { target: {} },
+      reservation: {
+        plan: {},
+        async abort() {
+          history.push('abort reservation');
+        },
+        async commit(acceptedRequests) {
+          history.push('commit');
+          assert.equal(acceptedRequests.get(f.key.value), BigInt(entries.length));
+          authority = f.current();
+          return { kind: 'committed' };
+        }
+      }
+    },
     staging: {
       // The production field comes from the captured inventory.
       envelope: { aggregateId: example.relocationId },
@@ -171,20 +185,7 @@ function targetAtCutover(f, entries) {
     releaseActivation() {},
     releaseJoinAdmission() {}
   };
-  const runtime = new ZLinkHostServiceRelocationRuntime({
-    locationStore: () => ({
-      async abortAggregate() {
-        history.push('abort reservation');
-        return { kind: 'aborted' };
-      },
-      async commitAggregate(fence) {
-        history.push('commit');
-        assert.equal(fence.acceptedRequests.get(f.key.value), BigInt(entries.length));
-        authority = f.current();
-        return { kind: 'committed' };
-      }
-    })
-  });
+  const runtime = new ZLinkHostServiceRelocationRuntime({});
   runtime.readAggregateForCommitRetry = async () => ({
     kind: 'committed',
     authorities: new Map([[f.key.value, authority]])

@@ -36,9 +36,15 @@ import type { PendingOperation } from '../../packages/framework/src/runtime/foun
 import { frameworkErrorMappingFixture } from './framework-error-mapping-fixture';
 import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
-import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
+import type {
+  ZLinkAuthorityKey,
+  ZLinkAuthoritySnapshot
+} from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import { ZLinkInMemoryLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-location-store';
-import { ZLinkAggregateInventoryStore } from '../../packages/framework/src/runtime/locations/aggregate-inventory-store';
+import {
+  standaloneActorInventory,
+  ZLinkAggregateInventoryStore
+} from '../../packages/framework/src/runtime/locations/aggregate-inventory-store';
 import { ZLinkInMemoryProviderLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
 import {
   createServiceRelocationId,
@@ -601,10 +607,11 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
   const harness = createActorJoinHostHarness({ dropCutover: true });
   harness.location.liveLeases.set('source-owner', 3n);
   let preparations = 0;
-  const prepareAggregate = harness.location.prepareAggregate.bind(harness.location);
-  harness.location.prepareAggregate = async (request) => {
-    preparations++;
-    return prepareAggregate(request);
+  // Location runtime §3.4 and §8.3 keep standalone Actor Prepare on the authority row.
+  const compareExchange = harness.location.compareExchangeAuthority.bind(harness.location);
+  harness.location.compareExchangeAuthority = async (key, expected, mutation) => {
+    if (mutation.relocation?.phase === 'prepared') preparations++;
+    return compareExchange(key, expected, mutation);
   };
   let release!: () => void, restoreEntered!: () => void;
   const heldRestore = new Promise<void>((resolve) => {
@@ -1039,7 +1046,8 @@ function targetCasFixture() {
     }
   };
   const commit = (
-    runtime: ZLinkHostServiceRelocationRuntime
+    runtime: ZLinkHostServiceRelocationRuntime,
+    submit: () => Promise<{ kind: 'committed' | 'stale' }>
   ): Promise<ZLinkAuthoritySnapshot | undefined> => {
     return (
       runtime as unknown as {
@@ -1062,29 +1070,24 @@ function targetCasFixture() {
         staging: { primaryAuthorityKey: actorKey, envelope, hidden: new Map() }
       },
       {
-        prepared: {
-          fence: {
-            aggregateId: { value: envelope.aggregateId },
-            aggregateGeneration: envelope.aggregateGeneration
-          },
-          plan: {
-            envelope,
-            participants: [
-              {
-                key: actorKey,
-                expected,
-                ownerTransition: 'newOwner',
-                authorityPayload,
-                membershipMutation: Buffer.from('membership')
-              }
-            ],
-            targetDescriptor: { meshName: 'mesh-a', rid: target.nodeRid },
-            targetDescriptorLifecycleGeneration: target.nodeGeneration,
-            capacity: expected.allocation.capacity,
-            targetOwner: {
-              ownerId: target.ownerId,
-              leaseGeneration: target.ownerLeaseGeneration
+        commit: submit,
+        plan: {
+          envelope,
+          participants: [
+            {
+              key: actorKey,
+              expected,
+              ownerTransition: 'newOwner',
+              authorityPayload,
+              membershipMutation: Buffer.from('membership')
             }
+          ],
+          targetDescriptor: { meshName: 'mesh-a', rid: target.nodeRid },
+          targetDescriptorLifecycleGeneration: target.nodeGeneration,
+          capacity: expected.allocation.capacity,
+          targetOwner: {
+            ownerId: target.ownerId,
+            leaseGeneration: target.ownerLeaseGeneration
           }
         }
       }
@@ -1096,10 +1099,13 @@ function targetCasFixture() {
     committedAuthority,
     // The settlement retry timer is unref'd like every runtime timer; the
     // test keeps its own event loop alive while the settlement runs.
-    commit: async (runtime: ZLinkHostServiceRelocationRuntime) => {
+    commit: async (
+      runtime: ZLinkHostServiceRelocationRuntime,
+      submit: () => Promise<{ kind: 'committed' | 'stale' }>
+    ) => {
       const keepAlive = setInterval(() => undefined, 1_000);
       try {
-        return await commit(runtime);
+        return await commit(runtime, submit);
       } finally {
         clearInterval(keepAlive);
       }
@@ -1185,18 +1191,18 @@ test('target-only CAS reconciles an unknown response to the exact committed owne
   const fixture = targetCasFixture();
   let current = fixture.expected;
   let writes = 0;
+  const submit = async (): Promise<{ kind: 'committed' | 'stale' }> => {
+    writes += 1;
+    current = fixture.committedAuthority;
+    throw new Error('commit response lost');
+  };
   const runtime = new ZLinkHostServiceRelocationRuntime({
     requests: fixtureRequestRuntime(),
     locationStore: () => ({
-      commitAggregate: async () => {
-        writes += 1;
-        current = fixture.committedAuthority;
-        throw new Error('commit response lost');
-      },
       readAuthority: async () => current
     })
   } as never);
-  const committed = await fixture.commit(runtime);
+  const committed = await fixture.commit(runtime, submit);
 
   assert.equal(writes, 1);
   assert.equal(committed?.ownerId, target.ownerId);
@@ -1226,14 +1232,14 @@ for (const validationError of [
     test(`target CAS propagates ${validationError.name} from Store ${operation}`, async () => {
       const fixture = targetCasFixture();
       let calls = 0;
+      const submit = async (): Promise<{ kind: 'committed' | 'stale' }> => {
+        if (operation === 'commit' && ++calls === 1) throw validationError;
+        if (operation === 'lease') throw new Error('commit response lost');
+        return { kind: 'stale' };
+      };
       const runtime = new ZLinkHostServiceRelocationRuntime({
         requests: fixtureRequestRuntime(),
         locationStore: () => ({
-          commitAggregate: async () => {
-            if (operation === 'commit' && ++calls === 1) throw validationError;
-            if (operation === 'lease') throw new Error('commit response lost');
-            return { kind: 'stale' };
-          },
           readAuthority: async () => {
             if (operation === 'read' && ++calls === 1) throw validationError;
             return fixture.expected;
@@ -1244,7 +1250,7 @@ for (const validationError of [
           }
         })
       } as never);
-      await assert.rejects(fixture.commit(runtime), (error) => error === validationError);
+      await assert.rejects(fixture.commit(runtime, submit), (error) => error === validationError);
       assert.equal(calls, 1, 'caller validation cannot be retried as an unknown Store result');
     });
   }
@@ -1254,15 +1260,15 @@ test('target CAS resubmits indeterminate results with no deadline while the targ
   const fixture = targetCasFixture();
   let current = fixture.expected;
   let writes = 0;
+  const submit = async (): Promise<{ kind: 'committed' | 'stale' }> => {
+    writes += 1;
+    if (writes < 3) throw new Error('commit response lost before the write');
+    current = fixture.committedAuthority;
+    return { kind: 'committed' };
+  };
   const runtime = new ZLinkHostServiceRelocationRuntime({
     requests: fixtureRequestRuntime(),
     locationStore: () => ({
-      commitAggregate: async () => {
-        writes += 1;
-        if (writes < 3) throw new Error('commit response lost before the write');
-        current = fixture.committedAuthority;
-        return { kind: 'committed' };
-      },
       readAuthority: async () => current,
       readOwnerLease: async (ownerId: string) => ({
         kind: 'found',
@@ -1272,7 +1278,7 @@ test('target CAS resubmits indeterminate results with no deadline while the targ
       })
     })
   } as never);
-  const committed = await fixture.commit(runtime);
+  const committed = await fixture.commit(runtime, submit);
   assert.equal(writes, 3, 'the same NewOwner CAS is resubmitted, never abandoned');
   assert.equal(committed?.ownerId, target.ownerId);
 });
@@ -1283,18 +1289,18 @@ test(
   async () => {
     const fixture = targetCasFixture();
     let writes = 0;
+    const submit = async (): Promise<{ kind: 'committed' | 'stale' }> => {
+      writes += 1;
+      throw new Error('commit result unknown');
+    };
     const runtime = new ZLinkHostServiceRelocationRuntime({
       requests: fixtureRequestRuntime(),
       locationStore: () => ({
-        commitAggregate: async () => {
-          writes += 1;
-          throw new Error('commit result unknown');
-        },
         readAuthority: async () => fixture.expected,
         readOwnerLease: async () => ({ kind: 'missing', storeNow: new Date() })
       })
     } as never);
-    assert.equal(await fixture.commit(runtime), undefined);
+    assert.equal(await fixture.commit(runtime, submit), undefined);
     assert.equal(writes, 1);
   }
 );
@@ -1305,13 +1311,13 @@ test(
   async () => {
     const fixture = targetCasFixture();
     let writes = 0;
+    const submit = async (): Promise<{ kind: 'committed' | 'stale' }> => {
+      writes += 1;
+      return { kind: 'stale' };
+    };
     const runtime = new ZLinkHostServiceRelocationRuntime({
       requests: fixtureRequestRuntime(),
       locationStore: () => ({
-        commitAggregate: async () => {
-          writes += 1;
-          return { kind: 'stale' };
-        },
         readAuthority: async () => fixture.expected,
         readOwnerLease: async (ownerId: string) => ({
           kind: 'found',
@@ -1321,7 +1327,7 @@ test(
         })
       })
     } as never);
-    assert.equal(await fixture.commit(runtime), undefined);
+    assert.equal(await fixture.commit(runtime, submit), undefined);
     assert.equal(writes, 1);
   }
 );
@@ -2298,6 +2304,47 @@ test('ActorJoin threads the admission-advertised chunk cap into the state chunk 
   }
 });
 
+test('standalone Actor inventory matches the .NET canonical UTF-8 golden', () => {
+  // .NET AuthorityAggregateRelocationTests.Single_actor_inventory_hashes_the_canonical_utf8_of_opaque_store_versions.
+  const { digest } = standaloneActorInventory(
+    { value: 'zla1:a:golden-actor' } as ZLinkAuthorityKey,
+    'v"\u2028\u{1f680}\n\u0001',
+    Buffer.from('abc')
+  );
+  assert.equal(digest, '41caf8f396eaff59b4500fbdda6f4bc7651522c4b375d40602ee851e77504446');
+});
+
+test('standalone Actor Join seals and restores without inventory records', async () => {
+  const harness = createActorJoinHostHarness({ missingInventory: true });
+  try {
+    const relocated = await harness.relocate();
+    await harness.targetIdle();
+    assert.equal(String(relocated.actorRef.nodeRid), 'target');
+    assert.equal(harness.location.commits, 1);
+    // Location runtime §8.3 omits inventory records for a standalone Actor.
+    assert.equal(harness.location.inventoryWrites, 0);
+    assert.equal(harness.location.inventoryReads, 0);
+    assert.equal(harness.location.aggregatePrepares, 0);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('standalone Actor Join rejects a changed source inventory digest as DataLost', async () => {
+  const harness = createActorJoinHostHarness({
+    missingInventory: true,
+    corruptInventoryDigest: true
+  });
+  try {
+    await assert.rejects(harness.relocate(), { kind: ZLinkFrameworkErrorKind.DataLost });
+    // A missing Store root must not be the reason for the rejection.
+    assert.equal(harness.location.inventoryReads, 0);
+    assert.equal(harness.location.commits, 0);
+  } finally {
+    await harness.dispose();
+  }
+});
+
 test('the 1000ms cutover wait records a Warning only; the source Preserve fence settles an unverified target', async () => {
   const originalSetTimeout = globalThis.setTimeout;
   const observedFallbacks: number[] = [];
@@ -2907,6 +2954,8 @@ interface NativeRouteChangePeers {
 }
 
 interface ActorJoinHarnessOptions {
+  readonly missingInventory?: boolean;
+  readonly corruptInventoryDigest?: boolean;
   readonly realSourceCapture?: boolean;
   readonly sourceQuiescenceChanged?: (safe: boolean) => void;
   readonly explicitFailureCode?: number;
@@ -2988,7 +3037,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     },
     storeNow: new Date()
   };
-  const location = actorJoinLocationStore(sourceAuthority, events);
+  const location = actorJoinLocationStore(sourceAuthority, events, options);
   const registration = {
     spotNodes: new Map([
       [
@@ -4332,8 +4381,15 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   };
 }
 
-function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[]) {
+function actorJoinLocationStore(
+  initial: ZLinkAuthoritySnapshot,
+  events: string[],
+  options: Pick<ActorJoinHarnessOptions, 'missingInventory' | 'corruptInventoryDigest'> = {}
+) {
   const inventory = new ZLinkAggregateInventoryStore(new ZLinkInMemoryProviderLocationStore());
+  let inventoryWrites = 0;
+  let inventoryReads = 0;
+  let aggregatePrepares = 0;
   let current = initial;
   let removed = false;
   let prepared: any;
@@ -4342,6 +4398,31 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
   let preserves = 0;
   let phaseWrites = 0;
   const progress: (Record<string, unknown> | undefined)[] = [];
+  function publishOwnerChange(
+    payload: Uint8Array,
+    relocation: ZLinkAuthoritySnapshot['relocation'],
+    owner: { ownerId: string; leaseGeneration: bigint },
+    descriptor: ZLinkAuthoritySnapshot['allocation']['descriptor'],
+    descriptorLifecycleGeneration: bigint
+  ) {
+    commits += 1;
+    events.push('cas');
+    current = {
+      ...current,
+      storeVersion: { value: `target-v${commits + 1}` } as never,
+      payload: Buffer.from(payload),
+      relocation,
+      authorityOwnerGeneration: current.authorityOwnerGeneration + 1n,
+      ownerId: owner.ownerId,
+      ownerLeaseGeneration: owner.leaseGeneration,
+      allocation: { ...current.allocation, descriptor, descriptorLifecycleGeneration }
+    };
+    if (relocation !== undefined) {
+      progress.push(
+        encodeAuthorityAggregate(undefined, relocation)?.relocation as Record<string, unknown>
+      );
+    }
+  }
   return {
     get progress() {
       return [...progress];
@@ -4355,18 +4436,32 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
     get preserves() {
       return preserves;
     },
-    storeAggregateInventory: inventory.store.bind(inventory),
+    get inventoryWrites() {
+      return inventoryWrites;
+    },
+    get inventoryReads() {
+      return inventoryReads;
+    },
+    get aggregatePrepares() {
+      return aggregatePrepares;
+    },
+    async storeAggregateInventory(...args: Parameters<typeof inventory.store>) {
+      inventoryWrites++;
+      return options.missingInventory ? inventory.plan(args[0]).digest : inventory.store(...args);
+    },
     readAggregateInventory(
       fence: Parameters<typeof inventory.read>[0],
       digest: string,
       signal?: AbortSignal
     ) {
+      inventoryReads++;
       return inventory.read(fence, Buffer.from(digest, 'hex'), signal);
     },
     async readAuthority() {
       return removed ? { kind: 'missing' as const, storeNow: new Date() } : current;
     },
     async prepareAggregate(request: any) {
+      aggregatePrepares++;
       prepared = request;
       if (request.participants[0]?.relocation !== undefined) {
         current = { ...current, relocation: request.participants[0].relocation };
@@ -4386,41 +4481,23 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
       };
     },
     async commitAggregate(fence: any) {
-      commits += 1;
-      events.push('cas');
       const participant = prepared.participants[0];
       if (participant.expectedStoreVersion.value !== current.storeVersion.value) {
         return { kind: 'stale' };
       }
-      current = {
-        ...current,
-        storeVersion: { value: `target-v${commits + 1}` } as never,
-        payload: Buffer.from(participant.authorityPayload),
-        relocation:
-          participant.relocation === undefined
-            ? undefined
-            : commitAuthorityRelocation(
-                participant.relocation,
-                fence.aggregateId.value,
-                fence.acceptedRequests?.get(participant.authorityKey.value)
-              ),
-        authorityOwnerGeneration: current.authorityOwnerGeneration + 1n,
-        ownerId: prepared.targetOwner.ownerId,
-        ownerLeaseGeneration: prepared.targetOwner.leaseGeneration,
-        allocation: {
-          ...current.allocation,
-          descriptor: prepared.targetDescriptor,
-          descriptorLifecycleGeneration: prepared.targetDescriptorLifecycleGeneration
-        }
-      };
-      if (current.relocation !== undefined) {
-        progress.push(
-          encodeAuthorityAggregate(undefined, current.relocation)?.relocation as Record<
-            string,
-            unknown
-          >
-        );
-      }
+      publishOwnerChange(
+        participant.authorityPayload,
+        participant.relocation === undefined
+          ? undefined
+          : commitAuthorityRelocation(
+              participant.relocation,
+              fence.aggregateId.value,
+              fence.acceptedRequests?.get(participant.authorityKey.value)
+            ),
+        prepared.targetOwner,
+        prepared.targetDescriptor,
+        prepared.targetDescriptorLifecycleGeneration
+      );
       return { kind: 'committed' };
     },
     async abortAggregate() {
@@ -4430,9 +4507,26 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
     async compareExchangeAuthority(_key: unknown, expected: any, mutation: any) {
       if (removed || expected.value !== current.storeVersion.value)
         return { kind: 'conflict', current: await this.readAuthority() };
+      if (mutation.kind === 'relocate') {
+        const target = mutation.target;
+        publishOwnerChange(
+          mutation.payload,
+          mutation.relocation,
+          target.owner,
+          { meshName: target.meshName, rid: target.nodeRid },
+          target.nodeLifecycleGeneration
+        );
+        return { ...current, kind: 'stored' };
+      }
       if (mutation.kind === 'delete') {
         removed = true;
         return { kind: 'deleted', storeNow: new Date() };
+      }
+      if (options.corruptInventoryDigest && mutation.relocation?.phase === 'captured') {
+        mutation = {
+          ...mutation,
+          relocation: { ...mutation.relocation, sourceInventorySha256: '00'.repeat(32) }
+        };
       }
       if (mutation.relocation !== undefined) {
         progress.push(

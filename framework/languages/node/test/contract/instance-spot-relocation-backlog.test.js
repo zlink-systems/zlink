@@ -257,11 +257,6 @@ async function targetFixture(queuedMessages, seen, sendReply) {
           leaseExpiresAt: new Date(200),
           storeNow: new Date(100)
         };
-      },
-      async commitAggregate(fence) {
-        assert.equal(fence.acceptedRequests.get(key.value), 1n);
-        assert.deepEqual(seen, []);
-        return { kind: 'committed' };
       }
     }),
     relocationStore: completion.store,
@@ -310,7 +305,14 @@ async function targetFixture(queuedMessages, seen, sendReply) {
         relocation,
         targetAttemptGeneration: target.nodeGeneration
       },
-      reservation: { prepared: { fence: {}, plan: {} } },
+      reservation: {
+        plan: {},
+        async commit(acceptedRequests) {
+          assert.equal(acceptedRequests.get(key.value), 1n);
+          assert.deepEqual(seen, []);
+          return { kind: 'committed' };
+        }
+      },
       authenticatedSourceNodeRid: coordinator.nodeRid,
       prepareFingerprint: relocationId
     },

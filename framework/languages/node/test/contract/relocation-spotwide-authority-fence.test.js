@@ -5,6 +5,9 @@ const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 const { userSpotCapacity } = require('./helpers/location-aggregate-fixture');
+const {
+  ServiceRelocationAggregateCommitter
+} = require('../../packages/framework/dist/runtime/foundation/service-relocation-aggregate-committer');
 
 const digest = 'a'.repeat(64);
 const relocationId = '00000000-0000-0000-0000-000000000001';
@@ -145,14 +148,16 @@ function fixture() {
     authorityPayload: snapshot.payload,
     membershipMutation: Buffer.from('[]')
   }));
+  const committer = new ServiceRelocationAggregateCommitter(store);
   return {
     actor,
-    entries,
+    reserve: () =>
+      runtime.reserveTargetForPrepare('mesh', prepare, envelope, entries, digest, (plan) =>
+        committer.prepare(plan)
+      ),
     spot,
     rows,
-    runtime,
     prepare,
-    envelope,
     aggregateRequests,
     seedRepresentativeCapture
   };
@@ -161,7 +166,7 @@ function fixture() {
 test('SpotWide PREPARE accepts a Captured representative and a steady member', async () => {
   const f = fixture();
   f.seedRepresentativeCapture();
-  await f.runtime.reserveTargetForPrepare('mesh', f.prepare, f.envelope, f.entries, digest);
+  await f.reserve();
   const member = f.aggregateRequests[0].participants.find(
     (p) => p.authorityKey.value === actorKey.value
   );
@@ -172,9 +177,7 @@ test('SpotWide PREPARE rejects a version-only member write after seal', async ()
   const f = fixture();
   f.seedRepresentativeCapture();
   f.rows.set(actorKey.value, { ...f.actor, storeVersion: { value: 'member-written-after-seal' } });
-  await assert.rejects(
-    f.runtime.reserveTargetForPrepare('mesh', f.prepare, f.envelope, f.entries, digest)
-  );
+  await assert.rejects(f.reserve());
   assert.equal(f.rows.get(actorKey.value).ownerId, source.ownerId);
   assert.equal(f.rows.get(spotKey.value).ownerId, source.ownerId);
 });
@@ -188,10 +191,7 @@ for (const [field, value] of [
     const f = fixture();
     f.seedRepresentativeCapture();
     f.prepare.coordinator[field] = value;
-    await assert.rejects(
-      f.runtime.reserveTargetForPrepare('mesh', f.prepare, f.envelope, f.entries, digest),
-      /authority changed/
-    );
+    await assert.rejects(f.reserve(), /authority changed/);
     assert.equal(f.aggregateRequests.length, 0);
     assert.equal(f.rows.get(spotKey.value).ownerId, source.ownerId);
     assert.equal(f.rows.get(actorKey.value).ownerId, source.ownerId);

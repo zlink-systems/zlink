@@ -181,21 +181,21 @@ test('target commit fixes capture plus pre-boundary request counts, excluding Se
   };
   let calls = 0;
   const authority = { storeVersion: { value: 'committed' } };
-  const runtime = new ZLinkHostServiceRelocationRuntime({
-    locationStore: () => ({
-      async commitAggregate(fence) {
-        calls++;
-        assert.equal(fence.acceptedRequests.get(key.value), 2n);
-        return { kind: 'committed' };
-      }
-    })
-  });
+  const runtime = new ZLinkHostServiceRelocationRuntime({});
+  const reservation = {
+    plan: {},
+    async commit(acceptedRequests) {
+      calls++;
+      assert.equal(acceptedRequests.get(key.value), 2n);
+      return { kind: 'committed' };
+    }
+  };
   runtime.readAggregateForCommitRetry = async () => ({
     kind: 'committed',
     authorities: new Map([[key.value, authority]])
   });
   assert.equal(
-    await runtime.commitTargetReservation(stage, { prepared: { fence: {}, plan: {} } }),
+    await runtime.commitTargetReservation(stage, reservation),
     authority
   );
   assert.equal(calls, 1);

@@ -227,7 +227,31 @@ export class ZLinkInMemoryAuthorityStore {
       this.scanRevision++;
       return this.stored(row.snapshot);
     }
-    if (!this.isOwnerLive(row.snapshot)) {
+    const ownerChange = mutation.kind === 'relocate' ? mutation.target : undefined;
+    const sourceAllocation = row.snapshot.allocation;
+    const allocation =
+      ownerChange === undefined
+        ? sourceAllocation
+        : {
+            ...sourceAllocation,
+            descriptor: { meshName: ownerChange.meshName, rid: ownerChange.nodeRid },
+            descriptorLifecycleGeneration: ownerChange.nodeLifecycleGeneration
+          };
+    if (ownerChange === undefined) {
+      if (!this.isOwnerLive(row.snapshot))
+        return { kind: 'conflict', current: this.read(keyValue) };
+    } else if (
+      !this.validation.isTargetLive(
+        allocation.descriptor,
+        allocation.descriptorLifecycleGeneration,
+        ownerChange.owner
+      ) ||
+      ((sourceAllocation.descriptor.meshName !== allocation.descriptor.meshName ||
+        !routingIdsEqual(sourceAllocation.descriptor.rid, allocation.descriptor.rid) ||
+        sourceAllocation.descriptorLifecycleGeneration !==
+          allocation.descriptorLifecycleGeneration) &&
+        !this.hasPendingCapacity(allocation))
+    ) {
       return { kind: 'conflict', current: this.read(keyValue) };
     }
     const actor =
@@ -244,7 +268,8 @@ export class ZLinkInMemoryAuthorityStore {
           );
     if (
       actor?.currentSpotKind === ZLinkSpotKind.User &&
-      (previousActor?.currentSpotKind !== ZLinkSpotKind.User ||
+      (ownerChange !== undefined ||
+        previousActor?.currentSpotKind !== ZLinkSpotKind.User ||
         previousActor.currentSpotId !== actor.currentSpotId ||
         previousActor.currentSpotGeneration !== actor.currentSpotGeneration)
     ) {
@@ -255,22 +280,32 @@ export class ZLinkInMemoryAuthorityStore {
       if (membershipFailure !== undefined)
         return { kind: 'conflict', current: this.read(keyValue), membershipFailure };
     }
+    const reincarnating =
+      mutation.kind === 'put' && mutation.generationTransition === 'reincarnate';
+    const advancesOwner = reincarnating || ownerChange !== undefined;
     if (
-      mutation.generationTransition === 'reincarnate' &&
-      (this.objectGeneration >= MAX_GENERATION || this.ownerGeneration >= MAX_GENERATION)
+      (reincarnating && this.objectGeneration >= MAX_GENERATION) ||
+      (advancesOwner && this.ownerGeneration >= MAX_GENERATION)
     ) {
       return { kind: 'generationExhausted' };
     }
     const nextVersion = this.tryNextStoreVersion();
     if (nextVersion === undefined) return { kind: 'generationExhausted' };
+    if (ownerChange !== undefined) {
+      this.adjustCapacity(this.activeCapacity, sourceAllocation, -1);
+      this.adjustCapacity(this.activeCapacity, allocation, 1);
+    }
     row.snapshot = {
       ...row.snapshot,
-      ...(mutation.generationTransition === 'reincarnate'
-        ? {
-            objectGeneration: ++this.objectGeneration,
-            authorityOwnerGeneration: ++this.ownerGeneration
-          }
-        : {}),
+      ...(ownerChange === undefined
+        ? {}
+        : {
+            allocation,
+            ownerId: ownerChange.owner.ownerId,
+            ownerLeaseGeneration: ownerChange.owner.leaseGeneration
+          }),
+      ...(reincarnating ? { objectGeneration: ++this.objectGeneration } : {}),
+      ...(advancesOwner ? { authorityOwnerGeneration: ++this.ownerGeneration } : {}),
       storeVersion: version(nextVersion),
       payload: Buffer.from(mutation.payload),
       ...(mutation.relocation === undefined
@@ -1191,7 +1226,8 @@ export class ZLinkInMemoryAuthorityStore {
 
 export function validateAuthorityMutation(mutation: ZLinkAuthorityMutation): void {
   if (mutation.relocation != null) encodeAuthorityAggregate(undefined, mutation.relocation);
-  if (mutation.kind === 'delete' || mutation.kind === 'restore') return;
+  if (mutation.kind === 'delete' || mutation.kind === 'restore' || mutation.kind === 'relocate')
+    return;
   if (mutation.kind === 'rebindOwnerLease') {
     if (
       mutation.expectedOwner.ownerId !== mutation.targetOwner.ownerId ||
@@ -1208,7 +1244,7 @@ export function validateAuthorityMutation(mutation: ZLinkAuthorityMutation): voi
   const generationTransition = (mutation as { readonly generationTransition?: unknown })
     .generationTransition;
   if (generationTransition !== 'preserve' && generationTransition !== 'reincarnate') {
-    throw new TypeError('Authority owner transitions require an aggregate CAS.');
+    throw new TypeError('Authority generation transition is invalid.');
   }
 }
 

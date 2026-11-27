@@ -13,6 +13,7 @@ const MAX_PAGE_BYTES = 1_024 * 1_024;
 const MAX_MEMBERSHIP_MUTATION_BYTES = 1_024 * 1_024;
 const MAX_COUNT = 0x7fff_ffff;
 const IO_CONCURRENCY = 64;
+const EMPTY_MEMBERSHIP_MUTATION = Buffer.from('[]');
 
 interface InventoryEntry {
   readonly index: number;
@@ -60,6 +61,27 @@ type InventoryRequest = ZLinkAggregateFence & {
 
 export class ZLinkAggregateInventoryError extends Error {}
 
+/** Location runtime §8.3 seals a standalone Actor without writing inventory records. */
+export function standaloneActorInventory(
+  authorityKey: ZLinkAuthorityKey,
+  expectedStoreVersion: string,
+  authorityPayload: Uint8Array
+): { readonly entry: StoredAggregateInventoryEntry; readonly digest: string } {
+  const mutation = Buffer.from(EMPTY_MEMBERSHIP_MUTATION);
+  const entry = inventoryEntry(
+    0,
+    authorityKey.value,
+    expectedStoreVersion,
+    'newOwner',
+    authorityPayload,
+    mutation
+  );
+  return {
+    entry: { ...entry, authorityPayload, membershipMutation: mutation },
+    digest: buildTree([entry]).root.digestSha256
+  };
+}
+
 /** Owns §8.3 inventory records above the opaque Location Store provider. */
 export class ZLinkAggregateInventoryStore {
   constructor(private readonly provider: ZLinkLocationStore) {}
@@ -83,14 +105,14 @@ export class ZLinkAggregateInventoryStore {
       return {
         authorityPayload,
         membershipMutation,
-        entry: {
+        entry: inventoryEntry(
           index,
-          authorityKey: participant.authorityKey.value,
-          expectedStoreVersion: participant.expectedStoreVersion.value,
-          ownerTransition: participant.ownerTransition,
-          authorityPayloadSha256: sha256(authorityPayload),
-          membershipMutationSha256: sha256(membershipMutation)
-        }
+          participant.authorityKey.value,
+          participant.expectedStoreVersion.value,
+          participant.ownerTransition,
+          authorityPayload,
+          membershipMutation
+        )
       };
     });
     const entries = participants.map(({ entry }) => entry);
@@ -275,6 +297,24 @@ export class ZLinkAggregateInventoryStore {
     if (result.kind !== 'found') throw dataLost(fence, `value is missing at '${key.value}'`);
     return result.value.bytes;
   }
+}
+
+function inventoryEntry(
+  index: number,
+  authorityKey: string,
+  expectedStoreVersion: string,
+  ownerTransition: InventoryEntry['ownerTransition'],
+  authorityPayload: Uint8Array,
+  membershipMutation: Uint8Array
+): InventoryEntry {
+  return {
+    index,
+    authorityKey,
+    expectedStoreVersion,
+    ownerTransition,
+    authorityPayloadSha256: sha256(authorityPayload),
+    membershipMutationSha256: sha256(membershipMutation)
+  };
 }
 
 // §8.3 applies the maintenanceAggregateBytes bound to the stored body.

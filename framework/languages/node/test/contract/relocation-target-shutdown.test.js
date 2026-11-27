@@ -51,16 +51,16 @@ function targetFixture(runtime = new ZLinkHostServiceRelocationRuntime({}), mesh
   };
   const events = [];
   const authority = { kind: 'snapshot', ownerId: 'target-owner' };
-  const prepared = {
-    fence: { aggregateId: { value: 'aggregate' }, aggregateGeneration: 1n },
-    plan: { targetDescriptor: { meshName } }
-  };
   const stage = {
     offer: {
       prepare,
       authenticatedSourceNodeRid: 'source',
       prepareFingerprint: 'exact-prepare',
-      reservation: { prepared }
+      reservation: {
+        plan: { targetDescriptor: { meshName } },
+        commit: (acceptedRequests) => store.commitAggregate({ acceptedRequests }),
+        abort: () => store.abortAggregate()
+      }
     },
     staging: {
       primaryAuthorityKey: { value: 'actor-key' },

@@ -105,22 +105,11 @@ for (const phase of ['steady', 'captured', 'legacy captured']) {
         }
       };
       const events = [];
-      let aggregateRequest;
+      let reservationPlan;
       const runtime = new ZLinkHostServiceRelocationRuntime({
         locationStore: () => ({
           async readAuthority() {
             return authority;
-          },
-          async prepareAggregate(request) {
-            events.push('aggregate');
-            aggregateRequest = request;
-            return {
-              kind: 'prepared',
-              fence: { aggregateId: request.aggregateId, aggregateGeneration: 1n }
-            };
-          },
-          async commitAggregate() {
-            events.push('newOwner');
           }
         }),
         spotManager: () => ({ entrySpotIdForMesh: () => 'target-entry' })
@@ -172,27 +161,32 @@ for (const phase of ['steady', 'captured', 'legacy captured']) {
         }
       ];
       const digest = '0'.repeat(64);
-      if (changed === 'none') {
-        await runtime.reserveTargetForPrepare('mesh', prepare, envelope, entries, digest);
-        assert.deepEqual(events, ['aggregate']);
-        assert.equal(
-          aggregateRequest.participants[0].expectedStoreVersion.value,
-          authority.storeVersion.value
+      const reserve = () =>
+        runtime.reserveTargetForPrepare(
+          'mesh',
+          prepare,
+          envelope,
+          entries,
+          digest,
+          async (plan) => {
+            events.push('reserve');
+            reservationPlan = plan;
+          }
         );
-        assert.deepEqual(aggregateRequest.participants[0].relocation.coordinator, {
+      if (changed === 'none') {
+        await reserve();
+        assert.deepEqual(events, ['reserve']);
+        const participant = reservationPlan.participants[0];
+        assert.equal(participant.key.value, key);
+        assert.equal(participant.expected.storeVersion.value, authority.storeVersion.value);
+        assert.equal(participant.relocation.phase, 'prepared');
+        assert.deepEqual(participant.relocation.coordinator, {
           ...source,
           expectedStoreVersion: 'baseline'
         });
       } else {
-        await assert.rejects(
-          runtime.reserveTargetForPrepare('mesh', prepare, envelope, entries, digest),
-          /coordinator.*fence|authority changed/
-        );
-        assert.deepEqual(
-          events,
-          [],
-          'rejected PREPARE must not prepare an aggregate or transfer ownership'
-        );
+        await assert.rejects(reserve(), /coordinator.*fence|authority changed/);
+        assert.deepEqual(events, [], 'rejected PREPARE must not change authority');
       }
     });
   }

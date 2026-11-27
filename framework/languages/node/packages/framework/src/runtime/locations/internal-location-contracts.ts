@@ -31,17 +31,25 @@ export type { ZLinkPeerLocationResolver } from '../../contracts/Locations/Resolv
 export type { ZLinkLocationChangeStampScope } from '../../contracts/Locations/Watch';
 
 import type * as AuthorityContract from '../../contracts/Locations/Authority';
-import type { AuthorityRelocation } from './authority-relocation-record';
+import type { AuthorityAggregateMarker, AuthorityRelocation } from './authority-relocation-record';
 export type { AuthorityRelocation } from './authority-relocation-record';
 
 export type ZLinkAuthoritySnapshot = AuthorityContract.ZLinkAuthoritySnapshot & {
+  readonly aggregateMarker?: Pick<AuthorityAggregateMarker, 'aggregateId' | 'aggregateGeneration'>;
   readonly relocation?: AuthorityRelocation;
 };
 export type ZLinkAuthorityReadResult =
   { readonly kind: 'missing'; readonly storeNow: Date } | ZLinkAuthoritySnapshot;
-export type ZLinkAuthorityMutation = AuthorityContract.ZLinkAuthorityMutation & {
-  readonly relocation?: AuthorityRelocation | null;
-};
+export type ZLinkAuthorityMutation =
+  | (AuthorityContract.ZLinkAuthorityMutation & {
+      readonly relocation?: AuthorityRelocation | null;
+    })
+  | {
+      readonly kind: 'relocate';
+      readonly target: AuthorityContract.ZLinkObjectCreationTarget;
+      readonly payload: Uint8Array;
+      readonly relocation: AuthorityRelocation;
+    };
 export type ZLinkAuthorityCompareExchangeResult =
   | ({ readonly kind: 'stored' } & Omit<ZLinkAuthoritySnapshot, 'kind'>)
   | Exclude<
