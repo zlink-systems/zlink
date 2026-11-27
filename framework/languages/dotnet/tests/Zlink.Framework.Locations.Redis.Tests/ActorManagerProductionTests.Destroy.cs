@@ -210,13 +210,23 @@ public sealed partial class ActorManagerProductionTests
         }
     }
 
-    private sealed class DestroyLocationStore(ZLinkAuthorityKey key, bool holdAuthorityRead)
-        : IZLinkLocationStore
+    private sealed class DestroyLocationStore(
+        ZLinkAuthorityKey key,
+        bool holdAuthorityRead,
+        IZLinkLocationStore? store = null
+    ) : IZLinkLocationStore
     {
-        private readonly ZLinkInMemoryProviderLocationStore _inner = new();
+        private readonly IZLinkLocationStore _inner =
+            store ?? new ZLinkInMemoryProviderLocationStore();
         private readonly ZLinkStoreKey _authorityKey =
             ZLinkProviderLocationRepository.AuthorityMetaKey(key);
         private int _deleteCalls;
+
+        public bool FailClosing { get; set; }
+        public TaskCompletionSource ClosingStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseClosing { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource DeleteStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -252,6 +262,17 @@ public sealed partial class ActorManagerProductionTests
             CancellationToken cancellationToken
         )
         {
+            if (
+                FailClosing
+                && request
+                    .Mutations.OfType<ZLinkStoreMutation.Put>()
+                    .Any(put => put.Key == _authorityKey)
+            )
+            {
+                ClosingStarted.TrySetResult();
+                await ReleaseClosing.Task.WaitAsync(cancellationToken);
+                throw new InvalidOperationException("Injected Actor Closing CAS failure.");
+            }
             if (
                 request
                     .Mutations.OfType<ZLinkStoreMutation.Delete>()

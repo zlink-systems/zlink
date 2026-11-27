@@ -53,8 +53,11 @@ export class ZLinkActorCreationCoordinator {
             return;
           }
           if (state.actor !== undefined) lifecycle.discardExecution(state.actor);
-          this.options.actorDestroyedCleanup?.(actorId);
-          state.clearAfterDestroy();
+          try {
+            await this.options.actorDestroyedCleanup?.(actorId);
+          } finally {
+            state.clearAfterDestroy();
+          }
         },
         () => this.createActorAfterClaim(actorId, actorType, state, createRequest, true, signal)
       );

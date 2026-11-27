@@ -422,8 +422,12 @@ export class ZLinkEntrySpotActivation {
     this.spotSerialExecutor.discardActor(actorId, error);
   }
 
-  terminateActor(actorId: string, terminal: () => Promise<void>): Promise<void> {
-    return this.spotSerialExecutor.terminateActor(actorId, terminal);
+  terminateActor(
+    actorId: string,
+    publishClosing: () => Promise<void>,
+    terminal: () => Promise<void>
+  ) {
+    return this.spotSerialExecutor.terminateActor(actorId, publishClosing, terminal);
   }
 
   /**

@@ -39,10 +39,14 @@ internal sealed class ControllableTimeProvider : TimeProvider
         }
     }
 
-    internal bool HasTimerDueIn(TimeSpan delay)
+    internal bool HasTimerDueIn(TimeSpan delay) => FindTimerDueIn(delay) is not null;
+
+    internal ITimer? FindTimerDueIn(TimeSpan delay, ITimer? excludedTimer = null)
     {
         lock (_gate)
-            return _timers.Any(timer => timer.IsDueAt(_timestamp + delay.Ticks));
+            return _timers.FirstOrDefault(timer =>
+                !ReferenceEquals(timer, excludedTimer) && timer.IsDueAt(_timestamp + delay.Ticks)
+            );
     }
 
     private event Action<TimeSpan>? TimerCreated;

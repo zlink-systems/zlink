@@ -148,35 +148,62 @@ public final class ZLinkActorCreationCoordinator
                                         deadline,
                                         excludedTargets);
                             }
-                            // A live Ready Actor is found without the new-Actor candidate
-                            // condition (Actor model section 6.3; Location runtime section 7).
                             return locations
                                     .read(ZLinkAuthorityKeyCodec.actor(actorId), OPEN)
                                     .thenCompose(
-                                            current ->
-                                                    current
-                                                                    instanceof
-                                                                    ZLinkAuthoritySnapshot snapshot
-                                                            ? isReady(snapshot, actorId, actorType)
-                                                                    .thenApply(
-                                                                            ready ->
-                                                                                    ready
-                                                                                            ? snapshot
-                                                                                            : null)
-                                                            : CompletableFuture.completedFuture(
-                                                                    null))
-                                    .thenCompose(
-                                            snapshot ->
-                                                    snapshot != null
-                                                            ? existing(snapshot, actorId, actorType)
-                                                            : createOnNewTarget(
-                                                                    operation,
-                                                                    actorId,
-                                                                    actorType,
-                                                                    requestEnvelope,
-                                                                    true,
-                                                                    deadline,
-                                                                    excludedTargets));
+                                            current -> {
+                                                if (current
+                                                        instanceof
+                                                        ZLinkAuthoritySnapshot snapshot) {
+                                                    var authority =
+                                                            authorities
+                                                                    .decode(snapshot.payload())
+                                                                    .orElse(null);
+                                                    if (authority != null
+                                                            && authority.actorId().equals(actorId)
+                                                            && authority
+                                                                    .stableType()
+                                                                    .equals(actorType)
+                                                            && authority.state()
+                                                                    != ZLinkActorAuthorityPayloadCodec
+                                                                            .State.CREATING) {
+                                                        return hasLiveOwner(snapshot)
+                                                                .thenCompose(
+                                                                        live ->
+                                                                                live
+                                                                                        ? existing(
+                                                                                                snapshot,
+                                                                                                actorId,
+                                                                                                actorType,
+                                                                                                true,
+                                                                                                () ->
+                                                                                                        resumeOrCreate(
+                                                                                                                operation,
+                                                                                                                actorId,
+                                                                                                                actorType,
+                                                                                                                requestEnvelope,
+                                                                                                                true,
+                                                                                                                deadline,
+                                                                                                                excludedTargets))
+                                                                                        : createOnNewTarget(
+                                                                                                operation,
+                                                                                                actorId,
+                                                                                                actorType,
+                                                                                                requestEnvelope,
+                                                                                                true,
+                                                                                                deadline,
+                                                                                                excludedTargets));
+                                                    }
+                                                }
+                                                return createOnNewTarget(
+                                                        operation,
+                                                        actorId,
+                                                        actorType,
+                                                        requestEnvelope,
+                                                        true,
+                                                        deadline,
+                                                        excludedTargets);
+                                            });
                         });
     }
 
@@ -248,12 +275,20 @@ public final class ZLinkActorCreationCoordinator
                 .thenCompose(
                         result -> {
                             if (result instanceof ZLinkObjectAlreadyExists exists) {
-                                if (!getOrCreate)
-                                    return CompletableFuture.failedFuture(
-                                            frameworkFailure(
-                                                    ZLinkFrameworkErrorKind.ALREADY_EXISTS,
-                                                    "Actor already exists"));
-                                return existing(exists.current(), actorId, actorType);
+                                return existing(
+                                        exists.current(),
+                                        actorId,
+                                        actorType,
+                                        getOrCreate,
+                                        () ->
+                                                resumeOrCreate(
+                                                        operation,
+                                                        actorId,
+                                                        actorType,
+                                                        requestEnvelope,
+                                                        true,
+                                                        deadline,
+                                                        excludedTargets));
                             }
                             if (result instanceof ZLinkObjectTypeMismatch) {
                                 return CompletableFuture.failedFuture(
@@ -385,14 +420,7 @@ public final class ZLinkActorCreationCoordinator
         return Duration.ofMillis(remainingMillis);
     }
 
-    private CompletionStage<Boolean> isReady(
-            ZLinkAuthoritySnapshot snapshot, String actorId, String actorType) {
-        if (authorities
-                .decode(snapshot.payload())
-                .filter(authority -> isReady(authority, actorId, actorType))
-                .isEmpty()) {
-            return CompletableFuture.completedFuture(false);
-        }
+    private CompletionStage<Boolean> hasLiveOwner(ZLinkAuthoritySnapshot snapshot) {
         return locations
                 .readOwnerLease(snapshot.ownerId())
                 .thenApply(
@@ -403,17 +431,17 @@ public final class ZLinkActorCreationCoordinator
                                                 snapshot.ownerLeaseGeneration()));
     }
 
-    private static boolean isReady(
-            ZLinkActorAuthorityPayloadCodec.ActorAuthority authority,
-            String actorId,
-            String actorType) {
-        return authority.state() == ZLinkActorAuthorityPayloadCodec.State.READY
-                && authority.actorId().equals(actorId)
-                && authority.stableType().equals(actorType);
-    }
-
     private CompletionStage<ZLinkActorCreateResult> existing(
-            ZLinkAuthoritySnapshot snapshot, String actorId, String actorType) {
+            ZLinkAuthoritySnapshot snapshot,
+            String actorId,
+            String actorType,
+            boolean getOrCreate,
+            Supplier<CompletionStage<ZLinkActorCreateResult>> observe) {
+        if (!getOrCreate) {
+            return CompletableFuture.failedFuture(
+                    frameworkFailure(
+                            ZLinkFrameworkErrorKind.ALREADY_EXISTS, "Actor already exists"));
+        }
         var authority =
                 authorities
                         .decode(snapshot.payload())
@@ -422,7 +450,13 @@ public final class ZLinkActorCreationCoordinator
                                         frameworkFailure(
                                                 ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
                                                 "Actor authority payload is invalid"));
-        if (!isReady(authority, actorId, actorType)) {
+        if (!authority.actorId().equals(actorId) || !authority.stableType().equals(actorType)) {
+            return failed("Actor authority identity does not match");
+        }
+        if (authority.state() == ZLinkActorAuthorityPayloadCodec.State.CLOSING) {
+            return awaitConflict().thenCompose(ignored -> observe.get());
+        }
+        if (authority.state() != ZLinkActorAuthorityPayloadCodec.State.READY) {
             return failed("Actor authority is not Ready");
         }
         return CompletableFuture.completedFuture(
@@ -1025,7 +1059,7 @@ public final class ZLinkActorCreationCoordinator
         return result;
     }
 
-    private static CompletionStage<Void> awaitConflict() {
+    static CompletionStage<Void> awaitConflict() {
         return CompletableFuture.supplyAsync(
                 () -> null,
                 CompletableFuture.delayedExecutor(

@@ -4424,6 +4424,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 };
         if (operations != null) {
             var registered = operations.<ZLinkBackendReceived>prepareOperation(operationId);
+            systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                    registered, completion);
             operations
                     .submitTerminal(
                             operationId,
@@ -4439,8 +4441,6 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             (accepted, failure) -> {
                                 if (failure != null || !accepted) request.close();
                             });
-            systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
-                    registered, completion);
             return registered;
         }
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
