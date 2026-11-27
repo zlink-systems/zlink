@@ -942,6 +942,53 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                                   inbound_source_node_rid, source_fence, incoming_hop_count,
                                   inbound_operation, inbound_reply_route_id);
     };
+    const auto dispatch_flow = message_kind == stream_message_kind_t::send
+                                   && runtime::flow_context_t::tracing (
+                                     detail::message_flow_tracer_t (state_owner->dispatch).mode ())
+                                 ? runtime::flow_context_t::current ()
+                                 : std::optional<runtime::flow_value_t>{};
+    const auto report_actor_send_drop = [&] (std::exception_ptr error = {}) {
+        if (message_kind != stream_message_kind_t::send)
+            return;
+        detail::dispatch_error_reporter_t (state_owner->dispatch).report_lazy ([&] {
+            return message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::spot_actor,
+              .message_kind = dispatch_message_kind_t::actor_send,
+              .reason = dispatch_error_reason_t::stale_target,
+              .action = dispatch_error_action_t::drop,
+              .packet_name = std::string (packet_name),
+              .actor_id = std::string (actor_ref.actor_id ().value ()),
+              .source_rid = inbound_source_node_rid.to_hex (),
+              .correlation_id = metadata.correlation_id,
+              .exception = std::move (error),
+              .flow_id = dispatch_flow ? std::make_optional (dispatch_flow->flow_id) : std::nullopt,
+              .flow_origin =
+                dispatch_flow ? std::make_optional (dispatch_flow->origin) : std::nullopt,
+              .mesh_name = state_owner->snapshot.name};
+        });
+        runtime::runtime_metrics_t metrics (state_owner->monitoring);
+        if (metrics.enabled ())
+            metrics.counter ("zlink.mesh_node.messages.dropped", "{message}", 1,
+                             {{"mesh_name", state_owner->snapshot.name},
+                              {"surface", "actor"},
+                              {"message_kind", "send"},
+                              {"reason", "stale_target"}});
+    };
+    const auto reject_handoff_packet = [&] (detail::handoff_append_result_t admission) {
+        if (admission == detail::handoff_append_result_t::join_completion_failed) {
+            auto failure = result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::unavailable, "Actor Join completion failed");
+            if (message_kind == stream_message_kind_t::send) {
+                report_actor_send_drop (failure.exception ());
+                return result_t<std::optional<zlink::message_t>>::success (zlink::message_t{});
+            }
+            return failure;
+        }
+        return detail::result_access_t::failure<std::optional<zlink::message_t>> (
+          detail::make_origin_exception (framework_error_kind_t::unavailable,
+                                         detail::failure_origin_t::actor_transfer_in_progress,
+                                         "actor transfer is in progress"));
+    };
     // Initial admission may release this packet while materialization prepares
     // the Actor queue. Final admission rechecks and posts in one coordinator turn.
     std::optional<detail::handoff_packet_t> dispatch_packet;
@@ -974,6 +1021,8 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                     return "appended";
                 case detail::handoff_append_result_t::duplicate_request:
                     return "duplicate_request";
+                case detail::handoff_append_result_t::join_completion_failed:
+                    return "join_completion_failed";
             }
             return "unknown";
         }();
@@ -1013,12 +1062,8 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
             }
             co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
         }
-        if (append_result != detail::handoff_append_result_t::not_moving) {
-            co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
-              detail::make_origin_exception (framework_error_kind_t::unavailable,
-                                             detail::failure_origin_t::actor_transfer_in_progress,
-                                             "actor transfer is in progress"));
-        }
+        if (append_result != detail::handoff_append_result_t::not_moving)
+            co_return reject_handoff_packet (append_result);
 
         // Only the exact committed target fence may bypass an older Message
         // Follow route; matching the node or ObjectGeneration alone is
@@ -1046,41 +1091,10 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         std::string mesh_name;
         bool dispatch_on_spot_serial = true;
     };
-    const auto dispatch_flow = message_kind == stream_message_kind_t::send
-                                   && runtime::flow_context_t::tracing (
-                                     detail::message_flow_tracer_t (state_owner->dispatch).mode ())
-                                 ? runtime::flow_context_t::current ()
-                                 : std::optional<runtime::flow_value_t>{};
-    const auto report_missing_actor_target = [&] {
-        if (message_kind != stream_message_kind_t::send)
-            return;
-        detail::dispatch_error_reporter_t (state_owner->dispatch).report_lazy ([&] {
-            return message_dispatch_error_event_t{
-              .surface = dispatch_error_surface_t::spot_actor,
-              .message_kind = dispatch_message_kind_t::actor_send,
-              .reason = dispatch_error_reason_t::stale_target,
-              .action = dispatch_error_action_t::drop,
-              .packet_name = std::string (packet_name),
-              .actor_id = std::string (actor_ref.actor_id ().value ()),
-              .source_rid = inbound_source_node_rid.to_hex (),
-              .correlation_id = metadata.correlation_id,
-              .flow_id = dispatch_flow ? std::make_optional (dispatch_flow->flow_id) : std::nullopt,
-              .flow_origin =
-                dispatch_flow ? std::make_optional (dispatch_flow->origin) : std::nullopt,
-              .mesh_name = state_owner->snapshot.name};
-        });
-        runtime::runtime_metrics_t metrics (state_owner->monitoring);
-        if (metrics.enabled ())
-            metrics.counter ("zlink.mesh_node.messages.dropped", "{message}", 1,
-                             {{"mesh_name", state_owner->snapshot.name},
-                              {"surface", "actor"},
-                              {"message_kind", "send"},
-                              {"reason", "stale_target"}});
-    };
     auto project_actor_dispatch_state =
       [&] (const std::optional<spot_id_t> &found_location) -> result_t<actor_dispatch_plan_t> {
         if (!found_location) {
-            report_missing_actor_target ();
+            report_actor_send_drop ();
             return result_t<actor_dispatch_plan_t>::failure (
               framework_error_kind_t::not_found, "actor spot route disappeared before dispatch");
         }
@@ -1106,7 +1120,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         const auto context = _state->spot_contexts_by_id.find (std::string (plan.current_spot_id));
         if (context == _state->spot_contexts_by_id.end () || !context->second._state
             || !context->second._state->spot_instance) {
-            report_missing_actor_target ();
+            report_actor_send_drop ();
             return result_t<actor_dispatch_plan_t>::failure (
               framework_error_kind_t::not_found,
               "actor spot context is not registered. node="
@@ -1473,10 +1487,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
               request_delivery ? std::optional<zlink::message_t>{}
                                : std::make_optional (zlink::message_t{}));
         }
-        co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
-          detail::make_origin_exception (framework_error_kind_t::unavailable,
-                                         detail::failure_origin_t::actor_transfer_in_progress,
-                                         "actor transfer is in progress"));
+        co_return reject_handoff_packet (final_admission->append_result);
     }
     if (message_kind == stream_message_kind_t::send && application_record
         && application_record->admission.durable () && application_record->native_reply) {
