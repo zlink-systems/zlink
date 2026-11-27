@@ -13,7 +13,7 @@ GameHosting.Configure(
     options =>
     {
         options.AddHandlersFromAssemblyOf(typeof(RoomSpot));
-        options
+        var server = options
             .AddRouteMesh(GameNames.WorldMesh)
             .SetRoutingIdPrefix(settings.Id)
             .Listen(settings.MeshEndpoint)
@@ -29,7 +29,20 @@ GameHosting.Configure(
                 f =>
                     f.ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
                         .PreserveStateWith<MatchmakingRelocation>()
-            )
+            );
+#if NETWORK_SYNC
+        if (settings.NetworkSync)
+        {
+            server.AddSpotFactory<NetworkSyncRoom>(
+                GameNames.RoomType,
+                f => f.StableTypeLimit(settings.RoomCapacity)
+                    .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
+                    .DisableRelocation()
+            );
+            return;
+        }
+#endif
+        server
             .AddSpotFactory<RoomSpot>(
                 GameNames.RoomType,
                 f =>

@@ -515,7 +515,7 @@ Content-Length: 0
     `NotFound`(404)다.**
 
     request 경로와 달리 RouteMesh channel의 one-way send는
-    `framework/src/runtime/host/app.cpp`의 `one_way_native_submit_result`를 지나는데, #498이
+    `framework/src/runtime/host/app_actor_gateway.cpp`의 `one_way_native_submit_result`를 지나는데, #498이
     고친 자리는 `channel_outbound_exchange.cpp`의 두 곳이라 이 경로가 빠졌다. 위 404는 그것을
     실행해 확인한 값이다.
 
