@@ -252,7 +252,7 @@ internal sealed class ZLinkActorOperationTarget(
             .ConfigureAwait(false);
     }
 
-    public async ValueTask<ActorDestroyOperationTerminal> DestroyAsync(
+    public async ValueTask<bool> DestroyAsync(
         ActorDestroyOperation operation,
         CancellationToken cancellationToken
     )
@@ -262,7 +262,7 @@ internal sealed class ZLinkActorOperationTarget(
             .ReadAuthorityAsync(key, cancellationToken)
             .ConfigureAwait(false);
         if (read is ZLinkAuthorityReadResult.Missing)
-            return Destroyed(false);
+            return false;
 
         return await DestroyObservedAsync(
                 operation,
@@ -272,7 +272,7 @@ internal sealed class ZLinkActorOperationTarget(
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask<ActorDestroyOperationTerminal> DestroyObservedAsync(
+    internal async ValueTask<bool> DestroyObservedAsync(
         ActorDestroyOperation operation,
         ZLinkAuthoritySnapshot snapshot,
         CancellationToken cancellationToken
@@ -322,7 +322,7 @@ internal sealed class ZLinkActorOperationTarget(
                 || read is ZLinkAuthorityReadResult.Found found
                     && found.Snapshot.ObjectGeneration > snapshot.ObjectGeneration
             )
-                return Destroyed(true);
+                return true;
             throw Stale(
                 operation.Actor.ActorId,
                 "The current owner does not contain the exact Actor incarnation."
@@ -332,15 +332,8 @@ internal sealed class ZLinkActorOperationTarget(
         await runtime
             .DestroyActorAsync(node.RoutingId, instance, cancellationToken)
             .ConfigureAwait(false);
-        return Destroyed(true);
+        return true;
     }
-
-    private static ActorDestroyOperationTerminal Destroyed(bool value) =>
-        new(
-            RequestResult.Ok,
-            ServiceWireConstants.FrameworkErrorCode.None,
-            new ActorDestroyCompletion(value)
-        );
 
     private async ValueTask<ActorCreateOperationTerminal> FailAsync(
         ActorCreateOperation operation,
