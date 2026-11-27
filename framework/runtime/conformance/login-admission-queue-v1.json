@@ -274,90 +274,253 @@
       ]
     },
     {
-      "name": "global-limit-blocks-and-report-releases",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:200",
+      "name": "permit-granted-below-limit",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:217",
       "given": {
-        "globalLimit": 3,
-        "reports": [
-          {
-            "node": "n",
-            "limit": 10,
-            "inFlight": 2,
-            "issuedSinceReport": 1
-          }
-        ],
-        "unreportedUnexpiredTickets": 1,
-        "waiting": [
-          "a"
-        ]
+        "globalLimit": 2,
+        "epoch": 42,
+        "runningPermits": []
       },
       "steps": [
         {
-          "action": "issue",
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
           "expect": {
-            "nodeBudget": 7,
-            "globalCount": 3,
-            "ticketSessions": []
+            "granted": true,
+            "permitIdNonzero": true,
+            "runningPermits": 1
           }
         },
         {
-          "action": "nodeReport",
-          "inFlight": 2,
-          "usedTicketSessions": [
-            "old"
-          ],
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
           "expect": {
-            "globalCount": 2
-          }
-        },
-        {
-          "action": "issue",
-          "expect": {
-            "ticketSessions": [
-              "a"
-            ]
+            "granted": true,
+            "runningPermits": 2
           }
         }
       ]
     },
     {
-      "name": "global-limit-expiration-releases",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:200",
+      "name": "permit-denied-at-limit",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:217",
       "given": {
         "globalLimit": 1,
-        "reports": [
+        "epoch": 42,
+        "runningPermits": [
           {
-            "node": "n",
-            "limit": 5,
-            "inFlight": 0,
-            "issuedSinceReport": 0
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3
           }
-        ],
-        "unreportedUnexpiredTickets": 1,
-        "waiting": [
-          "a"
         ]
       },
       "steps": [
         {
-          "action": "issue",
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
           "expect": {
-            "ticketSessions": []
+            "granted": false,
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "runningPermits": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "permit-wrong-epoch-denied",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:217",
+      "given": {
+        "globalLimit": 5,
+        "epoch": 42,
+        "runningPermits": []
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 41,
+          "expect": {
+            "granted": false,
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "runningPermits": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "permit-release-idempotent",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:221",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": []
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
           }
         },
         {
-          "action": "ticketExpires",
-          "sessionRid": "old",
+          "action": "releasePermit",
+          "permit": "last",
           "expect": {
-            "globalCount": 0
+            "runningPermits": 0
           }
         },
         {
-          "action": "issue",
+          "action": "releasePermit",
+          "permit": "last",
           "expect": {
-            "ticketSessions": [
-              "a"
-            ]
+            "runningPermits": 0
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "permit-reclaimed-when-owner-lease-ends",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:223",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [
+          {
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "ownerLeaseEnded",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "expect": {
+            "runningPermits": 0
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "permit-reclaimed-when-missing-from-report",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:223",
+      "given": {
+        "globalLimit": 2,
+        "epoch": 42,
+        "runningPermits": [
+          {
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3,
+            "permit": "p1"
+          },
+          {
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3,
+            "permit": "p2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [
+            "p2"
+          ],
+          "expect": {
+            "runningPermits": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "ticket-reuse-does-not-bypass-permit",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:227",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": []
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "expect": {
+            "granted": false,
+            "errorCode": "unavailable",
+            "runningPermits": 1
           }
         }
       ]
@@ -589,6 +752,96 @@
           "expect": {
             "decision": "stageOne",
             "handlerCallsBeforeStageOne": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "global-limit-admit-permit-before-handler",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:217",
+      "given": {
+        "queueEnabled": true,
+        "globalLimit": 1,
+        "ticketState": "valid",
+        "reportedEpoch": 42,
+        "spotPermit": "granted"
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "admitPermitRequests": 1,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "handlerCompleted",
+          "outcome": "failure",
+          "expect": {
+            "releasePermitSends": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "global-limit-permit-denied",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:217",
+      "given": {
+        "queueEnabled": true,
+        "globalLimit": 1,
+        "ticketState": "valid",
+        "reportedEpoch": 42,
+        "spotPermit": "denied"
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "releasePermitSends": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "global-limit-spot-no-response",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:225",
+      "given": {
+        "queueEnabled": true,
+        "globalLimit": 1,
+        "ticketState": "valid",
+        "reportedEpoch": 42,
+        "spotPermit": "noResponseBeforeDeadline"
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "handlerCalls": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "no-global-limit-no-permit",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:215",
+      "given": {
+        "queueEnabled": true,
+        "globalLimit": null,
+        "ticketState": "valid",
+        "reportedEpoch": 42
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "admitPermitRequests": 0,
+            "handlerCalls": 1
           }
         }
       ]
