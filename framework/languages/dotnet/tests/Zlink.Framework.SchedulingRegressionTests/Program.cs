@@ -1,3 +1,4 @@
+using Xunit.Abstractions;
 using Zlink.Framework.UnitTests;
 using Zlink.Framework.UnitTests.Runtime;
 
@@ -16,11 +17,12 @@ if (
 ThreadPool.GetMaxThreads(out var maxWorkers, out _);
 Console.WriteLine($"ThreadPool maximum workers: {maxWorkers}");
 
-var timer = new TimerLifecycleTests();
+var output = new ConsoleTestOutput();
+var timer = new TimerLifecycleTests(output);
 var maintenance = new MaintenanceRuntimeTests();
-var spot = new EntrySpotActorDispatchTests();
+var spot = new EntrySpotActorDispatchTests(output);
 var relocation = new RelocationBehaviorConformanceTests();
-var stateLane = new StateLaneTests();
+var stateLane = new StateLaneTests(output);
 (string Name, Func<Task> Run)[] regressions =
 [
     (
@@ -70,3 +72,10 @@ foreach (var regression in regressions)
     }
 }
 return failures == 0 ? 0 : 1;
+
+file sealed class ConsoleTestOutput : ITestOutputHelper
+{
+    public void WriteLine(string message) => Console.WriteLine(message);
+
+    public void WriteLine(string format, params object[] args) => Console.WriteLine(format, args);
+}
