@@ -11,13 +11,20 @@ from ...contracts.errors.codes import (
     ConnectResult,
 )
 from ...contracts.eventing.codes import MonitorEventMask
+from ...contracts.sockets.connection_attempt import (
+    ConnectionAttempt,
+    ConnectionAttemptState,
+    ConnectionFailure,
+    ConnectionFailureKind,
+    ConnectionFailureStage,
+)
 from ...contracts.sockets.codes import (
     ReceiveFlowState,
     RecvResult,
     SocketType,
     SubmitResult,
 )
-from ..._native.ffi import ZlinkMsg, ZlinkRoutingId, lib
+from ..._native.ffi import ZlinkConnectionAttempt, ZlinkMsg, ZlinkRoutingId, lib
 from ..buffers.payload_buffers import (
     _bool_bytes,
     _int32_bytes,
@@ -553,6 +560,65 @@ class _ConnectSocket(_Socket):
         rc = lib().zlink_disconnect_rid(self._handle, ctypes.byref(native))
         if rc != 0:
             _raise_result_error(ConnectError, ConnectResult, rc, lib().zlink_errno())
+
+    def connection_attempts_snapshot(self):
+        """Returns one :class:`ConnectionAttempt` per current outbound
+        connection registration as one atomic snapshot. A successful snapshot
+        clears ``PollEventFlag.POLLCONNECT`` readiness unless a later change
+        raced with it.
+
+        :raises ConfigError: when Core rejects the snapshot request.
+        """
+        capacity = 8
+        endpoint_capacity = 1024
+        while True:
+            attempts = (ZlinkConnectionAttempt * capacity)()
+            endpoint_bytes = ctypes.create_string_buffer(endpoint_capacity)
+            count = ctypes.c_size_t()
+            required = ctypes.c_size_t()
+            rc = lib().zlink_socket_connection_attempts_snapshot(
+                self._handle,
+                attempts,
+                capacity,
+                ctypes.byref(count),
+                endpoint_bytes,
+                endpoint_capacity,
+                ctypes.byref(required),
+            )
+            if rc == ConfigResult.BUFFER_TOO_SMALL:
+                # Core reports the sizes it needs; the set can grow before the retry.
+                if count.value <= capacity and required.value <= endpoint_capacity:
+                    raise ConfigError(ConfigResult.INTERNAL_ERROR, 0)
+                capacity = max(capacity, count.value)
+                endpoint_capacity = max(endpoint_capacity, required.value)
+                continue
+            if rc != 0:
+                _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+            if count.value > capacity or required.value > endpoint_capacity:
+                raise ConfigError(ConfigResult.INTERNAL_ERROR, 0)
+            raw = endpoint_bytes.raw
+            for a in attempts[: count.value]:
+                end = a.endpoint_offset + a.endpoint_length
+                # The row validation lives here only: tokens are nonzero and the
+                # endpoint is NUL-terminated inside the reported byte count.
+                if a.intent_id == 0 or a.revision == 0 or end >= required.value or raw[end] != 0:
+                    raise ConfigError(ConfigResult.INTERNAL_ERROR, 0)
+            return [
+                ConnectionAttempt(
+                    raw[a.endpoint_offset : a.endpoint_offset + a.endpoint_length].decode("utf-8"),
+                    a.intent_id,
+                    a.revision,
+                    a.last_failure_id,
+                    ConnectionAttemptState(a.state),
+                    ConnectionFailure(
+                        ConnectionFailureKind(a.last_failure.kind),
+                        ConnectionFailureStage(a.last_failure.stage),
+                        a.last_failure.normalized_errno,
+                        a.last_failure.disconnect_reason,
+                    ),
+                )
+                for a in attempts[: count.value]
+            ]
 
 
 class _EndpointSocket(_BindSocket, _ConnectSocket):

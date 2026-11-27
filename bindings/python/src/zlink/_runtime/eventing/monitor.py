@@ -5,7 +5,14 @@ import ctypes
 from ...contracts.core.options import AutoHwmRecalcReason
 from ...contracts.errors.codes import CloseResult, ConfigResult
 from ...contracts.errors.errors import CloseError, ConfigError, RecvError
-from ...contracts.eventing.codes import MonitorEventMask
+from ...contracts.eventing.codes import (
+    MonitorEventFlag,
+    MonitorEventMask,
+    MonitorSourceKind,
+    MonitorStateFlag,
+    MonitorStatusDetail,
+    TransportLane,
+)
 from ...contracts.eventing.monitor import MonitorEvent, MonitorStatus
 from ...contracts.sockets.codes import RecvResult
 from ..._native.ffi import (
@@ -30,9 +37,9 @@ def _monitor_status_from_native(snapshot):
     return MonitorStatus(
         abi_version=int(snapshot.abi_version),
         struct_size=int(snapshot.struct_size),
-        source_kind=int(snapshot.source_kind),
-        state_flags=int(snapshot.state_flags),
-        detail_flags=int(snapshot.detail_flags),
+        source_kind=MonitorSourceKind(int(snapshot.source_kind)),
+        state_flags=MonitorStateFlag(int(snapshot.state_flags)),
+        detail_flags=MonitorStatusDetail(int(snapshot.detail_flags)),
         snd_pending_msgs=int(snapshot.snd_pending_msgs),
         rcv_pending_msgs=int(snapshot.rcv_pending_msgs),
         snd_pending_bytes=int(snapshot.snd_pending_bytes),
@@ -80,14 +87,14 @@ class NativeMonitorSocket:
     @staticmethod
     def _decode_event(native):
         return MonitorEvent(
-            event=int(native.event),
+            event=MonitorEventMask(int(native.event)),
             value=int(native.value),
             routing_id=_routing_id_bytes(native.routing_id),
             local_addr=_decode_fixed(native.local_addr),
             remote_addr=_decode_fixed(native.remote_addr),
             connection_id=int(native.connection_id),
-            transport_lane=int(native.transport_lane),
-            flags=int(native.flags),
+            transport_lane=TransportLane(int(native.transport_lane)),
+            flags=MonitorEventFlag(int(native.flags)),
         )
 
     def status(self):

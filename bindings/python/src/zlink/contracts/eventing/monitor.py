@@ -3,7 +3,7 @@
 from typing import Optional, Protocol, runtime_checkable
 
 from ..sockets.codes import RecvFlags
-from .codes import MonitorEventMask
+from .codes import MonitorEventMask, MonitorStateFlag
 
 
 class MonitorStatus:
@@ -100,7 +100,7 @@ class MonitorStatus:
 
     def is_ready(self):
         """Return whether the monitored socket is in the ready state."""
-        return bool(self.state_flags & (1 << 0))
+        return bool(self.state_flags & MonitorStateFlag.READY)
 
 
 class MonitorEvent:
@@ -113,7 +113,7 @@ class MonitorEvent:
     id when the event carries one; ``local_addr``/``remote_addr`` are the
     endpoint addresses; ``connection_id`` is the process-local identity of
     the physical transport attempt;
-    ``transport_lane`` is one of the application/completion lane values; and
+    ``transport_lane`` is a :class:`TransportLane`; and
     ``flags`` carries event-specific bits (``MonitorEventFlag``) such as
     whether a resumed pipe is actually writable, or which part of a stale
     flow-state frame (generation or epoch) triggered the rejection.

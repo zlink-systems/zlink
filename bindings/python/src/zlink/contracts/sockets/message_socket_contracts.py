@@ -7,7 +7,7 @@ from .operations import RequestOp, SendOp
 
 
 @runtime_checkable
-class PairSocket(_socket_contract._DisconnectRidContract, Protocol):
+class PairSocket(_socket_contract._ConnectSocketContract, Protocol):
     """PAIR socket: an exclusive one-to-one peering with no routing."""
 
     def connect(self, endpoint):
@@ -32,7 +32,7 @@ class PairSocket(_socket_contract._DisconnectRidContract, Protocol):
 
 
 @runtime_checkable
-class DealerSocket(_socket_contract._DisconnectRidContract, _socket_contract._RoutingIdContract, Protocol):
+class DealerSocket(_socket_contract._ConnectSocketContract, _socket_contract._RoutingIdContract, Protocol):
     """DEALER socket: load-balances sends across its connected peers and can
     issue routed requests."""
 
