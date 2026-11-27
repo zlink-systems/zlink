@@ -900,6 +900,7 @@ export class ZLinkFrameworkRuntimeHost
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),
       completions: (meshName) => this.spotNodeRuntime?.meshCompletionTable(meshName),
       spotManager: () => this.spotManager,
+      acquireSpotReplayPermit: (signal) => this.applicationJobQueue.acquire(signal, 'remote'),
       actorManager: () => this.actorManager,
       actorTransfer: this.actorTransferRuntime,
       boundSessionRelocation: {

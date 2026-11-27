@@ -178,6 +178,8 @@ final class ZLinkLocationStoreFormat {
             ZLinkStoreKey oldKey, ZLinkMeshNodeDescriptorKey target, ZLinkStoreValue oldValue) {
         byte[] bytes = oldValue.bytes();
         var counters = ZLinkLegacyCapacity.decode(oldKey, bytes).counterPuts(target);
+        // Zero-valued counters are not target keys: only Put keys are conditioned and counted.
+        var counterKeys = counters.stream().map(ZLinkStorePut::key).toList();
         if (counters.size() >= ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
             throw new ZLinkConfigurationException(
                     "v11 capacity conversion exceeds the Location Store batch key limit for "
@@ -210,43 +212,40 @@ final class ZLinkLocationStoreFormat {
                                         new ZLinkConfigurationException(
                                                 "Location Store rejected v11 capacity conversion"));
                             }
-                            return confirmMove(oldKey, counters);
+                            return confirmMove(oldKey, bytes, counterKeys);
                         })
                 .thenCompose(stage -> stage);
     }
 
-    private CompletionStage<Void> confirmMove(ZLinkStoreKey oldKey, List<ZLinkStorePut> counters) {
+    private CompletionStage<Void> confirmMove(
+            ZLinkStoreKey oldKey, byte[] bytes, List<ZLinkStoreKey> counterKeys) {
         return read(oldKey)
                 .thenCompose(
                         old -> {
+                            if (!(old instanceof ZLinkStoreReadFound found))
+                                return CompletableFuture.completedFuture(null);
+                            if (!Arrays.equals(bytes, found.value().bytes()))
+                                return CompletableFuture.completedFuture(null)
+                                        .thenComposeAsync(ignored -> move(oldKey));
                             var destinations =
-                                    counters.stream()
-                                            .map(
-                                                    counter ->
-                                                            read(counter.key())
-                                                                    .toCompletableFuture())
+                                    counterKeys.stream()
+                                            .map(key -> read(key).toCompletableFuture())
                                             .toList();
                             return CompletableFuture.allOf(
                                             destinations.toArray(CompletableFuture<?>[]::new))
                                     .thenComposeAsync(
                                             ignored -> {
-                                                if (old instanceof ZLinkStoreReadFound)
-                                                    return move(oldKey);
                                                 if (destinations.stream()
-                                                        .allMatch(
+                                                        .anyMatch(
                                                                 result ->
                                                                         result.join()
                                                                                 instanceof
                                                                                 ZLinkStoreReadFound))
-                                                    return CompletableFuture.completedFuture(null);
-                                                // Counters are never deleted, so a missing row with
-                                                // a missing counter cannot become consistent by
-                                                // reading again.
-                                                return CompletableFuture.<Void>failedFuture(
-                                                        new ZLinkConfigurationException(
-                                                                "The migrated Location Store"
-                                                                        + " counter is missing for "
-                                                                        + oldKey.value()));
+                                                    return CompletableFuture.<Void>failedFuture(
+                                                            new ZLinkConfigurationException(
+                                                                    "Existing Location Store counter for "
+                                                                            + oldKey.value()));
+                                                return move(oldKey);
                                             });
                         });
     }
