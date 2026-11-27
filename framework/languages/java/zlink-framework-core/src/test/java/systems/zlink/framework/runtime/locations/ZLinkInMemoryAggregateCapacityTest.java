@@ -82,12 +82,6 @@ final class ZLinkInMemoryAggregateCapacityTest {
                         .get());
 
         fixture.targetDescriptorLive.set(false);
-        assertEquals(
-                ZLinkAggregateCommitResult.STALE,
-                fixture.store
-                        .commitAggregate(prepared.fence(), () -> false)
-                        .toCompletableFuture()
-                        .get());
         assertEquals(fixture.current.storeVersion(), current(fixture).storeVersion());
         assertEquals(1, fixture.store.activeCapacity(SOURCE_DESCRIPTOR, 7));
         assertEquals(1, fixture.store.pendingCapacity(TARGET_DESCRIPTOR, 9));
@@ -182,7 +176,7 @@ final class ZLinkInMemoryAggregateCapacityTest {
     }
 
     @Test
-    void aggregateCommitRejectsExpiredExactTargetOwnerWithoutMutation() throws Exception {
+    void aggregateCommitMovesCapacityAfterTargetOwnerExpires() throws Exception {
         Fixture fixture = fixture();
         fixture.sourceLive.set(false);
         var prepared =
@@ -201,23 +195,14 @@ final class ZLinkInMemoryAggregateCapacityTest {
         fixture.targetLive.set(false);
 
         assertEquals(
-                ZLinkAggregateCommitResult.STALE,
+                ZLinkAggregateCommitResult.COMMITTED,
                 fixture.store
                         .commitAggregate(prepared.fence(), () -> false)
                         .toCompletableFuture()
                         .get());
-        ZLinkAuthoritySnapshot current = current(fixture);
-        assertEquals(fixture.source.ownerId(), current.ownerId());
-        assertEquals(fixture.current.storeVersion(), current.storeVersion());
-        assertEquals(1, fixture.store.activeCapacity(SOURCE_DESCRIPTOR, 7));
-        assertEquals(1, fixture.store.pendingCapacity(TARGET_DESCRIPTOR, 9));
-
-        assertEquals(
-                ZLinkAggregateAbortResult.ABORTED,
-                fixture.store
-                        .abortAggregate(prepared.fence(), () -> false)
-                        .toCompletableFuture()
-                        .get());
+        assertEquals(fixture.target.ownerId(), current(fixture).ownerId());
+        assertEquals(0, fixture.store.activeCapacity(SOURCE_DESCRIPTOR, 7));
+        assertEquals(1, fixture.store.activeCapacity(TARGET_DESCRIPTOR, 9));
         assertEquals(0, fixture.store.pendingCapacity(TARGET_DESCRIPTOR, 9));
     }
 

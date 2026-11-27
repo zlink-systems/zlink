@@ -1006,10 +1006,7 @@ final class ZLinkInMemoryAuthorityStore {
                     if (state.state != State.PREPARED) {
                         return completed(ZLinkAggregateCommitResult.STALE);
                     }
-                    if (!ownerLeaseIsLive.test(state.request.targetOwner())) {
-                        return completed(ZLinkAggregateCommitResult.STALE);
-                    }
-                    if (!aggregateStateIsCurrent(state.request, fence)) {
+                    if (!aggregateParticipantsAreCurrent(state.request)) {
                         return completed(ZLinkAggregateCommitResult.STALE);
                     }
                     var payloads = new HashMap<String, byte[]>();
@@ -1620,29 +1617,10 @@ final class ZLinkInMemoryAuthorityStore {
         return increments >= 0 && current <= Long.MAX_VALUE - increments;
     }
 
-    private boolean aggregateStateIsCurrent(
-            ZLinkAggregatePrepareRequest request, ZLinkAggregateFence aggregateFence) {
-        ZLinkMeshNodeDescriptor target =
-                descriptorLookup.find(
-                        request.targetDescriptor(),
-                        request.targetDescriptorLifecycleGeneration(),
-                        request.targetOwner());
-        if (target == null
-                || target.state()
-                        != systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState.SERVING
-                || target.objectRole() != ZLinkMeshNodeObjectRole.SERVER
-                || target.placementWeight() <= 0) {
-            return false;
-        }
+    private boolean aggregateParticipantsAreCurrent(ZLinkAggregatePrepareRequest request) {
         for (ZLinkAggregateParticipant participant : request.participants()) {
             Row current = rows.get(participant.authorityKey());
             if (current == null || !current.storeVersion.equals(participant.casStoreVersion())) {
-                return false;
-            }
-            if (participant.ownerTransition() != ZLinkAuthorityGenerationTransition.NEW_OWNER) {
-                continue;
-            }
-            if (!targetSupportsAllocation(request, current.allocation)) {
                 return false;
             }
         }

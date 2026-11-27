@@ -2436,23 +2436,15 @@ final class ZLinkProviderAuthorityRepository {
                                                                 ? null
                                                                 : projectStandaloneActor(
                                                                         request, actor, intent);
-                                                return requireLiveOwner(
-                                                                request.targetOwner(),
+                                                return requireAggregateMembership(
+                                                                request,
+                                                                rows,
                                                                 conditions,
-                                                                opaqueCancellation)
+                                                                opaqueCancellation,
+                                                                actorProjection)
                                                         .thenCompose(
-                                                                live ->
-                                                                        live
-                                                                                ? requireAggregateMembership(
-                                                                                        request,
-                                                                                        rows,
-                                                                                        conditions,
-                                                                                        opaqueCancellation,
-                                                                                        actorProjection)
-                                                                                : completed(false))
-                                                        .thenCompose(
-                                                                live -> {
-                                                                    if (!live) {
+                                                                membershipMatches -> {
+                                                                    if (!membershipMatches) {
                                                                         return completed(
                                                                                 Optional.of(
                                                                                         ZLinkAggregateCommitResult
@@ -2575,18 +2567,7 @@ final class ZLinkProviderAuthorityRepository {
                                     || cancellation.isCancellationRequested()) {
                                 return completed(Optional.of(ZLinkAggregateCommitResult.STALE));
                             }
-                            return requireLiveOwner(
-                                            request.targetOwner(),
-                                            new ArrayList<>(),
-                                            opaqueCancellation)
-                                    .thenCompose(
-                                            live ->
-                                                    live
-                                                            ? completed(Optional.empty())
-                                                            : completed(
-                                                                    Optional.of(
-                                                                            ZLinkAggregateCommitResult
-                                                                                    .STALE)));
+                            return completed(Optional.empty());
                         });
     }
 

@@ -285,7 +285,7 @@ final class ZLinkRedisAggregateRelocationCapacityLiveTest {
         }
     }
 
-    private static ZLinkMeshNodeDescriptor descriptor(
+    static ZLinkMeshNodeDescriptor descriptor(
             RoutingId rid, ZLinkLocationOwnerToken owner, int roomLimit) {
         return new ZLinkMeshNodeDescriptor(
                 "game",
