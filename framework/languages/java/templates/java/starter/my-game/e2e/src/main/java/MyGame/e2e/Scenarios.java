@@ -10,9 +10,13 @@ public final class Scenarios {
     private Scenarios() {}
 
     // Add application scenarios to Scenario and zlink.structure.json together.
-    static void run(Scenario scenario, Nodes nodes) throws Exception {
+    static void run(Scenario scenario, Nodes nodes, boolean attach) throws Exception {
         switch (scenario) {
-            case CONNECT -> connect(nodes);
+            case CONNECT -> {
+                connect(nodes);
+                if (attach) System.out.println("Skipping drain: requires an isolated server.");
+                else nodes.drain(nodes.sessionId);
+            }
         }
     }
 
@@ -24,6 +28,5 @@ public final class Scenarios {
                 () -> connector.close().submit().toCompletableFuture().join()) {
             connector.connect().submit().toCompletableFuture().join();
         }
-        nodes.drain(nodes.sessionId);
     }
 }

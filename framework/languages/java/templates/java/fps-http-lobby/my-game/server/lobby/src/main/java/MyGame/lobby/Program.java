@@ -31,8 +31,7 @@ public class Program {
     }
 
     @Bean(destroyMethod = "close")
-    public HttpLobby http(
-            NodeConfig config, ZLinkSpotManager spots, ZLinkRouteClient routes) {
+    public HttpLobby http(NodeConfig config, ZLinkSpotManager spots, ZLinkRouteClient routes) {
         if (config.sessionEndpoint() == null || config.sessionEndpoint().isBlank())
             throw new IllegalArgumentException("Session endpoint is required");
         try {

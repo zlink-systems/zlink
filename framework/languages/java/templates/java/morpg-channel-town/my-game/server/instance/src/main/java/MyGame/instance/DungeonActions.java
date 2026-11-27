@@ -62,7 +62,8 @@ public final class DungeonActions {
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationActionRejected(Dungeon spot, Player actor, ZLinkMessageContext context, ActionRejected message) {
+    public CompletionStage<Void> notificationActionRejected(
+            Dungeon spot, Player actor, ZLinkMessageContext context, ActionRejected message) {
         return actor.deliver(message);
     }
 }

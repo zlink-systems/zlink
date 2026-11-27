@@ -19,6 +19,7 @@ export interface LegacyAggregate {
   readonly lifecycleGeneration: bigint;
   readonly capacity: ZLinkCapacityVector;
   readonly commitPageCount?: number;
+  readonly canonicalInventory?: boolean;
 }
 
 // Match strings separately so a decimal inside a string is never rewritten.
@@ -92,7 +93,8 @@ export function decodeLegacyAggregate(key: ZLinkStoreKey, bytes: Uint8Array): Le
       rid: legacyRoutingIdDisplay(target.rid, ridHex),
       ridHex,
       lifecycleGeneration: generation(header.targetDescriptorLifecycleGeneration),
-      capacity: capacity(header.capacity)
+      capacity: capacity(header.capacity),
+      canonicalInventory: node && typeof record.inventoryDigestSha256 === 'string'
     };
   } catch (error) {
     if (!(

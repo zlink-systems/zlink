@@ -29,9 +29,47 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 abstract class SpotActivationBase<C extends SpotDispatchLine> {
+    CompletionStage<List<byte[]>> replayAccepted(
+            ZLinkSpotAcceptedJournal.Record record,
+            Function<ZLinkBackendReceived, CompletionStage<Void>> dispatch) {
+        Objects.requireNonNull(record, "record");
+        CompletableFuture<List<byte[]>> reply = new CompletableFuture<>();
+        List<Message> parts = record.parts().stream().map(Message::from).toList();
+        var received =
+                new ZLinkBackendReceived(
+                        record.result(),
+                        record.routingId(),
+                        record.spotId(),
+                        record.requestSequence(),
+                        record.applicationMetadata(),
+                        new byte[0],
+                        parts,
+                        values -> {
+                            try {
+                                reply.complete(values.stream().map(Message::toByteArray).toList());
+                            } finally {
+                                values.forEach(Message::close);
+                            }
+                        },
+                        () -> {});
+        CompletionStage<Void> dispatched;
+        try {
+            dispatched = dispatch.apply(received);
+        } catch (RuntimeException failure) {
+            received.close();
+            return CompletableFuture.failedFuture(failure);
+        }
+        return dispatched.thenCompose(
+                ignored ->
+                        record.requestSequence().isPresent()
+                                ? reply
+                                : CompletableFuture.completedFuture(List.of()));
+    }
+
     static <T> CompletionStage<T> finishCleanup(Throwable failure, CompletionStage<T> cleanup) {
         Throwable primary = unwrapCompletion(failure);
         return cleanup.handle(
@@ -47,7 +85,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 });
     }
 
-    private static Throwable unwrapCompletion(Throwable failure) {
+    static Throwable unwrapCompletion(Throwable failure) {
         while (failure instanceof CompletionException && failure.getCause() != null) {
             failure = failure.getCause();
         }
@@ -211,15 +249,13 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
 
     final CompletionStage<Void> dispatchActorMessages(
             List<ZLinkBackendActorReceived> actorMessages,
-            java.util.function.Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>>
-                    admission) {
+            Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>> admission) {
         return dispatchActorMessages(actorMessages, admission, null);
     }
 
     final CompletionStage<Void> dispatchActorMessages(
             List<ZLinkBackendActorReceived> actorMessages,
-            java.util.function.Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>>
-                    admission,
+            Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>> admission,
             CompletableFuture<Void> requestAdmission) {
         List<CompletionStage<Void>> dispatches = new ArrayList<>();
         int index = 0;
@@ -580,47 +616,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                             .correlationId(correlationId)
                             .error(failure));
         }
-    }
-
-    final CompletionStage<Void> handleRoutedBoundSessionSendParts(List<Message> parts) {
-        List<Message> packetParts =
-                parts.size() == 2
-                        ? systems.zlink.framework.runtime.actors.ZLinkActorEntryTransferEnvelope
-                                .decode(parts.get(1))
-                        : parts;
-        boolean ownsPacketParts = packetParts != parts;
-        ZLinkActorSpotRoutePackets.BoundSessionSend send;
-        try {
-            send = ZLinkActorSpotRoutePackets.decodeBoundSessionSend(packetParts);
-        } finally {
-            if (ownsPacketParts) {
-                packetParts.forEach(Message::close);
-            }
-        }
-        byte[] frameBytes = send.frame().toByteArray();
-        CompletionStage<Void> sendStage =
-                host.actorSessions()
-                        .sendBoundSession(
-                                send.actorRef(),
-                                frameBytes,
-                                () ->
-                                        host.sendActorBoundSessionWithRetry(
-                                                host.primaryNode(),
-                                                send.actorRef(),
-                                                send.actorRef().actorId(),
-                                                frameBytes,
-                                                "routed actor bound session send failed"));
-        return sendStage.whenComplete((ignored, error) -> send.close());
-    }
-
-    final CompletionStage<List<Message>> handleRoutedBoundSessionSendRequestParts(
-            List<Message> parts) {
-        return handleRoutedBoundSessionSendParts(parts)
-                .thenApply(ignored -> List.of(Message.from(new byte[0])));
-    }
-
-    final CompletionStage<Optional<Message>> handleRoutedActorPacketParts(List<Message> parts) {
-        return handleRoutedActorPacketParts(parts, Instant.now());
     }
 
     final CompletionStage<Optional<Message>> handleRoutedActorPacketParts(

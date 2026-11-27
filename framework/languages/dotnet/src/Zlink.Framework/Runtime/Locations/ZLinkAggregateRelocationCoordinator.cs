@@ -10,7 +10,8 @@ internal sealed record ZLinkAggregateRelocationParticipant(
     string ExpectedStoreVersion,
     ZLinkAuthorityGenerationTransition OwnerTransition,
     ReadOnlyMemory<byte> ApplicationAuthorityPayload,
-    ReadOnlyMemory<byte> MembershipMutation
+    ReadOnlyMemory<byte> MembershipMutation,
+    ZLinkRelocationCompletionBudget? CompletionBudget = null
 );
 
 internal sealed record ZLinkAggregateRelocationRequest(
@@ -76,6 +77,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         ArgumentNullException.ThrowIfNull(request);
         Validate(request);
         cancellationToken.ThrowIfCancellationRequested();
+        foreach (var participant in request.Participants)
+            participant.CompletionBudget?.EnsureFitsBeforeCommit();
 
         // Canonical wire envelopes carry the source-captured inventory digest.
         // Their target-local participant recovery is reconstructed from the
@@ -147,7 +150,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     participant.ExpectedStoreVersion,
                     participant.OwnerTransition,
                     participant.ApplicationAuthorityPayload,
-                    participant.MembershipMutation
+                    participant.MembershipMutation,
+                    participant.CompletionBudget?.AcceptedRequests
                 ))
                 .ToArray();
             var prepare = await authorityStore

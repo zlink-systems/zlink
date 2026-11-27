@@ -444,32 +444,22 @@ export class ZLinkLocationStoreFormat {
       const result = await this.write(request);
       if (result === 'applied') return;
 
-      // Read the old row after the destinations so a concurrent atomic move cannot
-      // look like a live row with conflicting counters.
-      let present = 0;
+      // Read destinations first so a concurrent atomic move cannot appear to
+      // leave its old row and destination counters in place together.
+      let destinationExists = false;
       for (const put of puts) {
-        if ((await this.read(put.key)).kind === 'found') present++;
+        if ((await this.read(put.key)).kind === 'found') {
+          destinationExists = true;
+          break;
+        }
       }
       current = await this.read(key);
-      if (current.kind === 'missing') {
-        if (present !== puts.length) {
-          // A move may have won between the two observations.
-          for (const put of puts) {
-            if ((await this.read(put.key)).kind === 'missing') {
-              throw new ZLinkConfigurationException(
-                `Converted v11 capacity counter ${put.key.value} is missing.`
-              );
-            }
-          }
-        }
-        return;
-      }
-      if (present !== 0 && Buffer.from(bytes).equals(current.value.bytes)) {
+      if (current.kind === 'missing') return;
+      if (destinationExists && Buffer.from(bytes).equals(current.value.bytes)) {
         throw new ZLinkConfigurationException(
           `A destination counter for v11 capacity row ${key.value} already exists.`
         );
       }
-      if (result !== 'conflict') throw result;
       await macrotaskBoundary();
     }
   }

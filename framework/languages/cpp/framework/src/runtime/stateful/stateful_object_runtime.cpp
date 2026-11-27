@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/stateful/stateful_object_runtime.hpp"
+#include "runtime/dispatch/completion_turn.hpp"
 #include "runtime/execution/serial_application_record.hpp"
 #include "runtime/execution/task_result.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -92,10 +93,8 @@ void stateful_object_runtime_t::notify_quiescence ()
     if (_quiescence_waiters.empty ())
         return;
     // Resume a waiting seal off this lane; it re-checks the participants in its own turn.
-    for (auto &waiter : std::exchange (_quiescence_waiters, {})) {
-        detail::dispatch_completion ([waiter] { waiter->complete (result_t<void>::success ()); },
-                                     false, waiter.get ());
-    }
+    for (auto &waiter : std::exchange (_quiescence_waiters, {}))
+        waiter->complete ();
 }
 
 void stateful_object_runtime_t::configure_relocation_state (relocation_state_capture_t capture,
@@ -1240,7 +1239,7 @@ std::pair<stateful_error_t, std::optional<turn_record_t>> stateful_object_runtim
 task_t<stateful_object_runtime_t::owner_claim_t>
 stateful_object_runtime_t::try_claim_async (object_ref_t owner, turn_domain_t domain)
 {
-    using retry_t = std::pair<std::shared_ptr<task_completion_source_t<void>>, object_ref_t>;
+    using retry_t = std::pair<std::shared_ptr<detail::lane_completion_waiter_t>, object_ref_t>;
     using step_t = std::variant<owner_claim_t, retry_t>;
     // The lane turn owns the reference; only a busy owner hands it back with
     // the quiescence waiter it registered in that same turn.
@@ -1257,7 +1256,7 @@ stateful_object_runtime_t::try_claim_async (object_ref_t owner, turn_domain_t do
                                   : object->queue.infrastructure_active;
             if (!active)
                 return claim;
-            auto waiter = std::make_shared<task_completion_source_t<void>> ();
+            auto waiter = std::make_shared<detail::lane_completion_waiter_t> ();
             _quiescence_waiters.push_back (waiter);
             return retry_t{std::move (waiter), std::move (owner)};
         });
@@ -1796,7 +1795,7 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
         // The wait registers in the same lane turn that observes an active turn, so the
         // next quiescence change cannot be missed. The caller is not held meanwhile.
         const auto [owned, waiter] = co_await _lane.run_task (
-          [this, &plan] () -> std::pair<bool, std::shared_ptr<task_completion_source_t<void>>> {
+          [this, &plan] () -> std::pair<bool, std::shared_ptr<detail::lane_completion_waiter_t>> {
               for (std::size_t index = 0; index != plan.keys.size (); ++index) {
                   const auto found = _objects.find (plan.keys[index]);
                   if (found == _objects.end () || !sealed_by_on_lane (found->second, plan.token)
@@ -1805,7 +1804,7 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
                   if (found->second.queue.application_active
                       || found->second.queue.infrastructure_active
                       || found->second.queue.yielded_continuation) {
-                      auto changed = std::make_shared<task_completion_source_t<void>> ();
+                      auto changed = std::make_shared<detail::lane_completion_waiter_t> ();
                       _quiescence_waiters.push_back (changed);
                       return {true, std::move (changed)};
                   }

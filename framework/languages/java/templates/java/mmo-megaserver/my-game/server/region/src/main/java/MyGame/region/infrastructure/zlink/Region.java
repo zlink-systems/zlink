@@ -40,10 +40,12 @@ public final class Region implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
+        System.out.println("Player entered Region " + context.spotId());
         return broadcast();
     }
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
+        System.out.println("Player left " + context.spotId());
         positions.leave(actor.context().actorId());
         return broadcast();
     }

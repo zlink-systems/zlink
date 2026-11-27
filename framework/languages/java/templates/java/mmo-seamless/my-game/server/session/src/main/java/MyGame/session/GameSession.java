@@ -6,15 +6,16 @@ import systems.zlink.framework.actors.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.*;
 
-import java.util.concurrent.*;
 import java.util.Set;
+import java.util.concurrent.*;
 
 public final class GameSession implements ZLinkSession {
-    private static final Set<String> CLIENT_PACKETS = Set.of(
-            JoinWorldRequest.class.getSimpleName(),
-            MoveRequest.class.getSimpleName(),
-            OpenDungeonRequest.class.getSimpleName(),
-            SessionInfoRequest.class.getSimpleName());
+    private static final Set<String> CLIENT_PACKETS =
+            Set.of(
+                    JoinWorldRequest.class.getSimpleName(),
+                    MoveRequest.class.getSimpleName(),
+                    OpenDungeonRequest.class.getSimpleName(),
+                    SessionInfoRequest.class.getSimpleName());
     private final ZLinkSessionContext context;
     private final ZLinkActorManager actors;
 
@@ -46,7 +47,9 @@ public final class GameSession implements ZLinkSession {
         if (dispatch.packetName().equals(SessionInfoRequest.class.getSimpleName())) {
             var actor = bound();
             if (actor.ref().objectGeneration() > Rules.MAX_SAFE_INTEGER)
-                return context.client().send(new ActionRejected("integer-out-of-range", 0)).submit();
+                return context.client()
+                        .send(new ActionRejected("integer-out-of-range", 0))
+                        .submit();
             return context.client()
                     .reply(
                             new SessionInfo(

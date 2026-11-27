@@ -3,11 +3,15 @@ package MyGame.match.domain;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import MyGame.*;
+
 import com.fasterxml.jackson.databind.JsonNode;
-import java.util.List;
-import java.util.Comparator;
+
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+
+import java.util.Comparator;
+import java.util.List;
 
 final class ContractSerializationTest {
     @Test
@@ -29,17 +33,26 @@ final class ContractSerializationTest {
             new ShootRequest("p2", 9_007_199_254_740_993L),
             new MoveResult(41, 10, 7),
             new ShotResult("hit", "p2", 9_007_199_254_740_993L),
-            new RoomView("room-x", "matchA", List.of(new PlayerView("p1", 41, 10, 75, 9_007_199_254_740_993L)), "Playing", null),
+            new RoomView(
+                    "room-x",
+                    "matchA",
+                    List.of(new PlayerView("p1", 41, 10, 75, 9_007_199_254_740_993L)),
+                    "Playing",
+                    null),
             new ActionRejected("move-budget", 120),
             new MatchEnded("p1")
         };
-        Comparator<JsonNode> values = (left, right) -> left.isNumber() && right.isNumber()
-                ? left.decimalValue().compareTo(right.decimalValue())
-                : left.equals(right) ? 0 : 1;
+        Comparator<JsonNode> values =
+                (left, right) ->
+                        left.isNumber() && right.isNumber()
+                                ? left.decimalValue().compareTo(right.decimalValue())
+                                : left.equals(right) ? 0 : 1;
         for (int index = 0; index < samples.length; index++) {
             var expected = Json.MAPPER.readTree(golden[index]);
             var actual = Json.MAPPER.readTree(serializer.serialize(samples[index]).bytes());
-            assertTrue(expected.equals(values, actual), "Wire golden: " + samples[index].getClass().getSimpleName());
+            assertTrue(
+                    expected.equals(values, actual),
+                    "Wire golden: " + samples[index].getClass().getSimpleName());
         }
     }
 }

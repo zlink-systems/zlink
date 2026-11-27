@@ -29,8 +29,7 @@ public final class Rules {
 
     public record Wall(double x, double minY, double maxY) {}
 
-    public static final List<Wall> WALLS =
-            List.of(new Wall(WALL_X, WALL_MIN_Y, WALL_MAX_Y));
+    public static final List<Wall> WALLS = List.of(new Wall(WALL_X, WALL_MIN_Y, WALL_MAX_Y));
     public static final String ADMISSION_REJECTED = "admission-rejected",
             OUT_OF_RANGE = "out-of-range",
             BLOCKED_BY_WALL = "blocked-by-wall",

@@ -797,26 +797,33 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 && instance.State == ZLinkInstanceSpotAuthorityState.Closing
         );
 
-    internal static SpotRef? ProjectReadyUserSpot(string spotId, ZLinkAuthorityReadResult authority)
+    internal static (SpotRef Address, bool ReadyToFind)? ProjectCurrentUserSpot(
+        string spotId,
+        ZLinkAuthoritySnapshot snapshot
+    )
     {
         if (
-            authority is not ZLinkAuthorityReadResult.Found found
-            || found.Snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
-            || found.Snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
-            || found.Snapshot.OwnerLeaseGeneration <= 0
+            snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
+            || snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
+            || snapshot.OwnerLeaseGeneration <= 0
         )
             return null;
 
-        var snapshot = found.Snapshot;
         var descriptor = snapshot.Allocation.Descriptor;
+        var dispatchOpen = snapshot.Relocation is null;
+        // After NewOwner, the relocation fence supplies the address while the
+        // application payload can still name the previous owner.
         if (
-            snapshot.Relocation is not null
+            snapshot.Relocation
+                is {
+                    Phase: >= ServiceWireCodec.RelocationPhase.Committed
+                        and <= ServiceWireCodec.RelocationPhase.Completed,
+                }
             || !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var user)
         )
         {
             if (
                 !TryReadCommittedCanonicalTarget(snapshot, out var canonical, out _)
-                || canonical.Phase < (byte)ServiceWireCodec.RelocationPhase.Activated
                 || canonical.TargetAttemptGeneration == 0
                 || canonical.TargetOwnerLeaseGeneration != (ulong)snapshot.OwnerLeaseGeneration
                 || canonical.State.TargetNodeGeneration
@@ -827,6 +834,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 )
             )
                 return null;
+            dispatchOpen = canonical.Phase >= (byte)ServiceWireCodec.RelocationPhase.Activated;
         }
         else if (
             user.OwnerId != snapshot.OwnerId
@@ -836,12 +844,18 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         )
             return null;
 
-        return
-            user.State == ZLinkUserSpotAuthorityState.Ready
-            && user.SpotId == spotId
-            && user.MeshName == descriptor.MeshName
-            ? new SpotRef(spotId, snapshot.ObjectGeneration, descriptor.MeshName, descriptor.Rid)
-            : null;
+        if (
+            user.SpotId != spotId
+            || user.MeshName != descriptor.MeshName
+            || user.State
+                is not (ZLinkUserSpotAuthorityState.Ready or ZLinkUserSpotAuthorityState.Closing)
+        )
+            return null;
+
+        return (
+            new SpotRef(spotId, snapshot.ObjectGeneration, descriptor.MeshName, descriptor.Rid),
+            dispatchOpen && user.State == ZLinkUserSpotAuthorityState.Ready
+        );
     }
 
     private static ZLinkResolvedSpotLocation? ProjectSpot(ZLinkAuthorityReadResult authority)

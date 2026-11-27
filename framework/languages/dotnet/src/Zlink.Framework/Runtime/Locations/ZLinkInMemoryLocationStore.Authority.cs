@@ -787,10 +787,11 @@ internal sealed partial class ZLinkInMemoryLocationStore
         bool discarded = false
     )
     {
+        var actorClosing = ZLinkActorAuthorityPayloadCodec.IsClosing(current);
         if (
             (
                 current.Allocation.State == ZLinkPlacementAllocationState.Active
-                    ? creationTarget is null && !discarded
+                    ? creationTarget is null && !discarded && !actorClosing
                     : current.ReservedCreation is null
             ) || IsAuthorityInPreparedAggregate(key)
         )
@@ -812,7 +813,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
         {
             if (ownerLive)
                 return false;
-            if (!discarded && creationTarget is { } target)
+            if (!discarded && !actorClosing && creationTarget is { } target)
                 ZLinkAuthorityCleanup.RequireDisabledCreationPolicy(
                     key,
                     current.Allocation,
@@ -829,8 +830,11 @@ internal sealed partial class ZLinkInMemoryLocationStore
         )
             return false;
         List<KeyValuePair<string, ZLinkAuthoritySnapshot>> members = [];
-        var endedUserSpotId = active ? ZLinkAuthorityCleanup.RequireSteadyReady(current) : null;
-        if (active && !ownerLive)
+        var endedUserSpotId = active
+            ? ZLinkAuthorityCleanup.RequireReclaimableAuthority(current)
+            : null;
+        var requiresReleaseWait = active && !actorClosing;
+        if (requiresReleaseWait && !ownerLive)
             _ownerLeaseReleaseWait.Observe(owner);
         if (endedUserSpotId is not null && !discarded && creationTarget is { } spotTarget)
             members = EndedUserSpotMembers(
@@ -840,16 +844,16 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 spotTarget.TargetDescriptor,
                 now
             );
-        if (active)
+        if (requiresReleaseWait)
         {
             releaseWaitElapsed = _ownerLeaseReleaseWait.HasElapsed(owner, _ownerLeaseFencingMargin);
-            foreach (var (memberKey, member) in members)
+            foreach (var (_, member) in members)
                 releaseWaitElapsed &= _ownerLeaseReleaseWait.HasElapsed(
                     new ZLinkLocationOwnerToken(member.OwnerId, member.OwnerLeaseGeneration),
                     _ownerLeaseFencingMargin
                 );
         }
-        if (active && !releaseWaitElapsed)
+        if (!releaseWaitElapsed)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 "The Location owner lease release wait has not elapsed.",
@@ -1151,7 +1155,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 {
                     StoreVersion = Next(ref _authorityRevision).ToString(),
                     Payload = participant.AuthorityPayload.ToArray(),
-                    Relocation = aggregate.Request.ApplyRelocation(current.Relocation),
+                    Relocation = aggregate.Request.ApplyRelocation(current.Relocation, participant),
                     AuthorityOwnerGeneration = changesOwner
                         ? aggregate.TargetAuthorityOwnerGenerations[participant.Key]
                         : current.AuthorityOwnerGeneration,
@@ -1587,6 +1591,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 || !leftParticipant.AuthorityPayload.Span.SequenceEqual(
                     rightParticipant.AuthorityPayload.Span
                 )
+                || leftParticipant.AcceptedRequests != rightParticipant.AcceptedRequests
                 || !leftParticipant.MembershipMutation.Span.SequenceEqual(
                     rightParticipant.MembershipMutation.Span
                 )

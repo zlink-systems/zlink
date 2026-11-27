@@ -1,3 +1,4 @@
+import type { ServiceActorRouteFence } from '../../foundation/service-stateful-wire-codec';
 import type { PendingOperation } from '../../foundation/operation-registry';
 import type { RequestRuntime } from '../../foundation/request-runtime';
 import type {
@@ -189,6 +190,7 @@ export interface ZLinkBackendMeshNode {
     request: Omit<ServiceUserSpotCloseRecord, 'kind' | 'correlation' | 'operation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult>;
+  sendActorDestroy(fence: ServiceActorRouteFence): Promise<void>;
   requestActorCreate(
     targetNodeRid: string,
     request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation'>,
@@ -385,11 +387,16 @@ export interface ZLinkBackendMeshNode {
   sealSpotMessageFollowIngress?(
     source: ServiceDirectSpotRouteFence
   ): ServiceSpotMessageFollowSeal | undefined;
+  freezeSpotRelocationIngress?(
+    seal: ServiceSpotMessageFollowSeal
+  ): Promise<
+    readonly import('../../foundation/service-stateful-wire-codec').ServiceWireFrozenRecord[]
+  >;
   abortSpotMessageFollowIngress?(seal: ServiceSpotMessageFollowSeal): boolean;
   /** A null target consumes the committed seal without installing a Follow route. */
   commitSpotMessageFollowIngress?(
     seal: ServiceSpotMessageFollowSeal,
-    target: ServiceDirectSpotRouteFence | null,
+    target: (ServiceDirectSpotRouteFence & { readonly ownerId?: string }) | null,
     durationMs: number
   ): Promise<boolean>;
   joinActorSpot(

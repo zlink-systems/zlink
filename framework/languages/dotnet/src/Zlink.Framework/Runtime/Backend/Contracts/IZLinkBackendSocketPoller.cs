@@ -20,4 +20,7 @@ internal interface IZLinkBackendSocketPoller : IAsyncDisposable
         CancellationToken cancellationToken
     );
     ValueTask ResumeAsync();
+    void Wake() => throw new NotSupportedException();
+    ValueTask WaitForWakeAsync(CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
 }

@@ -55,27 +55,37 @@ public final class Zone implements ZLinkSpot<Player> {
                     ZLinkSpotActorJoinResult.reject(ZLinkMessage.of(rejection)));
         return CompletableFuture.completedFuture(
                 ZLinkSpotActorJoinResult.accept(
-                        ZLinkMessage.of(new WorldState(
-                                context.spotId(),
-                                config.id(),
-                                arrival.position().x(),
-                                arrival.sequence()))));
+                        ZLinkMessage.of(
+                                new WorldState(
+                                        context.spotId(),
+                                        config.id(),
+                                        arrival.position().x(),
+                                        arrival.sequence()))));
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
+        System.out.println("Player entered Zone " + context.spotId());
         var actorId = actor.context().actorId();
         var arrival = positions.takeArrival(actorId);
         if (arrival == null)
             throw new IllegalStateException("Zone admission has no movement intent");
         positions.addPlayer(actorId, arrival);
-        return publishLocal(actorId, new PlayerAppeared(actorId, arrival.position(), context.spotId()))
-                .thenCompose(ignored -> positions.isInBorder(arrival.position())
-                        ? publishBorder(actorId, arrival.position(), arrival.sequence(),
-                                BorderPresenceKind.APPEARED, null)
-                        : CompletableFuture.completedFuture(null));
+        return publishLocal(
+                        actorId, new PlayerAppeared(actorId, arrival.position(), context.spotId()))
+                .thenCompose(
+                        ignored ->
+                                positions.isInBorder(arrival.position())
+                                        ? publishBorder(
+                                                actorId,
+                                                arrival.position(),
+                                                arrival.sequence(),
+                                                BorderPresenceKind.APPEARED,
+                                                null)
+                                        : CompletableFuture.completedFuture(null));
     }
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
+        System.out.println("Player left " + context.spotId());
         var actorId = actor.context().actorId();
         var state = positions.removePlayer(actorId);
         if (state == null) return CompletableFuture.completedFuture(null);
@@ -87,22 +97,35 @@ public final class Zone implements ZLinkSpot<Player> {
         var before = positions.state(actorId);
         if (before == null || !before.connected()) return CompletableFuture.completedFuture(null);
         var state = positions.setConnected(actorId, false);
-        return publishLeft(actorId, state.position(), state.sequence(), PlayerLeftReason.DISCONNECTED);
+        return publishLeft(
+                actorId, state.position(), state.sequence(), PlayerLeftReason.DISCONNECTED);
     }
 
     public CompletionStage<Void> reconnect(Player actor) {
         var actorId = actor.context().actorId();
         var before = positions.state(actorId);
         if (before == null)
-            return actor.context().boundSession().send(new ActionRejected("outside-world", 0)).submit();
+            return actor.context()
+                    .boundSession()
+                    .send(new ActionRejected("outside-world", 0))
+                    .submit();
         var state = positions.setConnected(actorId, true);
         CompletionStage<Void> visible = CompletableFuture.completedFuture(null);
         if (!before.connected())
-            visible = publishLocal(actorId, new PlayerAppeared(actorId, state.position(), context.spotId()))
-                    .thenCompose(ignored -> positions.isInBorder(state.position())
-                            ? publishBorder(actorId, state.position(), state.sequence(),
-                                    BorderPresenceKind.APPEARED, null)
-                            : CompletableFuture.completedFuture(null));
+            visible =
+                    publishLocal(
+                                    actorId,
+                                    new PlayerAppeared(actorId, state.position(), context.spotId()))
+                            .thenCompose(
+                                    ignored ->
+                                            positions.isInBorder(state.position())
+                                                    ? publishBorder(
+                                                            actorId,
+                                                            state.position(),
+                                                            state.sequence(),
+                                                            BorderPresenceKind.APPEARED,
+                                                            null)
+                                                    : CompletableFuture.completedFuture(null));
         return visible.thenCompose(ignored -> sendWorldState(actor));
     }
 
@@ -114,30 +137,31 @@ public final class Zone implements ZLinkSpot<Player> {
         if (movement.relocates()) {
             actor.move(
                     movement.zoneId(),
-                    new EnterZone(movement.position(), movement.sequence(), movement.remainingMs()));
+                    new EnterZone(
+                            movement.position(), movement.sequence(), movement.remainingMs()));
             return CompletableFuture.completedFuture(null);
         }
         return publishLocal(
                         actorId,
-                        new PlayerMoved(actorId, movement.position(), movement.sequence(), context.spotId()))
-                .thenCompose(ignored -> movement.borderKind() == null
-                        ? CompletableFuture.completedFuture(null)
-                        : publishBorder(
+                        new PlayerMoved(
                                 actorId,
                                 movement.position(),
                                 movement.sequence(),
-                                movement.borderKind(),
-                                movement.borderKind() == BorderPresenceKind.LEFT
-                                        ? PlayerLeftReason.OUT_OF_RANGE
-                                        : null))
+                                context.spotId()))
+                .thenCompose(
+                        ignored ->
+                                movement.borderKind() == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : publishBorder(
+                                                actorId,
+                                                movement.position(),
+                                                movement.sequence(),
+                                                movement.borderKind(),
+                                                movement.borderKind() == BorderPresenceKind.LEFT
+                                                        ? PlayerLeftReason.OUT_OF_RANGE
+                                                        : null))
                 .thenCompose(ignored -> sendWorldState(actor));
     }
-
-
-
-
-
-
 
     public CompletionStage<Void> showBorder(BorderPresence presence) {
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
@@ -146,15 +170,27 @@ public final class Zone implements ZLinkSpot<Player> {
             var observer = entry.getValue();
             if (observerId.equals(presence.playerId())
                     || (presence.kind() != BorderPresenceKind.LEFT
-                            && Math.abs(observer.position().x() - presence.position().x()) > Rules.BORDER_RADIUS))
-                continue;
-            Object event = switch (presence.kind()) {
-                case APPEARED -> new PlayerAppeared(presence.playerId(), presence.position(), context.spotId());
-                case MOVED -> new PlayerMoved(presence.playerId(), presence.position(), presence.sequence(), context.spotId());
-                case LEFT -> new PlayerLeft(
-                        presence.playerId(),
-                        presence.reason() == null ? PlayerLeftReason.LEFT_ZONE : presence.reason(), context.spotId());
-            };
+                            && Math.abs(observer.position().x() - presence.position().x())
+                                    > Rules.BORDER_RADIUS)) continue;
+            Object event =
+                    switch (presence.kind()) {
+                        case APPEARED ->
+                                new PlayerAppeared(
+                                        presence.playerId(), presence.position(), context.spotId());
+                        case MOVED ->
+                                new PlayerMoved(
+                                        presence.playerId(),
+                                        presence.position(),
+                                        presence.sequence(),
+                                        context.spotId());
+                        case LEFT ->
+                                new PlayerLeft(
+                                        presence.playerId(),
+                                        presence.reason() == null
+                                                ? PlayerLeftReason.LEFT_ZONE
+                                                : presence.reason(),
+                                        context.spotId());
+                    };
             sends = sends.thenCompose(ignored -> actors.sendToActor(observerId, event).submit());
         }
         return sends;
@@ -180,9 +216,16 @@ public final class Zone implements ZLinkSpot<Player> {
     private CompletionStage<Void> publishLeft(
             String playerId, Position position, long sequence, PlayerLeftReason reason) {
         return publishLocal(playerId, new PlayerLeft(playerId, reason, context.spotId()))
-                .thenCompose(ignored -> positions.isInBorder(position)
-                        ? publishBorder(playerId, position, sequence, BorderPresenceKind.LEFT, reason)
-                        : CompletableFuture.completedFuture(null));
+                .thenCompose(
+                        ignored ->
+                                positions.isInBorder(position)
+                                        ? publishBorder(
+                                                playerId,
+                                                position,
+                                                sequence,
+                                                BorderPresenceKind.LEFT,
+                                                reason)
+                                        : CompletableFuture.completedFuture(null));
     }
 
     private CompletionStage<Void> publishBorder(
@@ -191,18 +234,29 @@ public final class Zone implements ZLinkSpot<Player> {
             long sequence,
             BorderPresenceKind kind,
             PlayerLeftReason reason) {
-        var presence = new BorderPresence(context.spotId(), playerId, position, sequence, kind, reason);
+        var presence =
+                new BorderPresence(context.spotId(), playerId, position, sequence, kind, reason);
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
         for (var topic : borderTopics)
-            sends = sends.thenCompose(ignored -> context.outbound()
-                    .publish(Names.BORDER, topic, presence)
-                    .submit());
+            sends =
+                    sends.thenCompose(
+                            ignored ->
+                                    context.outbound()
+                                            .publish(Names.BORDER, topic, presence)
+                                            .submit());
         return sends;
     }
 
     private CompletionStage<Void> sendWorldState(Player actor) {
         var state = positions.state(actor.context().actorId());
-        return actor.context().boundSession().send(new WorldState(
-                context.spotId(), config.id(), state.position().x(), state.sequence())).submit();
+        return actor.context()
+                .boundSession()
+                .send(
+                        new WorldState(
+                                context.spotId(),
+                                config.id(),
+                                state.position().x(),
+                                state.sequence()))
+                .submit();
     }
 }

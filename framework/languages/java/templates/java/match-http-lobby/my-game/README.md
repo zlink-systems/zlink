@@ -1,5 +1,7 @@
 # my-game — Matchmaking API node and match servers
 
+[한국어](README.ko.md)
+
 This Java template pairs two players through HTTP and runs their duel through ZLink STREAM. The API node creates a dynamic Room, sends its matched roster for preparation, and returns the assignment after receiving `RoomPrepared`. `RoomState` owns game state and decisions; `RoomRoster` owns member admission; `Player` owns its Framework Actor context.
 
 ```mermaid
@@ -33,16 +35,36 @@ Bash:
 PowerShell:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
+
+## Local server
+
+Install JDK 25 and keep Docker with Compose v2 running for Redis. Run the command from this project directory.
+
+```sh
+./run-server.sh
+```
+
+On Windows, install PowerShell 7 and run the CMD wrapper.
+
+```powershell
+.\run-server.cmd
+```
+
+The server builds the Java distributions, starts the nodes and Redis, and prints the WebSocket endpoint after `Server ready:`. Keep the terminal open. Press Ctrl+C to stop the nodes and Redis. A second server invocation is refused.
+
+Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal to use the running server. The runner detects `.logs/server.json` and prints `Using the running server`. With the server stopped, the default runner starts an isolated Docker stack. Attached runs skip `update` because it drains and replaces a play node. They also skip `lobby` because it restarts the API node.
+
+Each run keeps effective node settings, node stdout and stderr, Framework message-flow logs (`*.flow.log`), and any failure details in `.logs/run-<id>/`. Local build output is in `.logs/build.log` and isolated Docker build and cleanup output is in `.logs/docker-*/`.
 
 ## Client connection
 
 ### Endpoint and first packet
 
-Connect to the Session node's `players` STREAM listener. `server/config/session.json` configures `tcp://127.0.0.1:0`: loopback with port `0` requesting an OS-selected port. `server/shared/src/main/java/MyGame/Hosting.java` prints `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}`; use its actual `streamEndpoint`, not port `0`. Mesh and Redis endpoints are not client endpoints. The API node default in `server/config/lobby.json` is `http://127.0.0.1:0`; use its `READY` JSON `httpEndpoint` plus `/match` for matchmaking.
+Connect to the Session node's `players` STREAM listener. `server/config/session.json` configures `ws://127.0.0.1:0`: loopback with port `0` requesting an OS-selected port. `server/shared/src/main/java/MyGame/Hosting.java` prints `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}`; use its actual `streamEndpoint`, not port `0`. Mesh and Redis endpoints are not client endpoints. The API node default in `server/config/lobby.json` is `http://127.0.0.1:0`; use its `READY` JSON `httpEndpoint` plus `/match` for matchmaking.
 
-This is TCP with no URL path. Web browsers, Unity WebGL and Cocos Creator web cannot connect to this default TCP listener. Those targets need a separately configured WebSocket listener and a reachable `ws://` or `wss://` endpoint. Loopback is reachable only from the same host/network namespace. The Docker e2e runner owns and removes its temporary deployment. For an external client, keep a deployment running, bind a reachable interface and port, expose the container port, and use the server's reachable host.
+The default WebSocket endpoint uses the root path (`/`) and supports browsers, Unity WebGL and Cocos Creator web. An HTTPS page needs a reachable `wss://` endpoint. Loopback is reachable only from the same host/network namespace. The Docker e2e runner owns and removes its temporary deployment. For an external client, keep a deployment running, bind a reachable interface and port, expose the container port, and use the server's reachable host.
 
 First POST JSON `{"playerId":"...","mode":"duel"}` to the API node's HTTP endpoint plus `/match`, as `Scenarios.java` does, for two distinct players in the same mode. Start both HTTP requests concurrently: the first waits for its partner before either response completes. Each HTTP result is `MatchResponse(roomId, sessionEndpoint)`. Connect to that returned Session endpoint and send `JoinRoomRequest(playerId, roomId)` first using the assigned player and room. Successful admission pushes `RoomView`. Set the API node's configuration `sessionEndpoint` to the real running Session endpoint; `CHANGE_ME` is not usable.
 
@@ -112,11 +134,13 @@ public final class ConnectOnce {
 }
 ```
 
-## Docker e2e
+## End-to-end scenarios
+
+The following scenarios run in an isolated Docker stack when a local server is unavailable.
 
 Docker runs the Java e2e runner and every node role in containers. Nodes share the runner's network namespace and keep the existing stdin/stdout control protocol. Only the runner mounts the Docker socket. Each invocation removes its own containers, network and image tags; logs remain under `.logs/`.
 
-For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
+For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `.\run-e2e.cmd -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
 
 > **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.2+10 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
 
@@ -132,10 +156,10 @@ Bash:
 PowerShell:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario lobby,hit,wall,input,reconnect,update
+.\run-e2e.cmd -CheckStructure
+.\run-e2e.cmd -CheckDomain
 ```
 
 The runner validates `zlink.structure.json`, runs game and wire checks during the build and 19 HTTP domain checks before scenarios, creates its own Redis Compose project with an OS-assigned loopback port, and starts match, session, and lobby processes. Each scenario uses a fresh cluster, unique Redis prefix and `.logs/run-<id>/` directory. Cleanup errors fail the run. The build reports game and wire test results; the runner prints HTTP check counts and `Scenarios: n/n passed`.
@@ -160,6 +184,8 @@ The runner validates `zlink.structure.json`, runs game and wire checks during th
 - **READY and Serving** — The Framework host prints `READY` after observing runtime `Serving`. [Guide](https://docs.zlink.systems/java/guide/server/12-operations/#wait-for-serving). [server/shared/src/main/java/MyGame/Hosting.java:97](server/shared/src/main/java/MyGame/Hosting.java); [server/shared/src/main/java/MyGame/Hosting.java:121](server/shared/src/main/java/MyGame/Hosting.java).
 
 ## Known issues
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
 Validated against the published Framework 0.34.2 packages.
 

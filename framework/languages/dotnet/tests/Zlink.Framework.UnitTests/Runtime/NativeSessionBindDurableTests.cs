@@ -671,7 +671,14 @@ public sealed partial class StatefulServiceRuntimeTests
             ),
         };
         peers.Add(sourceRid, peer);
-        Assert.True(node.HasCurrentSource(sourceRid, routeGeneration, out var sourceGeneration));
+        Assert.True(
+            node.TryClaimIngressSource(
+                sourceRid,
+                routeGeneration,
+                ServiceWireConstants.Command.BoundSessionBind,
+                out var sourceGeneration
+            )
+        );
         Assert.Equal(ingressGeneration, sourceGeneration);
         node.SetBoundSessionBindHandler(
             (_, generation, _, reply, _) =>

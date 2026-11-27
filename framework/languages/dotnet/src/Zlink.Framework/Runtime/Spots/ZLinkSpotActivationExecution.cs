@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Numerics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
@@ -64,11 +65,14 @@ internal abstract partial class ZLinkSpotActivation
     public ValueTask DisposeAsync() =>
         StartFinalization(AwaitStateLane(_lane.RunAsync(BeginFinalizationOnLane)), null);
 
-    internal async ValueTask DiscardLocationExecutionAsync(Func<ValueTask> discardMembers)
+    internal async ValueTask DiscardLocationExecutionAsync(
+        Func<ValueTask> discardMembers,
+        CancellationToken generationShutdown = default
+    )
     {
         FenceLocationExecution();
         var state = await _lane.RunAsync(BeginFinalizationOnLane).ConfigureAwait(false);
-        await StartFinalization(state, discardMembers).ConfigureAwait(false);
+        await StartFinalization(state, discardMembers, generationShutdown).ConfigureAwait(false);
     }
 
     private (Task, TaskCompletionSource?) BeginFinalizationOnLane()
@@ -92,13 +96,16 @@ internal abstract partial class ZLinkSpotActivation
 
     private ValueTask StartFinalization(
         (Task, TaskCompletionSource?) state,
-        Func<ValueTask>? discardMembers
+        Func<ValueTask>? discardMembers,
+        CancellationToken generationShutdown = default
     )
     {
         if (state.Item2 is not null)
         {
             _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
-                Task.Run(() => CompleteFinalizationAsync(state.Item2, discardMembers))
+                Task.Run(() =>
+                    CompleteFinalizationAsync(state.Item2, discardMembers, generationShutdown)
+                )
             );
         }
         return new ValueTask(state.Item1);
@@ -174,12 +181,13 @@ internal abstract partial class ZLinkSpotActivation
 
     private async Task CompleteFinalizationAsync(
         TaskCompletionSource completion,
-        Func<ValueTask>? discardedMembers
+        Func<ValueTask>? discardedMembers,
+        CancellationToken generationShutdown
     )
     {
         try
         {
-            await FinalizeAsync(discardedMembers).ConfigureAwait(false);
+            await FinalizeAsync(discardedMembers, generationShutdown).ConfigureAwait(false);
             completion.TrySetResult();
         }
         catch (Exception exception)
@@ -188,7 +196,10 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
-    private async Task FinalizeAsync(Func<ValueTask>? discardedMembers)
+    private async Task FinalizeAsync(
+        Func<ValueTask>? discardedMembers,
+        CancellationToken generationShutdown
+    )
     {
         var failures = new List<Exception>();
         Capture(CancelActiveOperations);
@@ -200,7 +211,8 @@ internal abstract partial class ZLinkSpotActivation
                 await publication.ConfigureAwait(false);
             })
             .ConfigureAwait(false);
-        await CaptureAsync(DrainNativeRoutesAsync).ConfigureAwait(false);
+        await CaptureAsync(() => DrainFinalizingNativeRoutesAsync(generationShutdown))
+            .ConfigureAwait(false);
         // Closing callbacks have finished with membership intact. Actor terminal
         // barriers still need this parent's gate before its executor can end.
         await CaptureAsync(() =>
@@ -565,11 +577,25 @@ internal abstract partial class ZLinkSpotActivation
     // the queue order. The turn awaits the runtime inbound admission instead of
     // blocking the dispatch worker that raised the event.
     private ValueTask DrainNativeRoutesAsync() =>
-        _serial.RunIngressAsync(async () =>
+        _serial.RunIngressAsync(AdmitPendingNativeRoutesOnLaneAsync);
+
+    private ValueTask DrainFinalizingNativeRoutesAsync(CancellationToken generationShutdown) =>
+        _serial.RunIngressAsync(() =>
         {
+            if (!generationShutdown.IsCancellationRequested)
+                return AdmitPendingNativeRoutesOnLaneAsync();
+
+            // After the generation stops, the peer observes the transport closing.
             while (NativeSpot.RecvRoute(RecvFlags.DontWait) is { } received)
-                await AdmitNativeRouteOnLaneAsync(received).ConfigureAwait(false);
+                received.Dispose();
+            return ValueTask.CompletedTask;
         });
+
+    private async ValueTask AdmitPendingNativeRoutesOnLaneAsync()
+    {
+        while (NativeSpot.RecvRoute(RecvFlags.DontWait) is { } received)
+            await AdmitNativeRouteOnLaneAsync(received).ConfigureAwait(false);
+    }
 
     private ValueTask AdmitNativeRouteAsync(ZLinkBackendRouteReceived received) =>
         _serial.RunIngressAsync(() => AdmitNativeRouteOnLaneAsync(received));
@@ -2139,6 +2165,7 @@ internal abstract partial class ZLinkSpotActivation
         var duration = _runtime.Registration.Locations.Options.MessageFollowDuration;
         if (duration <= TimeSpan.Zero)
         {
+            RegisterInstanceSpotFollowLookup();
             RejectPendingMessageFollowRoutes();
             return;
         }
@@ -2154,10 +2181,62 @@ internal abstract partial class ZLinkSpotActivation
             Stopwatch.GetElapsedTime(0) + duration
         );
         Volatile.Write(ref _messageFollow, messageFollow);
+        RegisterInstanceSpotFollowLookup();
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"message_follow_registered target_rid={targetNodeRid}"
         );
         RelayPendingMessageFollowRoutes();
+    }
+
+    private void RegisterInstanceSpotFollowLookup()
+    {
+        if (this is ZLinkInstanceSpotActivation && NativeSpot is ZLinkBackendSpotWrapper backend)
+            backend.SetInstanceSpotFollowRoute(FindInstanceSpotFollowRoute);
+    }
+
+    private ZLinkSpotMessageFollow? FindInstanceSpotFollowRoute(
+        ZLinkServiceWireCodec.StatefulRecord frame
+    ) =>
+        FindMessageFollowRoute(
+            frame.TargetSpotGeneration,
+            frame.TargetNodeGeneration,
+            frame.AuthorityOwnerGeneration,
+            frame.OwnerLeaseGeneration,
+            frame.MessageFollowHopCount,
+            frame.ReadyInstanceRoute?.Authority.OwnerId.Value,
+            out _,
+            out _
+        );
+
+    private ZLinkSpotMessageFollow? FindMessageFollowRoute(
+        ulong objectGeneration,
+        ulong nodeGeneration,
+        ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration,
+        byte hopCount,
+        string? ownerId,
+        out ZLinkSpotMessageFollow? registered,
+        out TimeSpan now
+    )
+    {
+        now = default;
+        registered = Volatile.Read(ref _messageFollow);
+        if (registered is null)
+            return null;
+        now = Stopwatch.GetElapsedTime(0);
+        return
+            (ownerId is null || ownerId == registered.SourceOwner.OwnerId)
+            && registered.MatchesSourceRoute(
+                objectGeneration,
+                nodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
+                hopCount,
+                now
+            )
+            && _runtime.LocationLifecycle?.IsOwnerLeaseValid(registered.SourceOwner) == true
+            ? registered
+            : null;
     }
 
     internal ValueTask WaitForMessageFollowDrainedAsync(CancellationToken cancellationToken)
@@ -2170,19 +2249,30 @@ internal abstract partial class ZLinkSpotActivation
 
     private ZLinkSpotMessageFollowResult TryMessageFollow(ZLinkBackendRouteReceived received)
     {
-        var messageFollow = Volatile.Read(ref _messageFollow);
-        if (messageFollow is null)
+        var messageFollow = FindMessageFollowRoute(
+            ObjectGeneration,
+            received.TargetNodeGeneration,
+            received.AuthorityOwnerGeneration,
+            received.OwnerLeaseGeneration,
+            received.MessageFollowHopCount,
+            ownerId: null,
+            out var registered,
+            out var now
+        );
+        if (registered is null)
             return ZLinkSpotMessageFollowResult.NotApplicable;
-        var now = Stopwatch.GetElapsedTime(0);
-        var currentSourceOwner = _runtime.LocationLifecycle?.OwnerToken;
-        if (!messageFollow.MatchesSourceRoute(received, ObjectGeneration, currentSourceOwner, now))
+        if (
+            messageFollow is null
+            || received.OperationId.High == 0
+            || received.OperationId.Low == 0
+        )
         {
             // A mismatched frame is stale by itself. It must not revoke the
             // bounded Message Follow route for later frames that still carry
             // the exact source authority generations.
-            var removeRoute = messageFollow.ShouldRemoveAfterRejectedFrame(now);
+            var removeRoute = registered.ShouldRemoveAfterRejectedFrame(now);
             if (removeRoute)
-                _ = Interlocked.CompareExchange(ref _messageFollow, null, messageFollow);
+                _ = Interlocked.CompareExchange(ref _messageFollow, null, registered);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"{(removeRoute ? "message_follow_expired" : "message_follow_rejected")}"
             );
@@ -2771,6 +2861,57 @@ internal abstract partial class ZLinkSpotActivation
     {
         if (job.CanonicalRequest is not { } request)
             return ZLinkSpotAcceptedJournal.Decode(job.Payload.Span);
+        return new ZLinkSpotAcceptedJournalRecord(
+            RoutingId.FromHex(request.Source.NodeRid),
+            request.Source.NodeGeneration,
+            new ZLinkServiceWireCodec.RequestSourceFence(
+                request.Source.OwnerId,
+                request.Source.OwnerLeaseGeneration,
+                RoutingId.FromHex(request.Source.NodeRid),
+                request.Source.NodeGeneration
+            ),
+            request.SourceSpotId,
+            request.ReplyRouteId != 0 ? request.ReplyRouteId : null,
+            request.ReplyRouteId,
+            new MeshOperationId(request.OperationHigh, request.OperationLow),
+            request.TargetNodeGeneration,
+            request.TargetAuthorityOwnerGeneration,
+            request.TargetOwnerLeaseGeneration,
+            0,
+            request.Metadata,
+            MaterializeCanonicalReplayParts(request, channelName),
+            request.InstanceIntent
+        );
+    }
+
+    private static IReadOnlyList<ReadOnlyMemory<byte>> MaterializeCanonicalReplayParts(
+        ZLinkCanonicalAcceptedRequest request,
+        string channelName
+    )
+    {
+        var application = request.ApplicationPayload;
+        if (application.PacketName == ServiceWireConstants.FrameworkMultipartPacketName)
+        {
+            if (
+                !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                    new ZLinkApplicationPayloadEnvelope(
+                        application.PacketName,
+                        application.ContentType,
+                        application.Payload
+                    ),
+                    out var parts
+                )
+            )
+                throw new InvalidDataException("The accepted Spot multipart payload is invalid.");
+            try
+            {
+                return parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray();
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+            }
+        }
         var kind = request.ReplyRouteId == 0 ? ZLinkMessageKind.Command : ZLinkMessageKind.Request;
         using var header = ZLinkEnvelopeCodec.EncodeHeader(
             new ZLinkEnvelopeHeader(
@@ -2790,26 +2931,7 @@ internal abstract partial class ZLinkSpotActivation
                 request.SourceSpotId
             )
         );
-        return new ZLinkSpotAcceptedJournalRecord(
-            RoutingId.FromHex(request.Source.NodeRid),
-            request.Source.NodeGeneration,
-            new ZLinkServiceWireCodec.RequestSourceFence(
-                request.Source.OwnerId,
-                request.Source.OwnerLeaseGeneration,
-                RoutingId.FromHex(request.Source.NodeRid),
-                request.Source.NodeGeneration
-            ),
-            request.SourceSpotId,
-            null,
-            request.ReplyRouteId,
-            new MeshOperationId(request.OperationHigh, request.OperationLow),
-            request.TargetNodeGeneration,
-            request.TargetAuthorityOwnerGeneration,
-            request.TargetOwnerLeaseGeneration,
-            0,
-            request.Metadata,
-            [header.ToArray(), request.ApplicationPayload.Payload.ToArray()]
-        );
+        return [header.ToArray(), application.Payload];
     }
 
     private async ValueTask<bool> DispatchTimerAsync(

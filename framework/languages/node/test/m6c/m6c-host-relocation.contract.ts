@@ -5,6 +5,8 @@ import {
 import { LegacyRelocationAuthorityFixture } from './legacy-relocation-authority-fixture';
 import { MessageChannel } from 'node:worker_threads';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
+import { ZLinkSpotTimerRegistry } from '../../packages/framework/src/runtime/spots/spot-timer';
+import { ServiceRelocationObjectCaptureOwner } from '../../packages/framework/src/runtime/foundation/service-relocation-object-owner';
 import { ZLinkSpotActorMembership } from '../../packages/framework/src/runtime/spots/spot-actor-membership';
 import { resolveActorIngress } from '../../packages/framework/src/runtime/spots/spot-actor-ingress-admission';
 import { ZLinkActorRuntimeState } from '../../packages/framework/src/runtime/actors/actor-runtime-state';
@@ -36,6 +38,8 @@ import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
 import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import { ZLinkInMemoryLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-location-store';
+import { ZLinkAggregateInventoryStore } from '../../packages/framework/src/runtime/locations/aggregate-inventory-store';
+import { ZLinkInMemoryProviderLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
 import {
   createServiceRelocationId,
   decodeQueuedHandoffPacket,
@@ -1490,8 +1494,66 @@ function createHostRelocationBatchHarness() {
       events.push(`${actorId}:terminal`);
     }
   };
-  return { runtime, actorBarriers, events, prepares };
+  return { runtime, actorBarriers, events, prepares, activation };
 }
+
+test('PerActor Spot shell excludes Spot timers from relocation payload', async (t) => {
+  const { runtime, activation: fixture } = createHostRelocationBatchHarness();
+  const serial = new ZLinkSpotSerialTurnExecutor(true, fixture.spotId as never);
+  const timers = new ZLinkSpotTimerRegistry();
+  const activation = new ZLinkSpotActivation({
+    meshName: 'mesh-a',
+    spotId: fixture.spotId,
+    domain: {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.PerActor,
+      relocationCoordinationMode: 'framework_managed'
+    },
+    spotType: fixture.spotType,
+    spot: fixture.spot,
+    serial,
+    timers,
+    actorHandlers: {},
+    handlers: {}
+  } as never);
+  class TimerHandler {
+    async handle(): Promise<void> {}
+  }
+  await timers.add(
+    'spot-timer',
+    60_000,
+    undefined,
+    TimerHandler as never,
+    serial,
+    fixture.spot as never
+  );
+  let captured:
+    | Awaited<ReturnType<ServiceRelocationObjectCaptureOwner['captureUserSpotAggregate']>>
+    | undefined;
+  const originalCapture = ServiceRelocationObjectCaptureOwner.prototype.captureUserSpotAggregate;
+  const stopped = new Error('Capture observed.');
+  t.mock.method(
+    ServiceRelocationObjectCaptureOwner.prototype,
+    'captureUserSpotAggregate',
+    async (
+      ...args: Parameters<ServiceRelocationObjectCaptureOwner['captureUserSpotAggregate']>
+    ) => {
+      captured = await originalCapture.call(new ServiceRelocationObjectCaptureOwner(), ...args);
+      await captured.abortSource();
+      throw stopped;
+    }
+  );
+  try {
+    await assert.rejects(
+      runtime.relocatePerActorSpotShell('mesh-a', activation, target as never, undefined),
+      stopped
+    );
+    assert.notEqual(captured, undefined);
+    assert.deepEqual(captured!.envelope.participants[0]!.timers, []);
+  } finally {
+    await timers.dispose();
+  }
+});
 
 for (const scenario of ['held', 'rejected', 'successful'] as const) {
   test(`host relocation batch 2 ${scenario} before SpotWide PREPARE`, async () => {
@@ -4197,7 +4259,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       const wire = {
         kind: 'cutover',
         relocation: { high: 0n, low: 145n },
-        targetAttemptGeneration: 6n,
+        targetAttemptGeneration: 1n,
         coordinator,
         senderRole: 'source',
         object: {
@@ -4271,6 +4333,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
 }
 
 function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[]) {
+  const inventory = new ZLinkAggregateInventoryStore(new ZLinkInMemoryProviderLocationStore());
   let current = initial;
   let removed = false;
   let prepared: any;
@@ -4291,6 +4354,14 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
     },
     get preserves() {
       return preserves;
+    },
+    storeAggregateInventory: inventory.store.bind(inventory),
+    readAggregateInventory(
+      fence: Parameters<typeof inventory.read>[0],
+      digest: string,
+      signal?: AbortSignal
+    ) {
+      return inventory.read(fence, Buffer.from(digest, 'hex'), signal);
     },
     async readAuthority() {
       return removed ? { kind: 'missing' as const, storeNow: new Date() } : current;

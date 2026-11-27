@@ -1,9 +1,11 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkCompositeRelocationBarrier;
+import systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -12,6 +14,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
@@ -19,12 +22,11 @@ import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/** Owns the source-side all-lane barrier for one User Spot aggregate. */
+/** Owns the source-side execution barrier for one Spot relocation unit. */
 final class ZLinkUserSpotRelocationBarrier {
     private static final Logger LOGGER =
             Logger.getLogger(ZLinkUserSpotRelocationBarrier.class.getName());
-    private final DefaultSpotContext context;
-    private final ZLinkActorSessionCoordinator actors;
+    private final Participant participant;
     private final ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
     final ZLinkStateLane stateLane = new ZLinkStateLane();
     private Seal active;
@@ -33,8 +35,123 @@ final class ZLinkUserSpotRelocationBarrier {
 
     ZLinkUserSpotRelocationBarrier(
             DefaultSpotContext context, ZLinkActorSessionCoordinator actors) {
-        this.context = Objects.requireNonNull(context, "context");
-        this.actors = Objects.requireNonNull(actors, "actors");
+        this.participant = new UserParticipant(context, actors);
+    }
+
+    ZLinkUserSpotRelocationBarrier(DefaultInstanceSpotContext context) {
+        this.participant = new InstanceParticipant(context);
+    }
+
+    private interface Participant {
+        CompletionStage<Map<String, ZLinkSerialExecutionQueue>> lanes(List<String> actorIds);
+
+        byte[] freezeTimers();
+
+        void resumeTimers();
+
+        boolean relocatesActorMembers();
+
+        List<String> participantActorIds();
+
+        ZLinkSpotRelocationCoordinationMode coordinationMode();
+
+        default Optional<ZLinkSerialExecutionQueue.ActiveTurnSealHandle> activeTurn() {
+            return Optional.empty();
+        }
+
+        default CompletionStage<Optional<Seal>> awaitReady(
+                Supplier<CompletionStage<Optional<Seal>>> seal, CompletionStage<?> cancellation) {
+            throw new IllegalStateException(
+                    "Spot does not support application-signaled relocation");
+        }
+
+        default CompletionStage<Void> completeReady(ZLinkSpotRelocationReadyOutcome outcome) {
+            throw new IllegalStateException(
+                    "Spot does not support application-signaled relocation");
+        }
+    }
+
+    private record UserParticipant(DefaultSpotContext context, ZLinkActorSessionCoordinator actors)
+            implements Participant {
+        @Override
+        public CompletionStage<Map<String, ZLinkSerialExecutionQueue>> lanes(
+                List<String> actorIds) {
+            return context.relocationLanesAsync(actorIds);
+        }
+
+        @Override
+        public byte[] freezeTimers() {
+            return context.freezeTimerRelocationEnvelope();
+        }
+
+        @Override
+        public void resumeTimers() {
+            context.resumeTimersAfterRelocationAbort();
+        }
+
+        @Override
+        public boolean relocatesActorMembers() {
+            return context.executionMode() == ZLinkUserSpotExecutionMode.SPOT_WIDE;
+        }
+
+        @Override
+        public List<String> participantActorIds() {
+            return relocatesActorMembers() ? actors.actorIdsInSpot(context.spotId()) : List.of();
+        }
+
+        @Override
+        public ZLinkSpotRelocationCoordinationMode coordinationMode() {
+            return context.relocationCoordinationMode();
+        }
+
+        @Override
+        public Optional<ZLinkSerialExecutionQueue.ActiveTurnSealHandle> activeTurn() {
+            return context.captureSpotActiveTurnSealHandle();
+        }
+
+        @Override
+        public CompletionStage<Optional<Seal>> awaitReady(
+                Supplier<CompletionStage<Optional<Seal>>> seal, CompletionStage<?> cancellation) {
+            return context.awaitRelocationReadySignal(seal, cancellation);
+        }
+
+        @Override
+        public CompletionStage<Void> completeReady(ZLinkSpotRelocationReadyOutcome outcome) {
+            return context.runRelocationReadyCompletion(outcome);
+        }
+    }
+
+    private record InstanceParticipant(DefaultInstanceSpotContext context) implements Participant {
+        @Override
+        public CompletionStage<Map<String, ZLinkSerialExecutionQueue>> lanes(
+                List<String> actorIds) {
+            return CompletableFuture.completedFuture(Map.of("spot", context.ownerQueue()));
+        }
+
+        @Override
+        public byte[] freezeTimers() {
+            return ZLinkSpotTimerRelocationEnvelope.encode(context.timers.freeze());
+        }
+
+        @Override
+        public void resumeTimers() {
+            context.timers.resume();
+        }
+
+        @Override
+        public boolean relocatesActorMembers() {
+            return false;
+        }
+
+        @Override
+        public List<String> participantActorIds() {
+            return List.of();
+        }
+
+        @Override
+        public ZLinkSpotRelocationCoordinationMode coordinationMode() {
+            return ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED;
+        }
     }
 
     private <T> CompletionStage<T> inStateLane(Supplier<T> work) {
@@ -42,11 +159,11 @@ final class ZLinkUserSpotRelocationBarrier {
     }
 
     List<String> participantActorIds() {
-        return relocatesActorMembers() ? actors.actorIdsInSpot(context.spotId()) : List.of();
+        return participant.participantActorIds();
     }
 
     boolean relocatesActorMembers() {
-        return context.executionMode() == ZLinkUserSpotExecutionMode.SPOT_WIDE;
+        return participant.relocatesActorMembers();
     }
 
     CompletionStage<Optional<Seal>> trySeal() {
@@ -56,7 +173,8 @@ final class ZLinkUserSpotRelocationBarrier {
     CompletionStage<Optional<Seal>> trySeal(Predicate<Preview> admission) {
         Objects.requireNonNull(admission, "admission");
         Map<String, ZLinkSerialExecutionQueue.ActiveTurnSealHandle> activeTurns =
-                context.captureSpotActiveTurnSealHandle()
+                participant
+                        .activeTurn()
                         .<Map<String, ZLinkSerialExecutionQueue.ActiveTurnSealHandle>>map(
                                 handle -> Map.of("spot", handle))
                         .orElseGet(Map::of);
@@ -76,25 +194,25 @@ final class ZLinkUserSpotRelocationBarrier {
                             byte[] timerEnvelope;
                             List<String> participantActorIds;
                             try {
-                                timerEnvelope = context.freezeTimerRelocationEnvelope();
+                                timerEnvelope = participant.freezeTimers();
                                 participantActorIds = participantActorIds();
                             } catch (RuntimeException failure) {
                                 return clearSealing()
                                         .thenCompose(
                                                 ignored -> {
-                                                    context.resumeTimersAfterRelocationAbort();
+                                                    participant.resumeTimers();
                                                     return CompletableFuture.failedFuture(failure);
                                                 });
                             }
-                            return context.relocationLanesAsync(participantActorIds)
+                            return participant
+                                    .lanes(participantActorIds)
                                     .thenCompose(lanes -> barrier.trySeal(lanes, activeTurns))
                                     .exceptionallyCompose(
                                             failure -> {
                                                 return clearSealing()
                                                         .thenCompose(
                                                                 ignored -> {
-                                                                    context
-                                                                            .resumeTimersAfterRelocationAbort();
+                                                                    participant.resumeTimers();
                                                                     return CompletableFuture
                                                                             .failedFuture(failure);
                                                                 });
@@ -105,8 +223,7 @@ final class ZLinkUserSpotRelocationBarrier {
                                                     return clearSealing()
                                                             .thenApply(
                                                                     ignored -> {
-                                                                        context
-                                                                                .resumeTimersAfterRelocationAbort();
+                                                                        participant.resumeTimers();
                                                                         return Optional
                                                                                 .<Seal>empty();
                                                                     });
@@ -180,7 +297,8 @@ final class ZLinkUserSpotRelocationBarrier {
                                 return CompletableFuture.completedFuture(Optional.empty());
                             }
                             List<String> participantActorIds = participantActorIds();
-                            return context.relocationLanesAsync(participantActorIds)
+                            return participant
+                                    .lanes(participantActorIds)
                                     .thenCompose(
                                             lanes -> barrier.sealAtTurnBoundary(lanes, cancelled))
                                     .thenCompose(
@@ -197,12 +315,12 @@ final class ZLinkUserSpotRelocationBarrier {
             Predicate<Preview> admission,
             BooleanSupplier cancelled,
             CompletionStage<?> cancellationSignal) {
-        if (context.relocationCoordinationMode()
-                != systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode
-                        .APPLICATION_SIGNALED) {
+        if (participant.coordinationMode()
+                != ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED) {
             return sealAtTurnBoundary(admission, cancelled);
         }
-        return context.awaitRelocationReadySignal(() -> trySeal(admission), cancellationSignal)
+        return participant
+                .awaitReady(() -> trySeal(admission), cancellationSignal)
                 .thenCompose(
                         sealedResult ->
                                 sealedResult.isEmpty()
@@ -244,7 +362,7 @@ final class ZLinkUserSpotRelocationBarrier {
                             }
                             byte[] timerEnvelope;
                             try {
-                                timerEnvelope = context.freezeTimerRelocationEnvelope();
+                                timerEnvelope = participant.freezeTimers();
                             } catch (RuntimeException failure) {
                                 return rejectSeal(composite, false, failure);
                             }
@@ -324,9 +442,8 @@ final class ZLinkUserSpotRelocationBarrier {
                                 try {
                                     completion =
                                             Objects.requireNonNull(
-                                                    context.runRelocationReadyCompletion(
-                                                            systems.zlink.framework.spots
-                                                                    .ZLinkSpotRelocationReadyOutcome
+                                                    participant.completeReady(
+                                                            ZLinkSpotRelocationReadyOutcome
                                                                     .CONTINUED),
                                                     "relocation completion result");
                                 } catch (RuntimeException failure) {
@@ -379,14 +496,11 @@ final class ZLinkUserSpotRelocationBarrier {
                                                                                                         })
                                                                                                 .thenApply(
                                                                                                         ignored -> {
-                                                                                                            context
-                                                                                                                    .resumeTimersAfterRelocationAbort();
+                                                                                                            participant
+                                                                                                                    .resumeTimers();
                                                                                                             if (completionFailure
                                                                                                                     != null) {
-                                                                                                                throw new java
-                                                                                                                        .util
-                                                                                                                        .concurrent
-                                                                                                                        .CompletionException(
+                                                                                                                throw new CompletionException(
                                                                                                                         completionFailure);
                                                                                                             }
                                                                                                             return true;
@@ -576,7 +690,7 @@ final class ZLinkUserSpotRelocationBarrier {
                                                 }
                                                 try {
                                                     if (timerFrozen) {
-                                                        context.resumeTimersAfterRelocationAbort();
+                                                        participant.resumeTimers();
                                                     }
                                                 } catch (RuntimeException resumeFailure) {
                                                     if (terminal == null) {
@@ -586,8 +700,7 @@ final class ZLinkUserSpotRelocationBarrier {
                                                     }
                                                 }
                                                 if (terminal != null) {
-                                                    throw new java.util.concurrent
-                                                            .CompletionException(terminal);
+                                                    throw new CompletionException(terminal);
                                                 }
                                                 return Optional.<Seal>empty();
                                             });

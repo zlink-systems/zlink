@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -8,6 +9,7 @@ internal enum ZLinkActorAuthorityState : byte
 {
     Creating = 0,
     Ready = 1,
+    Closing = (byte)ServiceWireCodec.ActorAuthorityState.Closing,
 }
 
 internal sealed record ZLinkActorAuthorityPayload(
@@ -245,8 +247,12 @@ internal static class ZLinkActorAuthorityPayloadCodec
         body.U8(
             value.State switch
             {
-                ZLinkActorAuthorityState.Creating => 1,
-                ZLinkActorAuthorityState.Ready => 0,
+                ZLinkActorAuthorityState.Creating => (byte)
+                    ServiceWireCodec.AuthorityOperationKind.ColdActivation,
+                ZLinkActorAuthorityState.Ready => (byte)
+                    ServiceWireCodec.AuthorityOperationKind.Steady,
+                ZLinkActorAuthorityState.Closing => (byte)
+                    ServiceWireCodec.AuthorityOperationKind.Close,
                 _ => throw new ArgumentOutOfRangeException(nameof(value)),
             }
         );
@@ -275,6 +281,12 @@ internal static class ZLinkActorAuthorityPayloadCodec
             throw new ArgumentOutOfRangeException(nameof(value));
         return encoded;
     }
+
+    internal static bool IsClosing(ZLinkAuthoritySnapshot snapshot) =>
+        snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.Actor
+        && snapshot.Relocation is null
+        && TryDecode(snapshot.Payload.Span, out var actor)
+        && actor.State == ZLinkActorAuthorityState.Closing;
 
     // Steady Ready: no relocation in progress (no relocation payload and no
     // canonical relocation slot) and a Ready Actor payload.
@@ -356,8 +368,12 @@ internal static class ZLinkActorAuthorityPayloadCodec
                 || currentSpotKind is not (ZLinkSpotKind.Entry or ZLinkSpotKind.User)
                 || state switch
                 {
-                    ZLinkActorAuthorityState.Creating => operation != 1,
-                    ZLinkActorAuthorityState.Ready => operation != 0,
+                    ZLinkActorAuthorityState.Creating => operation
+                        != (byte)ServiceWireCodec.AuthorityOperationKind.ColdActivation,
+                    ZLinkActorAuthorityState.Ready => operation
+                        != (byte)ServiceWireCodec.AuthorityOperationKind.Steady,
+                    ZLinkActorAuthorityState.Closing => operation
+                        != (byte)ServiceWireCodec.AuthorityOperationKind.Close,
                     _ => true,
                 }
             )

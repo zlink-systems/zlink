@@ -38,6 +38,7 @@ if [ "$package" = java ]; then
   cp "$repo_root/scripts/ci/gradle/ci-mirror.gradle" "$game/ci-mirror.gradle"
   sed -i '/^FROM .* AS build$/a ENV GRADLE_OPTS="-Dorg.gradle.internal.repository.max.retries=5 -Dorg.gradle.internal.repository.initial.backoff=1000"' "$game/Dockerfile"
   sed -i '/^RUN .*gradlew/s#^RUN #COPY ci-mirror.gradle /opt/ci-mirror.gradle\nRUN --mount=type=cache,target=/root/.gradle,sharing=locked #' "$game/Dockerfile"
+  sed -i -E "s# --max-workers=[0-9]+##g" "$game/Dockerfile"
   sed -i 's#./gradlew --no-daemon #./gradlew --no-daemon --max-workers=2 --init-script /opt/ci-mirror.gradle #' "$game/Dockerfile"
   grep -q -- '--init-script /opt/ci-mirror.gradle ' "$game/Dockerfile" \
     || { echo "run-template: no Gradle build in $game/Dockerfile" >&2; exit 1; }

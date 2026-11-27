@@ -6,26 +6,35 @@ local_mode=false
 no_build=false
 build_only=false
 arguments=()
+check_only=false
 for argument in "$@"; do
   case "$argument" in
     --local) local_mode=true ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
+    --check-structure|--check-domain) check_only=true; arguments+=("$argument") ;;
     *) arguments+=("$argument") ;;
   esac
 done
 cd "$ROOT"
 mkdir -p "$ROOT/.logs"
+. "$ROOT/scripts/run-helpers.sh"
+if ! $local_mode && ! $build_only && ! $no_build && ! $check_only && server_running; then
+  echo 'Using the running server (.logs/server.json)'
+  java=$(local_java)
+  exec "$java" --enable-native-access=ALL-UNNAMED -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$e2e_classpath" MyGame.e2e.Program --attach "${arguments[@]}"
+fi
 if $local_mode; then
   if ! $no_build; then
-    if ! ./gradlew --no-daemon installDist :server:lobby:test :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
-      tail -n 35 "$ROOT/.logs/build.log" >&2
-      exit 1
-    fi
+    assert_no_running_server
+    build_local :server:lobby:test
   fi
   $build_only && exit 0
-  java_home_path=$(cat "$ROOT/.logs/java-home.txt")
-  exec "$java_home_path/bin/java" --enable-native-access=ALL-UNNAMED -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.Program "${arguments[@]}"
+  if ! java=$(local_java); then
+    echo 'Build with ./run-e2e.sh --local --build-only before using --no-build.' >&2
+    exit 1
+  fi
+  exec "$java" --enable-native-access=ALL-UNNAMED -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$e2e_classpath" MyGame.e2e.Program "${arguments[@]}"
 fi
 if $no_build; then
   echo '--no-build requires --local; Docker builds reuse the layer cache automatically.' >&2

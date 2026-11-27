@@ -88,7 +88,10 @@ public final class Client implements AutoCloseable {
                 RegionView.class,
                 v ->
                         v.players().stream()
-                                .anyMatch(p -> p.playerId().equals(playerId) && p.sequence() == sequence));
+                                .anyMatch(
+                                        p ->
+                                                p.playerId().equals(playerId)
+                                                        && p.sequence() == sequence));
     }
 
     RegionView view() throws Exception {

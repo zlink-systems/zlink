@@ -1535,7 +1535,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
 
         public IReadOnlyList<RouterRoute> RoutesSnapshot() => inner.RoutesSnapshot();
 
-        public new bool Recv(Received result, RecvFlags flags = RecvFlags.None)
+        public override bool Recv(Received result, RecvFlags flags = RecvFlags.None)
         {
             if (ReceiveRealRecords)
             {
@@ -1620,6 +1620,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         private readonly IZlinkTimer _control = Systems.Zlink.Zlink.CreateTimer();
         private readonly ManualResetEventSlim _allowWait = new(false);
         private readonly object _lifetime = new();
+        private readonly Func<IZlinkSocket, IZlinkSocket>? _unwrap;
         private bool _disposed;
         private int _waitCount;
 
@@ -1651,7 +1652,16 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             TaskCreationOptions.RunContinuationsAsynchronously
         );
 
-        internal ControlledReceivePoller() => _inner.Add(_control, ControlSlot);
+        internal ControlledReceivePoller(Func<IZlinkSocket, IZlinkSocket>? unwrap = null)
+        {
+            _unwrap = unwrap;
+            _inner.Add(_control, ControlSlot);
+        }
+
+        private IZlinkSocket NativeSocket(IZlinkSocket socket) =>
+            socket is EmptyIngressRouter adapter
+                ? adapter.Inner
+                : _unwrap?.Invoke(socket) ?? socket;
 
         internal void AllowWait() => _allowWait.Set();
 
@@ -1721,7 +1731,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 if (FailRearm)
                     throw new InvalidOperationException("Controlled receive rearm failure.");
             }
-            _inner.Modify(socket is EmptyIngressRouter adapter ? adapter.Inner : socket, events);
+            _inner.Modify(NativeSocket(socket), events);
             if ((events & PollEventFlags.PollIn) == 0)
                 SourcePaused.TrySetResult();
         }
@@ -1730,7 +1740,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
 
         public void Add(IZlinkSocket socket, PollEventFlags events, nuint slot)
         {
-            _inner.Add(socket is EmptyIngressRouter adapter ? adapter.Inner : socket, events, slot);
+            _inner.Add(NativeSocket(socket), events, slot);
             if ((events & PollEventFlags.PollIn) == 0)
                 SourcePaused.TrySetResult();
         }
@@ -1751,8 +1761,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
 
         public void ModifyFd(int fd, PollEventFlags events) => _inner.ModifyFd(fd, events);
 
-        public bool Remove(IZlinkSocket socket) =>
-            _inner.Remove(socket is EmptyIngressRouter adapter ? adapter.Inner : socket);
+        public bool Remove(IZlinkSocket socket) => _inner.Remove(NativeSocket(socket));
 
         public bool Remove(ISocketMonitor monitor) => _inner.Remove(monitor);
 

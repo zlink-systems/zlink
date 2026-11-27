@@ -42,7 +42,7 @@ internal sealed class ReadySignalHostedService(
                 ZLinkListenerKind.RouteMesh,
                 options.MeshName ?? options.ChannelName
             ),
-            "stream-raw" => (ZLinkListenerKind.Stream, "stream.raw"),
+            "stream-raw" or "login-admission-server" => (ZLinkListenerKind.Stream, "stream.raw"),
             _ => (ZLinkListenerKind.RouteMesh, null),
         };
         var endpoint = listener.Item2 is null

@@ -438,6 +438,41 @@ for (const [name, value] of [
   });
 }
 
+for (const scenario of ['removed', 'replaced', 'unchanged', 'zero']) {
+  test(`startup resolves a v11 capacity conflict with the old row ${scenario}`, async (t) => {
+    const store = new framework.ZLinkInMemoryProviderLocationStore();
+    const oldKey = legacyKey('race');
+    const active = counter('72616365', 'actors', 'active');
+    await put(store, oldKey, legacyRow(scenario === 'zero' ? 0 : 1, 0));
+    if (scenario === 'zero') await put(store, active, '9');
+    let attempts = 0;
+    const provider = intercept(store, async (request, signal) => {
+      if (request.mutations.some(({ key }) => key.value === oldKey) && ++attempts === 1) {
+        if (scenario === 'removed') {
+          await store.write({ conditions: [], mutations: [{ kind: 'delete', key: key(oldKey) }] });
+        }
+        if (scenario === 'replaced') await put(store, oldKey, legacyRow(2, 0));
+        return { kind: 'conflict', storeNow: new Date() };
+      }
+      return store.write(request, signal);
+    });
+
+    await startup(t, provider, 0);
+    assert.equal(attempts, scenario === 'removed' ? 1 : 2);
+    assert.equal(await read(store, oldKey), undefined);
+    assert.equal(await read(store, FORMAT), 'converted');
+    assert.equal(
+      await read(store, active),
+      {
+        removed: undefined,
+        replaced: '2',
+        unchanged: '1',
+        zero: '9'
+      }[scenario]
+    );
+  });
+}
+
 test('startup rejects a destination already present while its v11 row remains', async (t) => {
   const store = new framework.ZLinkInMemoryProviderLocationStore();
   const oldKey = legacyKey('conflict');

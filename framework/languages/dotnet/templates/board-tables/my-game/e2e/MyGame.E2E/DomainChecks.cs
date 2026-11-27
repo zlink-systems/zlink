@@ -246,11 +246,7 @@ internal static class DomainChecks
     ) =>
         new()
         {
-            Seats =
-            [
-                Seat(0, "p1", p1Chips, [11, 24]),
-                Seat(1, "p2", p2Chips, [0, 13]),
-            ],
+            Seats = [Seat(0, "p1", p1Chips, [11, 24]), Seat(1, "p2", p2Chips, [0, 13])],
             Deck = [],
             HandNumber = 1,
             InHand = true,
@@ -314,18 +310,47 @@ internal static class DomainChecks
             var p1Session = new RecordingBoundSession();
             var p2Session = new RecordingBoundSession();
             var settings = new NodeSettings("test-node", "redis", "test", "mesh");
+            var records = new DomainPlayerRecords();
             var spot = new TableSpot(
                 new TestSpotContext("test-table"),
                 settings,
                 actors,
+                records,
                 randomIndex
             );
-            var p1 = new PlayerActor(new TestActorContext("p1", p1Session));
-            var p2 = new PlayerActor(new TestActorContext("p2", p2Session));
+            var p1 = new PlayerActor(
+                new TestActorContext("p1", p1Session),
+                new UnusedSpotClient(),
+                records
+            );
+            var p2 = new PlayerActor(
+                new TestActorContext("p2", p2Session),
+                new UnusedSpotClient(),
+                records
+            );
             return new Fixture(actors, p1Session, p2Session, spot, p1, p2);
         }
 
-        public void Restore(TableState state) => Spot.Restore(JsonSerializer.SerializeToUtf8Bytes(state));
+        public void Restore(TableState state) =>
+            Spot.Restore(JsonSerializer.SerializeToUtf8Bytes(state));
+    }
+
+    private sealed class DomainPlayerRecords : IPlayerRecords
+    {
+        public ValueTask<long> LoadPlayerAsync(string playerId, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public ValueTask CommitRoundAsync(CommitRound round, CancellationToken ct) =>
+            ValueTask.CompletedTask;
+    }
+
+    private sealed class UnusedSpotClient : IZLinkSpotClient
+    {
+        public IZLinkSpotSendCall SendToSpot<TMessage>(string spotId, TMessage message) =>
+            throw new NotSupportedException();
+
+        public IZLinkSpotRequestCall RequestToSpot<TRequest>(string spotId, TRequest request) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingActorClient : IZLinkActorClient
@@ -400,8 +425,9 @@ internal static class DomainChecks
         )
             where THandler : class => throw new NotSupportedException();
 
-        public IZLinkWorkerCall<TResult> RunCpuWorker<TResult>(Func<CancellationToken, TResult> work) =>
-            throw new NotSupportedException();
+        public IZLinkWorkerCall<TResult> RunCpuWorker<TResult>(
+            Func<CancellationToken, TResult> work
+        ) => throw new NotSupportedException();
 
         public IZLinkWorkerCall<TResult> RunIoWorker<TResult>(
             Func<CancellationToken, ValueTask<TResult>> work
