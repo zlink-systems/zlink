@@ -34,6 +34,6 @@ Player Actor는 `LoadPlayer` 한 번으로 잔액을 읽고 입장 요청에 담
 
 ## 알려진 문제
 
-Framework 0.34.1은 play node가 자동 발견으로 플레이어 기록 채널을 등록한 경우 `update`에서 `ManualTopologyUnsupported`를 반환합니다. 시나리오는 이 relocation 실패를 보고합니다.
+고정한 Framework 릴리스는 play node가 자동 발견으로 플레이어 기록 채널을 등록한 경우 `update`에서 `ManualTopologyUnsupported`를 반환합니다. 시나리오는 이 relocation 실패를 보고합니다. Framework 수정([#5663](https://github.com/zlink-systems/zlink/issues/5663))은 다음 릴리스에 들어갑니다.
 
 drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.
