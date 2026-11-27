@@ -245,7 +245,7 @@ Connector는 다음과 같이 처리한다.
     permit에 포함하지 않으므로, incarnation 전환 직후에는 상한을 잠시 넘을 수 있다. 그 폭은 전환 시점에 실행 중이었거나 응답이 오가던 permit 수 이하다(이전 incarnation의 grant가 전환 뒤 늦게 도착한 경우 포함). Owner lease가 끝나 permit을 회수당한 node에서 아직 끝나지 않은 handler도
     같은 종류의 일시적 초과로 본다.
 - 예상 대기 `estimatedWaitMs`는 `ceil(position × 1000 / r)`이고, r은 최근 30초 동안 낸 ticket 수 ÷ 30(초당)이다.
-  r이 0이면 `position × 1000`이다. 결과는 2^31 − 1에서 자른다. `position`은 1부터 시작하는 mesh 전체 순번이다.
+  r이 0이면 `position × 1000`이다. 결과는 2^31 − 1에서 자른다. `position`은 mesh 전체 FIFO에서 그 대기자 앞에 있는 **ticket을 받지 않은** 대기자 수 + 1이다(ticket을 받은 대기자는 더 기다리지 않으므로 세지 않는다). `estimatedWaitMs`도 이 `position`으로 계산한다.
 - 같은 SessionRid의 `$zlink.admission.enqueue`는 멱등이다. 이미 대기 중이면 현재 순번을, ticket을 받고 아직 쓰지
   않았고 만료되지 않았으면 같은 ticket을 Response로 준다. 새 대기자를 만들지 않는다.
 - 대기자를 지우는 경우는 세 가지다: 보고에 사용된 ticket으로 올라온 경우, 보고에 끝난 session으로 올라온 경우,
