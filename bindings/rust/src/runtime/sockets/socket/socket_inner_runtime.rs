@@ -247,7 +247,11 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn set_linger(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_LINGER, milliseconds)
+        set_int_opt(
+            self.handle,
+            ffi::zlink_option_t::ZLINK_OPT_LINGER,
+            milliseconds,
+        )
     }
 
     pub(crate) fn linger(&self) -> Result<i32, ConfigError> {
@@ -255,7 +259,11 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn set_send_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO, milliseconds)
+        set_int_opt(
+            self.handle,
+            ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO,
+            milliseconds,
+        )
     }
 
     pub(crate) fn send_timeout(&self) -> Result<i32, ConfigError> {
@@ -263,7 +271,11 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn set_receive_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO, milliseconds)
+        set_int_opt(
+            self.handle,
+            ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO,
+            milliseconds,
+        )
     }
 
     pub(crate) fn receive_timeout(&self) -> Result<i32, ConfigError> {
@@ -939,4 +951,18 @@ fn supports_completion(typ: ffi::zlink_socket_type_t) -> bool {
             | ffi::zlink_socket_type_t::ZLINK_SOCKET_ROUTER
             | ffi::zlink_socket_type_t::ZLINK_SOCKET_STREAM
     )
+}
+
+impl crate::internal::RoutedHandle {
+    pub(crate) fn close_native(&self) -> i32 {
+        let handle = self.handle();
+        if handle.is_null() {
+            return 0;
+        }
+        let rc = unsafe { crate::ffi::zlink_close(handle) };
+        if rc == 0 {
+            self.detach();
+        }
+        rc
+    }
 }

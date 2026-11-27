@@ -33,8 +33,8 @@ impl RouterSocket {
     /// builder, then submit. A part is consumed on a successful submit (see
     /// [`SendOp`]).
     pub fn send(&self, target: &RoutingId) -> SendOp<Empty> {
-        let inner = crate::socket::router_inner(self);
-        crate::operations::routed_send_op(
+        let inner = &self.inner;
+        crate::messaging_operations::SendOpStorage::routed_send_op(
             inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
             inner
                 .completion_owner
@@ -50,23 +50,7 @@ impl RouterSocket {
     /// Returns `Ok(true)` on success and `Ok(false)` when
     /// [`RecvFlags::DONT_WAIT`] is set and no message is available.
     pub fn recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
-        let inner = crate::socket::router_inner(self);
-        crate::socket::recv_router_once(
-            inner.handle,
-            inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
-            inner
-                .completion_owner
-                .as_ref()
-                .expect("ROUTER completion owner")
-                .clone(),
-            inner
-                .reply_owner
-                .as_ref()
-                .expect("ROUTER reply owner")
-                .clone(),
-            flags.bits(),
-            out,
-        )
+        self.inner.recv_router_once(flags.bits(), out)
     }
 
     /// Returns the Core-selected route of every routing id as one atomic
@@ -75,32 +59,20 @@ impl RouterSocket {
     /// later change raced with it. Call it only from the socket's single
     /// route observer.
     pub fn routes_snapshot(&self) -> Result<Vec<RouterRoute>, ConfigError> {
-        crate::socket::router_routes_snapshot(crate::socket::router_inner(self).handle)
+        self.inner.router_routes_snapshot()
     }
 
     /// Begins a request addressed to peer `peer_rid`: add parts, then submit and
     /// await a reply. Parts are consumed on a successful submit (see [`SendOp`]).
     pub fn request(&self, peer_rid: &RoutingId) -> RequestOp<Empty> {
-        crate::operations::router_request_op(
-            crate::socket::router_inner(self)
-                .routed_handle
-                .as_ref()
-                .expect("ROUTER handle")
-                .clone(),
-            crate::socket::router_inner(self)
-                .completion_owner
-                .as_ref()
-                .expect("ROUTER completion owner")
-                .clone(),
-            *peer_rid,
-        )
+        self.inner.router_request_op(*peer_rid)
     }
 
     /// Begins a reply to the request token from peer `rid`: add parts,
     /// then submit. Parts are consumed on a successful submit (see [`SendOp`]).
     pub fn reply(&self, rid: &RoutingId, reply_token: ReplyToken) -> ReplyOp<Empty> {
-        let inner = crate::socket::router_inner(self);
-        crate::operations::router_reply_op(
+        let inner = &self.inner;
+        crate::messaging_operations::ReplyOpStorage::router_reply_op(
             inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
             inner
                 .reply_owner
@@ -114,114 +86,25 @@ impl RouterSocket {
 
     /// Returns the typed options facade common to all socket types.
     pub fn common_options(&self) -> CommonSocketOptions<'_> {
-        CommonSocketOptions::new(crate::socket::router_inner(self))
+        CommonSocketOptions::new(&self.inner)
     }
 
     /// Returns the ROUTER-specific typed options facade.
     pub fn router_options(&self) -> RouterSocketOptions<'_> {
-        RouterSocketOptions::new(crate::socket::router_inner(self))
-    }
-
-    /// Closes the socket and releases its native resources; further operations
-    /// fail.
-    pub fn close(&mut self) -> Result<(), crate::error::CloseError> {
-        crate::socket::router_inner_mut(self).close()
-    }
-
-    /// Binds the socket to a local transport address (for example
-    /// `tcp://*:5555`) to accept connections there.
-    pub fn bind(&self, addr: &str) -> Result<(), BindError> {
-        crate::socket::router_inner(self).bind(addr)
-    }
-
-    /// Stops accepting connections at `addr`, a previously bound address.
-    pub fn unbind(&self, addr: &str) -> Result<(), ConnectError> {
-        crate::socket::router_inner(self).unbind(addr)
-    }
-
-    /// Returns the concrete endpoint the socket last bound to, for example the
-    /// resolved port after binding to a wildcard.
-    pub fn last_endpoint(&self) -> Result<String, ConfigError> {
-        crate::socket::router_inner(self).last_endpoint()
-    }
-
-    /// Sets the server certificate (PEM) path for TLS. Apply before binding.
-    pub fn set_tls_cert(&self, cert: &str) -> Result<(), ConfigError> {
-        crate::socket::router_inner(self).set_tls_cert(cert)
-    }
-
-    /// Sets the private key (PEM) path for the TLS server certificate. Apply
-    /// before binding.
-    pub fn set_tls_key(&self, key: &str) -> Result<(), ConfigError> {
-        crate::socket::router_inner(self).set_tls_key(key)
-    }
-
-    /// Sets the CA bundle (PEM) path used to verify the TLS peer. Apply before
-    /// connecting.
-    pub fn set_tls_ca(&self, ca_cert: &str) -> Result<(), ConfigError> {
-        crate::socket::router_inner(self).set_tls_ca(ca_cert)
-    }
-
-    /// Sets the expected server hostname to verify during the TLS handshake.
-    pub fn set_tls_hostname(&self, hostname: &str) -> Result<(), ConfigError> {
-        crate::socket::router_inner(self).set_tls_hostname(hostname)
-    }
-
-    /// Sets whether to also trust the host system's CA store in addition to any
-    /// configured CA bundle.
-    pub fn set_tls_trust_system(&self, trust_system: bool) -> Result<(), ConfigError> {
-        crate::socket::router_inner(self).set_tls_trust_system(trust_system)
-    }
-
-    /// Configures this socket as a TLS server in one call. Apply before binding.
-    /// `cert` is the certificate (PEM) path, `key` its private key path, and
-    /// `require_client_cert` requires mutual TLS.
-    pub fn set_tls_server(
-        &self,
-        cert: &str,
-        key: &str,
-        require_client_cert: bool,
-    ) -> Result<(), ConfigError> {
-        crate::socket::router_inner(self).set_tls_server(cert, key, require_client_cert)
-    }
-
-    /// Configures this socket as a TLS client in one call. Apply before
-    /// connecting. `ca_cert` is the CA bundle (PEM) path, `hostname` the
-    /// expected server hostname, and `trust_system` also trusts the system CA
-    /// store.
-    pub fn set_tls_client(
-        &self,
-        ca_cert: &str,
-        hostname: &str,
-        trust_system: bool,
-    ) -> Result<(), ConfigError> {
-        crate::socket::router_inner(self).set_tls_client(ca_cert, hostname, trust_system)
-    }
-
-    /// Connects to a remote transport address. Connection is asynchronous; this
-    /// returns before the peer is reachable.
-    pub fn connect(&self, addr: &str) -> Result<(), ConnectError> {
-        crate::socket::router_inner(self).connect(addr)
-    }
-
-    /// Disconnects the connection previously established to `addr`.
-    pub fn disconnect(&self, addr: &str) -> Result<(), ConnectError> {
-        crate::socket::router_inner(self).disconnect(addr)
-    }
-
-    /// Disconnects the peer identified by `peer_rid` rather than by address.
-    pub fn disconnect_rid(&self, peer_rid: &RoutingId) -> Result<(), ConnectError> {
-        crate::socket::router_inner(self).disconnect_rid(peer_rid)
+        RouterSocketOptions::new(&self.inner)
     }
 
     /// Sets the routing id that identifies this ROUTER to its peers. Apply
     /// before connecting so peers observe it from the first message.
     pub fn set_routing_id(&self, id: &RoutingId) -> Result<(), ConfigError> {
-        crate::socket::router_inner(self).set_routing_id(id)
+        self.inner.set_routing_id(id)
     }
 
     /// Returns the routing id that identifies this ROUTER to its peers.
     pub fn routing_id(&self) -> Result<RoutingId, ConfigError> {
-        crate::socket::router_inner(self).routing_id()
+        self.inner.routing_id()
     }
 }
+
+impl_socket_common_base!(RouterSocket);
+impl_socket_connections!(RouterSocket);

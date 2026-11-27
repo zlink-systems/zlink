@@ -1,4 +1,5 @@
 use crate::error::{ConfigError, ConfigResult};
+use crate::internal::MessageStorage;
 
 pub use crate::routing_id::RoutingId;
 
@@ -18,12 +19,12 @@ unsafe impl Send for Message {}
 impl Message {
     /// Create an empty (zero-length) message.
     pub fn new() -> Result<Self, ConfigError> {
-        crate::message_factory::message_new()
+        MessageStorage::new_message()
     }
 
     /// Create a message of the given size filled with uninitialized bytes.
     pub fn with_size(size: usize) -> Result<Self, ConfigError> {
-        crate::message_factory::message_with_size(size)
+        MessageStorage::with_size_message(size)
     }
 
     /// Allocates a message with writable payload storage of `size` bytes; an
@@ -34,12 +35,12 @@ impl Message {
 
     /// Create a message by copying the given byte source.
     pub fn try_from<T: AsRef<[u8]>>(data: T) -> Result<Self, ConfigError> {
-        crate::message_factory::message_from_slice(data.as_ref())
+        MessageStorage::from_slice_message(data.as_ref())
     }
 
     /// View the message payload as a byte slice.
     pub fn as_bytes(&self) -> &[u8] {
-        crate::message_factory::message_as_bytes(self)
+        self.inner.as_bytes()
     }
 
     pub(crate) fn data(&self) -> &[u8] {
@@ -48,12 +49,12 @@ impl Message {
 
     /// View the message payload as a mutable byte slice.
     pub fn data_mut(&mut self) -> &mut [u8] {
-        crate::message_factory::message_data_mut(self)
+        self.inner.data_mut()
     }
 
     /// Message size in bytes.
     pub fn size(&self) -> usize {
-        crate::message_factory::message_size(self)
+        self.inner.size()
     }
 
     /// Returns `true` if the message has zero-length payload.
@@ -90,18 +91,18 @@ impl Message {
     /// This is a diagnostic helper only. It does not affect ownership or
     /// message lifetime.
     pub fn ref_count(&self) -> i32 {
-        crate::message_factory::message_ref_count(self)
+        self.inner.ref_count()
     }
 
     /// Returns an independent copy of this message that owns its own payload.
     pub fn try_clone(&self) -> Result<Self, ConfigError> {
-        crate::message_factory::message_try_clone(self)
+        self.inner.try_clone_message()
     }
 }
 
 impl Drop for Message {
     fn drop(&mut self) {
-        crate::message_factory::message_drop(self);
+        self.inner.close();
     }
 }
 
@@ -110,7 +111,7 @@ impl TryFrom<&[u8]> for Message {
 
     /// Creates a message holding an independent copy of the bytes.
     fn try_from(data: &[u8]) -> Result<Self, ConfigError> {
-        crate::message_factory::message_from_slice(data)
+        MessageStorage::from_slice_message(data)
     }
 }
 
@@ -119,7 +120,7 @@ impl TryFrom<Vec<u8>> for Message {
 
     /// Creates a message holding an independent copy of the bytes.
     fn try_from(v: Vec<u8>) -> Result<Self, ConfigError> {
-        crate::message_factory::message_from_slice(&v)
+        MessageStorage::from_slice_message(&v)
     }
 }
 
@@ -128,6 +129,6 @@ impl TryFrom<&str> for Message {
 
     /// Creates a message holding the UTF-8 bytes of the string.
     fn try_from(value: &str) -> Result<Self, ConfigError> {
-        crate::message_factory::message_from_slice(value.as_bytes())
+        MessageStorage::from_slice_message(value.as_bytes())
     }
 }

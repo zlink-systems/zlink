@@ -19,7 +19,3 @@ impl DealerSocket {
 pub(crate) fn dealer_inner(socket: &DealerSocket) -> &SocketInner {
     &socket.inner
 }
-
-pub(crate) fn dealer_inner_mut(socket: &mut DealerSocket) -> &mut SocketInner {
-    &mut socket.inner
-}

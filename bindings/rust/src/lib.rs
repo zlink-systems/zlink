@@ -36,6 +36,13 @@ mod flags;
 mod message;
 #[path = "runtime/messaging/message.rs"]
 mod message_factory;
+#[path = "runtime/messaging/completion_owner.rs"]
+mod runtime_completion;
+#[path = "runtime/core/utilities.rs"]
+mod runtime_utilities;
+#[macro_use]
+#[path = "contracts/sockets/common_socket_methods.rs"]
+mod common_socket_methods;
 #[path = "contracts/sockets/message_socket_contracts.rs"]
 mod message_socket_contracts;
 #[path = "contracts/messaging/operation_contracts.rs"]
@@ -78,6 +85,10 @@ mod socket;
 mod socket_contracts;
 #[path = "contracts/sockets/stream_socket.rs"]
 mod stream_socket_contract;
+#[path = "contracts/eventing/timer.rs"]
+mod timer_contract;
+#[path = "runtime/eventing/timer.rs"]
+mod timer_runtime;
 #[path = "contracts/messaging/topic_message.rs"]
 mod topic_message_contract;
 
@@ -111,7 +122,7 @@ pub use monitor_contracts::{
 };
 pub use poller_contracts::{
     POLLCOMPLETION, POLLIN, POLLOUT, POLLROUTE, PollEvent, PollItem, PollSourceKind, Pollable,
-    Poller, Timer,
+    Poller,
 };
 pub use pubsub_socket_contracts::{PubSocket, SubSocket, XPubSocket, XSubSocket};
 pub use results::{
@@ -121,6 +132,7 @@ pub use results::{
 pub use routed_socket_contracts::{RouterRoute, RouterSocket};
 pub use routing_id::RoutingId;
 pub use stream_socket_contract::{StreamPacket, StreamSocket};
+pub use timer_contract::Timer;
 pub use topic_message_contract::TopicMessage;
 
 pub fn version() -> (i32, i32, i32) {

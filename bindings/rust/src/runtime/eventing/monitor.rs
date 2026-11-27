@@ -127,46 +127,50 @@ impl MonitorStatus {
     }
 }
 
-pub(crate) fn monitor_status_is_ready(status: &MonitorStatus) -> bool {
-    status.state_flags & ffi::ZLINK_MONITOR_STATE_READY != 0
-}
+impl MonitorStatus {
+    pub(crate) fn native_is_ready(&self) -> bool {
+        self.state_flags & ffi::ZLINK_MONITOR_STATE_READY != 0
+    }
 
-pub(crate) fn monitor_status_is_closed(status: &MonitorStatus) -> bool {
-    status.state_flags & ffi::ZLINK_MONITOR_STATE_CLOSED != 0
-}
+    pub(crate) fn native_is_closed(&self) -> bool {
+        self.state_flags & ffi::ZLINK_MONITOR_STATE_CLOSED != 0
+    }
 
-pub(crate) fn monitor_status_has_flow_state_detail(status: &MonitorStatus) -> bool {
-    status.detail_flags & ffi::ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE != 0
+    pub(crate) fn native_has_flow_state_detail(&self) -> bool {
+        self.detail_flags & ffi::ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE != 0
+    }
 }
 
 // ---------------------------------------------------------------------------
 // SocketMonitor
 // ---------------------------------------------------------------------------
 
-pub(crate) fn socket_monitor_open(socket: &dyn Monitorable) -> Result<SocketMonitor, ConfigError> {
-    socket_monitor_open_with_options(socket, SocketMonitorOpenOptions::default())
-}
-
-/// Open a socket monitor with explicit typed options.
-pub(crate) fn socket_monitor_open_with_options(
-    socket: &dyn Monitorable,
-    options: SocketMonitorOpenOptions,
-) -> Result<SocketMonitor, ConfigError> {
-    let target = monitorable_handle(socket)?;
-    let opts = ffi::zlink_socket_monitor_open_options_t {
-        events: options.events.bits(),
-        monitor_hwm_bytes: options.monitor_hwm_bytes,
-    };
-    let handle = unsafe { ffi::zlink_socket_monitor_open(target, &opts) };
-    if handle.is_null() {
-        return Err(crate::error::ConfigError::new(
-            crate::error::ConfigResult::InvalidArgument,
-            last_errno(),
-        ));
+impl MonitorStorage {
+    pub(crate) fn open(socket: &dyn Monitorable) -> Result<SocketMonitor, ConfigError> {
+        Self::open_with_options(socket, SocketMonitorOpenOptions::default())
     }
-    Ok(SocketMonitor {
-        inner: Box::new(MonitorStorage { handle }),
-    })
+
+    /// Open a socket monitor with explicit typed options.
+    pub(crate) fn open_with_options(
+        socket: &dyn Monitorable,
+        options: SocketMonitorOpenOptions,
+    ) -> Result<SocketMonitor, ConfigError> {
+        let target = monitorable_handle(socket)?;
+        let opts = ffi::zlink_socket_monitor_open_options_t {
+            events: options.events.bits(),
+            monitor_hwm_bytes: options.monitor_hwm_bytes,
+        };
+        let handle = unsafe { ffi::zlink_socket_monitor_open(target, &opts) };
+        if handle.is_null() {
+            return Err(crate::error::ConfigError::new(
+                crate::error::ConfigResult::InvalidArgument,
+                last_errno(),
+            ));
+        }
+        Ok(SocketMonitor {
+            inner: Box::new(MonitorStorage { handle }),
+        })
+    }
 }
 
 impl MonitorStorage {

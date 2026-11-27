@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use crate::error::{SubmitError, SubmitResult, ZlinkError};
 use crate::flags::SendFlags;
+use crate::internal::MessageParts;
 use crate::message::{Message, RoutingId};
 
 /// Typestate marker: no message has been set yet.
@@ -14,99 +15,6 @@ pub struct Empty;
 
 /// Typestate marker: at least one message part has been set.
 pub struct Ready;
-
-pub(crate) struct MessageParts {
-    inline: [crate::ffi::zlink_msg_t; 2],
-    inline_len: usize,
-    heap: Option<Vec<crate::ffi::zlink_msg_t>>,
-}
-
-impl Default for MessageParts {
-    fn default() -> Self {
-        Self {
-            inline: [
-                crate::ffi::zlink_msg_t::recv_slot(),
-                crate::ffi::zlink_msg_t::recv_slot(),
-            ],
-            inline_len: 0,
-            heap: None,
-        }
-    }
-}
-
-impl MessageParts {
-    pub(crate) fn push(&mut self, message: Message) {
-        if let Some(parts) = self.heap.as_mut() {
-            parts.push(message.into_raw());
-            return;
-        }
-
-        if self.inline_len < self.inline.len() {
-            self.inline[self.inline_len] = message.into_raw();
-            self.inline_len += 1;
-            return;
-        }
-
-        let mut parts = Vec::with_capacity(self.inline_len + 1);
-        for slot in self.inline.iter_mut().take(self.inline_len) {
-            parts.push(std::mem::replace(
-                slot,
-                crate::ffi::zlink_msg_t::recv_slot(),
-            ));
-        }
-        self.inline_len = 0;
-        parts.push(message.into_raw());
-        self.heap = Some(parts);
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.heap
-            .as_ref()
-            .map_or(self.inline_len, |parts| parts.len())
-    }
-
-    pub(crate) fn iter_mut(&mut self) -> std::slice::IterMut<'_, crate::ffi::zlink_msg_t> {
-        self.as_mut_slice().iter_mut()
-    }
-
-    pub(crate) fn as_mut_ptr(&mut self) -> *mut crate::ffi::zlink_msg_t {
-        self.as_mut_slice().as_mut_ptr()
-    }
-
-    pub(crate) fn close_parts(&mut self) {
-        {
-            let parts = self.as_mut_slice();
-            if !parts.is_empty() {
-                unsafe {
-                    crate::ffi::zlink_multipart_close(parts.as_mut_ptr(), parts.len());
-                }
-            }
-        }
-
-        if let Some(parts) = self.heap.as_mut() {
-            parts.clear();
-        } else {
-            self.inline_len = 0;
-        }
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [crate::ffi::zlink_msg_t] {
-        match self.heap.as_mut() {
-            Some(parts) => parts.as_mut_slice(),
-            None => &mut self.inline[..self.inline_len],
-        }
-    }
-}
-
-impl Drop for MessageParts {
-    fn drop(&mut self) {
-        self.close_parts();
-    }
-}
 
 /// A multipart HWM-managed send builder.
 pub struct SendOp<State> {
@@ -236,12 +144,12 @@ impl SendOp<Ready> {
     /// a completion and no public `POLLCOMPLETION` poller owns the socket, this
     /// returns `SubmitResult::InvalidState`.
     pub fn submit(self) -> Result<SendSubmission, SubmitError> {
-        crate::operations::submit_send(self.inner)
+        self.inner.submit_send()
     }
 
     /// Uses Core blocking admission (`NONE`).
     pub fn submit_sync(self) -> Result<(), SubmitError> {
-        crate::operations::submit_send_blocking(self.inner)
+        self.inner.submit_send_blocking()
     }
 }
 
@@ -251,7 +159,7 @@ impl PublishOp<Ready> {
         self
     }
     pub fn submit(self) -> Result<(), SubmitError> {
-        crate::operations::submit_publish(self.inner)
+        self.inner.submit_publish()
     }
 }
 
@@ -270,18 +178,18 @@ impl RequestOp<Ready> {
     /// `POLLCOMPLETION` poller must own the socket before submission; otherwise
     /// this returns `SubmitResult::InvalidState`.
     pub fn submit(self) -> Result<RequestSubmission, ZlinkError> {
-        crate::operations::submit_routed_request(self.inner)
+        self.inner.submit_routed_request()
     }
 
     /// Uses Core blocking admission and waits for the reply. Without a public
     /// completion owner, the calling thread drains this request in-line.
     pub fn submit_sync(self) -> Result<Vec<Message>, ZlinkError> {
-        crate::operations::submit_routed_request_sync(self.inner)
+        self.inner.submit_routed_request_sync()
     }
 }
 
 impl ReplyOp<Ready> {
     pub fn submit(self) -> Result<(), SubmitError> {
-        crate::operations::submit_reply(self.inner)
+        self.inner.submit_reply()
     }
 }

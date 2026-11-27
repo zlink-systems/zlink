@@ -20,10 +20,6 @@ pub(crate) fn pair_inner(socket: &PairSocket) -> &SocketInner {
     &socket.inner
 }
 
-pub(crate) fn pair_inner_mut(socket: &mut PairSocket) -> &mut SocketInner {
-    &mut socket.inner
-}
-
 pub(crate) fn pair_handle(socket: &PairSocket) -> *mut std::ffi::c_void {
     socket.inner.handle
 }

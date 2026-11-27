@@ -9,3 +9,8 @@ impl MessageStorage {
         Self { raw }
     }
 }
+
+#[derive(Default)]
+pub(crate) struct NativeReceiveScratch {
+    pub(crate) parts: Vec<ffi::zlink_msg_t>,
+}

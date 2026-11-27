@@ -6,10 +6,6 @@ use crate::error::{CloseError, ConfigError};
 use crate::ffi;
 use crate::internal::ContextStorage;
 use crate::native_errors::{check_close_rc, check_config_rc, config_validation_error, last_errno};
-use crate::socket_contracts::{
-    DealerSocket, PairSocket, PubSocket, RouterSocket, StreamSocket, SubSocket, XPubSocket,
-    XSubSocket,
-};
 
 impl AutoHwmProfile {
     pub(crate) fn to_raw(self) -> i32 {
@@ -61,55 +57,23 @@ impl AutoHwmRecalcReason {
     }
 }
 
-pub(crate) fn context_new() -> Result<Context, ConfigError> {
-    let handle = unsafe { ffi::zlink_ctx_new() };
-    if handle.is_null() {
-        return Err(ConfigError::new(
-            crate::error::ConfigResult::InvalidHandle,
-            last_errno(),
-        ));
-    }
-    Ok(Context {
-        inner: Box::new(ContextStorage {
-            handle,
-            thread_name_prefix: std::sync::Mutex::new(String::new()),
-        }),
-    })
-}
-
-pub(crate) fn context_pair_socket(context: &Context) -> Result<PairSocket, ConfigError> {
-    PairSocket::new(context)
-}
-
-pub(crate) fn context_pub_socket(context: &Context) -> Result<PubSocket, ConfigError> {
-    PubSocket::new(context)
-}
-
-pub(crate) fn context_sub_socket(context: &Context) -> Result<SubSocket, ConfigError> {
-    SubSocket::new(context)
-}
-
-pub(crate) fn context_dealer_socket(context: &Context) -> Result<DealerSocket, ConfigError> {
-    DealerSocket::new(context)
-}
-
-pub(crate) fn context_router_socket(context: &Context) -> Result<RouterSocket, ConfigError> {
-    RouterSocket::new(context)
-}
-
-pub(crate) fn context_xpub_socket(context: &Context) -> Result<XPubSocket, ConfigError> {
-    XPubSocket::new(context)
-}
-
-pub(crate) fn context_xsub_socket(context: &Context) -> Result<XSubSocket, ConfigError> {
-    XSubSocket::new(context)
-}
-
-pub(crate) fn context_stream_socket(context: &Context) -> Result<StreamSocket, ConfigError> {
-    StreamSocket::new(context)
-}
-
 impl ContextStorage {
+    pub(crate) fn new_context() -> Result<Context, ConfigError> {
+        let handle = unsafe { ffi::zlink_ctx_new() };
+        if handle.is_null() {
+            return Err(ConfigError::new(
+                crate::error::ConfigResult::InvalidHandle,
+                last_errno(),
+            ));
+        }
+        Ok(Context {
+            inner: Box::new(ContextStorage {
+                handle,
+                thread_name_prefix: std::sync::Mutex::new(String::new()),
+            }),
+        })
+    }
+
     fn set_int_option(&self, option: i32, value: i32) -> Result<(), ConfigError> {
         check_config_rc(unsafe { ffi::zlink_ctx_set(self.handle, raw_option(option), value) })
     }

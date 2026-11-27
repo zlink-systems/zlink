@@ -5,35 +5,35 @@ use std::os::fd::RawFd;
 use std::os::windows::io::RawSocket as RawFd;
 use std::sync::Arc;
 
-use crate::SocketMonitor;
-use crate::error::{CloseError, ConfigError, RecvError, RecvResult, ZlinkError};
+use crate::error::{CloseError, ConfigError, ZlinkError};
 use crate::ffi;
-use crate::internal::{PollerSocketRegistration, PollerStorage, TimerStorage};
+use crate::internal::{PollerSocketRegistration, PollerStorage};
 use crate::native_errors::{
-    check_close_rc, check_config_rc, check_recv_rc, config_result_from_native, last_errno,
+    check_close_rc, check_config_rc, config_result_from_native, last_errno,
 };
 use crate::poller_contracts::{
-    POLLCOMPLETION, PollEvent, PollItem, PollSourceKind, Pollable, Poller, Timer,
+    POLLCOMPLETION, PollEvent, PollItem, PollSourceKind, Pollable, Poller,
 };
-
-pub(crate) fn poller_new() -> Result<Poller, ConfigError> {
-    let handle = unsafe { ffi::zlink_poller_new() };
-    if handle.is_null() {
-        return Err(crate::error::ConfigError::new(
-            crate::error::ConfigResult::InvalidArgument,
-            last_errno(),
-        ));
-    }
-    Ok(Poller {
-        inner: Box::new(PollerStorage {
-            handle,
-            sockets: std::sync::Mutex::new(std::collections::HashMap::new()),
-            raw_events: std::cell::UnsafeCell::new(Vec::new()),
-        }),
-    })
-}
+use crate::{SocketMonitor, Timer};
 
 impl PollerStorage {
+    pub(crate) fn new_poller() -> Result<Poller, ConfigError> {
+        let handle = unsafe { ffi::zlink_poller_new() };
+        if handle.is_null() {
+            return Err(crate::error::ConfigError::new(
+                crate::error::ConfigResult::InvalidArgument,
+                last_errno(),
+            ));
+        }
+        Ok(Poller {
+            inner: Box::new(PollerStorage {
+                handle,
+                sockets: std::sync::Mutex::new(std::collections::HashMap::new()),
+                raw_events: std::cell::UnsafeCell::new(Vec::new()),
+            }),
+        })
+    }
+
     pub(crate) fn close(&mut self) -> Result<(), CloseError> {
         if self.handle.is_null() {
             return Ok(());
@@ -218,18 +218,12 @@ impl PollerStorage {
 
     pub(crate) fn add_timer(&self, timer: &Timer, slot: usize) -> Result<(), ConfigError> {
         check_config_rc(unsafe {
-            ffi::zlink_poller_add_timer(
-                self.handle,
-                timer_native_handle(timer),
-                slot as *mut c_void,
-            )
+            ffi::zlink_poller_add_timer(self.handle, timer.inner.handle, slot as *mut c_void)
         })
     }
 
     pub(crate) fn remove_timer(&self, timer: &Timer) -> Result<(), ConfigError> {
-        check_config_rc(unsafe {
-            ffi::zlink_poller_remove_timer(self.handle, timer_native_handle(timer))
-        })
+        check_config_rc(unsafe { ffi::zlink_poller_remove_timer(self.handle, timer.inner.handle) })
     }
 
     /// Wait for events on any registered source.
@@ -386,52 +380,6 @@ pub fn poll(items: &mut [PollItem], timeout_ms: i64) -> Result<i32, ConfigError>
         item.revents = raw[idx].revents;
     }
     Ok(rc)
-}
-
-pub(crate) fn timer_new() -> Result<Timer, ConfigError> {
-    let handle = unsafe { ffi::zlink_timer_new() };
-    if handle.is_null() {
-        return Err(crate::error::ConfigError::new(
-            crate::error::ConfigResult::InvalidArgument,
-            last_errno(),
-        ));
-    }
-    Ok(Timer {
-        inner: Arc::new(TimerStorage { handle }),
-    })
-}
-
-impl TimerStorage {
-    pub(crate) fn start(&self, interval_ns: u64, repeat_count: u64) -> Result<(), ConfigError> {
-        check_config_rc(unsafe { ffi::zlink_timer_start(self.handle, interval_ns, repeat_count) })
-    }
-
-    pub(crate) fn stop(&self) -> Result<(), ConfigError> {
-        check_config_rc(unsafe { ffi::zlink_timer_stop(self.handle) })
-    }
-
-    /// Receive a timer fire count. Returns `Ok(None)` when Core reports `RECV_NO_DATA`.
-    pub(crate) fn recv(&self) -> Result<Option<u64>, RecvError> {
-        let mut count = 0u64;
-        let rc = unsafe { ffi::zlink_timer_recv(self.handle, &mut count) };
-        if rc == RecvResult::NoData as i32 {
-            return Ok(None);
-        }
-        check_recv_rc(rc)?;
-        Ok(Some(count))
-    }
-}
-
-impl Drop for TimerStorage {
-    fn drop(&mut self) {
-        // Core destroy is fail-fast; a drop cannot report or retry its result.
-        let mut handle = self.handle;
-        unsafe { ffi::zlink_timer_destroy(&mut handle) };
-    }
-}
-
-fn timer_native_handle(timer: &Timer) -> *mut c_void {
-    timer.inner.handle
 }
 
 fn monitor_native_handle(monitor: &SocketMonitor) -> *mut c_void {

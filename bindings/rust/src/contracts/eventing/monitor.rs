@@ -248,7 +248,7 @@ pub struct SocketMonitor {
 impl SocketMonitor {
     /// Open a socket monitor for all events.
     pub fn open(socket: &dyn Monitorable) -> Result<Self, ConfigError> {
-        crate::monitor::socket_monitor_open(socket)
+        MonitorStorage::open(socket)
     }
 
     /// Open a socket monitor with explicit event and byte-HWM options.
@@ -256,7 +256,7 @@ impl SocketMonitor {
         socket: &dyn Monitorable,
         options: SocketMonitorOpenOptions,
     ) -> Result<Self, ConfigError> {
-        crate::monitor::socket_monitor_open_with_options(socket, options)
+        MonitorStorage::open_with_options(socket, options)
     }
 
     /// Blocking receive of a monitor event.
@@ -283,18 +283,18 @@ impl SocketMonitor {
 impl MonitorStatus {
     /// Returns `true` when the monitored socket is in the ready state.
     pub fn is_ready(&self) -> bool {
-        crate::monitor::monitor_status_is_ready(self)
+        self.native_is_ready()
     }
 
     /// Returns `true` when the monitored socket is closed.
     pub fn is_closed(&self) -> bool {
-        crate::monitor::monitor_status_is_closed(self)
+        self.native_is_closed()
     }
 
     /// Returns `true` when `flow_paused_connections` and the other `flow_*`
     /// fields are populated (ABI 4+, paired DEALER/ROUTER sockets only).
     pub fn has_flow_state_detail(&self) -> bool {
-        crate::monitor::monitor_status_has_flow_state_detail(self)
+        self.native_has_flow_state_detail()
     }
 }
 

@@ -71,8 +71,8 @@ pub struct Received {
     route: Option<ReceivedRoute>,
     reply_token: Option<ReplyToken>,
     route_generation: u64,
-    receive_scratch: Vec<Message>,
-    native_receive_scratch: Vec<crate::ffi::zlink_msg_t>,
+    pub(crate) receive_scratch: Vec<Message>,
+    pub(crate) native_receive_scratch: crate::internal::NativeReceiveScratch,
 }
 
 impl Default for Received {
@@ -90,14 +90,8 @@ impl Received {
             reply_token: None,
             route_generation: 0,
             receive_scratch: Vec::new(),
-            native_receive_scratch: Vec::new(),
+            native_receive_scratch: crate::internal::NativeReceiveScratch::default(),
         }
-    }
-
-    pub(crate) fn receive_scratch(
-        &mut self,
-    ) -> (&mut Vec<Message>, &mut Vec<crate::ffi::zlink_msg_t>) {
-        (&mut self.receive_scratch, &mut self.native_receive_scratch)
     }
 
     pub(crate) fn replace_received_parts(&mut self, routing_id: Option<RoutingId>) {
@@ -175,10 +169,10 @@ impl Received {
         Ok(())
     }
     pub fn reply(&self) -> ReplyOp<Empty> {
-        crate::received_operations::received_reply(self)
+        self.runtime_reply()
     }
     pub fn send(&self) -> SendOp<Empty> {
-        crate::received_operations::received_send(self)
+        self.runtime_send()
     }
 
     pub(crate) fn set_stream_send_context(

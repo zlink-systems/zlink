@@ -1,10 +1,9 @@
 use std::any::Any;
 use std::os::fd::RawFd;
-use std::sync::Arc;
 
-use crate::SocketMonitor;
-use crate::error::{CloseError, ConfigError, RecvError, ZlinkError};
-use crate::internal::{PollerStorage, TimerStorage};
+use crate::error::{CloseError, ConfigError, ZlinkError};
+use crate::internal::PollerStorage;
+use crate::{SocketMonitor, Timer};
 
 pub(crate) mod private {
     pub(crate) trait Sealed {}
@@ -104,7 +103,7 @@ pub struct Poller {
 impl Poller {
     /// Creates an empty poller. The caller owns it and releases it on drop.
     pub fn new() -> Result<Self, ConfigError> {
-        crate::poller::poller_new()
+        PollerStorage::new_poller()
     }
 
     /// Destroys the poller. A native `EBUSY` leaves it available for a later close.
@@ -204,33 +203,5 @@ impl Poller {
     /// Returns the number of registered sources, or Core's configuration error.
     pub fn size(&self) -> Result<i32, ConfigError> {
         self.inner.size()
-    }
-}
-
-/// A timer that fires on an interval and can be polled or awaited.
-pub struct Timer {
-    pub(crate) inner: Arc<TimerStorage>,
-}
-
-impl Timer {
-    /// Creates a standalone timer. The caller owns it and releases it on drop.
-    pub fn new() -> Result<Self, ConfigError> {
-        crate::poller::timer_new()
-    }
-
-    /// Starts the timer firing once per `interval_ns` nanoseconds;
-    /// `repeat_count` sets how many times it fires.
-    pub fn start(&self, interval_ns: u64, repeat_count: u64) -> Result<(), ConfigError> {
-        self.inner.start(interval_ns, repeat_count)
-    }
-
-    /// Stops the timer; it can be restarted with [`start`](Self::start).
-    pub fn stop(&self) -> Result<(), ConfigError> {
-        self.inner.stop()
-    }
-
-    /// Receive a timer fire count. Returns `Ok(None)` when no data is available.
-    pub fn recv(&self) -> Result<Option<u64>, RecvError> {
-        self.inner.recv()
     }
 }

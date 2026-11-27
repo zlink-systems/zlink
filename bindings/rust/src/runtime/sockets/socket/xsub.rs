@@ -18,7 +18,3 @@ impl XSubSocket {
 pub(crate) fn xsub_inner(socket: &XSubSocket) -> &SocketInner {
     &socket.inner
 }
-
-pub(crate) fn xsub_inner_mut(socket: &mut XSubSocket) -> &mut SocketInner {
-    &mut socket.inner
-}

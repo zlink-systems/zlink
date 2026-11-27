@@ -18,7 +18,3 @@ impl SubSocket {
 pub(crate) fn sub_inner(socket: &SubSocket) -> &SocketInner {
     &socket.inner
 }
-
-pub(crate) fn sub_inner_mut(socket: &mut SubSocket) -> &mut SocketInner {
-    &mut socket.inner
-}

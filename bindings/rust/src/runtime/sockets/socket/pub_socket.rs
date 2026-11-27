@@ -19,7 +19,3 @@ impl PubSocket {
 pub(crate) fn pub_inner(socket: &PubSocket) -> &SocketInner {
     &socket.inner
 }
-
-pub(crate) fn pub_inner_mut(socket: &mut PubSocket) -> &mut SocketInner {
-    &mut socket.inner
-}

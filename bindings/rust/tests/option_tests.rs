@@ -103,9 +103,7 @@ fn common_signed_millisecond_options_preserve_core_values() {
 fn common_option_linger_milliseconds() {
     let ctx = Context::new().unwrap();
     let sock = ctx.pair_socket().unwrap();
-    sock.common_options()
-        .set_linger(200)
-        .unwrap();
+    sock.common_options().set_linger(200).unwrap();
 }
 
 #[test]

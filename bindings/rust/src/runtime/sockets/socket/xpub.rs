@@ -19,7 +19,3 @@ impl XPubSocket {
 pub(crate) fn xpub_inner(socket: &XPubSocket) -> &SocketInner {
     &socket.inner
 }
-
-pub(crate) fn xpub_inner_mut(socket: &mut XPubSocket) -> &mut SocketInner {
-    &mut socket.inner
-}
