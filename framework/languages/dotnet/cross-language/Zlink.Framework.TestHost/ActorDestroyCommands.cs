@@ -20,7 +20,6 @@ internal sealed class ActorDestroyCommands(
     private readonly Dictionary<string, Call> _destroys = new(StringComparer.Ordinal);
     private ActorRef? _oldRef;
     private Call? _create;
-    private Task? _destroyDeadline;
     private bool _finish;
 
     public override async Task StartAsync(CancellationToken cancellationToken)
@@ -129,6 +128,7 @@ internal sealed class ActorDestroyCommands(
         var verb = command[0];
         var arguments = verb
             is "placement"
+                or "peer-placement"
                 or "find"
                 or "authority"
                 or "destroy"
@@ -148,10 +148,13 @@ internal sealed class ActorDestroyCommands(
                 await CreateAsync(cancellationToken);
                 break;
             case "placement":
+            case "peer-placement":
                 var weight = int.Parse(command[1], CultureInfo.InvariantCulture);
-                meshOptions.Mesh(options.MeshName!).PlacementWeight = weight;
+                var local = verb == "placement";
+                if (local)
+                    meshOptions.Mesh(options.MeshName!).PlacementWeight = weight;
                 await store.WaitForPlacementAsync(
-                    RoutingId.From(options.NodeRid!),
+                    RoutingId.From((local ? options.NodeRid : options.PeerRid)!),
                     weight,
                     cancellationToken
                 );
@@ -198,9 +201,10 @@ internal sealed class ActorDestroyCommands(
                     ?? throw new InvalidOperationException(
                         "The original ActorRef was not captured."
                     );
-                if (label == "admission")
-                    _destroyDeadline = RecordDestroyDeadlineAsync(cancellationToken);
+                var started = DateTimeOffset.UtcNow;
                 var destroy = actors.DestroyAsync(oldRef, cancellationToken).AsTask();
+                if (label == "admission")
+                    events.WriteAt(started + events.RequestTimeout, "destroyDeadline");
                 _destroys.Add(label, new(destroy, RecordDestroyAsync(destroy, label)));
                 break;
             case "pending-destroy":
@@ -251,8 +255,6 @@ internal sealed class ActorDestroyCommands(
                         .Values.Select(call => call.Recorded)
                         .Append(_create?.Recorded ?? Task.CompletedTask)
                 );
-                if (_destroyDeadline is not null)
-                    await _destroyDeadline;
                 _finish = true;
                 break;
             default:
@@ -464,13 +466,6 @@ internal sealed class ActorDestroyCommands(
                 );
             await Task.Delay(10, cancellationToken);
         }
-    }
-
-    private async Task RecordDestroyDeadlineAsync(CancellationToken cancellationToken)
-    {
-        // DestroyAsync uses the framework default request timeout.
-        await Task.Delay(events.RequestTimeout, cancellationToken);
-        events.Write("destroyDeadline");
     }
 
     private static void RequirePending(Task? operation, string name)

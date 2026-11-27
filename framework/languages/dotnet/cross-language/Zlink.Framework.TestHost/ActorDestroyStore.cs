@@ -150,7 +150,7 @@ internal sealed class ActorDestroyStore(
             if (events.Owner && closing)
                 events.Write("closingCommitted");
             if (events.Owner && deleting && original is not null)
-                events.Write("ownerDeleteCommitted");
+                events.WriteAt(committed.StoreNow, "ownerDeleteCommitted");
             if (!events.Owner && deleting && original is not null && events.Scenario is "d" or "f")
                 RecordRelease(request, committed, original);
             if (
@@ -288,11 +288,11 @@ internal sealed class ActorDestroyStore(
                 ),
                 cancellationToken
             );
-            if (result is not ZLinkStoreWriteResult.Applied)
+            if (result is not ZLinkStoreWriteResult.Applied committed)
                 throw new InvalidOperationException(
                     $"Owner lease termination returned {result.GetType().Name}."
                 );
-            events.Write("ownerLeaseEnded");
+            events.WriteAt(committed.StoreNow, "ownerLeaseEnded");
         }
         finally
         {

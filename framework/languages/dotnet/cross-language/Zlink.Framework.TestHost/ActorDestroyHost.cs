@@ -91,9 +91,16 @@ internal sealed class ActorDestroyEvents(
     public TimeSpan RequestTimeout { get; set; }
     public string? RetryProbeLabel { get; set; }
 
-    public void Write(string name, params (string Name, object? Value)[] fields)
+    public void Write(string name, params (string Name, object? Value)[] fields) =>
+        WriteAt(DateTimeOffset.UtcNow, name, fields);
+
+    public void WriteAt(
+        DateTimeOffset timestamp,
+        string name,
+        params (string Name, object? Value)[] fields
+    )
     {
-        var time = (DateTimeOffset.UtcNow.UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks) / 10;
+        var time = (timestamp.UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks) / 10;
         var row = FormattableString.Invariant(
             $"actor-destroy|run={Escape(runId)}|event={name}|timeUs={time}"
         );
