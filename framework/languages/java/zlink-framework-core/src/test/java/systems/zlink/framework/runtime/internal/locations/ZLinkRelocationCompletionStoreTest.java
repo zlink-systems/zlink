@@ -467,7 +467,13 @@ final class ZLinkRelocationCompletionStoreTest {
             calls.add("get");
             if (++operations == failOn) return CompletableFuture.failedFuture(failure);
             if (operations == corruptOn) {
-                return CompletableFuture.completedFuture(new ZLinkRelocationFound(new byte[] {0}));
+                return memory.get(reference, cancellation)
+                        .thenApply(
+                                result -> {
+                                    var found = (ZLinkRelocationFound) result;
+                                    return new ZLinkRelocationFound(
+                                            new byte[] {0}, found.expiresAt(), found.storeNow());
+                                });
             }
             return memory.get(reference, cancellation);
         }

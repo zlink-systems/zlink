@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.locations;
 import systems.zlink.framework.locations.*;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
@@ -162,7 +163,9 @@ public interface ZLinkLocationRepository {
             ZLinkAggregatePrepareRequest request, ZLinkStoreCancellation cancellation);
 
     CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
-            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation);
+            ZLinkAggregateFence fence,
+            List<Long> acceptedRequests,
+            ZLinkStoreCancellation cancellation);
 
     CompletionStage<ZLinkAggregateAbortResult> abortAggregate(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation);

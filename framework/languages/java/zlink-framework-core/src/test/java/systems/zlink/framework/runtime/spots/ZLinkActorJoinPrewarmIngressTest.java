@@ -140,7 +140,10 @@ final class ZLinkActorJoinPrewarmIngressTest {
             //  install time, must come out in order ahead of the arrival
             //  that landed straight in the real stage.
             harness.endpoint
-                    .publish(harness.request)
+                    .publish(
+                            harness.request,
+                            harness.endpoint.prepareCompletions(
+                                    harness.request, List.of(), Runnable::run))
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
 
@@ -185,7 +188,11 @@ final class ZLinkActorJoinPrewarmIngressTest {
             //  Publish closes the temporary queue, replays it and submits
             //  command 44, then blocks in normalization: this is the window
             //  in which the Session owner's first relay reaches the target.
-            CompletionStage<Void> publish = harness.endpoint.publish(harness.request);
+            CompletionStage<Void> publish =
+                    harness.endpoint.publish(
+                            harness.request,
+                            harness.endpoint.prepareCompletions(
+                                    harness.request, List.of(), Runnable::run));
             normalizeEntered.get(5, TimeUnit.SECONDS);
 
             //  The relay arrives from the Session owner, not from the
@@ -290,6 +297,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                             TARGET_RID,
                             TARGET_NODE_GENERATION,
                             coordinator,
+                            new InMemoryRelocationStore(),
                             unusedSpotStaging(),
                             ignored -> null,
                             (lane, queued) ->
@@ -407,7 +415,10 @@ final class ZLinkActorJoinPrewarmIngressTest {
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
             endpoint.stage(request).toCompletableFuture().get(5, TimeUnit.SECONDS);
-            coordinator.commit(prepared, OPEN).toCompletableFuture().get(5, TimeUnit.SECONDS);
+            coordinator
+                    .commit(prepared, Map.of(), OPEN)
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
         }
 
         ZLinkInternalMeshNode.PeerAuthorityFence sourceFence() {

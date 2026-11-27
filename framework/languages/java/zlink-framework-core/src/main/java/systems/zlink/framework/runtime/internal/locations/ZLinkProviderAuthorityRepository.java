@@ -1138,7 +1138,8 @@ final class ZLinkProviderAuthorityRepository {
                                                             != null) {
                                                 throw new ZLinkFrameworkException(
                                                         ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                        "Ended authority requires relocation recovery");
+                                                        "Ended authority requires relocation"
+                                                                + " recovery");
                                             }
                                         }
                                         return provider.read(sourceKey, cancellation)
@@ -2204,21 +2205,24 @@ final class ZLinkProviderAuthorityRepository {
     }
 
     CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
-            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateFence fence,
+            List<Long> acceptedRequests,
+            ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(fence, "fence");
         Objects.requireNonNull(cancellation, "cancellation");
         var completion = new CompletableFuture<ZLinkAggregateCommitResult>();
-        completeAggregateCommit(fence, cancellation, completion);
+        completeAggregateCommit(fence, List.copyOf(acceptedRequests), cancellation, completion);
         return completion;
     }
 
     private void completeAggregateCommit(
             ZLinkAggregateFence fence,
+            List<Long> acceptedRequests,
             ZLinkStoreCancellation cancellation,
             CompletableFuture<ZLinkAggregateCommitResult> completion) {
         CompletionStage<Optional<ZLinkAggregateCommitResult>> attempt;
         try {
-            attempt = readAggregateCommitAttempt(fence, cancellation);
+            attempt = readAggregateCommitAttempt(fence, acceptedRequests, cancellation);
         } catch (RuntimeException failure) {
             completion.completeExceptionally(failure);
             return;
@@ -2234,13 +2238,18 @@ final class ZLinkProviderAuthorityRepository {
                                 .execute(
                                         () ->
                                                 completeAggregateCommit(
-                                                        fence, cancellation, completion));
+                                                        fence,
+                                                        acceptedRequests,
+                                                        cancellation,
+                                                        completion));
                     }
                 });
     }
 
     private CompletionStage<Optional<ZLinkAggregateCommitResult>> readAggregateCommitAttempt(
-            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateFence fence,
+            List<Long> acceptedRequests,
+            ZLinkStoreCancellation cancellation) {
         ZLinkStoreKey marker = aggregateKey(fence);
         var opaqueCancellation = adapt(cancellation);
         return provider.read(marker, opaqueCancellation)
@@ -2262,6 +2271,7 @@ final class ZLinkProviderAuthorityRepository {
                                                         normalizeAggregateParticipants(
                                                                 fence,
                                                                 prepared.request(participants),
+                                                                prepared.acceptedRequests(),
                                                                 opaqueCancellation))
                                         .thenApply(
                                                 ignored ->
@@ -2269,7 +2279,10 @@ final class ZLinkProviderAuthorityRepository {
                                                                 ZLinkAggregateCommitResult
                                                                         .ALREADY_COMMITTED));
                             }
-                            if (prepared.state() != AGGREGATE_PREPARED) {
+                            if (prepared.state() != AGGREGATE_PREPARED
+                                    || (!acceptedRequests.isEmpty()
+                                            && acceptedRequests.size()
+                                                    != prepared.participantCount())) {
                                 return completed(Optional.of(ZLinkAggregateCommitResult.STALE));
                             }
                             return aggregateInventory
@@ -2341,7 +2354,8 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                 marker,
                                                                                                                 encodeAggregate(
                                                                                                                         AGGREGATE_COMMITTED,
-                                                                                                                        request),
+                                                                                                                        request,
+                                                                                                                        acceptedRequests),
                                                                                                                 null));
                                                                                         return write(
                                                                                                         new ZLinkStoreWriteRequest(
@@ -2363,6 +2377,7 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                             return normalizeAggregateParticipants(
                                                                                                                             fence,
                                                                                                                             request,
+                                                                                                                            acceptedRequests,
                                                                                                                             opaqueCancellation)
                                                                                                                     .thenApply(
                                                                                                                             ignored ->
@@ -2423,6 +2438,7 @@ final class ZLinkProviderAuthorityRepository {
                                                         normalizeAggregateParticipants(
                                                                 fence,
                                                                 current.request(participants),
+                                                                current.acceptedRequests(),
                                                                 opaqueCancellation))
                                         .thenApply(
                                                 ignored ->
@@ -2697,13 +2713,15 @@ final class ZLinkProviderAuthorityRepository {
                                                             .version()
                                                             .equals(item.value().version()))
                                                         throw new ZLinkConfigurationException(
-                                                                "v11 aggregate changed during conversion: "
+                                                                "v11 aggregate changed during"
+                                                                        + " conversion: "
                                                                         + item.key().value());
                                                     if (!(read
                                                             instanceof
                                                             ZLinkStoreReadFound capacity))
                                                         throw new ZLinkConfigurationException(
-                                                                "Missing v11 capacity for aggregate "
+                                                                "Missing v11 capacity for aggregate"
+                                                                        + " "
                                                                         + item.key().value());
                                                     var row =
                                                             projected == null
@@ -3037,6 +3055,7 @@ final class ZLinkProviderAuthorityRepository {
     private CompletionStage<Void> normalizeAggregateParticipants(
             ZLinkAggregateFence fence,
             ZLinkAggregatePrepareRequest request,
+            List<Long> acceptedRequests,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
         for (int index = 0; index < request.participants().size(); index++) {
@@ -3045,7 +3064,13 @@ final class ZLinkProviderAuthorityRepository {
                     chain.thenCompose(
                             ignored ->
                                     normalizeAggregateParticipant(
-                                            fence, request, participantIndex, cancellation, 0));
+                                            fence,
+                                            request,
+                                            participantIndex,
+                                            acceptedRequestCount(
+                                                    acceptedRequests, participantIndex),
+                                            cancellation,
+                                            0));
         }
         return chain;
     }
@@ -3054,6 +3079,7 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkAggregateFence fence,
             ZLinkAggregatePrepareRequest request,
             int index,
+            Long acceptedRequests,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
             int retry) {
         ZLinkAggregateParticipant participant = request.participants().get(index);
@@ -3153,7 +3179,8 @@ final class ZLinkProviderAuthorityRepository {
                                                                         allocation,
                                                                         Optional.empty())
                                                                 .withCommittedRelocation(
-                                                                        current.relocation());
+                                                                        current.relocation(),
+                                                                        acceptedRequests);
                                                 return write(
                                                                 new ZLinkStoreWriteRequest(
                                                                         List.of(
@@ -3186,6 +3213,7 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                 fence,
                                                                                                 request,
                                                                                                 index,
+                                                                                                acceptedRequests,
                                                                                                 cancellation,
                                                                                                 retry
                                                                                                         + 1));
@@ -4155,7 +4183,11 @@ final class ZLinkProviderAuthorityRepository {
                                                                         record.pendingCreation());
                                                 projected =
                                                         projected.withCommittedRelocation(
-                                                                record.relocation());
+                                                                record.relocation(),
+                                                                acceptedRequestCount(
+                                                                        aggregate
+                                                                                .acceptedRequests(),
+                                                                        marker.index()));
                                                 return snapshot(
                                                         projected,
                                                         found.value().version().value(),
@@ -4490,7 +4522,16 @@ final class ZLinkProviderAuthorityRepository {
                 HexFormat.of().parseHex(node.path("membershipMutationSha256").asText()));
     }
 
+    private static Long acceptedRequestCount(List<Long> counts, int index) {
+        return counts.isEmpty() ? null : counts.get(index);
+    }
+
     private static byte[] encodeAggregate(byte state, ZLinkAggregatePrepareRequest request) {
+        return encodeAggregate(state, request, List.of());
+    }
+
+    private static byte[] encodeAggregate(
+            byte state, ZLinkAggregatePrepareRequest request, List<Long> acceptedRequests) {
         try {
             var bytes = new ByteArrayOutputStream();
             var out = new DataOutputStream(bytes);
@@ -4516,6 +4557,7 @@ final class ZLinkProviderAuthorityRepository {
             }
             out.writeInt(request.participants().size());
             writeBytes(out, ZLinkAggregateInventoryStore.fingerprint(request));
+            for (long accepted : acceptedRequests) out.writeLong(accepted);
             out.flush();
             return bytes.toByteArray();
         } catch (IOException failure) {
@@ -4557,8 +4599,14 @@ final class ZLinkProviderAuthorityRepository {
             if (fingerprint.length != 32) {
                 throw new IOException("aggregate request fingerprint is invalid");
             }
+            List<Long> acceptedRequests = List.of();
             if (in.available() != 0) {
-                throw new IOException("aggregate marker has trailing bytes");
+                if (state != AGGREGATE_COMMITTED || in.available() != (long) count * Long.BYTES) {
+                    throw new IOException("aggregate marker has trailing bytes");
+                }
+                var counts = new ArrayList<Long>(count);
+                for (int index = 0; index < count; index++) counts.add(in.readLong());
+                acceptedRequests = List.copyOf(counts);
             }
             return new PreparedAggregate(
                     state,
@@ -4572,7 +4620,8 @@ final class ZLinkProviderAuthorityRepository {
                     spots,
                     spotType,
                     count,
-                    fingerprint);
+                    fingerprint,
+                    acceptedRequests);
         } catch (IOException | RuntimeException failure) {
             throw new IllegalStateException("Location Store aggregate record is invalid", failure);
         }
@@ -4762,8 +4811,9 @@ final class ZLinkProviderAuthorityRepository {
             payload = payload.clone();
         }
 
-        AuthorityRecord withCommittedRelocation(ZLinkAuthorityRelocation value) {
-            return withRelocation(value == null ? null : value.phase("committed"));
+        AuthorityRecord withCommittedRelocation(
+                ZLinkAuthorityRelocation value, Long acceptedRequests) {
+            return withRelocation(value == null ? null : value.committed(acceptedRequests));
         }
 
         AuthorityRecord withRelocation(ZLinkAuthorityRelocation next) {
@@ -4915,7 +4965,8 @@ final class ZLinkProviderAuthorityRepository {
             int spots,
             Optional<ZLinkSpotTypeCapacityDelta> spotType,
             int participantCount,
-            byte[] requestFingerprint) {
+            byte[] requestFingerprint,
+            List<Long> acceptedRequests) {
         PreparedAggregate {
             inventoryDigest = inventoryDigest.clone();
             requestFingerprint = requestFingerprint.clone();

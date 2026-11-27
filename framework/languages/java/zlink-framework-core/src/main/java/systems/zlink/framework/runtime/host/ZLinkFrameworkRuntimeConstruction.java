@@ -126,6 +126,7 @@ record ZLinkFrameworkRuntimeConstruction(
                         locations,
                         locationResolvers,
                         authorities,
+                        completionStore,
                         options,
                         adapters,
                         applicationVersion,
@@ -143,6 +144,7 @@ record ZLinkFrameworkRuntimeConstruction(
                                 locations,
                                 locationResolvers,
                                 authorities,
+                                completionStore,
                                 options,
                                 adapters,
                                 applicationVersion,
@@ -194,6 +196,8 @@ record ZLinkFrameworkRuntimeConstruction(
                 ZLinkLocationRepository locations,
                 ZLinkStoreLocationResolvers locationResolvers,
                 ZLinkLocationRepository authorities,
+                systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore
+                        completionStore,
                 ZLinkLocationOptions options,
                 systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry
                         adapters,

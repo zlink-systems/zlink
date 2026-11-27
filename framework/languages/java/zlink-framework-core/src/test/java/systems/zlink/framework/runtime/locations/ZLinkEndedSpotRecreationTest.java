@@ -101,7 +101,8 @@ final class ZLinkEndedSpotRecreationTest {
                                                     .failedFuture(
                                                             new java.util.concurrent
                                                                     .CancellationException(
-                                                                    "provider write observed deadline"));
+                                                                    "provider write observed"
+                                                                            + " deadline"));
                                         }
 
                                         if (condition.equals("exhausted"))
@@ -1835,7 +1836,7 @@ final class ZLinkEndedSpotRecreationTest {
         assertEquals(
                 live ? ZLinkAggregateCommitResult.COMMITTED : ZLinkAggregateCommitResult.STALE,
                 fixture.store
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
     }
@@ -1940,7 +1941,7 @@ final class ZLinkEndedSpotRecreationTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 fixture.store
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
         fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();

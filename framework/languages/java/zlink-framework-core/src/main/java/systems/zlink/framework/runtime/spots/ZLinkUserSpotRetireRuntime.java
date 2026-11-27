@@ -72,6 +72,23 @@ public final class ZLinkUserSpotRetireRuntime {
      * {@code Preserve} fence. The host enters {@code Error} with {@code Blocked/RelocationFailed}
      * (spec 30 §13).
      */
+    static void requireRelocationCompletion(
+            systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot snapshot) {
+        var relocation = snapshot.relocation();
+        var completion = relocation == null ? null : relocation.completion();
+        if (completion == null
+                || relocation.hasReached("completed")
+                || completion.acceptedRequests() == 0) return;
+        String details =
+                "RelocationId="
+                        + relocation.relocationId()
+                        + " pendingDeliveries="
+                        + Long.toUnsignedString(completion.pendingDeliveries());
+        throw new RelocationBlockedException(
+                ZLinkFrameworkRelocationReason.OPERATION_IN_PROGRESS,
+                "Relocation has unfinished completion delivery: " + details);
+    }
+
     public static final class RelocationAuthorityErrorException extends RelocationBlockedException {
         public RelocationAuthorityErrorException(String message) {
             super(ZLinkFrameworkRelocationReason.RELOCATION_FAILED, message);
@@ -86,6 +103,7 @@ public final class ZLinkUserSpotRetireRuntime {
             ZLinkLocationRepository locations,
             ZLinkStoreLocationResolvers locationResolvers,
             ZLinkLocationRepository authorities,
+            systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore completionStore,
             ZLinkLocationOptions options,
             ZLinkRelocationAdapterRegistry adapters,
             long applicationVersion,
@@ -100,6 +118,7 @@ public final class ZLinkUserSpotRetireRuntime {
                 locations,
                 locationResolvers,
                 authorities,
+                completionStore,
                 options,
                 adapters,
                 applicationVersion,
@@ -119,6 +138,7 @@ public final class ZLinkUserSpotRetireRuntime {
             ZLinkLocationRepository locations,
             ZLinkStoreLocationResolvers locationResolvers,
             ZLinkLocationRepository authorities,
+            systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore completionStore,
             ZLinkLocationOptions options,
             ZLinkRelocationAdapterRegistry adapters,
             long applicationVersion,
@@ -148,6 +168,7 @@ public final class ZLinkUserSpotRetireRuntime {
         this.sessionRelocationSealTimeout = sessionRelocationSealTimeout;
         this.registrations = List.copyOf(registrations);
         Objects.requireNonNull(nodes, "nodes");
+        Objects.requireNonNull(completionStore, "completionStore");
         var coordinator =
                 new ZLinkAggregateRelocationCoordinator(
                         aggregateRelocationAuthorityStoreDecorator == null
@@ -232,6 +253,7 @@ public final class ZLinkUserSpotRetireRuntime {
                             node.status().routingId(),
                             node.status().lifecycleGeneration(),
                             coordinator,
+                            completionStore,
                             staging,
                             stableType ->
                                     relocatableSpots.containsKey(stableType)
@@ -430,7 +452,8 @@ public final class ZLinkUserSpotRetireRuntime {
                                                 throw new RelocationBlockedException(
                                                         ZLinkFrameworkRelocationReason
                                                                 .OPERATION_IN_PROGRESS,
-                                                        "Relocation workload changed during host preflight");
+                                                        "Relocation workload changed during host"
+                                                                + " preflight");
                                             }
                                             return onPreflightPassed.get();
                                         },

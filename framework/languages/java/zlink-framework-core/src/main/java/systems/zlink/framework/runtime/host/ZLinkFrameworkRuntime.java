@@ -618,6 +618,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                             locationStore,
                                             this.storeLocationResolvers,
                                             this.locationStores.authorityStore(),
+                                            this.registration.relocationStore(),
                                             this.registration.locations().options(),
                                             relocationAdapters,
                                             this.registration.applicationVersion(),
@@ -1630,7 +1631,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                         : CompletableFuture.failedFuture(
                                                 new RelocationBlockedException(
                                                         toPublicRelocationReason(reason),
-                                                        "Host relocation target preflight failed")));
+                                                        "Host relocation target preflight"
+                                                                + " failed")));
     }
 
     private CompletionStage<Void> validateRelocationTargetPopulation(

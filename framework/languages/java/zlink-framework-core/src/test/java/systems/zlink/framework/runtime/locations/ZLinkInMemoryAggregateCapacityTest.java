@@ -85,7 +85,7 @@ final class ZLinkInMemoryAggregateCapacityTest {
         assertEquals(
                 ZLinkAggregateCommitResult.STALE,
                 fixture.store
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .get());
         assertEquals(fixture.current.storeVersion(), current(fixture).storeVersion());
@@ -155,13 +155,13 @@ final class ZLinkInMemoryAggregateCapacityTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 fixture.store
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .get());
         assertEquals(
                 ZLinkAggregateCommitResult.ALREADY_COMMITTED,
                 fixture.store
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .get());
 
@@ -203,7 +203,7 @@ final class ZLinkInMemoryAggregateCapacityTest {
         assertEquals(
                 ZLinkAggregateCommitResult.STALE,
                 fixture.store
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .get());
         ZLinkAuthoritySnapshot current = current(fixture);
@@ -242,7 +242,7 @@ final class ZLinkInMemoryAggregateCapacityTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 fixture.store
-                        .commitAggregate(activated.fence(), () -> false)
+                        .commitAggregate(activated.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .get());
         ZLinkAuthoritySnapshot before = current(fixture);
@@ -277,7 +277,7 @@ final class ZLinkInMemoryAggregateCapacityTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 fixture.store
-                        .commitAggregate(completed.fence(), () -> false)
+                        .commitAggregate(completed.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .get());
 

@@ -996,6 +996,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                 "relocation authority is not Ready on the source: "
                                                         + key));
                             }
+                            ZLinkUserSpotRetireRuntime.requireRelocationCompletion(snapshot);
                             return CompletableFuture.completedFuture(
                                     new Owned(
                                             key,

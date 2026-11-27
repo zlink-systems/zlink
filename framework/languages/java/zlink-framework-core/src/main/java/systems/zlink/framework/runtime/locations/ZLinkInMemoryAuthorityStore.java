@@ -932,8 +932,11 @@ final class ZLinkInMemoryAuthorityStore {
                                                                         .equals(authorityKey)));
     }
 
-    public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
-            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+    CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
+            ZLinkAggregateFence fence,
+            List<Long> acceptedRequests,
+            ZLinkStoreCancellation cancellation) {
+        List<Long> counts = List.copyOf(acceptedRequests);
         return inStateLane(
                 () -> {
                     AggregateState state = aggregates.get(fence.aggregateId());
@@ -943,7 +946,9 @@ final class ZLinkInMemoryAuthorityStore {
                     if (state.state == State.COMMITTED) {
                         return completed(ZLinkAggregateCommitResult.ALREADY_COMMITTED);
                     }
-                    if (state.state != State.PREPARED) {
+                    if (state.state != State.PREPARED
+                            || (!counts.isEmpty()
+                                    && counts.size() != state.request.participants().size())) {
                         return completed(ZLinkAggregateCommitResult.STALE);
                     }
                     if (!ownerLeaseIsLive.test(state.request.targetOwner())) {
@@ -1004,7 +1009,8 @@ final class ZLinkInMemoryAuthorityStore {
                             || !hasCounterRoom(revision, state.request.participants().size())) {
                         return completed(ZLinkAggregateCommitResult.GENERATION_EXHAUSTED);
                     }
-                    for (ZLinkAggregateParticipant participant : state.request.participants()) {
+                    for (int index = 0; index < state.request.participants().size(); index++) {
+                        var participant = state.request.participants().get(index);
                         Row current = rows.get(participant.authorityKey());
                         boolean changesOwner =
                                 participant.ownerTransition()
@@ -1029,7 +1035,12 @@ final class ZLinkInMemoryAuthorityStore {
                                         targetAllocation,
                                         participant.relocation() == null
                                                 ? current.relocation
-                                                : participant.relocation().phase("committed")));
+                                                : participant
+                                                        .relocation()
+                                                        .committed(
+                                                                counts.isEmpty()
+                                                                        ? null
+                                                                        : counts.get(index))));
                         membershipMutations.put(
                                 participant.authorityKey(), participant.membershipMutation());
                         if (changesOwner) {

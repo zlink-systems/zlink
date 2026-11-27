@@ -6,46 +6,49 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 /** Canonical service-wire command 33/46 relocation reply codec. */
 public final class ZLinkServiceRelocationWireCodec {
     public byte[] encodeReplyRelay(ReplyRelay value) {
+        return encodeReplyRelayFrames(value, null).getFirst();
+    }
+
+    private List<byte[]> encodeReplyRelayFrames(
+            ReplyRelay value, ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1 payload) {
         Objects.requireNonNull(value, "value");
         value.validate();
         try {
-            List<byte[]> frames =
-                    ServiceWirePilotCodec.encodeReplyRelay33(
-                            new ServiceWirePilotCodec.ReplyRelay33(
-                                    toGenerated(value.operation()),
-                                    value.replyRouteId(),
-                                    new ServiceWirePilotCodec.MaintenanceRelocationReplyContext(
-                                            toGenerated(value.relocation()),
-                                            value.targetAttemptGeneration(),
-                                            toGenerated(value.coordinator()),
-                                            value.participantId(),
-                                            value.sequence()),
-                                    value.terminalResult(),
-                                    value.failureCode(),
-                                    null));
-            if (frames.size() != 1) {
-                throw invalid("command 33 frame projection");
-            }
-            return frames.get(0);
+            return ServiceWirePilotCodec.encodeReplyRelay33(
+                    new ServiceWirePilotCodec.ReplyRelay33(
+                            toGenerated(value.operation()),
+                            value.replyRouteId(),
+                            new ServiceWirePilotCodec.MaintenanceRelocationReplyContext(
+                                    toGenerated(value.relocation()),
+                                    value.targetAttemptGeneration(),
+                                    toGenerated(value.coordinator()),
+                                    value.participantId(),
+                                    value.sequence()),
+                            value.terminalResult(),
+                            value.failureCode(),
+                            payload));
         } catch (IOException failure) {
             throw invalid("command 33 field", failure);
         }
     }
 
     public ReplyRelay decodeReplyRelay(byte[] encoded) {
-        Objects.requireNonNull(encoded, "encoded");
+        return decodeReplyRelayFrames(List.of(encoded)).relay();
+    }
+
+    private StoredReply decodeReplyRelayFrames(List<byte[]> frames) {
         try {
-            var generated = ServiceWirePilotCodec.decodeReplyRelay33(List.of(encoded));
+            var generated = ServiceWirePilotCodec.decodeReplyRelay33(frames);
             if (!(generated.context()
-                            instanceof
-                            ServiceWirePilotCodec.MaintenanceRelocationReplyContext context)
-                    || generated.payload() != null) {
+                    instanceof ServiceWirePilotCodec.MaintenanceRelocationReplyContext context)) {
                 throw invalid("command 33 frame projection");
             }
             ReplyRelay result =
@@ -60,10 +63,43 @@ public final class ZLinkServiceRelocationWireCodec {
                             generated.terminalResult(),
                             generated.failureCode());
             result.validate();
-            return result;
+            return new StoredReply(result, generated.payload());
         } catch (IOException failure) {
             throw invalid("command 33 frame", failure);
         }
+    }
+
+    public record StoredReply(
+            ReplyRelay relay, ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1 payload) {}
+
+    public byte[] encodeStoredReply(
+            ReplyRelay value, ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1 payload) {
+        var frames = encodeReplyRelayFrames(value, payload);
+        int size = Integer.BYTES;
+        for (byte[] frame : frames)
+            size = Math.addExact(size, Math.addExact(Integer.BYTES, frame.length));
+        var bytes = ByteBuffer.allocate(size).putInt(frames.size());
+        for (byte[] frame : frames) bytes.putInt(frame.length).put(frame);
+        return bytes.array();
+    }
+
+    public StoredReply decodeStoredReply(byte[] encoded) {
+        var bytes = ByteBuffer.wrap(encoded);
+        if (bytes.remaining() < Integer.BYTES) throw invalid("stored command 33 part count");
+        int count = bytes.getInt();
+        if (count < 1 || count > 2) throw invalid("stored command 33 part count");
+        List<byte[]> frames = new ArrayList<>(count);
+        for (int index = 0; index < count; index++) {
+            if (bytes.remaining() < Integer.BYTES) throw invalid("stored command 33 part length");
+            int length = bytes.getInt();
+            if (length < 0 || length > bytes.remaining())
+                throw invalid("stored command 33 part length");
+            byte[] frame = new byte[length];
+            bytes.get(frame);
+            frames.add(frame);
+        }
+        if (bytes.hasRemaining()) throw invalid("stored command 33 trailing bytes");
+        return decodeReplyRelayFrames(frames);
     }
 
     public byte[] encodeReplyRelayAck(ReplyRelayAck value) {

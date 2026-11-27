@@ -172,7 +172,8 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                             return CompletableFuture.failedFuture(
                                                     new ZLinkFrameworkException(
                                                             ZLinkFrameworkErrorKind.DATA_LOST,
-                                                            "Location Store capacity record is inconsistent"));
+                                                            "Location Store capacity record is"
+                                                                    + " inconsistent"));
                                         }
                                     } else if (method.getName().equals("abortAggregate")) {
                                         aggregateAborts.incrementAndGet();
@@ -878,7 +879,17 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         }
 
         @Override
-        public CompletionStage<Void> publish(ZLinkSpotRetireControl.StageRequest request) {
+        public ZLinkTargetRelocationCompletions prepareCompletions(
+                ZLinkSpotRetireControl.StageRequest request,
+                List<byte[]> verifiedBatch,
+                java.util.function.Consumer<Runnable> resubmit) {
+            return ZLinkSpotRuntimeTestAccess.noAcceptedRelocationRequests(request, resubmit);
+        }
+
+        @Override
+        public CompletionStage<Void> publish(
+                ZLinkSpotRetireControl.StageRequest request,
+                ZLinkTargetRelocationCompletions completions) {
             published.incrementAndGet();
             return CompletableFuture.completedFuture(null);
         }

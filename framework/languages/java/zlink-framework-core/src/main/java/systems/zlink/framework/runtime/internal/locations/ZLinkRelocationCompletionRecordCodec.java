@@ -3,12 +3,11 @@ package systems.zlink.framework.runtime.internal.locations;
 import com.fasterxml.jackson.core.Base64Variants;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.core.StreamReadFeature;
 import com.fasterxml.jackson.core.json.JsonWriteFeature;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -22,7 +21,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
@@ -41,8 +39,6 @@ public final class ZLinkRelocationCompletionRecordCodec {
                                     .maxStringLength(Integer.MAX_VALUE)
                                     .build())
                     .build();
-    private static final ObjectMapper READER =
-            new ObjectMapper(JSON).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final Set<String> DELIVERIES =
             Set.of("pending", "terminalReceived", "alreadyTerminal", "sourceLeaseExpired");
     private static final String LONGEST_DELIVERY = "sourceLeaseExpired";
@@ -118,38 +114,41 @@ public final class ZLinkRelocationCompletionRecordCodec {
     }
 
     static Record decode(Supplier<InputStream> bytes) {
-        try (var input = bytes.get()) {
-            JsonNode root = READER.readTree(input);
-            fields(root, "entries", "formatVersion", "relocationId");
-            if (!"1".equals(text(root, "formatVersion")) || !root.get("entries").isArray()) {
-                throw invalid("Invalid completion version or entries.");
-            }
+        try (var input = bytes.get();
+                var parser = JSON.createParser(input)) {
+            requireToken(parser.nextToken(), JsonToken.START_OBJECT);
+            field(parser, "entries", JsonToken.START_ARRAY);
             List<Entry> entries = new ArrayList<>();
-            for (JsonNode item : root.get("entries")) {
-                fields(
-                        item,
-                        "delivery",
-                        "objectKey",
-                        "operationId",
-                        "reply",
-                        "replyRouteId",
-                        "source");
-                JsonNode source = item.get("source");
-                fields(source, "leaseGeneration", "nodeGeneration", "nodeRid", "ownerId");
+            while (parser.nextToken() != JsonToken.END_ARRAY) {
+                requireToken(parser.currentToken(), JsonToken.START_OBJECT);
+                String delivery = text(parser, "delivery");
+                String objectKey = text(parser, "objectKey");
+                String operationId = text(parser, "operationId");
+                field(parser, "reply", JsonToken.VALUE_STRING);
+                byte[] reply = parser.getBinaryValue(Base64Variants.MIME_NO_LINEFEEDS);
+                String replyRouteId = text(parser, "replyRouteId");
+                field(parser, "source", JsonToken.START_OBJECT);
+                String leaseGeneration = text(parser, "leaseGeneration");
+                String nodeGeneration = text(parser, "nodeGeneration");
+                String nodeRid = text(parser, "nodeRid");
+                String ownerId = text(parser, "ownerId");
+                requireToken(parser.nextToken(), JsonToken.END_OBJECT);
+                requireToken(parser.nextToken(), JsonToken.END_OBJECT);
                 entries.add(
                         new Entry(
-                                text(item, "objectKey"),
-                                new Source(
-                                        text(source, "ownerId"),
-                                        text(source, "leaseGeneration"),
-                                        text(source, "nodeRid"),
-                                        text(source, "nodeGeneration")),
-                                text(item, "operationId"),
-                                text(item, "replyRouteId"),
-                                Base64.getDecoder().decode(text(item, "reply")),
-                                text(item, "delivery")));
+                                objectKey,
+                                new Source(ownerId, leaseGeneration, nodeRid, nodeGeneration),
+                                operationId,
+                                replyRouteId,
+                                reply,
+                                delivery));
             }
-            var result = new Record(text(root, "relocationId"), entries);
+            if (!"1".equals(text(parser, "formatVersion"))) {
+                throw invalid("Invalid completion version.");
+            }
+            var result = new Record(text(parser, "relocationId"), entries);
+            requireToken(parser.nextToken(), JsonToken.END_OBJECT);
+            if (parser.nextToken() != null) throw invalid("Completion JSON has trailing tokens.");
             try (var expected = bytes.get()) {
                 write(
                         result,
@@ -304,19 +303,18 @@ public final class ZLinkRelocationCompletionRecordCodec {
         throw invalid("Invalid completion uint64.");
     }
 
-    private static void fields(JsonNode node, String... expected) {
-        if (node == null || !node.isObject() || node.size() != expected.length) {
-            throw invalid("Invalid completion fields.");
-        }
-        for (String field : expected) {
-            if (!node.has(field)) throw invalid("Invalid completion fields.");
-        }
+    private static void requireToken(JsonToken actual, JsonToken expected) {
+        if (actual != expected) throw invalid("Invalid completion JSON token.");
     }
 
-    private static String text(JsonNode node, String name) {
-        var value = node.get(name);
-        if (!value.isTextual()) throw invalid("Invalid completion text field.");
-        return value.textValue();
+    private static void field(JsonParser parser, String name, JsonToken value) throws IOException {
+        if (!name.equals(parser.nextFieldName())) throw invalid("Invalid completion field.");
+        requireToken(parser.nextToken(), value);
+    }
+
+    private static String text(JsonParser parser, String name) throws IOException {
+        field(parser, name, JsonToken.VALUE_STRING);
+        return parser.getText();
     }
 
     private static ZLinkAggregateRelocationCoordinator.RelocationDataLostException invalid(

@@ -29,6 +29,18 @@ public final class ZLinkServiceFrozenRecordCodec {
                         || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire);
     }
 
+    public static boolean isActor(byte[] encoded) {
+        return encoded.length != 0
+                && (encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_SEND.wire
+                        || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire);
+    }
+
+    public static boolean isRequest(byte[] encoded) {
+        return encoded.length != 0
+                && (encoded[0] == (int) ServiceWireCodec.MeshRecordKind.SPOT_REQUEST.wire
+                        || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire);
+    }
+
     public static DecodedSpot decodeSpot(byte[] encoded) {
         Reader reader = new Reader(encoded);
         int kind = reader.u8();

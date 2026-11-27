@@ -69,7 +69,9 @@ final class ZLinkAcceptedJournalReplayerTest {
                         : ZLinkAcceptedJournalTestRecords.actor(
                                 "actor-a", 41, "query", Map.of(), new byte[0]);
         var terminal =
-                replayer.replayFrozen(lane.equals("spot") ? "spot" : "actor:actor-a", record)
+                replayer.replay(
+                                lane.equals("spot") ? "spot" : "actor:actor-a",
+                                new ZLinkSerialExecutionQueue.QueuedRecord(1, record))
                         .toCompletableFuture();
         assertFalse(terminal.isDone());
         if (lane.equals("spot")) spotHandler.completeExceptionally(original);
@@ -197,7 +199,10 @@ final class ZLinkAcceptedJournalReplayerTest {
                 assertThrows(
                         CompletionException.class,
                         () ->
-                                replayer.replayFrozen("actor-a", encoded)
+                                replayer.replay(
+                                                "actor-a",
+                                                new ZLinkSerialExecutionQueue.QueuedRecord(
+                                                        1, encoded))
                                         .toCompletableFuture()
                                         .join());
         assertInstanceOf(IllegalArgumentException.class, bareLane.getCause());

@@ -24,6 +24,7 @@ final class ZLinkRelocationCompletionBlob {
     static final long MAX_BYTES = 256L * 1024 * 1024 * 1024;
     private static final int CHUNK_BYTES = 64 * 1024 * 1024;
     private static final Duration RETENTION = Duration.ofHours(24);
+    private static final Duration RENEW_THRESHOLD = RETENTION.dividedBy(2);
     private final ZLinkRelocationStore store;
 
     ZLinkRelocationCompletionBlob(ZLinkRelocationStore store) {
@@ -77,11 +78,12 @@ final class ZLinkRelocationCompletionBlob {
             String reference,
             String expectedSha256,
             String inventorySha256,
+            boolean pending,
             ZLinkStoreCancellation cancellation) {
-        return requireBlob(reference, cancellation)
+        return requireFound(reference, cancellation)
                 .thenCompose(
-                        bytes -> {
-                            var manifest = decodeManifest(bytes);
+                        head -> {
+                            var manifest = decodeManifest(head.payload());
                             if (manifest.chunks().isEmpty()
                                     || manifest.totalLength() <= 0
                                     || manifest.totalLength() > MAX_BYTES
@@ -104,37 +106,14 @@ final class ZLinkRelocationCompletionBlob {
                                 reads =
                                         reads.thenCompose(
                                                 payload ->
-                                                        requireBlob(entry.reference(), cancellation)
+                                                        readChunk(entry, pending, cancellation)
                                                                 .thenApply(
-                                                                        encoded -> {
-                                                                            var chunk =
-                                                                                    decodeChunk(
-                                                                                            encoded);
-                                                                            if (chunk.order()
-                                                                                            != entry
-                                                                                                    .order()
-                                                                                    || chunk.data()
-                                                                                                    .length
-                                                                                            != entry
-                                                                                                    .length()
-                                                                                    || crc32c(
-                                                                                                    chunk
-                                                                                                            .data())
-                                                                                            != entry
-                                                                                                    .checksumCrc32c()) {
-                                                                                throw dataLost(
-                                                                                        "Completion"
-                                                                                                + " chunk"
-                                                                                                + " differs"
-                                                                                                + " from"
-                                                                                                + " manifest.");
-                                                                            }
-                                                                            payload.add(
-                                                                                    chunk.data());
+                                                                        data -> {
+                                                                            payload.add(data);
                                                                             return payload;
                                                                         }));
                             }
-                            return reads.thenApply(
+                            return reads.thenCompose(
                                     payload -> {
                                         if (payload.length != manifest.totalLength()
                                                 || payload.checksum()
@@ -144,16 +123,40 @@ final class ZLinkRelocationCompletionBlob {
                                                     "Completion payload length or checksum"
                                                             + " differs.");
                                         }
-                                        return ZLinkRelocationCompletionRecordCodec.decode(
-                                                () ->
-                                                        new SequenceInputStream(
-                                                                Collections.enumeration(
-                                                                        payload.chunks.stream()
-                                                                                .map(
-                                                                                        ByteArrayInputStream
-                                                                                                ::new)
-                                                                                .toList())));
+                                        return retain(reference, head, pending, cancellation)
+                                                .thenApply(
+                                                        ignored ->
+                                                                ZLinkRelocationCompletionRecordCodec
+                                                                        .decode(
+                                                                                () ->
+                                                                                        new SequenceInputStream(
+                                                                                                Collections
+                                                                                                        .enumeration(
+                                                                                                                payload
+                                                                                                                        .chunks
+                                                                                                                        .stream()
+                                                                                                                        .map(
+                                                                                                                                ByteArrayInputStream
+                                                                                                                                        ::new)
+                                                                                                                        .toList()))));
                                     });
+                        });
+    }
+
+    private CompletionStage<byte[]> readChunk(
+            RelocationChunkEntryV1 entry, boolean pending, ZLinkStoreCancellation cancellation) {
+        return requireFound(entry.reference(), cancellation)
+                .thenCompose(
+                        found -> {
+                            var chunk = decodeChunk(found.payload());
+                            byte[] data = chunk.data();
+                            if (chunk.order() != entry.order()
+                                    || data.length != entry.length()
+                                    || crc32c(data) != entry.checksumCrc32c()) {
+                                throw dataLost("Completion chunk differs from manifest.");
+                            }
+                            return retain(entry.reference(), found, pending, cancellation)
+                                    .thenApply(ignored -> data);
                         });
     }
 
@@ -173,12 +176,61 @@ final class ZLinkRelocationCompletionBlob {
                                                 }));
     }
 
+    CompletionStage<Void> delete(String reference, ZLinkStoreCancellation cancellation) {
+        return store.get(reference, cancellation)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkRelocationFound found)) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            var manifest = decodeManifest(found.payload());
+                            CompletionStage<Void> deletes = CompletableFuture.completedFuture(null);
+                            for (var entry : manifest.chunks()) {
+                                deletes =
+                                        deletes.thenCompose(
+                                                ignored ->
+                                                        store.delete(
+                                                                        entry.reference(),
+                                                                        cancellation)
+                                                                .thenApply(deleted -> null));
+                            }
+                            return deletes.thenCompose(
+                                    ignored ->
+                                            store.delete(reference, cancellation)
+                                                    .thenApply(deleted -> null));
+                        });
+    }
+
+    private CompletionStage<Void> retain(
+            String reference,
+            ZLinkRelocationFound found,
+            boolean pending,
+            ZLinkStoreCancellation cancellation) {
+        if (!pending
+                || Duration.between(found.storeNow(), found.expiresAt()).compareTo(RENEW_THRESHOLD)
+                        > 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return store.renew(reference, RETENTION, cancellation)
+                .thenAccept(
+                        renewed -> {
+                            if (renewed instanceof ZLinkRelocationRenewMissing) {
+                                throw dataLost("Completion blob disappeared during renew.");
+                            }
+                        });
+    }
+
     private CompletionStage<byte[]> requireBlob(
+            String reference, ZLinkStoreCancellation cancellation) {
+        return requireFound(reference, cancellation).thenApply(ZLinkRelocationFound::payload);
+    }
+
+    private CompletionStage<ZLinkRelocationFound> requireFound(
             String reference, ZLinkStoreCancellation cancellation) {
         return store.get(reference, cancellation)
                 .thenApply(
                         read -> {
-                            if (read instanceof ZLinkRelocationFound found) return found.payload();
+                            if (read instanceof ZLinkRelocationFound found) return found;
                             throw dataLost("Completion blob is missing.");
                         });
     }

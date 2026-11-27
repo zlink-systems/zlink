@@ -258,8 +258,10 @@ class ZLinkLocationStoreResolverTest {
 
         @Override
         public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
-                ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
-            return authority.commitAggregate(fence, cancellation);
+                ZLinkAggregateFence fence,
+                java.util.List<Long> acceptedRequests,
+                ZLinkStoreCancellation cancellation) {
+            return authority.commitAggregate(fence, acceptedRequests, cancellation);
         }
 
         @Override

@@ -1,7 +1,12 @@
 package systems.zlink.framework.locations.redis;
 
+import io.lettuce.core.RedisCommandTimeoutException;
+import io.lettuce.core.RedisConnectionException;
 import io.lettuce.core.ScriptOutputType;
+import io.lettuce.core.api.async.RedisAsyncCommands;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.ZLinkBlobAlreadyStored;
 import systems.zlink.framework.locationprovider.ZLinkBlobConflict;
 import systems.zlink.framework.locationprovider.ZLinkBlobFound;
@@ -24,7 +29,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 
 public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, AutoCloseable {
     private static final int MAXIMUM_REFERENCE_BYTES = 4096;
@@ -57,42 +64,42 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
     private static final String PUT =
             ZLinkRedisLocationConnection.script(
                     """
-            if redis.replicate_commands then redis.replicate_commands() end
-            local time = redis.call('TIME')
-            local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
-            local current = redis.call('GET', KEYS[1])
-            if current == ARGV[1] then
-                local ttl = redis.call('PTTL', KEYS[1])
-                return {'${ALREADY}', nowMs, ttl}
-            elseif current then
-                return {'${COLLISION}', nowMs}
-            end
-            redis.call('PSETEX', KEYS[1], ARGV[2], ARGV[1])
-            return {'${STORED}', nowMs, tonumber(ARGV[2])}
-            """,
+                    if redis.replicate_commands then redis.replicate_commands() end
+                    local time = redis.call('TIME')
+                    local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+                    local current = redis.call('GET', KEYS[1])
+                    if current == ARGV[1] then
+                        local ttl = redis.call('PTTL', KEYS[1])
+                        return {'${ALREADY}', nowMs, ttl}
+                    elseif current then
+                        return {'${COLLISION}', nowMs}
+                    end
+                    redis.call('PSETEX', KEYS[1], ARGV[2], ARGV[1])
+                    return {'${STORED}', nowMs, tonumber(ARGV[2])}
+                    """,
                     ScriptToken.BY_WIRE);
     private static final String READ =
             ZLinkRedisLocationConnection.script(
                     """
-            local time = redis.call('TIME')
-            local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
-            local value = redis.call('GET', KEYS[1])
-            if not value then return {'${MISSING}', nowMs} end
-            return {'${FOUND}', nowMs, redis.call('PTTL', KEYS[1]), value}
-            """,
+                    local time = redis.call('TIME')
+                    local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+                    local value = redis.call('GET', KEYS[1])
+                    if not value then return {'${MISSING}', nowMs} end
+                    return {'${FOUND}', nowMs, redis.call('PTTL', KEYS[1]), value}
+                    """,
                     ScriptToken.BY_WIRE);
     private static final String RENEW =
             ZLinkRedisLocationConnection.script(
                     """
-            if redis.replicate_commands then redis.replicate_commands() end
-            local time = redis.call('TIME')
-            local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
-            if redis.call('EXISTS', KEYS[1]) == 0 then
-                return {'${MISSING}', nowMs}
-            end
-            redis.call('PEXPIRE', KEYS[1], ARGV[1])
-            return {'${RENEWED}', nowMs}
-            """,
+                    if redis.replicate_commands then redis.replicate_commands() end
+                    local time = redis.call('TIME')
+                    local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+                    if redis.call('EXISTS', KEYS[1]) == 0 then
+                        return {'${MISSING}', nowMs}
+                    end
+                    redis.call('PEXPIRE', KEYS[1], ARGV[1])
+                    return {'${RENEWED}', nowMs}
+                    """,
                     ScriptToken.BY_WIRE);
 
     final ZLinkRedisLocationConnection<byte[]> connection;
@@ -117,9 +124,7 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
         if (cancelled(cancellation)) {
             return cancelledStage();
         }
-        return connection
-                .commands()
-                .thenCompose(
+        return execute(
                         redis ->
                                 redis.<List<Object>>eval(
                                         PUT,
@@ -148,9 +153,7 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
         if (cancelled(cancellation)) {
             return cancelledStage();
         }
-        return connection
-                .commands()
-                .thenCompose(
+        return execute(
                         redis ->
                                 redis.<List<Object>>eval(
                                         READ,
@@ -175,9 +178,7 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
         if (cancelled(cancellation)) {
             return cancelledStage();
         }
-        return connection
-                .commands()
-                .thenCompose(
+        return execute(
                         redis ->
                                 redis.<List<Object>>eval(
                                         RENEW,
@@ -201,10 +202,37 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
         if (cancelled(cancellation)) {
             return cancelledStage();
         }
+        return execute(redis -> redis.del(key(normalized))).thenApply(count -> null);
+    }
+
+    private <T> CompletionStage<T> execute(
+            Function<RedisAsyncCommands<String, byte[]>, CompletionStage<T>> operation) {
         return connection
                 .commands()
-                .thenCompose(redis -> redis.del(key(normalized)))
-                .thenApply(count -> null);
+                .thenCompose(operation)
+                .exceptionallyCompose(
+                        failure -> {
+                            Throwable cause = failure;
+                            while (cause instanceof CompletionException
+                                    && cause.getCause() != null) {
+                                cause = cause.getCause();
+                            }
+                            if (cause instanceof RedisCommandTimeoutException) {
+                                return CompletableFuture.failedFuture(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                                "Redis relocation Store command timed out.",
+                                                cause));
+                            }
+                            if (cause instanceof RedisConnectionException) {
+                                return CompletableFuture.failedFuture(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                "Redis relocation Store connection failed.",
+                                                cause));
+                            }
+                            return CompletableFuture.failedFuture(cause);
+                        });
     }
 
     @Override

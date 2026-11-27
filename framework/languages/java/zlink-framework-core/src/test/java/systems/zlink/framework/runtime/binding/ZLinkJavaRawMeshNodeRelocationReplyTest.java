@@ -12,6 +12,8 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
@@ -26,7 +28,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ZLinkJavaRawMeshNodeRelocationReplyTest {
@@ -260,7 +261,9 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                     assertThrows(
                             ExecutionException.class,
                             () -> waiting.toCompletableFuture().get(1, TimeUnit.SECONDS));
-            assertTrue(timeout.getCause() instanceof TimeoutException);
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    ((ZLinkFrameworkException) timeout.getCause()).kind());
 
             source.setRelocationReplyRelayHandler(
                     (transportSource, command, frames) ->
@@ -285,7 +288,9 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                                                     Duration.ofMillis(100))
                                             .toCompletableFuture()
                                             .get(1, TimeUnit.SECONDS));
-            assertTrue(wrongRoute.getCause() instanceof TimeoutException);
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    ((ZLinkFrameworkException) wrongRoute.getCause()).kind());
 
             source.setRelocationReplyRelayHandler(
                     (transportSource, command, frames) ->
@@ -315,7 +320,9 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                                                     Duration.ofMillis(100))
                                             .toCompletableFuture()
                                             .get(1, TimeUnit.SECONDS));
-            assertTrue(stale.getCause() instanceof TimeoutException);
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    ((ZLinkFrameworkException) stale.getCause()).kind());
         }
     }
 
@@ -438,7 +445,9 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                                                     Duration.ofMillis(200))
                                             .toCompletableFuture()
                                             .get(2, TimeUnit.SECONDS));
-            assertTrue(wrongFence.getCause() instanceof TimeoutException);
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    ((ZLinkFrameworkException) wrongFence.getCause()).kind());
 
             //  A landing that is not an admitted peer never receives the
             //  relay; the pending fence fails or expires without an ACK.

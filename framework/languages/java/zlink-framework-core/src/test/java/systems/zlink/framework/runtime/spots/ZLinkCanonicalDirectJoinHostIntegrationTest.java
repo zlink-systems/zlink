@@ -414,6 +414,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             TARGET_RID,
                             targetDescriptor.lifecycleGeneration(),
                             coordinator,
+                            new InMemoryRelocationStore(),
                             unusedSpotStaging(),
                             ignored -> null,
                             (lane, queued) -> {
@@ -440,36 +441,24 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             TIMEOUT,
                             request -> {
                                 EVENTS.add("target.normalize");
-                                return coordinator
-                                        .normalizePublishedAggregate(
-                                                request.participants().stream()
-                                                        .map(
-                                                                value ->
-                                                                        new ZLinkAggregateRelocationCoordinator
-                                                                                .ExpectedParticipant(
-                                                                                value
-                                                                                        .authorityKey(),
-                                                                                value
-                                                                                        .objectGeneration(),
-                                                                                value
-                                                                                        .sourceAuthorityOwnerGeneration()))
-                                                        .toList(),
-                                                new ZLinkAggregateFence(
-                                                        request.fence().aggregateId(),
-                                                        request.fence().aggregateGeneration()),
-                                                new ZLinkLocationOwnerToken(
-                                                        request.targetOwnerId(),
-                                                        request.targetOwnerLeaseGeneration()),
-                                                OPEN)
-                                        .whenComplete(
-                                                (ignored, failure) -> {
-                                                    if (failure == null) {
-                                                        link.targetCompletion.complete(null);
-                                                    } else {
-                                                        link.targetCompletion.completeExceptionally(
-                                                                failure);
-                                                    }
-                                                });
+                                return coordinator.normalizePublishedAggregate(
+                                        request.participants().stream()
+                                                .map(
+                                                        value ->
+                                                                new ZLinkAggregateRelocationCoordinator
+                                                                        .ExpectedParticipant(
+                                                                        value.authorityKey(),
+                                                                        value.objectGeneration(),
+                                                                        value
+                                                                                .sourceAuthorityOwnerGeneration()))
+                                                .toList(),
+                                        new ZLinkAggregateFence(
+                                                request.fence().aggregateId(),
+                                                request.fence().aggregateGeneration()),
+                                        new ZLinkLocationOwnerToken(
+                                                request.targetOwnerId(),
+                                                request.targetOwnerLeaseGeneration()),
+                                        OPEN);
                             },
                             null,
                             null,
@@ -513,7 +502,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                     })
                                     : observed,
                             coordinator,
-                            unusedRelocationTarget());
+                            ZLinkSpotRuntimeTestAccess.unusedRelocationTarget());
             ZLinkSpotRetireControl.TargetEndpoint observedEndpoint =
                     new ZLinkSpotRetireControl.TargetEndpoint() {
                         @Override
@@ -572,12 +561,23 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         }
 
                         @Override
+                        public ZLinkTargetRelocationCompletions prepareCompletions(
+                                ZLinkSpotRetireControl.StageRequest request,
+                                List<byte[]> verifiedBatch,
+                                java.util.function.Consumer<Runnable> resubmit) {
+                            return endpoint.prepareCompletions(request, verifiedBatch, resubmit);
+                        }
+
+                        @Override
                         public CompletionStage<Void> publish(
-                                ZLinkSpotRetireControl.StageRequest request) {
-                            return endpoint.publish(request)
+                                ZLinkSpotRetireControl.StageRequest request,
+                                ZLinkTargetRelocationCompletions completions) {
+                            return endpoint.publish(request, completions)
                                     .whenComplete(
                                             (ignored, failure) -> {
-                                                if (failure != null) {
+                                                if (failure == null) {
+                                                    link.targetCompletion.complete(null);
+                                                } else {
                                                     link.targetCompletion.completeExceptionally(
                                                             failure);
                                                 }
@@ -974,7 +974,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             if (scenario.leaveMode() != LeaveMode.PENDING) {
                 assertFalse(
                         link.targetCompletion.isDone(),
-                        "target normalization must wait for the client push terminal");
+                        "target publication must wait for the client push terminal");
                 PUSH_TERMINAL.get().complete(null);
             }
 
@@ -1094,7 +1094,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertBefore("prefix.admitted", "target.open");
             assertBefore("prefix.admitted", "command44");
             assertBefore("command44", "client.push.terminal");
-            assertBefore("client.push.terminal", "target.normalize");
+            assertBefore("target.normalize", "target.accepted");
             link.checkCanonicalBindingRetries().toCompletableFuture().get(1, TimeUnit.SECONDS);
             assertTrue(EVENTS.contains("route.duplicate.noop"));
             assertTrue(EVENTS.contains("route.changed.conflict"));
@@ -1517,30 +1517,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         return CompletableFuture.completedFuture(null);
                     }
                 });
-    }
-
-    private static ZLinkSpotRetireControl.TargetEndpoint unusedRelocationTarget() {
-        return new ZLinkSpotRetireControl.TargetEndpoint() {
-            private CompletionStage<Void> unused() {
-                return CompletableFuture.failedFuture(
-                        new AssertionError("source must not act as target"));
-            }
-
-            @Override
-            public CompletionStage<Void> stage(ZLinkSpotRetireControl.StageRequest request) {
-                return unused();
-            }
-
-            @Override
-            public CompletionStage<Void> publish(ZLinkSpotRetireControl.StageRequest request) {
-                return unused();
-            }
-
-            @Override
-            public CompletionStage<Void> abort(ZLinkSpotRetireControl.StageRequest request) {
-                return unused();
-            }
-        };
     }
 
     // Session-Actor binding §4: the SpotNode binding record owns the Session owner identity taken

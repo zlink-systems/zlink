@@ -272,8 +272,9 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 new CountingEndpoint() {
                     @Override
                     public CompletionStage<Void> publish(
-                            ZLinkSpotRetireControl.StageRequest request) {
-                        super.publish(request);
+                            ZLinkSpotRetireControl.StageRequest request,
+                            ZLinkTargetRelocationCompletions completions) {
+                        super.publish(request, completions);
                         publicationEntered.complete(null);
                         return publication;
                     }
@@ -675,8 +676,18 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     }
 
                     @Override
+                    public ZLinkTargetRelocationCompletions prepareCompletions(
+                            ZLinkSpotRetireControl.StageRequest request,
+                            List<byte[]> verifiedBatch,
+                            java.util.function.Consumer<Runnable> resubmit) {
+                        return ZLinkSpotRuntimeTestAccess.noAcceptedRelocationRequests(
+                                request, resubmit);
+                    }
+
+                    @Override
                     public CompletionStage<Void> publish(
-                            ZLinkSpotRetireControl.StageRequest request) {
+                            ZLinkSpotRetireControl.StageRequest request,
+                            ZLinkTargetRelocationCompletions completions) {
                         publishes.incrementAndGet();
                         if (reentered.compareAndSet(false, true)) {
                             reentrantPublication.set(
@@ -1818,7 +1829,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                                     }
                                     throw new UnsupportedOperationException(method.getName());
                                 });
-        return ZLinkSpotRetireControl.install(node, endpoint);
+        return ZLinkSpotRetireControl.install(node, endpoint, Runnable::run);
     }
 
     private static ZLinkCanonicalRelocationStateMachine.TargetAttempt targetAttempt(
@@ -2094,7 +2105,17 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         }
 
         @Override
-        public CompletionStage<Void> publish(ZLinkSpotRetireControl.StageRequest request) {
+        public ZLinkTargetRelocationCompletions prepareCompletions(
+                ZLinkSpotRetireControl.StageRequest request,
+                List<byte[]> verifiedBatch,
+                java.util.function.Consumer<Runnable> resubmit) {
+            return ZLinkSpotRuntimeTestAccess.noAcceptedRelocationRequests(request, resubmit);
+        }
+
+        @Override
+        public CompletionStage<Void> publish(
+                ZLinkSpotRetireControl.StageRequest request,
+                ZLinkTargetRelocationCompletions completions) {
             published.incrementAndGet();
             if (onPublish != null) {
                 onPublish.run();

@@ -554,6 +554,7 @@ final class ZLinkCommittedActorLocalIngressTest {
                                         (systems.zlink.framework.runtime.internal.locations
                                                         .ZLinkAggregateFence)
                                                 arguments[0],
+                                        java.util.List.of(),
                                         (systems.zlink.framework.runtime.internal.locations
                                                         .ZLinkStoreCancellation)
                                                 arguments[1])

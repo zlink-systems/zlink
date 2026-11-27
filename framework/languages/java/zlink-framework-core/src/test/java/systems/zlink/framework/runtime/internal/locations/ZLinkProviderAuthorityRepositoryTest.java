@@ -320,7 +320,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 fixture.repository()
-                        .commitAggregate(new ZLinkAggregateFence(id, 7), () -> false)
+                        .commitAggregate(
+                                new ZLinkAggregateFence(id, 7), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
         var committed =
@@ -429,7 +430,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 fixture.repository()
-                        .commitAggregate(new ZLinkAggregateFence(id, 7), () -> false)
+                        .commitAggregate(
+                                new ZLinkAggregateFence(id, 7), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
         var committed =
@@ -2314,14 +2316,14 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 repository
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
         assertFalse(provider.failCommitOnce);
         assertEquals(
                 ZLinkAggregateCommitResult.ALREADY_COMMITTED,
                 repository
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
         assertEquals(
@@ -2540,7 +2542,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
             assertEquals(
                     ZLinkAggregateCommitResult.COMMITTED,
                     repository
-                            .commitAggregate(prepared.fence(), () -> false)
+                            .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                             .toCompletableFuture()
                             .join());
             var published =
@@ -3364,7 +3366,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 fixture.repository()
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
 
@@ -3956,6 +3958,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .commitAggregate(
                                 new ZLinkAggregateFence(
                                         request.aggregateId(), request.aggregateGeneration()),
+                                java.util.List.of(),
                                 () -> false)
                         .toCompletableFuture()
                         .join();
@@ -3968,6 +3971,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .commitAggregate(
                                 new ZLinkAggregateFence(
                                         request.aggregateId(), request.aggregateGeneration()),
+                                java.util.List.of(),
                                 () -> false)
                         .toCompletableFuture()
                         .join());
@@ -4075,7 +4079,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 repository
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
         assertEquals(conflictCount, store.conflictsReturned);

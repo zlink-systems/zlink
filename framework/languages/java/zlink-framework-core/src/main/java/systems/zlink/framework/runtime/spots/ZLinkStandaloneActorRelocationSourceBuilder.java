@@ -559,7 +559,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                         return ZLinkStandaloneActorRelocationSourceBuilder
                                                                                 .<Void>failed(
                                                                                         new IllegalStateException(
-                                                                                                "Source relocation queue was lost during abort"));
+                                                                                                "Source"
+                                                                                                        + " relocation"
+                                                                                                        + " queue"
+                                                                                                        + " was lost"
+                                                                                                        + " during"
+                                                                                                        + " abort"));
                                                                     return coordinator
                                                                             .clearSourceProgress(
                                                                                     phaseParticipants,
@@ -658,6 +663,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                 "Actor authority is not Ready on the source: "
                                                         + key));
                             }
+                            ZLinkUserSpotRetireRuntime.requireRelocationCompletion(snapshot);
                             var authority =
                                     authorities
                                             .decode(snapshot.payload())

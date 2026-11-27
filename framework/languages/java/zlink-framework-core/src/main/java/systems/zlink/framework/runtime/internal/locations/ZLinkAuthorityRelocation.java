@@ -48,16 +48,23 @@ public final class ZLinkAuthorityRelocation {
         this.value = ((ObjectNode) value).deepCopy();
     }
 
-    record Completion(
+    public record Completion(
             long acceptedRequests,
             long completedResults,
             long pendingDeliveries,
             String reference,
             String sha256) {}
 
-    Completion completion() {
+    public Completion completion() {
         JsonNode completion = value.get("completion");
         return completion == null ? null : readCompletion(completion);
+    }
+
+    public ZLinkAuthorityRelocation committed(Long acceptedRequests) {
+        var committed = phase("committed");
+        return acceptedRequests == null
+                ? committed
+                : committed.withCompletion(new Completion(acceptedRequests, 0, 0, null, null));
     }
 
     boolean publishesCompletionAfter(ZLinkAuthorityRelocation previous) {

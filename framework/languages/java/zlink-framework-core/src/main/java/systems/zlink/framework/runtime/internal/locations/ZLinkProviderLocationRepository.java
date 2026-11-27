@@ -7,6 +7,7 @@ import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.LocationOperation;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -385,10 +386,12 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
 
     @Override
     public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
-            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateFence fence,
+            List<Long> acceptedRequests,
+            ZLinkStoreCancellation cancellation) {
         return observeStore(
                 LocationOperation.COMPARE_EXCHANGE,
-                () -> authority.commitAggregate(fence, cancellation));
+                () -> authority.commitAggregate(fence, acceptedRequests, cancellation));
     }
 
     @Override

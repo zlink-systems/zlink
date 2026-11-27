@@ -240,8 +240,10 @@ public final class ZLinkInMemoryLocationStore
 
     @Override
     public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
-            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
-        return authority.commitAggregate(fence, cancellation);
+            ZLinkAggregateFence fence,
+            List<Long> acceptedRequests,
+            ZLinkStoreCancellation cancellation) {
+        return authority.commitAggregate(fence, acceptedRequests, cancellation);
     }
 
     @Override

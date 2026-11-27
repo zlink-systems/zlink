@@ -13,6 +13,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.locations.*;
+import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode.PeerAuthorityFence;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
@@ -97,7 +98,13 @@ final class ZLinkTargetEarlyAdmissionTest {
             assertFalse(first.isDone());
             assertFalse(second.isDone());
             assertFalse(spot.isDone());
-            var opening = fixture.endpoint.publish(fixture.request).toCompletableFuture();
+            var opening =
+                    fixture.endpoint
+                            .publish(
+                                    fixture.request,
+                                    fixture.endpoint.prepareCompletions(
+                                            fixture.request, List.of(), Runnable::run))
+                            .toCompletableFuture();
             opening.get(5, TimeUnit.SECONDS);
             assertEquals(List.of("spot-1"), fixture.executed);
             assertFalse(first.isDone());
@@ -126,7 +133,13 @@ final class ZLinkTargetEarlyAdmissionTest {
             assertTrue(fixture.actorRead.isDone());
             assertFalse(actor.isDone());
             assertFalse(spot.isDone());
-            var opening = fixture.endpoint.publish(fixture.request).toCompletableFuture();
+            var opening =
+                    fixture.endpoint
+                            .publish(
+                                    fixture.request,
+                                    fixture.endpoint.prepareCompletions(
+                                            fixture.request, List.of(), Runnable::run))
+                            .toCompletableFuture();
             opening.get(5, TimeUnit.SECONDS);
             assertEquals(List.of("actor-1"), fixture.executed);
             assertFalse(spot.isDone());
@@ -149,7 +162,13 @@ final class ZLinkTargetEarlyAdmissionTest {
                 .toCompletableFuture()
                 .join();
         var first = fixture.spot(6, 1);
-        var opening = fixture.endpoint.publish(fixture.request).toCompletableFuture();
+        var opening =
+                fixture.endpoint
+                        .publish(
+                                fixture.request,
+                                fixture.endpoint.prepareCompletions(
+                                        fixture.request, List.of(), Runnable::run))
+                        .toCompletableFuture();
         assertFalse(opening.isDone());
         var late = new ArrayList<CompletableFuture<Integer>>();
         try {
@@ -368,6 +387,7 @@ final class ZLinkTargetEarlyAdmissionTest {
                             TARGET,
                             17,
                             coordinator,
+                            new InMemoryRelocationStore(),
                             new ZLinkUserSpotAggregateStagingOwner(backend),
                             ignored -> TestSpot.class,
                             (lane, record) -> {
@@ -428,7 +448,10 @@ final class ZLinkTargetEarlyAdmissionTest {
                     .toCompletableFuture()
                     .join();
             publication.complete(
-                    coordinator.commit(prepared, () -> false).toCompletableFuture().join());
+                    coordinator
+                            .commit(prepared, Map.of(), () -> false)
+                            .toCompletableFuture()
+                            .join());
             committed.set(true);
         }
 
@@ -484,7 +507,10 @@ final class ZLinkTargetEarlyAdmissionTest {
         }
 
         void open() throws Exception {
-            endpoint.publish(request).toCompletableFuture().get(5, TimeUnit.SECONDS);
+            endpoint.publish(
+                            request, endpoint.prepareCompletions(request, List.of(), Runnable::run))
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
         }
 
         private static void complete(CompletableFuture<Integer> result, List<Message> parts) {

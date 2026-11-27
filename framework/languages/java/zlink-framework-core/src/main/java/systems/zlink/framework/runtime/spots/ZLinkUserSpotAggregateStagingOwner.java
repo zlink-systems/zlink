@@ -27,6 +27,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -475,13 +476,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     for (var lane : backlog.finalRequest.acceptedJournal().entrySet()) {
                         for (var record : lane.getValue()) {
                             CompletionStage<Void> admitted =
-                                    enqueueBacklogTurn(
-                                            staged,
-                                            dispatches,
-                                            lane.getKey(),
-                                            record.payload(),
-                                            () -> backlog.replayer.replay(lane.getKey(), record),
-                                            null);
+                                    enqueueAcceptedBacklogTurn(
+                                            backlog, dispatches, lane.getKey(), record);
                             assert (admitted =
                                             backlog.debugProbe.completeOn(
                                                     admitted,
@@ -496,15 +492,12 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     int relayedIndex = 0;
                     for (PendingIngress ingress : backlog.relayed) {
                         CompletionStage<Void> admitted =
-                                enqueueBacklogTurn(
-                                        staged,
+                                enqueueAcceptedBacklogTurn(
+                                        backlog,
                                         dispatches,
                                         ingress.laneId(),
-                                        ingress.record(),
-                                        () ->
-                                                backlog.replayer.replayFrozen(
-                                                        ingress.laneId(), ingress.record()),
-                                        null);
+                                        new ZLinkSerialExecutionQueue.QueuedRecord(
+                                                1, ingress.record()));
                         assert (admitted =
                                         backlog.debugProbe.completeOn(
                                                 admitted,
@@ -525,9 +518,10 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                         dispatches,
                                         ingress.laneId(),
                                         ingress.record(),
-                                        ZLinkConfirmedReplay.after(
-                                                ingress.confirmation(),
-                                                () -> replayIngress(staged, ingress)),
+                                        ignored ->
+                                                ZLinkConfirmedReplay.after(
+                                                        ingress.confirmation(),
+                                                        () -> replayIngress(staged, ingress)),
                                         ingress);
                         assert (admitted = backlog.debugProbe.completeOn(admitted, obligation))
                                 != null;
@@ -538,25 +532,45 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 });
     }
 
+    private CompletionStage<Void> enqueueAcceptedBacklogTurn(
+            DurableBacklog backlog,
+            List<QueuedTurn> dispatches,
+            String laneId,
+            ZLinkSerialExecutionQueue.QueuedRecord record) {
+        return enqueueBacklogTurn(
+                backlog.staged,
+                dispatches,
+                laneId,
+                record.payload(),
+                terminal -> backlog.replayer.prepareReplay(laneId, record, terminal, ignored -> {}),
+                null);
+    }
+
     private CompletionStage<Void> enqueueBacklogTurn(
             Staged staged,
             List<QueuedTurn> dispatches,
             String laneId,
             byte[] record,
-            Supplier<CompletionStage<Void>> turn,
+            Function<CompletionStage<Void>, Supplier<CompletionStage<Void>>> prepareTurn,
             PendingIngress ingress) {
         var admission = new CompletableFuture<Void>();
+        var terminal = new CompletableFuture<Void>();
         try {
+            var turn = prepareTurn.apply(terminal);
             backend.enqueueIngress(staged.spot, dispatches, laneId, record, turn, admission)
                     .whenComplete(
                             (ignored, failure) -> {
-                                if (failure != null) {
+                                if (failure == null) {
+                                    terminal.complete(null);
+                                } else {
+                                    terminal.completeExceptionally(unwrap(failure));
                                     admission.completeExceptionally(unwrap(failure));
                                     if (ingress != null)
                                         notifyIngressFailure(ingress, unwrap(failure));
                                 }
                             });
         } catch (RuntimeException failure) {
+            terminal.completeExceptionally(failure);
             admission.completeExceptionally(failure);
             if (ingress != null) notifyIngressFailure(ingress, failure);
         }
@@ -804,10 +818,6 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 java.util.function.Consumer<CompletionStage<Void>> observe) {
             observe.accept(terminal);
             return () -> replay(laneId, record);
-        }
-
-        default CompletionStage<Void> replayFrozen(String laneId, byte[] frozenRecord) {
-            return replay(laneId, new ZLinkSerialExecutionQueue.QueuedRecord(1, frozenRecord));
         }
     }
 

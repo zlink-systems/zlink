@@ -4600,7 +4600,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 pending.completion.completeExceptionally(failure);
             }
         }
-        return pending.completion;
+        return pending.completion.exceptionallyCompose(
+                failure -> CompletableFuture.failedFuture(requestFailure(failure)));
     }
 
     @Override

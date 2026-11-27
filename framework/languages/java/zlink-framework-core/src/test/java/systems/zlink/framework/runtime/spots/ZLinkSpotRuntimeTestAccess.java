@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
@@ -16,6 +17,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -26,10 +28,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -116,6 +120,7 @@ public final class ZLinkSpotRuntimeTestAccess {
             ZLinkLocationRepository locations,
             ZLinkStoreLocationResolvers locationResolvers,
             ZLinkLocationRepository authorities,
+            systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore completionStore,
             ZLinkLocationOptions options,
             ZLinkRelocationAdapterRegistry adapters,
             long applicationVersion,
@@ -133,6 +138,7 @@ public final class ZLinkSpotRuntimeTestAccess {
                 locations,
                 locationResolvers,
                 authorities,
+                completionStore,
                 options,
                 adapters,
                 applicationVersion,
@@ -142,6 +148,52 @@ public final class ZLinkSpotRuntimeTestAccess {
                 stateMachines,
                 authorityStoreDecorator,
                 targetNormalizerDecorator);
+    }
+
+    static ZLinkSpotRetireControl.TargetEndpoint unusedRelocationTarget() {
+        return new ZLinkSpotRetireControl.TargetEndpoint() {
+            @Override
+            public CompletionStage<Void> stage(ZLinkSpotRetireControl.StageRequest request) {
+                return CompletableFuture.failedFuture(unexpectedTargetCall());
+            }
+
+            @Override
+            public ZLinkTargetRelocationCompletions prepareCompletions(
+                    ZLinkSpotRetireControl.StageRequest request,
+                    List<byte[]> verifiedBatch,
+                    Consumer<Runnable> resubmit) {
+                throw unexpectedTargetCall();
+            }
+
+            @Override
+            public CompletionStage<Void> publish(
+                    ZLinkSpotRetireControl.StageRequest request,
+                    ZLinkTargetRelocationCompletions completions) {
+                return CompletableFuture.failedFuture(unexpectedTargetCall());
+            }
+
+            @Override
+            public CompletionStage<Void> abort(ZLinkSpotRetireControl.StageRequest request) {
+                return CompletableFuture.failedFuture(unexpectedTargetCall());
+            }
+
+            private AssertionError unexpectedTargetCall() {
+                return new AssertionError("source must not act as target");
+            }
+        };
+    }
+
+    static ZLinkTargetRelocationCompletions noAcceptedRelocationRequests(
+            ZLinkSpotRetireControl.StageRequest request, Consumer<Runnable> resubmit) {
+        var locations = new ZLinkInMemoryLocationStore();
+        return new ZLinkTargetRelocationCompletions(
+                request,
+                new systems.zlink.framework.runtime.internal.locations
+                        .ZLinkAggregateRelocationCoordinator(locations),
+                locations,
+                new InMemoryRelocationStore(),
+                resubmit,
+                List.of());
     }
 
     public static int targetAttemptCount(Object stateMachine) {
