@@ -221,8 +221,8 @@ Connector는 다음과 같이 처리한다.
   - Node는 유효한 ticket을 가진 인증을 handler에 넣기 전에 대기열 Spot에 `AdmitPermit` Spot request를 한 번 보낸다. 내용은 node
     RID, node owner lease(`ownerId`, `leaseGeneration`), SessionRid, ticket의 epoch와 `requestSeq`다. `requestSeq`는 node incarnation 안에서
     단조 증가하는 요청 순번이고 Spot은 permit에 그 순번을 기록한다. Spot은 `실행 중 permit 수 < AdmissionGlobalLimit`
-    이고 epoch가 현재 값이면 permit ID(0이 아닌 64-bit)를 Response로 주고, 아니면 §3.4 첫 행과 같은 `unavailable`+queueRequired로
-    거절한다. 거절된 연결은 §3.5.5대로 다시 대기한다.
+    이고 epoch가 현재 값이면 `granted`=true와 permit ID(0이 아닌 64-bit)를 Response로 주고, 아니면 `granted`=false Response를 준다(§3.5.8).
+    Node는 거절을 받으면 client에 §3.4 첫 행과 같은 `unavailable`+queueRequired를 보내고, 그 연결은 §3.5.5대로 다시 대기한다.
   - Node는 handler가 끝나면(성공·실패·취소 모두) `ReleasePermit` Spot send로 permit을 반납한다. Spot은 같은 permit의 반납을
     멱등으로 처리한다.
   - Spot은 permit마다 node owner lease를 기록하고, 그 lease가 끝난 node의 permit을 모두 회수한다. Node 보고(§3.5.3)는
@@ -282,8 +282,10 @@ Connector는 다음과 같이 처리한다.
 
 #### 3.5.8 대기열 Spot 등록과 node 간 메시지
 
-- 대기열 Spot의 Spot type은 Framework Instance Spot type `$zlink.AdmissionQueue`다. 2단계를 켠 node는 대기열 RouteMesh(§3.5.0)에
-  이 type을 등록한다. 그 mesh에 Location Store가 없거나 Object role이 `None`이면 시작할 때 설정 오류다.
+- 대기열 Spot의 Spot type은 Framework Instance Spot type `$zlink.AdmissionQueue`다. 2단계를 켠 node 중 대기열 RouteMesh(§3.5.0)의
+  Object role이 Server인 node만 이 type을 등록한다(배치 후보). Object Client node는 등록하지 않고 메시지만 보낸다(기존 Instance Spot
+  intent). 그 mesh에 Location Store가 없거나 Object role이 `None`이면 시작할 때 설정 오류다. 실행 중 그 mesh에 Server node가 없으면
+  `enqueue`·`report`가 실패하고 node는 §3.5.1대로 ticket을 모두 거절한다.
 - 대기열 Spot과 node 사이 메시지는 아래 네 가지이며 기존 typed JSON 규칙([Message model §5](../00-foundation/05-message-model.ko.md))을
   따른다. 필드 이름은 camelCase, `dec`는 64-bit 정수의 10진 문자열, `b64`는 padding 없는 base64url이다. 모든 필드는 필수이고
   `?`가 붙은 것만 선택이다. 알 수 없는 필드는 무시하고, 빠진 필수 필드나 형식 오류는 protocol error다.
@@ -301,7 +303,7 @@ Connector는 다음과 같이 처리한다.
 |---|---|---|---|
 | `$zlink.admission-queue.enqueue` | request | `connection` Connection | `epoch` dec · `delivery` Delivery |
 | `$zlink.admission-queue.report` | request(1초마다, §3.5.3) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `limit` int32 · `inFlight` int32 · `usedTickets` [{`streamName`, `sessionRid`}] · `endedSessions` [{`streamName`, `sessionRid`}] · `heldPermits` [dec] · `resolvedRequestSeq` dec(전역 상한이 없으면 `"0"`) | `epoch` dec · `deliveries` [Delivery](이 node 대기자 중 순번·예상 대기가 바뀐 것, 5초가 지난 것, 새 ticket) |
-| `$zlink.admission-queue.admit-permit` | request(§3.5.3 전역 상한) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `ownerId` string · `leaseGeneration` dec · `streamName` string · `sessionRid` b64 · `epoch` dec · `requestSeq` dec | `permitId` dec(0이 아님). 거절은 Response가 아니라 `unavailable` + `$zlink.admission.queueRequired`=`"1"` 실패다 |
+| `$zlink.admission-queue.admit-permit` | request(§3.5.3 전역 상한) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `ownerId` string · `leaseGeneration` dec · `streamName` string · `sessionRid` b64 · `epoch` dec · `requestSeq` dec | `granted` bool · `permitId?` dec(`granted`면 필수, 0이 아님). 거절도 Response(`granted`=false)이고, node는 그때 client에 §3.4 첫 행(`unavailable` + queueRequired)을 보낸다 |
 | `$zlink.admission-queue.release-permit` | send | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `permitId` dec | — |
 
 ## 4. 시험

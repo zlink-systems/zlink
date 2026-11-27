@@ -254,8 +254,8 @@ Instance Spot default mesh), that's a configuration error at startup. Every node
     request carrying the node RID, the node owner lease (`ownerId`, `leaseGeneration`), the SessionRid, the ticket's epoch,
     and `requestSeq`, a request sequence that increases monotonically within the node incarnation; the Spot records it on the permit.
     While `executing permits < AdmissionGlobalLimit` and the epoch is current, the Spot answers with a permit ID (a nonzero
-    64-bit value); otherwise it rejects with `unavailable` + queueRequired, as in the first row of §3.4. A rejected connection
-    waits again per §3.5.5.
+    64-bit value) with `granted`=true; otherwise it answers `granted`=false (§3.5.8). On a rejection the node sends the client
+    `unavailable` + queueRequired, as in the first row of §3.4, and that connection waits again per §3.5.5.
   - When the handler ends (success, failure, or cancellation), the node returns the permit with a `ReleasePermit` Spot send. The
     Spot treats repeated returns of the same permit as idempotent.
   - The Spot records the node owner lease of each permit and reclaims every permit of a node whose lease ended. A node report (§3.5.3)
@@ -323,9 +323,11 @@ Instance Spot default mesh), that's a configuration error at startup. Every node
 
 #### 3.5.8 Queue Spot Registration and Node Messages
 
-- The queue Spot's Spot type is the Framework Instance Spot type `$zlink.AdmissionQueue`. A node with stage 2 on registers this
-  type in the queue RouteMesh (§3.5.0). If that mesh has no Location Store or its Object role is `None`, that's a configuration
-  error at startup.
+- The queue Spot's Spot type is the Framework Instance Spot type `$zlink.AdmissionQueue`. Among nodes with stage 2 on, only those whose
+  Object role in the queue RouteMesh (§3.5.0) is Server register this type (as placement candidates). An Object Client node doesn't
+  register it and only sends the messages (the existing Instance Spot intent). If that mesh has no Location Store or its Object role
+  is `None`, that's a configuration error at startup. If the mesh has no Server node at runtime, `enqueue` and `report` fail and the
+  node rejects every ticket per §3.5.1.
 - The messages between the queue Spot and nodes are the four below and follow the existing typed JSON rules
   ([Message model §5](../00-foundation/05-message-model.en.md)). Field names are camelCase, `dec` is a 64-bit integer as a
   decimal string, and `b64` is unpadded base64url. Every field is required except those marked `?`. Unknown fields are ignored;
@@ -345,7 +347,7 @@ Common shapes
 |---|---|---|---|
 | `$zlink.admission-queue.enqueue` | request | `connection` Connection | `epoch` dec · `delivery` Delivery |
 | `$zlink.admission-queue.report` | request (every second, §3.5.3) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `limit` int32 · `inFlight` int32 · `usedTickets` [{`streamName`, `sessionRid`}] · `endedSessions` [{`streamName`, `sessionRid`}] · `heldPermits` [dec] · `resolvedRequestSeq` dec (`"0"` without a global limit) | `epoch` dec · `deliveries` [Delivery] (this node's waiting clients whose position or estimate changed, whose 5 seconds passed, and new tickets) |
-| `$zlink.admission-queue.admit-permit` | request (§3.5.3 global limit) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `ownerId` string · `leaseGeneration` dec · `streamName` string · `sessionRid` b64 · `epoch` dec · `requestSeq` dec | `permitId` dec (nonzero). A rejection isn't a Response but an `unavailable` + `$zlink.admission.queueRequired`=`"1"` failure |
+| `$zlink.admission-queue.admit-permit` | request (§3.5.3 global limit) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `ownerId` string · `leaseGeneration` dec · `streamName` string · `sessionRid` b64 · `epoch` dec · `requestSeq` dec | `granted` bool · `permitId?` dec (required and nonzero when `granted`). A rejection is also a Response (`granted`=false); the node then sends the client the first row of §3.4 (`unavailable` + queueRequired) |
 | `$zlink.admission-queue.release-permit` | send | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `permitId` dec | — |
 
 ## 4. Tests
