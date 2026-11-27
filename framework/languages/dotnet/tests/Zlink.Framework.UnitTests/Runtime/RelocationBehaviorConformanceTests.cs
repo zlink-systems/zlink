@@ -140,6 +140,145 @@ public sealed partial class RelocationBehaviorConformanceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task LateRemoteRequestRequiresSuccessfulJoinCompletion(bool failCompletion)
+    {
+        var flowDirectory =
+            Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_DIRECTORY")
+            ?? Common.FrameworkTestEnvironment.CreateTestLogDirectory("late-remote-join");
+        var actorId = $"late-remote-join-{Guid.NewGuid():N}";
+        using var flow = new TestHostMessageFlowListener(
+            Path.Combine(flowDirectory, $"{actorId}.flow")
+        );
+        var trace = new RelocationBehaviorTrace
+        {
+            ActorId = actorId,
+            ConfigureTarget = context =>
+                context.Handlers.AddActorPacket<JoinCallbackSendHandler, BehaviorActor>(
+                    nameof(JoinCallbackSend)
+                ),
+        };
+        if (failCompletion)
+            trace.OnPublicJoinCompleted = _ =>
+                throw new InvalidOperationException("Controlled remote Join completion failure.");
+        trace.ReleaseJoinHandler.SetResult();
+        trace.ReleaseSourceLeave.SetResult();
+        trace.ReleaseTargetLifecycle.SetResult();
+        var store = new RecordingLocationStore(new ZLinkInMemoryProviderLocationStore(), trace);
+        var relocationStore = new SynchronizedRelocationStore();
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            store,
+            relocationStore,
+            registerTargetSpot: false
+        );
+        var created = Assert.IsType<ZLinkActorCreateResult.Created>(
+            await source
+                .Services.GetRequiredService<IZLinkActorManager>()
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                .InMesh(RelocationBehaviorHost.MeshName)
+                .Request(new BehaviorCreate(7))
+                .Async()
+        );
+        Assert.Equal(source.LocalNodeRid, created.Actor.NodeRid);
+        trace.SourceNodeRid = source.LocalNodeRid;
+        trace.SourceObjectGeneration = created.Actor.ObjectGeneration;
+        await store.ObserveActorAuthorityAsync(actorId);
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            store,
+            relocationStore,
+            registerTargetSpot: true
+        );
+        await using var sender = await RelocationBehaviorHost.StartAsync(
+            "sender",
+            trace,
+            store,
+            relocationStore,
+            registerTargetSpot: false
+        );
+        foreach (var host in new[] { source, target, sender })
+        {
+            host.Runtime.Registration.DispatchOptions.Diagnostics.SetLevel(
+                ZLinkDiagnosticsLevel.Normal
+            );
+            await WaitUntilAsync(() =>
+                host.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                    .Node.Status()
+                    .ActivePeerCount == 2
+            );
+        }
+        var spot = await target
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate($"{actorId}-spot", RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Request(ZLinkMessage.Empty)
+            .Async();
+        Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
+        trace.TargetNodeRid = target.LocalNodeRid;
+        await source
+            .Services.GetRequiredService<IZLinkActorClient>()
+            .RequestToActor(actorId, new BeginBehaviorJoin(spot.Spot.SpotId))
+            .Async<BehaviorAck>();
+        await trace.WaitAsync("publicJoinCompleted");
+        var completion = Assert.Single(trace.JoinCompletions);
+        Assert.Equal("target", completion.Node);
+        Assert.IsType<ZLinkActorJoinCompletion.Accepted>(completion.Completion);
+        Assert.True(target.Runtime.TryGetActorState(actorId, out var targetState));
+        await WaitUntilAsync(() => targetState.PendingLifecycleCount == 0);
+
+        const string marker = "direct";
+        var client = sender.Services.GetRequiredService<IZLinkActorClient>();
+        var request = client
+            .RequestToActor(actorId, new BehaviorWork(marker))
+            .Timeout(TimeSpan.FromSeconds(5));
+        var start = Stopwatch.StartNew();
+        if (failCompletion)
+        {
+            var failure = await Record.ExceptionAsync(async () =>
+            {
+                await request.Async<BehaviorAck>();
+            });
+            Assert.True(
+                failure is ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.Unavailable }
+                    && start.Elapsed < TimeSpan.FromSeconds(1)
+                    && trace.DeliveredMarkers.Count == 0,
+                $"result={(failure as ZLinkFrameworkException)?.Kind.ToString() ?? failure?.GetType().Name ?? "reply"} elapsed={start.Elapsed} handler_calls={trace.DeliveredMarkers.Count}"
+            );
+        }
+        else
+        {
+            Assert.Equal(marker, (await request.Async<BehaviorAck>()).Marker);
+            Assert.Equal([marker], trace.DeliveredMarkers);
+        }
+
+        Assert.Equal(spot.Spot.SpotId, targetState.SpotId);
+        Assert.False(targetState.Handoff.BlocksLocalDispatch);
+        await client.SendToActor(actorId, new JoinCallbackSend()).Async();
+        await WaitUntilAsync(
+            () =>
+                trace.Events.Contains("joinedSendDelivered")
+                || flow.ReadLines()
+                    .Any(line =>
+                        line.Contains(
+                            $"packet={nameof(JoinCallbackSend)} ",
+                            StringComparison.Ordinal
+                        )
+                        && line.Contains($"\"actor_id\":\"{actorId}\"", StringComparison.Ordinal)
+                        && line.Contains("\"action\":\"drop\"", StringComparison.Ordinal)
+                    ),
+            TimeSpan.FromSeconds(3)
+        );
+        Assert.Equal(
+            failCompletion ? 0 : 1,
+            trace.Events.Count(name => name == "joinedSendDelivered")
+        );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task Session_bind_uses_authenticated_ingress_before_reverse_route_is_ready(
         bool staleActor
     )
