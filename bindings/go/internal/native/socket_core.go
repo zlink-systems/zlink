@@ -189,7 +189,8 @@ func (s *socketCore) getStringOption(option C.zlink_option_t, capHint int) (stri
 	if err != nil {
 		return "", err
 	}
-	return string(buf[:int(size)]), nil
+	// Core reports the size including the terminating NUL.
+	return strings.TrimSuffix(string(buf[:int(size)]), "\x00"), nil
 }
 
 func (s *socketCore) setOption(option C.zlink_option_t, ptr unsafe.Pointer, size C.size_t) error {

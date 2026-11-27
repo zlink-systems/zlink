@@ -98,12 +98,14 @@ func (s *connectionSocket) SetIPv6(value bool) error {
 // Deprecated: use CommonOptions().IPv6.
 func (s *connectionSocket) IPv6() (bool, error) { return s.CommonOptions().IPv6() }
 
+// Deprecated: use CommonOptions().SetRidDuplicatePolicy.
 func (s *connectionSocket) SetRidDuplicatePolicy(value int) error {
-	return s.setIntOption(C.ZLINK_OPT_RID_DUPLICATE_POLICY, int32(value))
+	return s.CommonOptions().SetRidDuplicatePolicy(RidDuplicatePolicy(value))
 }
 
+// Deprecated: use CommonOptions().RidDuplicatePolicy.
 func (s *connectionSocket) RidDuplicatePolicy() (int, error) {
-	value, err := s.getIntOption(C.ZLINK_OPT_RID_DUPLICATE_POLICY)
+	value, err := s.CommonOptions().RidDuplicatePolicy()
 	return int(value), err
 }
 
@@ -152,7 +154,7 @@ func (s *connectionSocket) CommonOptions() *CommonSocketOptions {
 }
 
 func (s *connectionSocket) LastEndpoint() (string, error) {
-	return s.getStringOption(C.ZLINK_OPT_LAST_ENDPOINT, 256)
+	return s.getStringOption(C.ZLINK_OPT_LAST_ENDPOINT, 1024)
 }
 
 func (s *connectionSocket) setPubBoolOption(option C.zlink_pub_option_t, value bool) error {
