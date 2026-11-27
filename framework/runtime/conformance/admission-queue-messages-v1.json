@@ -9,7 +9,7 @@
       "name": "enqueue-position",
       "packetName": "$zlink.admission-queue.enqueue",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:302",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:304",
       "request": {
         "connection": {
           "nodeRid": "bm9kZS1h",
@@ -33,7 +33,7 @@
       "name": "enqueue-ticket",
       "packetName": "$zlink.admission-queue.enqueue",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:302",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:304",
       "request": {
         "connection": {
           "nodeRid": "bm9kZS1h",
@@ -57,7 +57,7 @@
       "name": "report",
       "packetName": "$zlink.admission-queue.report",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:303",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:305",
       "request": {
         "nodeRid": "bm9kZS1h",
         "nodeLifecycleGeneration": "7",
@@ -105,7 +105,7 @@
       "name": "report-no-global-limit",
       "packetName": "$zlink.admission-queue.report",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:303",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:305",
       "request": {
         "nodeRid": "bm9kZS1h",
         "nodeLifecycleGeneration": "7",
@@ -125,7 +125,7 @@
       "name": "admit-permit",
       "packetName": "$zlink.admission-queue.admit-permit",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:304",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:306",
       "request": {
         "nodeRid": "bm9kZS1h",
         "nodeLifecycleGeneration": "7",
@@ -137,6 +137,7 @@
         "requestSeq": "12"
       },
       "response": {
+        "granted": true,
         "permitId": "12"
       }
     },
@@ -144,7 +145,7 @@
       "name": "admit-permit-rejected",
       "packetName": "$zlink.admission-queue.admit-permit",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:304",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:306",
       "request": {
         "nodeRid": "bm9kZS1h",
         "nodeLifecycleGeneration": "7",
@@ -155,18 +156,15 @@
         "epoch": "41",
         "requestSeq": "13"
       },
-      "failure": {
-        "errorCode": "unavailable",
-        "metadata": {
-          "$zlink.admission.queueRequired": "1"
-        }
+      "response": {
+        "granted": false
       }
     },
     {
       "name": "release-permit",
       "packetName": "$zlink.admission-queue.release-permit",
       "kind": "send",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:305",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:307",
       "send": {
         "nodeRid": "bm9kZS1h",
         "nodeLifecycleGeneration": "7",
@@ -244,6 +242,14 @@
         "future": true
       },
       "expect": "accepted"
+    },
+    {
+      "name": "granted-without-permit-id",
+      "packetName": "$zlink.admission-queue.admit-permit",
+      "responsePayload": {
+        "granted": true
+      },
+      "expect": "protocolError"
     }
   ]
 }
