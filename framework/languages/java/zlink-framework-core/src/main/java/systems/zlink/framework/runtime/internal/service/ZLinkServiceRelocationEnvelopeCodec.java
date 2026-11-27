@@ -283,12 +283,10 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
                 new Text8(value.name()),
                 new Text8(value.handlerType()),
                 new NonzeroU64(value.periodMilliseconds()),
-                switch (value.overrunPolicy()) {
-                    case 1 -> TimerOverrunPolicyKind.SKIP_LATE_TICKS;
-                    case 2 -> TimerOverrunPolicyKind.CATCH_UP_BOUNDED;
-                    case 3 -> TimerOverrunPolicyKind.DELAY_NEXT_TICK;
-                    default -> throw invalid("timer overrun policy");
-                },
+                Arrays.stream(TimerOverrunPolicyKind.values())
+                        .filter(policy -> policy.wire == value.overrunPolicy())
+                        .findFirst()
+                        .orElseThrow(() -> invalid("timer overrun policy")),
                 new NonzeroU64(value.maxCatchUpTicks()),
                 value.stopOnUnhandledException() ? Bool8.TRUE : Bool8.FALSE,
                 new OrdinalOrZero(value.lastCompletedDeliveryIndex()),

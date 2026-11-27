@@ -18,6 +18,7 @@ import java.util.Optional;
 /** Canonical service-wire-v1 frozen Spot and Actor operation encoder. */
 public final class ZLinkServiceFrozenRecordCodec {
     public static final int ACCEPTED_RECORD_OVERHEAD_BYTES = 512;
+    private static final int MAX_UTF8_BYTES_PER_UTF16_CODE_UNIT = 3;
 
     private ZLinkServiceFrozenRecordCodec() {}
 
@@ -199,7 +200,8 @@ public final class ZLinkServiceFrozenRecordCodec {
             ZLinkServiceM6BWireCodec.InstanceRouteFence target) {
         // These Ready authority fields add UTF-8 text to the ordinary Spot record overhead.
         return ACCEPTED_RECORD_OVERHEAD_BYTES
-                + 3 * (target.ownerId().length() + target.storeVersion().length());
+                + MAX_UTF8_BYTES_PER_UTF16_CODE_UNIT
+                        * (target.ownerId().length() + target.storeVersion().length());
     }
 
     public static byte[] encodeInstanceSpot(

@@ -267,9 +267,11 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 .exceptionallyCompose(
                         failure -> {
                             Throwable cause = unwrapCompletion(failure);
+                            if (cause instanceof SourceReleaseFailure) {
+                                return failed(cause.getCause());
+                            }
                             if (unit.kind() != ZLinkPlacementObjectKind.INSTANCE_SPOT
-                                    || cancellation.isCancellationRequested()
-                                    || cause.getSuppressed().length != 0) {
+                                    || cancellation.isCancellationRequested()) {
                                 return failed(failure);
                             }
                             return locations
@@ -641,7 +643,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                                     seal,
                                                                     sealedSessions.get(),
                                                                     true));
-                                                    return failed(cause);
+                                                    return failed(new SourceReleaseFailure(cause));
                                                 }
                                                 if (relocationReplies != null) {
                                                     admission
@@ -1866,6 +1868,12 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
         private Captured withSessionRoutes(List<ZLinkSpotRetireControl.SessionRouteFence> exact) {
             return new Captured(inventory, staging, exact);
+        }
+    }
+
+    private static final class SourceReleaseFailure extends RuntimeException {
+        private SourceReleaseFailure(Throwable cause) {
+            super(cause);
         }
     }
 
