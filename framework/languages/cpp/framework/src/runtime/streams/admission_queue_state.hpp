@@ -44,14 +44,23 @@ class queue_state_t
     friend struct queue_fixture_t;
     using steady_time_t = std::chrono::steady_clock::time_point;
 
+    enum class ticket_delivery_t
+    {
+        pending,
+        delivered,
+        used
+    };
+
     struct waiter_t
     {
         connection_t connection;
         std::optional<issued_ticket_t> ticket;
         std::uint64_t expiration{};
         std::optional<position_t> last_position;
-        bool ticket_delivered = false;
+        ticket_delivery_t ticket_delivery = ticket_delivery_t::pending;
         steady_time_t last_push;
+
+        bool is_queued () const noexcept { return ticket_delivery != ticket_delivery_t::used; }
     };
 
     struct report_state_t

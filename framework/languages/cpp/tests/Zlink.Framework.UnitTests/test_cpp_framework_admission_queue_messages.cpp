@@ -49,13 +49,15 @@ void check (bool passed, const json_t &fixture)
 
 } // namespace
 
-int main ()
+int main (int argc, char *argv[])
 {
     try {
-        const auto fixture = json_t::parse (std::ifstream (ZLINK_ADMISSION_MESSAGES_PATH));
-        if (fixture.at ("messages").size () < 7 || fixture.at ("invalid").size () < 7
+        const auto fixture =
+          json_t::parse (std::ifstream (argc == 2 ? argv[1] : ZLINK_ADMISSION_MESSAGES_PATH));
+        if (fixture.at ("messages").size () != 8 || fixture.at ("invalid").size () != 9
             || fixture.at ("spotType") != spot_type)
-            throw std::runtime_error ("Unexpected admission message fixture contract");
+            throw std::runtime_error (
+              "Expected 8 messages and 9 invalid entries for the admission queue spot type");
         for (const auto &entry : fixture.at ("messages")) {
             const auto packet = entry.at ("packetName").get<std::string> ();
             const auto &request = entry.at (packet == release_packet ? "send" : "request");

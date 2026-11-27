@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <ranges>
 #include <stdexcept>
 
 namespace zlink::framework::runtime::admission_queue
@@ -11,6 +12,7 @@ namespace zlink::framework::runtime::admission_queue
 namespace
 {
 using namespace std::chrono_literals;
+constexpr char signing_key[] = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 
 bytes_t bytes (std::string_view value)
 {
@@ -44,6 +46,56 @@ std::optional<std::int32_t> global_limit (const json_t &value)
         return value.at ("globalLimit").get<std::int32_t> ();
     return {};
 }
+
+void test_used_ticket_can_admit_until_expiry ()
+{
+    constexpr std::uint64_t epoch = 42;
+    const auto signer = std::make_shared<ticket_signer_t> (signing_key, std::nullopt);
+    queue_state_t state (signer, 1, epoch);
+    queue_time_t now{std::chrono::steady_clock::time_point (10s), 1'700'000'000'000};
+    const auto first = connection ("first");
+    const auto second = connection ("second");
+    const auto third = connection ("third");
+    const auto node = node_of (first);
+    auto report = node_report_t{.node = node, .limit = 3};
+    auto admit = [&] (const connection_t &identity, std::uint64_t seq) {
+        return state.admit ({identity, {"owner", 1}, epoch, seq}, now);
+    };
+
+    if (!state.accept_report (report, now).empty ()
+        || !std::holds_alternative<issued_ticket_t> (state.enqueue (first, now).delivery.value)
+        || std::get<position_t> (state.enqueue (second, now).delivery.value).position != 1
+        || std::get<position_t> (state.enqueue (third, now).delivery.value).position != 2)
+        throw std::runtime_error ("used-ticket: expected first ticket and two queued sessions");
+    const auto permit = admit (first, 1);
+    if (permit == 0)
+        throw std::runtime_error ("used-ticket: first permit denied");
+    state.release ({node, permit});
+
+    report.used = {session_of (first)};
+    if (!state.accept_report (report, now).empty ())
+        throw std::runtime_error ("used-ticket: unexpected lease lookup");
+    const auto deliveries = state.finish_report (node, now).deliveries;
+    if (deliveries.size () != 2 || deliveries[0].session != session_of (second)
+        || !std::holds_alternative<issued_ticket_t> (deliveries[0].value)
+        || deliveries[1].session != session_of (third)
+        || std::get<position_t> (deliveries[1].value).position != 1)
+        throw std::runtime_error ("used-ticket: expected second ticket and third at position 1");
+
+    auto other_incarnation = first;
+    ++other_incarnation.node_generation;
+    if (admit (other_incarnation, 2) != 0)
+        throw std::runtime_error ("used-ticket: permit granted to a different node incarnation");
+    const auto retry = admit (first, 2);
+    if (retry == 0)
+        throw std::runtime_error ("used-ticket: same-connection permit denied before expiry");
+    state.release ({node, retry});
+
+    now.steady += std::chrono::milliseconds (ticket_lifetime_ms + 1);
+    now.unix_ms += ticket_lifetime_ms + 1;
+    if (admit (first, 3) != 0)
+        throw std::runtime_error ("used-ticket: permit granted after expiry");
+}
 } // namespace
 
 struct queue_fixture_t
@@ -51,8 +103,7 @@ struct queue_fixture_t
     explicit queue_fixture_t (const json_t &entry) :
         fixture (entry),
         given (entry.at ("given")),
-        signer (std::make_shared<ticket_signer_t> ("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-                                                   std::nullopt)),
+        signer (std::make_shared<ticket_signer_t> (signing_key, std::nullopt)),
         state (signer, global_limit (given), given.value ("epoch", 42u)),
         now{std::chrono::steady_clock::time_point (10s), 1'700'000'000'000}
     {
@@ -107,20 +158,26 @@ struct queue_fixture_t
             seed_ticket (wait (connection ("expired")), now.unix_ms + 1);
     }
 
+    auto queued_waiters () const
+    {
+        return state._waiters | std::views::filter (&queue_state_t::waiter_t::is_queued);
+    }
+
     void run ()
     {
         for (const auto &step : fixture.at ("steps")) {
             const auto action = step.at ("action").get<std::string> ();
             const auto &expect = step.at ("expect");
             if (action == "enqueue") {
-                const auto before = state._waiters.size ();
+                const auto before = std::ranges::distance (queued_waiters ());
                 const auto identity = connection (step.contains ("sessionRid") ? step : given);
                 auto reply = state.enqueue (identity, now);
                 if (expect.contains ("position"))
                     check (std::get<position_t> (reply.delivery.value).position
                            == expect.at ("position"));
                 if (expect.contains ("newWaiters"))
-                    check (state._waiters.size () - before == expect.at ("newWaiters"));
+                    check (std::ranges::distance (queued_waiters ()) - before
+                           == expect.at ("newWaiters"));
                 if (expect.contains ("ticket") && !expect.at ("ticket").is_null ())
                     check (std::get<issued_ticket_t> (reply.delivery.value).ticket
                            == issued_ticket);
@@ -151,7 +208,7 @@ struct queue_fixture_t
                 }
                 if (expect.contains ("waiting")) {
                     json_t waiting = json_t::array ();
-                    for (const auto &waiter : state._waiters)
+                    for (const auto &waiter : queued_waiters ())
                         waiting.push_back ({{"node", text (waiter.connection.node_rid)},
                                             {"sessionRid", text (waiter.connection.session_rid)}});
                     check (waiting == expect.at ("waiting"));
@@ -191,7 +248,7 @@ struct queue_fixture_t
                 state.owner_lease_ended ({step.at ("ownerId"), step.at ("leaseGeneration")});
             } else if (action == "nodeWaiters") {
                 json_t order = json_t::array ();
-                for (const auto &waiter : state._waiters)
+                for (const auto &waiter : queued_waiters ())
                     if (text (waiter.connection.node_rid) == step.at ("node").get<std::string> ())
                         order.push_back (text (waiter.connection.session_rid));
                 check (order == expect.at ("order"));
@@ -268,7 +325,7 @@ struct queue_fixture_t
     json_t sessions (bool ticketed) const
     {
         auto result = json_t::array ();
-        for (const auto &waiter : state._waiters)
+        for (const auto &waiter : queued_waiters ())
             if (waiter.ticket.has_value () == ticketed)
                 result.push_back (text (waiter.connection.session_rid));
         return result;
@@ -294,12 +351,14 @@ int main (int argc, char *argv[])
         const auto fixture =
           json_t::parse (std::ifstream (argc == 2 ? argv[1] : ZLINK_ADMISSION_QUEUE_PATH));
         const auto &scenarios = fixture.at ("queueScenarios");
-        if (scenarios.size () < 20)
-            throw std::runtime_error ("Expected twenty queue scenarios");
+        if (scenarios.size () != 22)
+            throw std::runtime_error ("Expected 22 queue scenarios");
         for (const auto &scenario : scenarios) {
             queue_fixture_t (scenario).run ();
             std::cout << "PASS " << scenario.at ("name").get<std::string> () << '\n';
         }
+        test_used_ticket_can_admit_until_expiry ();
+        std::cout << "PASS used-ticket-can-admit-until-expiry\n";
     }
     catch (const std::exception &error) {
         std::cerr << "FAIL " << error.what () << '\n';

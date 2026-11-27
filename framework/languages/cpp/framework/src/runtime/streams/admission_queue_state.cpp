@@ -52,12 +52,21 @@ std::set<owner_t> queue_state_t::accept_report (const node_report_t &report, que
     });
     _reports.insert_or_assign (
       report.node, report_state_t{now.steady, std::max (0, report.limit - report.in_flight)});
-    std::set removed (report.used.begin (), report.used.end ());
-    removed.insert (report.ended.begin (), report.ended.end ());
-    _waiters.remove_if ([&] (const auto &waiter) {
-        return node_of (waiter.connection) == report.node
-               && removed.contains (session_of (waiter.connection));
-    });
+    const std::set used (report.used.begin (), report.used.end ());
+    const std::set ended (report.ended.begin (), report.ended.end ());
+    for (auto waiter = _waiters.begin (); waiter != _waiters.end ();) {
+        if (node_of (waiter->connection) == report.node) {
+            const auto session = session_of (waiter->connection);
+            const bool reported_used = used.contains (session);
+            if (ended.contains (session) || (reported_used && !waiter->ticket)) {
+                waiter = _waiters.erase (waiter);
+                continue;
+            }
+            if (reported_used)
+                waiter->ticket_delivery = ticket_delivery_t::used;
+        }
+        ++waiter;
+    }
     return issue (now) ? permit_owners () : std::set<owner_t>{};
 }
 
@@ -79,7 +88,7 @@ report_reply_t queue_state_t::finish_report (const node_t &node,
         if (node_of (waiter.connection) != node)
             continue;
         if (waiter.ticket) {
-            if (!waiter.ticket_delivered)
+            if (waiter.ticket_delivery == ticket_delivery_t::pending)
                 reply.deliveries.push_back (deliver (waiter, {}, now.steady));
         } else {
             const auto position = position_of (rank);
@@ -109,10 +118,11 @@ std::uint64_t queue_state_t::admit (const admit_request_t &request, queue_time_t
     }
     place->ticket.reset ();
     place->last_position.reset ();
-    place->ticket_delivered = false;
+    place->ticket_delivery = ticket_delivery_t::pending;
     const auto node = node_of (place->connection);
-    const auto first_of_node = std::ranges::find_if (
-      _waiters, [&] (const auto &waiter) { return node_of (waiter.connection) == node; });
+    const auto first_of_node = std::ranges::find_if (_waiters, [&] (const auto &waiter) {
+        return waiter.is_queued () && node_of (waiter.connection) == node;
+    });
     _waiters.splice (first_of_node, _waiters, place);
     return 0;
 }
@@ -173,8 +183,9 @@ std::size_t queue_state_t::global_budget () const
 {
     if (!_global_limit)
         return _waiters.size ();
-    const auto issued = std::ranges::count_if (
-      _waiters, [] (const auto &waiter) { return waiter.ticket.has_value (); });
+    const auto issued = std::ranges::count_if (_waiters, [] (const auto &waiter) {
+        return waiter.ticket.has_value () && waiter.is_queued ();
+    });
     const auto outstanding = static_cast<std::size_t> (issued) + _permits.size ();
     const auto limit = static_cast<std::size_t> (*_global_limit);
     return limit > outstanding ? limit - outstanding : 0;
@@ -224,7 +235,8 @@ position_t queue_state_t::position_of (std::size_t position) const
 delivery_t queue_state_t::deliver (waiter_t &waiter, position_t position, steady_time_t now)
 {
     if (waiter.ticket) {
-        waiter.ticket_delivered = true;
+        if (waiter.ticket_delivery == ticket_delivery_t::pending)
+            waiter.ticket_delivery = ticket_delivery_t::delivered;
         return {session_of (waiter.connection), *waiter.ticket};
     }
     waiter.last_position = position;
