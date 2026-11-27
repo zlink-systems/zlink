@@ -4168,6 +4168,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIER contract
     TIMEOUT 30)
   add_zlink_connector_test(
+    test_cpp_stream_connector_admission_queue
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_admission_queue.cpp
+    "connector-unit;connector-contract;stream;admission"
+    contract)
+  target_compile_definitions(test_cpp_stream_connector_admission_queue PRIVATE
+    ZLINK_ADMISSION_QUEUE_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-queue-v1.json")
+  target_link_libraries(test_cpp_stream_connector_admission_queue PRIVATE zlink::cpp)
+  add_zlink_connector_test(
     test_cpp_stream_connector_request_allocations
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_request_allocations.cpp
     "connector-unit;connector-regression"
