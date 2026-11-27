@@ -386,7 +386,10 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/spots/spot_route_packets.cpp
   framework/src/runtime/streams/stream_compression.cpp
   framework/src/runtime/streams/stream_runtime.cpp
+  framework/src/runtime/streams/stream_host_core.cpp
   framework/src/runtime/streams/stream_host_service.cpp
+  framework/src/runtime/streams/stream_host_session.cpp
+  framework/src/runtime/streams/stream_host_transport.cpp
   framework/src/runtime/timers/timer_runtime.cpp
   framework/src/runtime/utils/uuid.cpp
   framework/src/runtime/transport/endpoint.cpp)
