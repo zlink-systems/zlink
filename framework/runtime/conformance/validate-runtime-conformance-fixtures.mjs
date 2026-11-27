@@ -4321,8 +4321,13 @@ function validateActorJoinSealedRemote(fixture) {
   assert.ok(Number.isInteger(expect.requestTimeoutMs) && expect.requestTimeoutMs > 0);
   assert.ok(Number.isInteger(expect.requestMaxElapsedMs) && expect.requestMaxElapsedMs > 0);
   assert.ok(expect.requestMaxElapsedMs < expect.requestTimeoutMs, 'rejection must settle before the deadline');
-  assert.equal(typeof expect.ownerRejectionMessage, 'string');
-  assert.ok(expect.ownerRejectionMessage.length > 0);
+  // Error text differs by language; the drop is identified by event, sender and action.
+  assert.equal(expect.ownerDropEvent, 'zlink.dispatch_error');
+  assert.equal('ownerRejectionMessage' in expect, false, 'owner error text is not a cross-language contract');
+  for (const [owner, reason] of Object.entries(expect.ownerDropReasons)) {
+    assert.ok(owner in fixture.ownerLanguages, `${owner}: unknown owner`);
+    assert.match(reason, /^[a-z_]+$/, `${owner}: reason`);
+  }
 }
 
 const actorJoinSealedRemote = await readFixture('./actor-join-sealed-remote-v1.json');

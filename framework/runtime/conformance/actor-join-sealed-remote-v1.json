@@ -13,6 +13,9 @@
     "requestMaxElapsedMs": 1000,
     "requestErrorKind": "unavailable",
     "sendOwnerAction": "drop",
-    "ownerRejectionMessage": "Actor Join completion did not release application dispatch."
+    "ownerDropEvent": "zlink.dispatch_error",
+    "ownerDropReasons": {
+      "node": "handler_exception"
+    }
   }
 }
