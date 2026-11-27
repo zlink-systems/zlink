@@ -249,7 +249,8 @@ void stream_host_service_t::listener_t::record_connection_closed (const char *cl
 
 bool stream_host_service_t::listener_t::draining () const noexcept
 {
-    return _drain_flag && _drain_flag->load (std::memory_order_acquire);
+    return _host._admission.load (std::memory_order_acquire) == admission_t::sealed
+           || (_drain_flag && _drain_flag->load (std::memory_order_acquire));
 }
 
 /* flow-correlation §4.3: session dispatch failures surface as error

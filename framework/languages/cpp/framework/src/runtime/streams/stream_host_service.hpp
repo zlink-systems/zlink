@@ -77,6 +77,7 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     ~stream_host_service_t () override;
 
     task_t<void> start (service_provider_t &services) override;
+    void seal_application_dispatch () noexcept override;
     void request_stop () noexcept override;
     void stop () noexcept override;
     int shutdown_request_priority () const noexcept override { return 100; }
@@ -122,6 +123,25 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
   private:
     friend struct stream_host_service_test_access_t;
     class listener_t;
+    using listeners_t = std::vector<std::shared_ptr<listener_t>>;
+
+    enum class admission_t
+    {
+        inactive,
+        accepting,
+        sealed
+    };
+
+    template <typename Operation> auto with_listeners (Operation operation)
+    {
+        const std::lock_guard lock (_listeners_mutex);
+        return operation (_listeners);
+    }
+
+    void set_admission_locked (admission_t next) noexcept;
+    listeners_t listener_snapshot ();
+    listeners_t request_listener_stop (admission_t next);
+    void stop_listeners (admission_t next) noexcept;
 
     std::shared_ptr<std::atomic_bool> _drain_flag;
     std::stop_token _shutdown_cancellation;
@@ -136,10 +156,12 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     std::shared_ptr<application_job_queue_t> _application_jobs;
     std::shared_ptr<stream_host_ingress_t> _ingress;
     detail::delay_owner_t *_delay_owner = nullptr;
-    service_provider_t *_services = nullptr;
-    std::atomic_bool _stop{false};
+    std::atomic<admission_t> _admission{admission_t::inactive};
+    // Existing sessions keep using the transport during graceful drain.
+    std::atomic_bool _transport_stop{false};
     boost::asio::io_context _liveness_io;
-    std::vector<std::shared_ptr<listener_t>> _listeners;
+    std::mutex _listeners_mutex;
+    listeners_t _listeners;
     std::vector<std::thread> _threads;
     std::thread _liveness_thread;
 };
