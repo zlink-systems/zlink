@@ -378,6 +378,7 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/http/http_listener.cpp
   framework/src/runtime/http/http_request_pipeline.cpp
   framework/src/runtime/host/framework_runtime.cpp
+  framework/src/runtime/locations/in_memory_location_store.cpp
   framework/src/runtime/mesh/mesh_metadata_codec.cpp
   framework/src/runtime/mesh/mesh_node_host_service.cpp
   framework/src/runtime/mesh/mesh_node_host_actor_creation_completion.cpp

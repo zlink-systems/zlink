@@ -139,7 +139,8 @@ int main ()
     const auto authority_key_codec =
       read_text_file (root / "framework/src/runtime/locations/authority_key_codec.hpp");
     const auto in_memory_location_store =
-      read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp");
+      read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp")
+      + read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.cpp");
     const auto provider_location_repository =
       read_text_file (root / "framework/src/runtime/locations/provider_location_repository.hpp");
     const auto public_store_adapters =
