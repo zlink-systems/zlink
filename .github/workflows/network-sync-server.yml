@@ -1,0 +1,35 @@
+name: Network sync server
+
+# network-sync server plugin의 Framework 비의존 시뮬레이션 코어를 빌드·시험한다(#3774).
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/network-sync/server/**"
+      - ".github/workflows/network-sync-server.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "plugins/network-sync/server/**"
+      - ".github/workflows/network-sync-server.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  simulation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+      - name: Check format
+        run: |
+          dotnet format plugins/network-sync/server/Simulation/Zlink.NetworkSync.Simulation.csproj --verify-no-changes
+          dotnet format plugins/network-sync/server/Simulation.Tests/Zlink.NetworkSync.Simulation.Tests.csproj --verify-no-changes
+      - name: Test simulation core
+        run: dotnet test plugins/network-sync/server/Simulation.Tests/Zlink.NetworkSync.Simulation.Tests.csproj --nologo
