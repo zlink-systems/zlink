@@ -908,7 +908,9 @@ already-accepted handler's token isn't reused. A callback exception is
 `ForceStopped/TeardownFailed`; deadline expiry is `ForceStopped/DeadlineExceeded`. A relocation unit whose authority is still
 unsettled at the stop deadline isn't treated as an expired owner lease. The unit is recorded as a relocation failure, no
 expired-owner cleanup runs for it (such as failing its pending backlog at once), and its Store authority isn't changed. The
-unit's next owner lookup decides the outcome from the Store authority.
+unit's next owner lookup decides the outcome from the Store authority. A `Draining` source starts `Preserve` for an accepted
+relocation no later than the stop deadline minus the time of one management request (or at the Restore deadline if that's
+earlier). It may start earlier (for example, as soon as shutdown is requested).
 Callback execution isn't guaranteed on hardware failure or `SIGKILL`. It doesn't
 guarantee that a different runtime automatically takes over an interrupted relocation or
 cleanup.
