@@ -4,7 +4,17 @@ import type {
   ZLinkAuthorityKey,
   ZLinkPlacementObjectKind
 } from '../locations/internal-location-contracts';
-import { enumWireRelocationPhase } from '../protocol/service_wire_codec.generated';
+import {
+  decodeRelocationEnvelopeV1LogicalStream as decodeInstanceRelocationEnvelope,
+  encodeRelocationEnvelopeV1LogicalStream as encodeInstanceRelocationEnvelope,
+  enumWireRelocationPhase,
+  type TimerOverrunPolicyKind
+} from '../protocol/service_wire_codec.generated';
+import {
+  canonicalFrozenRecordBytes,
+  readCanonicalFrozenRecord,
+  STATEFUL_MESSAGE_CONTEXT
+} from './service-stateful-wire-codec';
 import {
   decodeRelocationEnvelopeV1 as decodeGeneratedRelocationEnvelopeV1,
   encodeRelocationEnvelopeV1 as encodeGeneratedRelocationEnvelopeV1,
@@ -471,72 +481,76 @@ export function encodeServiceRelocationEnvelope(
       })
     )
     .sort(compareParticipantOrder);
-  return Buffer.from(
-    encodeGeneratedRelocationEnvelopeV1({
-      relocationHigh: aggregate.high,
-      relocationLow: aggregate.low,
-      object: toGeneratedRelocationObject(root, rootObjectKind),
-      applicationVersion: encodedApplicationVersion,
-      applicationStates,
-      savedWork: saved,
-      timerRegistrations: timers.map(({ participantId, timer }) => ({
-        participantId,
-        name: timer.timerId,
-        handlerType: timer.handlerType,
-        periodMilliseconds: BigInt(positiveInteger(timer.intervalMs, 'timer interval')),
-        overrunPolicy: timerPolicy(timer.overrunPolicy),
-        maxCatchUpTicks: BigInt(positiveInteger(timer.maxCatchUpTicks, 'timer catch-up limit')),
-        stopOnUnhandledException: requireBoolean(
-          timer.stopOnUnhandledException,
-          'timer stop-on-error flag'
-        ),
-        lastCompletedDeliveryIndex: nonNegativeBigInt(timer.deliveryIndex, 'timer delivery index'),
-        lastCompletedScheduledIndex: nonNegativeBigInt(
-          timer.lastScheduledIndex,
-          'timer scheduled index'
-        ),
-        nextScheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(
-          timer.dueAtUnixMs,
-          'timer due time'
-        )
-      })),
-      sessionBindings: participants.flatMap((participant, index) =>
-        participant.sessionBinding === undefined
-          ? []
-          : [{ ...participant.sessionBinding, participantId: BigInt(index + 1) }]
+  const wire: GeneratedRelocationEnvelopeV1 = {
+    relocationHigh: aggregate.high,
+    relocationLow: aggregate.low,
+    object: toGeneratedRelocationObject(root, rootObjectKind),
+    applicationVersion: encodedApplicationVersion,
+    applicationStates,
+    savedWork: saved,
+    timerRegistrations: timers.map(({ participantId, timer }) => ({
+      participantId,
+      name: timer.timerId,
+      handlerType: timer.handlerType,
+      periodMilliseconds: BigInt(positiveInteger(timer.intervalMs, 'timer interval')),
+      overrunPolicy: timerPolicy(timer.overrunPolicy),
+      maxCatchUpTicks: BigInt(positiveInteger(timer.maxCatchUpTicks, 'timer catch-up limit')),
+      stopOnUnhandledException: requireBoolean(
+        timer.stopOnUnhandledException,
+        'timer stop-on-error flag'
       ),
-      pendingTimerTicks: pending.map((value) => ({
-        participantId: value.participantId,
-        order: value.order,
-        timerName: value.timerName,
-        deliveryIndex: nonNegativeBigInt(value.tick.deliveryIndex, 'pending timer delivery index'),
-        scheduledIndex: nonNegativeBigInt(
-          value.tick.scheduledIndex,
-          'pending timer scheduled index'
-        ),
-        scheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(
-          value.tick.scheduledAtUnixMs,
-          'pending timer scheduled time'
-        ),
-        skippedTicks: nonNegativeBigInt(value.tick.skippedTicks, 'pending timer skipped ticks')
-      }))
-    })
+      lastCompletedDeliveryIndex: nonNegativeBigInt(timer.deliveryIndex, 'timer delivery index'),
+      lastCompletedScheduledIndex: nonNegativeBigInt(
+        timer.lastScheduledIndex,
+        'timer scheduled index'
+      ),
+      nextScheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(
+        timer.dueAtUnixMs,
+        'timer due time'
+      )
+    })),
+    sessionBindings: participants.flatMap((participant, index) =>
+      participant.sessionBinding === undefined
+        ? []
+        : [{ ...participant.sessionBinding, participantId: BigInt(index + 1) }]
+    ),
+    pendingTimerTicks: pending.map((value) => ({
+      participantId: value.participantId,
+      order: value.order,
+      timerName: value.timerName,
+      deliveryIndex: nonNegativeBigInt(value.tick.deliveryIndex, 'pending timer delivery index'),
+      scheduledIndex: nonNegativeBigInt(value.tick.scheduledIndex, 'pending timer scheduled index'),
+      scheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(
+        value.tick.scheduledAtUnixMs,
+        'pending timer scheduled time'
+      ),
+      skippedTicks: nonNegativeBigInt(value.tick.skippedTicks, 'pending timer skipped ticks')
+    }))
+  };
+  return Buffer.from(
+    wire.object.objectKind === 'instanceSpot'
+      ? encodeCanonicalInstanceEnvelope(wire, wire.object)
+      : encodeGeneratedRelocationEnvelopeV1(wire)
   );
 }
 
 export function decodeServiceRelocationEnvelope(
   payload: Uint8Array,
-  aggregateGeneration: bigint
+  aggregateGeneration: bigint,
+  objectKind?: GeneratedRelocationObjectIdentity['objectKind']
 ): ServiceRelocationEnvelope {
   let generated: GeneratedRelocationEnvelopeV1;
   try {
-    generated = decodeGeneratedRelocationEnvelopeV1([payload]);
+    generated =
+      objectKind === 'instanceSpot'
+        ? decodeCanonicalInstanceEnvelope(payload)
+        : decodeGeneratedRelocationEnvelopeV1([payload]);
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : '';
-    if (message === 'object kind') {
+    if (message === 'object kind' || message === 'relocation-object-identity enum') {
       throw new TypeError('relocation-envelope-v1 root object kind is invalid.', { cause });
     }
-    if (message === 'relocation envelope trailing') {
+    if (message === 'relocation envelope trailing' || message.includes('trailing bytes')) {
       throw new TypeError('Trailing relocation envelope bytes.', { cause });
     }
     throw new TypeError('Invalid relocation envelope.', { cause });
@@ -612,6 +626,84 @@ export function decodeServiceRelocationEnvelope(
       value === rootParticipant ? { ...value, ...rootProjection } : value
     ),
     memberships: []
+  };
+}
+
+// Instance relocation has one participant. The aggregate codec used by the
+// other roots supports existing inventories above the generated vector bound.
+function encodeCanonicalInstanceEnvelope(
+  wire: GeneratedRelocationEnvelopeV1,
+  object: Extract<GeneratedRelocationObjectIdentity, { objectKind: 'instanceSpot' }>
+): Uint8Array {
+  if (wire.applicationStates.length !== 1) {
+    throw new TypeError('Instance Spot relocation requires one participant.');
+  }
+  return encodeInstanceRelocationEnvelope(
+    {
+      relocation: { high: wire.relocationHigh, low: wire.relocationLow },
+      object,
+      applicationVersion: wire.applicationVersion,
+      applicationStates: wire.applicationStates.map(({ participantId, hasState, payload }) => ({
+        participantId,
+        applicationState: hasState ? { hasState: 'true', payload } : { hasState: 'false' }
+      })),
+      savedWork: wire.savedWork.map(({ participantId, order, frozenRecord }) => ({
+        participantId,
+        order,
+        record: readCanonicalFrozenRecord(frozenRecord)
+      })),
+      timerRegistrations: wire.timerRegistrations.map((timer) => ({
+        ...timer,
+        overrunPolicy: timerPolicyName(timer.overrunPolicy),
+        stopOnUnhandledException: timer.stopOnUnhandledException ? 'true' : 'false'
+      })),
+      pendingTimerTicks: wire.pendingTimerTicks,
+      sessionBindings: wire.sessionBindings
+    },
+    STATEFUL_MESSAGE_CONTEXT
+  );
+}
+
+function decodeCanonicalInstanceEnvelope(payload: Uint8Array): GeneratedRelocationEnvelopeV1 {
+  const wire = decodeInstanceRelocationEnvelope(payload, STATEFUL_MESSAGE_CONTEXT);
+  if (wire.object.objectKind !== 'instanceSpot') {
+    throw new TypeError('relocation-envelope-v1 root object kind is invalid.');
+  }
+  if (wire.applicationStates.length !== 1 || wire.applicationStates[0]?.participantId !== 1n) {
+    throw new TypeError('Instance Spot relocation requires one participant.');
+  }
+  if (
+    wire.savedWork.some(({ participantId }) => participantId !== 1n) ||
+    wire.timerRegistrations.some(({ participantId }) => participantId !== 1n) ||
+    wire.pendingTimerTicks.some(
+      ({ participantId, timerName }) =>
+        participantId !== 1n || !wire.timerRegistrations.some(({ name }) => name === timerName)
+    )
+  ) {
+    throw new TypeError('Instance Spot backlog names a missing participant or timer.');
+  }
+  return {
+    relocationHigh: wire.relocation.high,
+    relocationLow: wire.relocation.low,
+    object: wire.object,
+    applicationVersion: wire.applicationVersion,
+    applicationStates: wire.applicationStates.map(({ participantId, applicationState }) => ({
+      participantId,
+      hasState: applicationState.hasState === 'true',
+      payload: applicationState.hasState === 'true' ? applicationState.payload : Buffer.alloc(0)
+    })),
+    savedWork: wire.savedWork.map(({ participantId, order, record }) => ({
+      participantId,
+      order,
+      frozenRecord: canonicalFrozenRecordBytes(record)
+    })),
+    timerRegistrations: wire.timerRegistrations.map((timer) => ({
+      ...timer,
+      overrunPolicy: timerPolicy(timer.overrunPolicy),
+      stopOnUnhandledException: timer.stopOnUnhandledException === 'true'
+    })),
+    pendingTimerTicks: wire.pendingTimerTicks,
+    sessionBindings: wire.sessionBindings
   };
 }
 
@@ -735,7 +827,7 @@ function timerPolicy(value: string): 1 | 2 | 3 {
   throw new TypeError('Timer overrun policy is invalid.');
 }
 
-function timerPolicyName(value: number): string {
+function timerPolicyName(value: number): TimerOverrunPolicyKind {
   if (value === 1) return 'skipLateTicks';
   if (value === 2) return 'catchUpBounded';
   if (value === 3) return 'delayNextTick';

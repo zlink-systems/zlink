@@ -38,7 +38,7 @@ long long command_calls (const std::string &stats, std::string_view command)
     return offset == std::string::npos ? 0LL : std::stoll (stats.substr (offset + prefix.size ()));
 }
 
-TEST (ZLinkFrameworkLocationsRedis, AggregatePageReadKeepsSourceVersionUntilCommit)
+TEST (ZLinkFrameworkLocationsRedis, AggregateReadKeepsSourceVersionUntilCommit)
 {
     const auto options = find_redis_options ();
     if (!options)
@@ -54,7 +54,7 @@ TEST (ZLinkFrameworkLocationsRedis, AggregatePageReadKeepsSourceVersionUntilComm
                 raw.del (keys.begin (), keys.end ());
         });
     });
-    zlink::framework::test::aggregate_page_read_keeps_source_version_until_commit (provider, bytes);
+    zlink::framework::test::aggregate_read_keeps_source_version_until_commit (provider, bytes);
 }
 
 TEST (ZLinkFrameworkLocationsRedis, PublicTypesImplementOnlyTheOpaqueStoreContracts)
