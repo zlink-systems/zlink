@@ -197,7 +197,8 @@ configuration error at startup.
 
 If `AdmissionQueueEnabled` is `true` and `AuthenticationPacketName` or `AdmissionQueueKey` is missing, there's no MeshNode, or
 there are several MeshNodes and `AdmissionQueueMeshName` is missing (`Mesh selection is required`, the same check as the
-Instance Spot default mesh), that's a configuration error at startup. Every node carries the same value. When it's `false`, the other stage 2 settings aren't read.
+Instance Spot default mesh), or the name of a STREAM registration with stage 2 on isn't 1–255 bytes of UTF-8 (the ticket MAC's
+`len(StreamName)` is one byte), that's a configuration error at startup. Every node carries the same value. When it's `false`, the other stage 2 settings aren't read.
 
 #### 3.5.1 Queue Spot and Epoch
 
@@ -250,7 +251,10 @@ Instance Spot default mesh), that's a configuration error at startup. Every node
 - With a global limit (below), the issue budget includes it too: `budget(N) = min(node budget(N), max(0, AdmissionGlobalLimit − executing permits − unexpired issued tickets not yet used))`.
   Tickets are therefore issued only as permits free up. When `AdmitPermit` answers a connection with `granted=false`, that
   connection's ticket becomes invalid on the spot and the Spot puts that waiting client back at the head of its node's FIFO. If the
-  connection enqueues again, it gets its current position, not the same ticket.
+  connection enqueues again, it gets its current position, not the same ticket. The Spot considers `granted` only while the
+  connection has a currently valid ticket (issued, not expired, not invalidated); otherwise it answers `granted=false`. An
+  authentication that comes back with the old ticket after invalidation and before a new ticket is issued is therefore rejected,
+  and once a new ticket is issued, the same connection in the same epoch is treated the same regardless of the ticket bytes.
 - **Global limit.** When the setting `AdmissionGlobalLimit` (a positive integer, optional) is present, it caps concurrent
   authentication executions across the whole mesh. A ticket is only an admission right; the queue Spot grants the
   execution permit separately.
