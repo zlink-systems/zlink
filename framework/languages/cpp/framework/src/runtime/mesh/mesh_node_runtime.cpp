@@ -3538,9 +3538,12 @@ task_t<void> mesh_node_runtime_t::settle_remote_application_actor_join_source (
             (void) co_await abort_remote_actor_join_seal (s);
         }
         throw framework_exception_t (
-          data_lost        ? framework_error_kind_t::data_lost
-          : authority_lost ? framework_error_kind_t::unavailable
-                           : framework_error_kind_t::internal_failure,
+          data_lost ? framework_error_kind_t::data_lost
+          // A Join the stopping source could not settle before its deadline is
+          // unavailable to the caller, like one whose authority was lost.
+          : authority_lost || authority_unsettled_at_stop
+            ? framework_error_kind_t::unavailable
+            : framework_error_kind_t::internal_failure,
           "canonical Actor Join relocation did not complete (terminal="
             + std::to_string (static_cast<int> (relocated.terminal))
             + ", reason=" + std::to_string (static_cast<int> (relocated.reason)) + ")"
