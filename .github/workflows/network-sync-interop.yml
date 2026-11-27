@@ -1,0 +1,53 @@
+name: Network sync interoperability
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "plugins/network-sync/**"
+      - ".github/workflows/network-sync-interop.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "plugins/network-sync/**"
+      - ".github/workflows/network-sync-interop.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: plugins/network-sync/tests/stream
+    env:
+      ZLINK_REDIS_TEST_ENDPOINT: 127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+      - name: Check format
+        run: dotnet format --verify-no-changes
+      - name: Test managed interoperability
+        env:
+          NETWORK_SYNC_FLOW_LOG: ${{ runner.temp }}/network-sync-flow.log
+        run: dotnet test --no-restore --logger "console;verbosity=normal"
+      - name: Save relay trace
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: network-sync-flow
+          path: ${{ runner.temp }}/network-sync-flow.log
