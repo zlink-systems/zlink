@@ -9,6 +9,8 @@
 #include <zlink/framework/detail/binary_text_codec.hpp>
 
 #include "runtime/locations/location_key_codec.hpp"
+#include "runtime/locations/aggregate_inventory.hpp"
+#include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_store_limits.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -1282,6 +1284,39 @@ class in_memory_location_repository_t : public location_repository_t
           .get ();
     }
 
+    task_t<bool> seal_relocation_inventory (aggregate_fence_t fence,
+                                            std::string digest,
+                                            std::vector<aggregate_participant_t> participants) override
+    {
+        const auto tree = aggregate_inventory::build_tree (participants);
+        if (tree.root.at (location_record_fields::digestSha256) != digest)
+            return completed (false);
+        return _lane
+          .run ([&] {
+              // §8.3: one sealed source inventory per (relocationId, 1); a reseal must be identical.
+              const auto [sealed, inserted] = _sealed_inventories.try_emplace (
+                aggregate_inventory::key_suffix (fence),
+                sealed_inventory_t{std::move (digest), std::move (participants)});
+              return completed (inserted || sealed->second.digest == digest);
+          })
+          .get ();
+    }
+
+    task_t<std::optional<std::vector<aggregate_participant_t>>>
+    read_relocation_inventory (aggregate_fence_t fence, std::string digest) override
+    {
+        return _lane
+          .run ([&] {
+              const auto sealed =
+                _sealed_inventories.find (aggregate_inventory::key_suffix (fence));
+              if (sealed == _sealed_inventories.end () || sealed->second.digest != digest)
+                  return completed (std::optional<std::vector<aggregate_participant_t>>{});
+              return completed (std::optional<std::vector<aggregate_participant_t>>{
+                sealed->second.participants});
+          })
+          .get ();
+    }
+
     task_t<std::int64_t> remove_all_by_owner (location_owner_token_t owner) override
     {
         return _lane
@@ -1337,6 +1372,12 @@ class in_memory_location_repository_t : public location_repository_t
     {
         aggregate_prepare_request_t request;
         aggregate_status_t status = aggregate_status_t::prepared;
+    };
+
+    struct sealed_inventory_t
+    {
+        std::string digest;
+        std::vector<aggregate_participant_t> participants;
     };
 
 
@@ -2128,6 +2169,7 @@ class in_memory_location_repository_t : public location_repository_t
     std::map<std::string, reservation_state_t> _reservations;
     std::map<std::string, creation_terminal_record_t> _creation_terminals;
     std::map<std::string, aggregate_state_t> _aggregates;
+    std::map<std::string, sealed_inventory_t> _sealed_inventories;
     std::map<std::string, std::uint64_t> _pending_by_placement;
     std::map<std::string, std::uint64_t> _active_by_placement;
     std::uint64_t _object_generation = 0;

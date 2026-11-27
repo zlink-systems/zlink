@@ -317,6 +317,103 @@ TEST (ZLinkFrameworkInMemoryLocationStore, ActorCanJoinRelocatedSingleSpot)
     ASSERT_NE (nullptr, std::get_if<authority_stored_t> (&joined));
 }
 
+TEST (ZLinkFrameworkInMemoryLocationStore, SpotWideSourceCaptureSealsInventoryAtRelocationKey)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    using namespace zlink::framework::runtime::stateful;
+    in_memory_location_repository_t store;
+    const auto owner_a = claim_owner (store, "owner-a");
+    const auto owner_b = claim_owner (store, "owner-b");
+    publish_mesh_node (store, "node-a", owner_a);
+    publish_mesh_node (store, "node-b", owner_b);
+    const object_creation_target_t target_a{"play", node_rid_t::from_string ("node-a"), 1, owner_a};
+    const auto create = [&] (placement_object_kind_t kind, std::string id, std::string type,
+                             std::vector<std::byte> payload) {
+        object_reserve_request_t request{
+          .key = {kind, std::move (id)},
+          .intent = {.stable_type = std::move (type)},
+          .target = target_a,
+          .creating_payload = payload,
+          .capacity_bundle = {.actor_slots = kind == placement_object_kind_t::actor ? 1u : 0u,
+                              .spot_slots = kind == placement_object_kind_t::user_spot ? 1u : 0u}};
+        if (kind == placement_object_kind_t::user_spot)
+            request.capacity_bundle.spot_type =
+              spot_type_capacity_delta_t{kind, request.intent.stable_type, 1};
+        const auto reservation = store.reserve (request).result ().value ();
+        const auto committed =
+          store
+            .commit (
+              {request.key, std::get<object_reserved_t> (reservation).fence, std::move (payload)})
+            .result ()
+            .value ();
+        return std::get<object_committed_t> (committed).ready;
+    };
+    const auto spot =
+      create (placement_object_kind_t::user_spot, "room-1", "room",
+              encode_user_spot_authority_payload (
+                {.stable_type = "room",
+                 .spot_id = "room-1",
+                 .owner_id = owner_a.owner_id,
+                 .owner_lease_generation = static_cast<std::uint64_t> (owner_a.lease_generation),
+                 .mesh_name = "play",
+                 .node_rid = target_a.node_rid,
+                 .node_generation = 1}));
+    const auto member = create (
+      placement_object_kind_t::actor, "member-1", "player",
+      encode_actor_authority_payload (
+        {.stable_type = "player",
+         .actor_id = "member-1",
+         .current_spot_id = "room-1",
+         .current_spot_generation = spot.object_generation,
+         .current_spot_kind = actor_authority_spot_kind_t::user,
+         .owner_id = owner_a.owner_id,
+         .owner_lease_generation = static_cast<std::uint64_t> (owner_a.lease_generation),
+         .mesh_name = "play",
+         .node_rid = target_a.node_rid,
+         .node_generation = 1}));
+    const std::vector<object_ref_t> participants{
+      {object_kind_t::user_spot, "room-1", spot.object_generation, spot.authority_owner_generation,
+       "play", "node-a"},
+      {object_kind_t::actor, "member-1", member.object_generation,
+       member.authority_owner_generation, "play", "node-a"}};
+    relocation_authority_fence_t fence;
+    fence.kind = object_kind_t::user_spot;
+    fence.key = "room-1";
+    fence.expected_store_version = spot.store_version;
+    fence.source_owner = owner_a;
+    fence.target_owner = owner_b;
+    fence.relocation = {0x4718, 0x5728};
+
+    // §8.3 (#5656): a SpotWide capture seals its source inventory at (relocationId, 1).
+    public_authority_store_adapter_t relocation (store);
+    ASSERT_TRUE (
+      relocation.begin_source_capture (participants, fence, "node-b", 1, 1).result ().value ());
+    aggregate_fence_t sealed{{}, aggregate_inventory::sealed_inventory_generation, {}};
+    for (std::size_t index = 0; index != 8; ++index) {
+        sealed.aggregate_id.value[index] =
+          static_cast<std::byte> (fence.relocation.high >> ((7 - index) * 8));
+        sealed.aggregate_id.value[index + 8] =
+          static_cast<std::byte> (fence.relocation.low >> ((7 - index) * 8));
+    }
+    const auto record = std::get<authority_snapshot_t> (
+      store.read_authority (spot_authority_key ("room-1")).result ().value ());
+    ASSERT_TRUE (record.aggregate && record.aggregate->relocation);
+    const auto digest = record.aggregate->encoded.at ("relocation")
+                          .at ("sourceInventorySha256")
+                          .get<std::string> ();
+    const auto inventory = store.read_relocation_inventory (sealed, digest).result ().value ();
+    ASSERT_TRUE (inventory);
+    ASSERT_EQ (inventory->size (), 2u);
+    EXPECT_EQ (inventory->at (0).expected_store_version, member.store_version);
+    EXPECT_EQ (inventory->at (1).expected_store_version, spot.store_version);
+    EXPECT_FALSE (
+      store.read_relocation_inventory (sealed, std::string (64, '0')).result ().value ());
+    EXPECT_FALSE (store.seal_relocation_inventory (sealed, std::string (64, '0'), *inventory)
+                    .result ()
+                    .value ());
+}
+
 TEST (ZLinkFrameworkInMemoryLocationStore, DescriptorFencesCapabilityProfileAndPendingCapacity)
 {
     using namespace zlink::framework;
