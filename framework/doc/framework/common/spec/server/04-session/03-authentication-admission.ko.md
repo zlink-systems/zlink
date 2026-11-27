@@ -162,6 +162,21 @@ Connector는 다음과 같이 처리한다.
 다음은 PM 판정(11-25, #4546 2단계)으로 정했다. 바꿀 때는 이 절, [Stream Connector §5.8](../../stream-connector/32-stream-connector.ko.md#58-입장-대기와-자동-재시도)과
 공통 fixture를 함께 고친다.
 
+#### 3.5.0 2단계 설정
+
+2단계 설정은 1단계와 같은 STREAM session 등록 options(§1.1)에 둔다. 언어별 이름은 언어별 exact interface 문서가 정한다.
+한 node의 STREAM 등록마다 값이 다르면 시작할 때 설정 오류다.
+
+| 설정 | 의미 | 기본값 |
+|---|---|---|
+| `AdmissionQueueEnabled` | 2단계(로그인 대기열)를 켠다. bool | `false` |
+| `AdmissionQueueKey` | ticket 서명 현재 키(§3.5.2). 2단계를 켜면 필수 | 없음 |
+| `AdmissionQueuePreviousKey` | ticket 검증 이전 키(§3.5.2). 선택 | 없음 |
+| `AdmissionGlobalLimit` | mesh 전체 동시 인증 상한(§3.5.3). `1..2147483647` 정수, 선택 | 없음(node별 예산만) |
+
+`AdmissionQueueEnabled`가 `true`인데 `AuthenticationPacketName`이나 `AdmissionQueueKey`가 없으면 시작할 때 설정 오류다.
+`false`이면 나머지 2단계 설정은 읽지 않는다.
+
 #### 3.5.1 대기열 Spot과 epoch
 
 - 대기열 Spot은 인증 STREAM 등록이 속한 RouteMesh마다 하나인 Instance Spot이고 Spot ID는 `$zlink.admission-queue`다.
