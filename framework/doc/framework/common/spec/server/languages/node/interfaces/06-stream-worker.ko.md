@@ -77,6 +77,11 @@ export interface ZLinkStreamNodeOptions {
     readonly authenticationPacketName?: string;
     readonly maxConcurrentAuthentications?: number;
     readonly authenticationRetryDelayMs?: number;
+    readonly admissionQueueEnabled?: boolean;
+    readonly admissionQueueKey?: string;
+    readonly admissionQueuePreviousKey?: string;
+    readonly admissionQueueMeshName?: string;
+    readonly admissionGlobalLimit?: number;
     readonly heartbeatIntervalMs?: number;
     readonly heartbeatTimeoutMs?: number;
     readonly idleTimeoutMs?: number;
@@ -100,6 +105,11 @@ export interface ZLinkStreamNodeBuilder {
     setHeartbeat(intervalMs: number, timeoutMs: number): this;
     setIdleTimeout(timeoutMs: number): this;
     setAuthenticationAdmission(packetName: string, maxConcurrentAuthentications?: number, authenticationRetryDelayMs?: number): this;
+    setAdmissionQueueEnabled(enabled: boolean): this;
+    setAdmissionQueueKey(key: string): this;
+    setAdmissionQueuePreviousKey(key: string): this;
+    setAdmissionQueueMeshName(meshName: string): this;
+    setAdmissionGlobalLimit(limit: number): this;
     setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
     registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
 }

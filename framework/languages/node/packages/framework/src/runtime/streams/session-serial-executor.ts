@@ -2,6 +2,7 @@ import {
   ZLinkSerialExecutionQueue,
   type ZLinkSerialWorkLane,
   type ZLinkSerialWorkOptions,
+  type ZLinkSerialWorkPreparation,
   type ZLinkSerialWorkRecord
 } from '../execution/serial-execution-queue';
 import {
@@ -30,9 +31,10 @@ export class ZLinkSessionSerialExecutor {
   executeApplication(
     work: () => Promise<void>,
     options: Omit<ZLinkSerialWorkOptions, 'lane'> = {},
-    onRejected?: (error?: unknown) => void
+    onRejected?: (error?: unknown) => void,
+    preparation?: ZLinkSerialWorkPreparation
   ): boolean {
-    return this.submit(work, 'application', options, onRejected);
+    return this.submit(work, 'application', options, onRejected, preparation);
   }
 
   executeControl(
@@ -61,13 +63,20 @@ export class ZLinkSessionSerialExecutor {
     work: () => Promise<void>,
     lane: ZLinkSerialWorkLane,
     options: Omit<ZLinkSerialWorkOptions, 'lane'> = {},
-    onRejected?: (error?: unknown) => void
+    onRejected?: (error?: unknown) => void,
+    preparation?: ZLinkSerialWorkPreparation
   ): boolean {
     if (this.scheduler.admissionClosed) return false;
     const serialOptions = { ...options, lane };
     const submitted = hasApplicationJobPermit()
-      ? this.scheduler.submitPreAdmitted(work, serialOptions)
-      : this.scheduler.submit(bindApplicationJobPermit(work), serialOptions);
+      ? this.scheduler.submitPreAdmitted(work, serialOptions, undefined, undefined, preparation)
+      : this.scheduler.submit(
+          bindApplicationJobPermit(work),
+          serialOptions,
+          undefined,
+          undefined,
+          preparation
+        );
     void submitted.catch((error) => onRejected?.(error));
     return true;
   }

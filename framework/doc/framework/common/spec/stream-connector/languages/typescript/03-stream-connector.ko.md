@@ -133,6 +133,8 @@ interface ZlinkStreamConnector {
 
   onRequestSending(handler: (context: ZlinkStreamRequestSendingContext) => void): Disposable;
   onAdmissionWaiting(handler: (context: ZlinkStreamAdmissionWaitingContext, signal?: AbortSignal) => Promise<void> | void): Disposable;
+  onAdmissionQueued(handler: (signal?: AbortSignal) => Promise<void> | void): Disposable;
+  onAdmissionPosition(handler: (position: number, estimatedWaitMs: number, signal?: AbortSignal) => Promise<void> | void): Disposable;
   onReplyReceived(
     handler: (context: ZlinkStreamReplyReceivedContext, signal?: AbortSignal) => Promise<void> | void
   ): Disposable;

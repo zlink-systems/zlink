@@ -229,7 +229,7 @@ export function createIntegrationSpotManager(
   const manager = new DefaultZLinkSpotManager({
     spotFactories: [...registration.spotFactories],
     instanceSpotFactories: new Map(
-      [...registration.spotNodes].map(([meshName, spotNode]) => [
+      [...host.options.registration.spotNodes].map(([meshName, spotNode]) => [
         meshName,
         new Map(Object.entries(spotNode.instanceSpotFactories ?? {}))
       ])

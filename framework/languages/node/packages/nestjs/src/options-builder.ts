@@ -685,6 +685,31 @@ class DefaultZLinkNestStreamNodeBuilder
     return this;
   }
 
+  setAdmissionQueueEnabled(enabled: boolean): this {
+    this.streamOptions.admissionQueueEnabled = enabled;
+    return this;
+  }
+
+  setAdmissionQueueKey(key: string): this {
+    this.streamOptions.admissionQueueKey = key;
+    return this;
+  }
+
+  setAdmissionQueuePreviousKey(key: string): this {
+    this.streamOptions.admissionQueuePreviousKey = key;
+    return this;
+  }
+
+  setAdmissionQueueMeshName(meshName: string): this {
+    this.streamOptions.admissionQueueMeshName = meshName;
+    return this;
+  }
+
+  setAdmissionGlobalLimit(limit: number): this {
+    this.streamOptions.admissionGlobalLimit = limit;
+    return this;
+  }
+
   setHeartbeat(intervalMs: number, timeoutMs: number): this {
     this.streamOptions.heartbeatIntervalMs = intervalMs;
     this.streamOptions.heartbeatTimeoutMs = timeoutMs;

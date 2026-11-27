@@ -220,7 +220,14 @@ export interface ZLinkRouteChannelOptions extends ZLinkRouteMeshChannelOptions {
 
 export interface ZLinkStreamNodeOptions extends Pick<
   import('../../framework/dist/nest-integration').ZLinkStreamNodeOptions,
-  'authenticationPacketName' | 'maxConcurrentAuthentications' | 'authenticationRetryDelayMs'
+  | 'authenticationPacketName'
+  | 'maxConcurrentAuthentications'
+  | 'authenticationRetryDelayMs'
+  | 'admissionQueueEnabled'
+  | 'admissionQueueKey'
+  | 'admissionQueuePreviousKey'
+  | 'admissionQueueMeshName'
+  | 'admissionGlobalLimit'
 > {
   readonly heartbeatIntervalMs?: number;
   readonly heartbeatTimeoutMs?: number;
