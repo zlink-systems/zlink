@@ -198,7 +198,9 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
   frameworkRelocationFailureCode,
-  internalFrameworkErrorKindFromWireFailureCode
+  internalFrameworkErrorKindFromWireFailureCode,
+  internalFrameworkWireReply,
+  requestResultToPublicErrorKind
 } from '../framework-errors-internal';
 import {
   compareInventoryAuthorityKeys,
@@ -6872,6 +6874,11 @@ function maintenanceReplyRelay(
   flowEnabled: boolean
 ): ServiceMaintenanceReplyRelay {
   const value = completion.result.ok ? completion.result.response : undefined;
+  const terminal = completion.result.ok
+    ? { terminalResult: RequestResult.Ok, failureCode: ServiceWireFrameworkErrorCode.none }
+    : internalFrameworkWireReply(
+        completion.result.errorKind ?? ZLinkFrameworkInternalErrorKind.RequestFailed
+      );
   const direct = packet.messageFollowOrigin?.requestSource !== undefined;
   const application =
     direct && completion.result.ok
@@ -6897,10 +6904,7 @@ function maintenanceReplyRelay(
     replyRouteId: BigInt(completion.source.replyRouteId),
     participantId,
     sequence: BigInt(completion.index + 1),
-    terminalResult: completion.result.ok ? RequestResult.Ok : RequestResult.InternalError,
-    failureCode: completion.result.ok
-      ? ServiceWireFrameworkErrorCode.none
-      : ServiceWireFrameworkErrorCode.requestFailed,
+    ...terminal,
     ...(application !== undefined
       ? {
           payload: {
@@ -6939,7 +6943,14 @@ function handoffResultFromRelay(relay: ServiceMaintenanceReplyRelay): ZLinkActor
   const index = Number(relay.sequence - 1n);
   return relay.terminalResult === RequestResult.Ok
     ? { index, ok: true, ...(value === undefined ? {} : { response: value }) }
-    : { index, ok: false, error: `Actor handoff failed with framework code ${relay.failureCode}.` };
+    : {
+        index,
+        ok: false,
+        error: `Actor handoff failed with framework code ${relay.failureCode}.`,
+        errorKind:
+          internalFrameworkErrorKindFromWireFailureCode(relay.failureCode) ??
+          requestResultToPublicErrorKind(relay.terminalResult)
+      };
 }
 
 function wireIdText(value: { readonly high: bigint; readonly low: bigint }): string {
