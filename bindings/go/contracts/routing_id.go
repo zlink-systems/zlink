@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
@@ -23,13 +24,26 @@ type RoutingID struct {
 	data [maxRoutingIDSize]byte
 }
 
+// NewRoutingID copies data into a RoutingID. A size outside 1-255 returns the
+// empty RoutingID value; use TryNewRoutingID to receive the error at creation.
 func NewRoutingID(data []byte) RoutingID {
+	rid, _ := TryNewRoutingID(data)
+	return rid
+}
+
+// TryNewRoutingID is NewRoutingID that reports a size outside 1-255 as a
+// *ConfigError with ConfigInvalidArgument.
+func TryNewRoutingID(data []byte) (RoutingID, error) {
 	if len(data) == 0 || len(data) > maxRoutingIDSize {
-		return RoutingID{}
+		return RoutingID{}, invalidRoutingID()
 	}
 	var rid RoutingID
 	rid.size = uint8(copy(rid.data[:], data))
-	return rid
+	return rid, nil
+}
+
+func invalidRoutingID() error {
+	return NewConfigError(ConfigInvalidArgument, int(syscall.EINVAL), nil)
 }
 
 // NewRoutingIDString encodes a user-visible routing id string as UTF-8.
@@ -51,16 +65,41 @@ func NewRoutingIDUUIDBytes(value [16]byte) RoutingID {
 // NewRoutingIDFromHex parses the hex form returned by RoutingID.Hex. Invalid
 // input returns the empty RoutingID value.
 func NewRoutingIDFromHex(value string) RoutingID {
+	rid, _ := TryNewRoutingIDFromHex(value)
+	return rid
+}
+
+// TryNewRoutingIDFromHex is NewRoutingIDFromHex that reports invalid input as
+// a *ConfigError with ConfigInvalidArgument.
+func TryNewRoutingIDFromHex(value string) (RoutingID, error) {
 	if len(value) == 0 || len(value)%2 != 0 || len(value) > maxRoutingIDSize*2 {
-		return RoutingID{}
+		return RoutingID{}, invalidRoutingID()
 	}
 	var rid RoutingID
 	n, err := hex.Decode(rid.data[:], []byte(value))
 	if err != nil || n == 0 {
-		return RoutingID{}
+		return RoutingID{}, invalidRoutingID()
 	}
 	rid.size = uint8(n)
-	return rid
+	return rid, nil
+}
+
+// Uint32 returns the big-endian value of a 4-byte routing id.
+func (r RoutingID) Uint32() (uint32, bool) {
+	if r.size != 4 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint32(r.data[:4]), true
+}
+
+// UUIDBytes returns the 16 bytes of a UUID routing id.
+func (r RoutingID) UUIDBytes() ([16]byte, bool) {
+	var uuid [16]byte
+	if r.size != 16 {
+		return uuid, false
+	}
+	copy(uuid[:], r.data[:16])
+	return uuid, true
 }
 
 func (r RoutingID) Bytes() []byte {
@@ -88,10 +127,10 @@ func (r RoutingID) String() string {
 	if text := r.printableUTF8(); text != "" {
 		return text
 	}
-	if r.size == 4 {
-		return fmt.Sprintf("%d", binary.BigEndian.Uint32(r.data[:4]))
+	if value, ok := r.Uint32(); ok {
+		return fmt.Sprintf("%d", value)
 	}
-	if r.size == 16 {
+	if _, ok := r.UUIDBytes(); ok {
 		hexText := r.Hex()
 		return fmt.Sprintf("%s-%s-%s-%s-%s", hexText[:8], hexText[8:12], hexText[12:16], hexText[16:20], hexText[20:])
 	}

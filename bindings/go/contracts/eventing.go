@@ -13,6 +13,8 @@ const (
 	PollCompletion PollEventFlag = 32
 	// PollRoute reports that a ROUTER's selected route changed; read RoutesSnapshot().
 	PollRoute PollEventFlag = 64
+	// PollConnect reports that a raw socket's connection attempts changed; read ConnectionAttemptsSnapshot().
+	PollConnect PollEventFlag = 128
 )
 
 // PollSourceKind identifies the kind of source in a PollEvent.

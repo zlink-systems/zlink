@@ -152,7 +152,7 @@ func (s *connectionSocket) CommonOptions() *CommonSocketOptions {
 }
 
 func (s *connectionSocket) LastEndpoint() (string, error) {
-	return s.getStringOption(C.ZLINK_OPT_LAST_ENDPOINT, 256)
+	return s.getStringOption(C.ZLINK_OPT_LAST_ENDPOINT, 1024)
 }
 
 func (s *connectionSocket) setPubBoolOption(option C.zlink_pub_option_t, value bool) error {

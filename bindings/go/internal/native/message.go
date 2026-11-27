@@ -23,11 +23,13 @@ const maxFixedCStringFieldSize = 255
 type RoutingID = contracts.RoutingID
 
 var (
-	NewRoutingID          = contracts.NewRoutingID
-	NewRoutingIDString    = contracts.NewRoutingIDString
-	NewRoutingIDUint32    = contracts.NewRoutingIDUint32
-	NewRoutingIDUUIDBytes = contracts.NewRoutingIDUUIDBytes
-	NewRoutingIDFromHex   = contracts.NewRoutingIDFromHex
+	NewRoutingID           = contracts.NewRoutingID
+	NewRoutingIDString     = contracts.NewRoutingIDString
+	NewRoutingIDUint32     = contracts.NewRoutingIDUint32
+	NewRoutingIDUUIDBytes  = contracts.NewRoutingIDUUIDBytes
+	NewRoutingIDFromHex    = contracts.NewRoutingIDFromHex
+	TryNewRoutingID        = contracts.TryNewRoutingID
+	TryNewRoutingIDFromHex = contracts.TryNewRoutingIDFromHex
 )
 
 // RoutingID and zlink_routing_id_t have the same fixed layout. These bounds
