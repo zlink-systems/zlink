@@ -192,14 +192,17 @@ configuration error at startup.
 | `AdmissionQueueEnabled` | Turns stage 2 (the login queue) on. bool | `false` |
 | `AdmissionQueueKey` | Current ticket signing key (§3.5.2). Required when stage 2 is on | none |
 | `AdmissionQueuePreviousKey` | Previous ticket verification key (§3.5.2). Optional | none |
+| `AdmissionQueueMeshName` | RouteMesh that holds the queue Spot (§3.5.1). Omit it when the process has one MeshNode, which is then used. Required when there are several | none |
 | `AdmissionGlobalLimit` | Mesh-wide concurrent authentication limit (§3.5.3). Integer in `1..2147483647`, optional | none (per-node budgets only) |
 
-If `AdmissionQueueEnabled` is `true` and `AuthenticationPacketName` or `AdmissionQueueKey` is missing, that's a configuration
-error at startup. When it's `false`, the other stage 2 settings aren't read.
+If `AdmissionQueueEnabled` is `true` and `AuthenticationPacketName` or `AdmissionQueueKey` is missing, there's no MeshNode, or
+there are several MeshNodes and `AdmissionQueueMeshName` is missing (`Mesh selection is required`, the same check as the
+Instance Spot default mesh), that's a configuration error at startup. Every node carries the same value. When it's `false`, the other stage 2 settings aren't read.
 
 #### 3.5.1 Queue Spot and Epoch
 
-- The queue Spot is one Instance Spot per RouteMesh that holds the authentication STREAM registration, with Spot ID
+- The queue Spot is one Instance Spot in the queue RouteMesh of §3.5.0 (the only MeshNode's mesh, or `AdmissionQueueMeshName`
+  when there are several), with Spot ID
   `$zlink.admission-queue/<RouteMeshName>`. Spot IDs are global names in the Location Store, not scoped by mesh, so the
   RouteMesh name keeps RouteMeshes that share a Store from colliding (within the Spot ID length limit). The Framework prepares it by sending the first `$zlink.admission.enqueue` or the first node
   report (§3.5.3) with an `InstanceSpot(...)` intent. Placement follows the existing Instance Spot placement rules; there's

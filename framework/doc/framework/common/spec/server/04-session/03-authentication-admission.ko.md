@@ -172,14 +172,16 @@ Connector는 다음과 같이 처리한다.
 | `AdmissionQueueEnabled` | 2단계(로그인 대기열)를 켠다. bool | `false` |
 | `AdmissionQueueKey` | ticket 서명 현재 키(§3.5.2). 2단계를 켜면 필수 | 없음 |
 | `AdmissionQueuePreviousKey` | ticket 검증 이전 키(§3.5.2). 선택 | 없음 |
+| `AdmissionQueueMeshName` | 대기열 Spot을 둘 RouteMesh(§3.5.1). process에 MeshNode가 하나면 생략하고 그 mesh를 쓴다. 여럿이면 필수 | 없음 |
 | `AdmissionGlobalLimit` | mesh 전체 동시 인증 상한(§3.5.3). `1..2147483647` 정수, 선택 | 없음(node별 예산만) |
 
-`AdmissionQueueEnabled`가 `true`인데 `AuthenticationPacketName`이나 `AdmissionQueueKey`가 없으면 시작할 때 설정 오류다.
+`AdmissionQueueEnabled`가 `true`인데 `AuthenticationPacketName`이나 `AdmissionQueueKey`가 없거나, MeshNode가 없거나, MeshNode가 여럿인데
+`AdmissionQueueMeshName`이 없으면(`Mesh selection is required`, Instance Spot 기본 mesh 판정과 같다) 시작할 때 설정 오류다. 모든 node에 같은 값을 둔다.
 `false`이면 나머지 2단계 설정은 읽지 않는다.
 
 #### 3.5.1 대기열 Spot과 epoch
 
-- 대기열 Spot은 인증 STREAM 등록이 속한 RouteMesh마다 하나인 Instance Spot이고 Spot ID는 `$zlink.admission-queue/<RouteMeshName>`이다. Spot ID는 Location Store에서 mesh를 가리지 않는 전역 이름이므로 RouteMesh 이름을 넣어 같은 Store를 쓰는 RouteMesh끼리 겹치지 않게 한다(Spot ID 길이 상한 안에서).
+- 대기열 Spot은 §3.5.0의 대기열 RouteMesh(MeshNode가 하나면 그 mesh, 여럿이면 `AdmissionQueueMeshName`)에 하나인 Instance Spot이고 Spot ID는 `$zlink.admission-queue/<RouteMeshName>`이다. Spot ID는 Location Store에서 mesh를 가리지 않는 전역 이름이므로 RouteMesh 이름을 넣어 같은 Store를 쓰는 RouteMesh끼리 겹치지 않게 한다(Spot ID 길이 상한 안에서).
   Framework가 첫 `$zlink.admission.enqueue`나 첫 node 보고(§3.5.3)를 `InstanceSpot(...)` intent로 보내 준비한다.
   배치는 기존 Instance Spot 배치 규칙을 따르며 별도 배치 권위를 두지 않는다.
 - Epoch는 대기열 Spot incarnation이 초기화할 때 CSPRNG로 만드는 0이 아닌 64-bit 부호 없는 정수다. Incarnation이
