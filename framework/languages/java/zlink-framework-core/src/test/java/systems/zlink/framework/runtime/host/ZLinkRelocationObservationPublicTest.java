@@ -491,6 +491,7 @@ final class ZLinkRelocationObservationPublicTest {
         sourceOptions.configureLocations().setMessageFollowDuration(Duration.ofSeconds(30));
         try (var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions);
                 var sourceServing = observe(source.observe(), status -> status.isReady())) {
+            completeStartup(source);
             await(sourceServing.result);
             var original =
                     assertInstanceOf(
@@ -513,6 +514,7 @@ final class ZLinkRelocationObservationPublicTest {
                             observe(
                                     target.routeMeshRuntime().observe(MESH, 8),
                                     status -> status.isReady() && status.readyPeerCount() > 0)) {
+                completeStartup(target);
                 await(targetServing.result);
                 await(sourcePeer.result);
                 await(targetPeer.result);
@@ -1011,13 +1013,17 @@ final class ZLinkRelocationObservationPublicTest {
     }
 
     private static void awaitReady(ZLinkFrameworkRuntime runtime) {
+        completeStartup(runtime);
+        assertTrue(runtime.isReady());
+    }
+
+    private static void completeStartup(ZLinkFrameworkRuntime runtime) {
         ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
         if (!runtime.isReady())
             assertTrue(
                     ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
                             .toCompletableFuture()
                             .join());
-        assertTrue(runtime.isReady());
     }
 
     static <T> Observation<T> observe(
