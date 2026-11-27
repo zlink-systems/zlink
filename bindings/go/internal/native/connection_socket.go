@@ -19,63 +19,83 @@ type connectionSocket struct {
 }
 
 // SetSendHighWaterMark sets the send byte HWM over the full uint64 range.
+//
+// Deprecated: use CommonOptions().SetSendHighWaterMark.
 func (s *connectionSocket) SetSendHighWaterMark(value uint64) error {
 	return s.CommonOptions().SetSendHighWaterMark(value)
 }
 
 // SendHighWaterMark returns the send byte HWM without narrowing the Core value.
+//
+// Deprecated: use CommonOptions().SendHighWaterMark.
 func (s *connectionSocket) SendHighWaterMark() (uint64, error) {
 	return s.CommonOptions().SendHighWaterMark()
 }
 
 // SetReceiveHighWaterMark sets the receive byte HWM over the full uint64 range.
+//
+// Deprecated: use CommonOptions().SetReceiveHighWaterMark.
 func (s *connectionSocket) SetReceiveHighWaterMark(value uint64) error {
 	return s.CommonOptions().SetReceiveHighWaterMark(value)
 }
 
 // ReceiveHighWaterMark returns the receive byte HWM without narrowing the Core value.
+//
+// Deprecated: use CommonOptions().ReceiveHighWaterMark.
 func (s *connectionSocket) ReceiveHighWaterMark() (uint64, error) {
 	return s.CommonOptions().ReceiveHighWaterMark()
 }
 
+// Deprecated: use CommonOptions().SetLinger.
 func (s *connectionSocket) SetLinger(value time.Duration) error {
 	return s.CommonOptions().SetLinger(value)
 }
 
+// Deprecated: use CommonOptions().Linger.
 func (s *connectionSocket) Linger() (time.Duration, error) { return s.CommonOptions().Linger() }
 
+// Deprecated: use CommonOptions().SetReceiveTimeout.
 func (s *connectionSocket) SetReceiveTimeout(value time.Duration) error {
 	return s.CommonOptions().SetReceiveTimeout(value)
 }
 
+// Deprecated: use CommonOptions().ReceiveTimeout.
 func (s *connectionSocket) ReceiveTimeout() (time.Duration, error) {
 	return s.CommonOptions().ReceiveTimeout()
 }
 
+// Deprecated: use CommonOptions().SetSendTimeout.
 func (s *connectionSocket) SetSendTimeout(value time.Duration) error {
 	return s.CommonOptions().SetSendTimeout(value)
 }
 
+// Deprecated: use CommonOptions().SendTimeout.
 func (s *connectionSocket) SendTimeout() (time.Duration, error) {
 	return s.CommonOptions().SendTimeout()
 }
 
+// Deprecated: use CommonOptions().SetTCPKeepalive.
 func (s *connectionSocket) SetTCPKeepalive(value bool) error {
 	return s.CommonOptions().SetTCPKeepalive(value)
 }
 
+// Deprecated: use CommonOptions().TCPKeepalive.
 func (s *connectionSocket) TCPKeepalive() (bool, error) { return s.CommonOptions().TCPKeepalive() }
 
+// Deprecated: use CommonOptions().SetTCPNoDelay.
 func (s *connectionSocket) SetTCPNoDelay(value bool) error {
 	return s.CommonOptions().SetTCPNoDelay(value)
 }
 
+// Deprecated: use CommonOptions().TCPNoDelay.
 func (s *connectionSocket) TCPNoDelay() (bool, error) { return s.CommonOptions().TCPNoDelay() }
 
+// Deprecated: use CommonOptions().SetIPv6.
 func (s *connectionSocket) SetIPv6(value bool) error {
 	return s.CommonOptions().SetIPv6(value)
 }
 
+// Deprecated: use CommonOptions().IPv6.
 func (s *connectionSocket) IPv6() (bool, error) { return s.CommonOptions().IPv6() }
 
 func (s *connectionSocket) SetRidDuplicatePolicy(value int) error {
@@ -87,26 +107,32 @@ func (s *connectionSocket) RidDuplicatePolicy() (int, error) {
 	return int(value), err
 }
 
+// Deprecated: use CommonOptions().SetSubmitRetryMode.
 func (s *connectionSocket) SetSubmitRetryMode(value SubmitRetryMode) error {
 	return s.CommonOptions().SetSubmitRetryMode(value)
 }
 
+// Deprecated: use CommonOptions().SubmitRetryMode.
 func (s *connectionSocket) SubmitRetryMode() (SubmitRetryMode, error) {
 	return s.CommonOptions().SubmitRetryMode()
 }
 
+// Deprecated: use CommonOptions().SetSubmitRetryTimeout.
 func (s *connectionSocket) SetSubmitRetryTimeout(value time.Duration) error {
 	return s.CommonOptions().SetSubmitRetryTimeout(value)
 }
 
+// Deprecated: use CommonOptions().SubmitRetryTimeout.
 func (s *connectionSocket) SubmitRetryTimeout() (time.Duration, error) {
 	return s.CommonOptions().SubmitRetryTimeout()
 }
 
+// Deprecated: use CommonOptions().SetSubmitRetryAttempts.
 func (s *connectionSocket) SetSubmitRetryAttempts(value int) error {
 	return s.CommonOptions().SetSubmitRetryAttempts(value)
 }
 
+// Deprecated: use CommonOptions().SubmitRetryAttempts.
 func (s *connectionSocket) SubmitRetryAttempts() (int, error) {
 	return s.CommonOptions().SubmitRetryAttempts()
 }
