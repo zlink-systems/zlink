@@ -32,7 +32,7 @@ namespace
 {
 constexpr auto creation_authority_poll_interval = std::chrono::milliseconds (10);
 
-std::atomic_uint64_t next_user_spot_operation{1};
+std::atomic_uint64_t next_mesh_operation{1};
 } // namespace
 
 task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
@@ -289,7 +289,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
     protocol::user_spot_create_header_t command{
       0,
       {source_status.lifecycle_generation (),
-       next_user_spot_operation.fetch_add (1, std::memory_order_relaxed)},
+       next_mesh_operation.fetch_add (1, std::memory_order_relaxed)},
       source_status.routing_id ().to_bytes (),
       source_status.lifecycle_generation (),
       *spot_id,
@@ -420,7 +420,7 @@ mesh_node_host_service_t::close_user_spot (std::shared_ptr<detail::mesh_node_run
     protocol::user_spot_close_header_t command{
       0,
       {source_status.lifecycle_generation (),
-       next_user_spot_operation.fetch_add (1, std::memory_order_relaxed)},
+       next_mesh_operation.fetch_add (1, std::memory_order_relaxed)},
       source_status.routing_id ().to_bytes (),
       source_status.lifecycle_generation (),
       {spot.spot_id (), spot.object_generation (),

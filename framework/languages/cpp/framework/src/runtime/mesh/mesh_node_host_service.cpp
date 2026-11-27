@@ -589,30 +589,33 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                 continue;
             const auto gate = _actor_destroy_gate;
             detail::spot_node_runtime_t spot_runtime (registration->spot_state);
-            struct destroy_actor_cleanup_t
+            struct destroy_actor_authority_t
             {
-                static task_t<result_t<void>> run (mesh_node_host_service_t *self,
-                                                   std::decay_t<decltype (gate)> gate,
-                                                   actor_ref_t actor)
+                static task_t<void> run (mesh_node_host_service_t *self,
+                                         std::decay_t<decltype (gate)> gate,
+                                         actor_ref_t actor,
+                                         bool closing,
+                                         std::string expected_store_version)
                 {
                     if (!gate->try_enter ())
-                        co_return result_t<void>::failure (
-                          framework_error_kind_t::shutting_down,
-                          "Actor destroy cleanup was rejected during Mesh shutdown");
-                    try {
-                        auto result = co_await self->finalize_local_actor_destroy (actor);
-                        gate->leave ();
-                        co_return result;
-                    }
-                    catch (...) {
-                        gate->leave ();
-                        throw;
-                    }
+                        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                                     "Actor destroy interrupted by Mesh shutdown");
+                    struct leave_t
+                    {
+                        std::shared_ptr<actor_destroy_callback_gate_t> held;
+                        ~leave_t () { held->leave (); }
+                    } leave{gate};
+                    co_await self->update_actor_destroy_authority (
+                      std::move (actor), closing, std::move (expected_store_version));
                 }
             };
             spot_runtime.on_destroy_actor (
-              [this, gate] (actor_ref_t actor) -> task_t<result_t<void>> {
-                  return destroy_actor_cleanup_t::run (this, gate, std::move (actor));
+              [this, gate] (actor_ref_t actor, std::string expected_store_version) {
+                  return destroy_actor_authority_t::run (this, gate, std::move (actor), true,
+                                                         std::move (expected_store_version));
+              },
+              [this, gate] (actor_ref_t actor) {
+                  return destroy_actor_authority_t::run (this, gate, std::move (actor), false, {});
               });
             if (actor_gateway) {
                 spot_runtime.on_actor_ref_updated (

@@ -11,7 +11,7 @@
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/locations/sha256.hpp"
-#include "runtime/utils/poll_interval_wait.hpp"
+
 
 #include <algorithm>
 #include <chrono>
@@ -73,13 +73,19 @@ mesh_node_host_service_t::create_actor (bool exclusive,
       std::tuple<std::string, std::uint64_t, std::optional<std::uint64_t>>;
     std::set<unavailable_target_t> unavailable_targets;
     const auto complete_existing =
-      [&] (const authority_snapshot_t &current) -> result_t<actor_create_result_t> {
+      [&] (const authority_snapshot_t &current) -> std::optional<result_t<actor_create_result_t>> {
         if (current.allocation.stable_type != stable_type)
             return result_t<actor_create_result_t>::failure (framework_error_kind_t::type_mismatch,
                                                              "Actor stable type does not match");
         if (exclusive)
             return result_t<actor_create_result_t>::failure (framework_error_kind_t::already_exists,
                                                              "Actor already exists");
+        const auto payload = decode_direct_actor_authority_payload (current.payload);
+        if (!payload)
+            return result_t<actor_create_result_t>::failure (framework_error_kind_t::unavailable,
+                                                             "Actor authority is unavailable");
+        if (payload->state != actor_authority_state_t::ready)
+            return std::nullopt;
         return result_t<actor_create_result_t>::success (
           actor_create_existing_t{::zlink::framework::detail::actor_ref_access_t::make (
             current.allocation.target.node_rid, current.allocation.stable_type,
@@ -98,12 +104,10 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                   return message_t::from_raw (std::move (raw), _serializers);
               }));
         if (snapshot && snapshot->allocation.state == placement_allocation_state_t::active) {
-            const auto projection =
-              decode_actor_authority_payload (snapshot->payload, snapshot->object_generation);
-            if (projection && projection->state == actor_authority_state_t::ready) {
-                const auto owner_available = co_await reader.owner_available (snapshot->owner);
-                if (owner_available)
-                    co_return complete_existing (*snapshot);
+            const auto owner_available = co_await reader.owner_available (snapshot->owner);
+            if (owner_available) {
+                if (auto existing = complete_existing (*snapshot))
+                    co_return std::move (*existing);
             }
         }
     }
@@ -222,7 +226,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
     while (std::chrono::steady_clock::now () < deadline) {
         const auto reserved = co_await _location_store->reserve (reserve);
         if (const auto *existing = std::get_if<object_already_exists_t> (&reserved)) {
-            co_return complete_existing (existing->current);
+            if (auto result = complete_existing (existing->current))
+                co_return std::move (*result);
         }
         if (std::holds_alternative<object_type_mismatch_t> (reserved))
             co_return result_t<actor_create_result_t>::failure (
@@ -410,7 +415,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
               [this] (zlink::message_t raw) {
                   return message_t::from_raw (std::move (raw), _serializers);
               }));
-        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
+        co_await detail::delay (_services->get_required<detail::delay_owner_t> (),
+                                std::chrono::milliseconds (1));
     }
     co_return result_t<actor_create_result_t>::failure (framework_error_kind_t::deadline_exceeded,
                                                         "Actor creation deadline elapsed");
