@@ -779,7 +779,7 @@ Transport, target과 Session owner가 수행하는 검증과 그 경계는
 ### Terminal completion 추적
 
 - Target은 terminal result를 [Location runtime §9.3](../05-location-relocation/01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다)의 그 request row에 CAS로 기록(`accepted` → `pending`)한 뒤에만 `replyRelay`를 보낸다.
-- `replyRelay`는 원래 reply route와 그 요청을 가리키는 source lease fence를 사용한다. 목적지는 원 requester node가 아니라 그 request를 처음 수락해 reply capability를 가진 relocation source node다. Source node는 받은 결과를 원 reply route로 원 requester에게 전달하고, requester는 기존 peer authority fence로 relay를 인증한다(Store를 다시 읽지 않는다).
+- `replyRelay`는 원래 reply route와 그 요청을 가리키는 source lease fence를 사용한다. 목적지는 row의 request source node(원 requester node)다. 그 node는 자기 request registry로 결과를 받았는지(`terminalReceived`) 이미 끝났는지(`alreadyTerminal`) 판정해 relay를 보낸 target에게 `replyRelayAck`(command 46)을 보낸다. Relay는 기존 peer authority fence(coordinator RID·generation·owner lease)로 인증하고 Store를 다시 읽지 않는다.
 - Source는 원래 requester가 terminal result를 수락하거나 이미 terminal임을 확인한 뒤에만 authenticated `replyRelayAck`을 보낸다. 중간 node의 submit 성공은 근거가 아니다. Target은 이 ACK로 row를 terminal 상태로 바꾼다.
 - Physical connection close는 terminal delivery의 증거가 아니다.
 
