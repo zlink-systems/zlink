@@ -7,7 +7,7 @@ internal sealed class TestHostMessageFlowListener : IDisposable
     private readonly object _fileGate = new();
     private readonly ActivityListener _listener;
 
-    public TestHostMessageFlowListener(string filePath, SealedJoinObservation? sealedJoin = null)
+    public TestHostMessageFlowListener(string filePath, Action<Activity>? observeStopped = null)
     {
         _filePath = filePath;
         if (Path.GetDirectoryName(filePath) is { Length: > 0 } directory)
@@ -21,7 +21,7 @@ internal sealed class TestHostMessageFlowListener : IDisposable
             ActivityStopped = activity =>
             {
                 Capture(activity);
-                sealedJoin?.ObserveIngress(activity);
+                observeStopped?.Invoke(activity);
             },
         };
         ActivitySource.AddActivityListener(_listener);
