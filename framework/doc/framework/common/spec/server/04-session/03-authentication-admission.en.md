@@ -231,7 +231,7 @@ error at startup. When it's `false`, the other stage 2 settings aren't read.
 
 - Every node with stage 2 on sends the queue Spot a `NodeReport` Spot request once per second. It carries the node RID,
   the stage 1 limit, the current in-flight count, the SessionRids whose tickets were used since the previous report,
-  and the SessionRids of waiting sessions that ended since the previous report. The Spot returns the current epoch in
+  the SessionRids of waiting sessions that ended since the previous report, and, with a global limit, the permit IDs it holds. The Spot returns the current epoch in
   the Response. These reports are Framework-internal Spot messages, not client wire.
 - The Spot treats only reports received within the last 3 seconds as valid. It issues no tickets to sessions on a node
   without a valid report.
@@ -240,18 +240,26 @@ error at startup. When it's `false`, the other stage 2 settings aren't read.
   `budget(N) = max(0, limit − in-flight − tickets issued to N's waiting clients since that report)`. When a report arrives
   and when a client enters the queue, the Spot issues tickets to each node's waiting clients in enqueue order, up to that
   node's budget. Order is therefore FIFO within a node and approximately FIFO across the mesh.
-- **Global limit.** When the setting `AdmissionGlobalLimit` (a positive integer, optional) is present, the Spot issues
-  each ticket only while `Σ(in-flight count of valid reports) + unexpired tickets not yet reported as used <
-  AdmissionGlobalLimit`. Past that, it issues no ticket even if a node budget remains, and waits for the next report or
-  a ticket expiry. Without the setting, only the per-node budgets apply.
-  - A node with stage 2 on rejects every authentication without a valid ticket by the first row of §3.4 before the handler
-    runs, so every authentication that reaches a handler carries a ticket this Spot issued. The count inside the Spot
-    therefore bounds concurrent authentication across the whole mesh. There's no separate Store counter.
-  - A ticket counts as unused until a node report lists it as used. A ticket in use can be counted twice, once with the
-    in-flight count, but that only errs below the limit.
-  - When the queue Spot gets a new incarnation, the epoch changes and every earlier ticket is invalid (§3.5.1). The Spot
-    issues no ticket before it receives a valid report, so it doesn't exceed the limit right after re-preparation.
-  - Every node is set to the same value. The Spot uses the value of the node its incarnation runs on.
+- **Global limit.** When the setting `AdmissionGlobalLimit` (a positive integer, optional) is present, it caps concurrent
+  authentication executions across the whole mesh. A ticket is only an admission right; the queue Spot grants the
+  execution permit separately.
+  - Before a node passes an authentication with a valid ticket to the handler, it sends the queue Spot one `AdmitPermit` Spot
+    request carrying the node RID, the node owner lease (`ownerId`, `leaseGeneration`), the SessionRid, and the ticket's epoch.
+    While `executing permits < AdmissionGlobalLimit` and the epoch is current, the Spot answers with a permit ID (a nonzero
+    64-bit value); otherwise it rejects with `unavailable` + queueRequired, as in the first row of §3.4. A rejected connection
+    waits again per §3.5.5.
+  - When the handler ends (success, failure, or cancellation), the node returns the permit with a `ReleasePermit` Spot send. The
+    Spot treats repeated returns of the same permit as idempotent.
+  - The Spot records the node owner lease of each permit and reclaims every permit of a node whose lease ended. It also reclaims
+    permits missing from that node's next report (§3.5.3); the report carries the permit IDs the node holds.
+  - If `AdmitPermit` fails or the Spot doesn't answer within the authentication request deadline, the handler doesn't run and
+    the request ends with `unavailable`. With a global limit, nothing is let past the limit when the Spot is absent.
+  - Ticket reuse, delayed use reports, report expiry, and epoch changes don't affect the permit count. The cost, with stage 2 and
+    the global limit on, is one Spot round trip and one return send per authentication.
+  - Every node is set to the same value. The Spot uses the value of the node its incarnation runs on. A new incarnation starts at
+    zero permits; nodes holding an earlier incarnation's permits treat them as returned after the report Response with the new
+    epoch and don't count them again, so right after an incarnation change the limit can be exceeded briefly, by at most the
+    number of authentications running at the change.
 - The estimated wait `estimatedWaitMs` is `ceil(position × 1000 / r)`, where r is the number of tickets issued in the last
   30 seconds divided by 30 (per second). When r is 0, it's `position × 1000`. The result is clamped to 2^31 − 1.
   `position` is the 1-based position across the mesh.
