@@ -280,6 +280,30 @@ Connector는 다음과 같이 처리한다.
 - 한 연결의 순서는 `OnAdmissionQueued` → `OnAdmissionPosition`* → (`OnAdmissionWaiting`*) → request 완료다.
   정확한 signature는 언어별 exact interface가 구현 PR과 함께 정한다.
 
+#### 3.5.8 대기열 Spot 등록과 node 간 메시지
+
+- 대기열 Spot의 Spot type은 Framework Instance Spot type `$zlink.AdmissionQueue`다. 2단계를 켠 node는 대기열 RouteMesh(§3.5.0)에
+  이 type을 등록한다. 그 mesh에 Location Store가 없거나 Object role이 `None`이면 시작할 때 설정 오류다.
+- 대기열 Spot과 node 사이 메시지는 아래 네 가지이며 기존 typed JSON 규칙([Message model §5](../00-foundation/05-message-model.ko.md))을
+  따른다. 필드 이름은 camelCase, `dec`는 64-bit 정수의 10진 문자열, `b64`는 padding 없는 base64url이다. 모든 필드는 필수이고
+  `?`가 붙은 것만 선택이다. 알 수 없는 필드는 무시하고, 빠진 필수 필드나 형식 오류는 protocol error다.
+- 대기자에게 가는 순번·ticket은 새 전달 경로를 두지 않는다. Spot은 그 node의 다음 `report` Response에 `deliveries`로 싣고, node가
+  자기 연결로 §3.4의 `$zlink.admission.position`·`$zlink.admission.ticket` Send를 보낸다. `enqueue` Response의 `delivery`도 같다.
+
+공통 형식
+
+| 이름 | 필드 |
+|---|---|
+| `Connection` | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `streamName` string · `sessionRid` b64 |
+| `Delivery` | `streamName` string · `sessionRid` b64 · `kind` `"position"`\|`"ticket"` · `position?` int32(1부터) · `estimatedWaitMs?` int32 · `ticket?` b64(66자) · `expiresInMs?` int32. `kind`가 `position`이면 `position`·`estimatedWaitMs`, `ticket`이면 `ticket`·`expiresInMs`가 필수다 |
+
+| 메시지 | 종류 | 요청 | 응답 |
+|---|---|---|---|
+| `$zlink.admission-queue.enqueue` | request | `connection` Connection | `epoch` dec · `delivery` Delivery |
+| `$zlink.admission-queue.report` | request(1초마다, §3.5.3) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `limit` int32 · `inFlight` int32 · `usedTickets` [{`streamName`, `sessionRid`}] · `endedSessions` [{`streamName`, `sessionRid`}] · `heldPermits` [dec] · `resolvedRequestSeq` dec(전역 상한이 없으면 `"0"`) | `epoch` dec · `deliveries` [Delivery](이 node 대기자 중 순번·예상 대기가 바뀐 것, 5초가 지난 것, 새 ticket) |
+| `$zlink.admission-queue.admit-permit` | request(§3.5.3 전역 상한) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `ownerId` string · `leaseGeneration` dec · `streamName` string · `sessionRid` b64 · `epoch` dec · `requestSeq` dec | `permitId` dec(0이 아님). 거절은 Response가 아니라 `unavailable` + `$zlink.admission.queueRequired`=`"1"` 실패다 |
+| `$zlink.admission-queue.release-permit` | send | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `permitId` dec | — |
+
 ## 4. 시험
 
 - 공통 fixture `login-admission-v1.json`의 서버 시나리오 12개와 connector 시나리오 11개를 네 언어가 실행한다.

@@ -321,6 +321,33 @@ Instance Spot default mesh), that's a configuration error at startup. Every node
 - On one connection the order is `OnAdmissionQueued` → `OnAdmissionPosition`* → (`OnAdmissionWaiting`*) → request
   completion. Each language's exact interface fixes the exact signatures together with the implementation PR.
 
+#### 3.5.8 Queue Spot Registration and Node Messages
+
+- The queue Spot's Spot type is the Framework Instance Spot type `$zlink.AdmissionQueue`. A node with stage 2 on registers this
+  type in the queue RouteMesh (§3.5.0). If that mesh has no Location Store or its Object role is `None`, that's a configuration
+  error at startup.
+- The messages between the queue Spot and nodes are the four below and follow the existing typed JSON rules
+  ([Message model §5](../00-foundation/05-message-model.en.md)). Field names are camelCase, `dec` is a 64-bit integer as a
+  decimal string, and `b64` is unpadded base64url. Every field is required except those marked `?`. Unknown fields are ignored;
+  a missing required field or a malformed value is a protocol error.
+- Positions and tickets for waiting clients have no new delivery path. The Spot carries them as `deliveries` in that node's next
+  `report` Response, and the node sends the §3.4 `$zlink.admission.position` and `$zlink.admission.ticket` Sends on its own
+  connection. The `delivery` in the `enqueue` Response works the same way.
+
+Common shapes
+
+| Name | Fields |
+|---|---|
+| `Connection` | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `streamName` string · `sessionRid` b64 |
+| `Delivery` | `streamName` string · `sessionRid` b64 · `kind` `"position"`\|`"ticket"` · `position?` int32 (1-based) · `estimatedWaitMs?` int32 · `ticket?` b64 (66 chars) · `expiresInMs?` int32. With `kind` `position`, `position` and `estimatedWaitMs` are required; with `ticket`, `ticket` and `expiresInMs` are |
+
+| Message | Kind | Request | Response |
+|---|---|---|---|
+| `$zlink.admission-queue.enqueue` | request | `connection` Connection | `epoch` dec · `delivery` Delivery |
+| `$zlink.admission-queue.report` | request (every second, §3.5.3) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `limit` int32 · `inFlight` int32 · `usedTickets` [{`streamName`, `sessionRid`}] · `endedSessions` [{`streamName`, `sessionRid`}] · `heldPermits` [dec] · `resolvedRequestSeq` dec (`"0"` without a global limit) | `epoch` dec · `deliveries` [Delivery] (this node's waiting clients whose position or estimate changed, whose 5 seconds passed, and new tickets) |
+| `$zlink.admission-queue.admit-permit` | request (§3.5.3 global limit) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `ownerId` string · `leaseGeneration` dec · `streamName` string · `sessionRid` b64 · `epoch` dec · `requestSeq` dec | `permitId` dec (nonzero). A rejection isn't a Response but an `unavailable` + `$zlink.admission.queueRequired`=`"1"` failure |
+| `$zlink.admission-queue.release-permit` | send | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `permitId` dec | — |
+
 ## 4. Tests
 
 - All four languages run the shared fixture `login-admission-v1.json`: 12 server scenarios and 11 connector scenarios.
