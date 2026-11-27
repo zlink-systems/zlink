@@ -1,13 +1,13 @@
 use super::*;
 impl crate::internal::SocketStorage {
     pub(crate) fn create(
-        ctx: &crate::core_context::Context,
+        ctx: &crate::contracts::core::context::Context,
         typ: ffi::zlink_socket_type_t,
     ) -> Result<Self, ConfigError> {
         let handle = unsafe { ffi::zlink_socket(context_handle(ctx), typ) };
         if handle.is_null() {
             return Err(ConfigError::new(
-                crate::error::ConfigResult::InvalidHandle,
+                crate::contracts::errors::errors::ConfigResult::InvalidHandle,
                 last_errno(),
             ));
         }
@@ -36,28 +36,41 @@ impl crate::internal::SocketStorage {
     // -- Connection --------------------------------------------------------
 
     pub(crate) fn bind(&self, addr: &str) -> Result<(), BindError> {
-        let c = CString::new(addr)
-            .map_err(|_| BindError::new(crate::error::BindResult::InvalidArgument, libc::EINVAL))?;
+        let c = CString::new(addr).map_err(|_| {
+            BindError::new(
+                crate::contracts::errors::errors::BindResult::InvalidArgument,
+                libc::EINVAL,
+            )
+        })?;
         check_bind_rc(unsafe { ffi::zlink_bind(self.handle, c.as_ptr()) })
     }
 
     pub(crate) fn connect(&self, addr: &str) -> Result<(), ConnectError> {
         let c = CString::new(addr).map_err(|_| {
-            ConnectError::new(crate::error::ConnectResult::InvalidArgument, libc::EINVAL)
+            ConnectError::new(
+                crate::contracts::errors::errors::ConnectResult::InvalidArgument,
+                libc::EINVAL,
+            )
         })?;
         check_connect_rc(unsafe { ffi::zlink_connect(self.handle, c.as_ptr()) })
     }
 
     pub(crate) fn unbind(&self, addr: &str) -> Result<(), ConnectError> {
         let c = CString::new(addr).map_err(|_| {
-            ConnectError::new(crate::error::ConnectResult::InvalidArgument, libc::EINVAL)
+            ConnectError::new(
+                crate::contracts::errors::errors::ConnectResult::InvalidArgument,
+                libc::EINVAL,
+            )
         })?;
         check_connect_rc(unsafe { ffi::zlink_unbind(self.handle, c.as_ptr()) })
     }
 
     pub(crate) fn disconnect(&self, addr: &str) -> Result<(), ConnectError> {
         let c = CString::new(addr).map_err(|_| {
-            ConnectError::new(crate::error::ConnectResult::InvalidArgument, libc::EINVAL)
+            ConnectError::new(
+                crate::contracts::errors::errors::ConnectResult::InvalidArgument,
+                libc::EINVAL,
+            )
         })?;
         check_connect_rc(unsafe { ffi::zlink_disconnect(self.handle, c.as_ptr()) })
     }
@@ -150,7 +163,7 @@ impl crate::internal::SocketStorage {
         };
         if rc != 0 && len == 0 {
             let err = check_config_rc(rc).expect_err("nonzero subscription_at result");
-            if err.code() == crate::error::ConfigResult::NotFound {
+            if err.code() == crate::contracts::errors::errors::ConfigResult::NotFound {
                 return Ok(None);
             }
             return Err(err);
@@ -247,7 +260,11 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn set_linger(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_LINGER, milliseconds)
+        set_int_opt(
+            self.handle,
+            ffi::zlink_option_t::ZLINK_OPT_LINGER,
+            milliseconds,
+        )
     }
 
     pub(crate) fn linger(&self) -> Result<i32, ConfigError> {
@@ -255,7 +272,11 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn set_send_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO, milliseconds)
+        set_int_opt(
+            self.handle,
+            ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO,
+            milliseconds,
+        )
     }
 
     pub(crate) fn send_timeout(&self) -> Result<i32, ConfigError> {
@@ -263,7 +284,11 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn set_receive_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO, milliseconds)
+        set_int_opt(
+            self.handle,
+            ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO,
+            milliseconds,
+        )
     }
 
     pub(crate) fn receive_timeout(&self) -> Result<i32, ConfigError> {
@@ -488,7 +513,9 @@ impl crate::internal::SocketStorage {
             )
         }) {
             Ok(()) => Ok(()),
-            Err(err) if err.code() == crate::error::ConfigResult::InvalidHandle => {
+            Err(err)
+                if err.code() == crate::contracts::errors::errors::ConfigResult::InvalidHandle =>
+            {
                 self.set_tls_cert(cert)?;
                 self.set_tls_key(key)?;
                 set_bool_opt(
@@ -546,7 +573,9 @@ impl crate::internal::SocketStorage {
             )
         }) {
             Ok(()) => Ok(()),
-            Err(err) if err.code() == crate::error::ConfigResult::InvalidHandle => {
+            Err(err)
+                if err.code() == crate::contracts::errors::errors::ConfigResult::InvalidHandle =>
+            {
                 self.set_tls_ca(ca_cert)?;
                 self.set_tls_hostname(hostname)?;
                 self.set_tls_trust_system(trust_system)
@@ -639,7 +668,7 @@ impl crate::internal::SocketStorage {
     pub(crate) fn get_pub_message_opt(
         &self,
         opt: ffi::zlink_pub_option_t,
-    ) -> Result<crate::message::Message, ConfigError> {
+    ) -> Result<crate::contracts::messaging::message::Message, ConfigError> {
         // Two-step query: first probe the length with a null buffer, then
         // allocate exactly what's needed. Previously this always allocated a
         // 64 KiB scratch buffer up front; for the welcome-message case the
@@ -649,7 +678,7 @@ impl crate::internal::SocketStorage {
             ffi::zlink_get_pub_option(self.handle, opt, std::ptr::null_mut(), &mut len)
         })?;
         if len == 0 {
-            return crate::message::Message::try_from([]);
+            return crate::contracts::messaging::message::Message::try_from([]);
         }
         let mut buf = vec![0u8; len];
         let mut filled = len;
@@ -661,7 +690,7 @@ impl crate::internal::SocketStorage {
                 &mut filled,
             )
         })?;
-        crate::message::Message::try_from(&buf[..filled])
+        crate::contracts::messaging::message::Message::try_from(&buf[..filled])
     }
 
     // -- SUB-option helper -------------------------------------------------
@@ -939,4 +968,18 @@ fn supports_completion(typ: ffi::zlink_socket_type_t) -> bool {
             | ffi::zlink_socket_type_t::ZLINK_SOCKET_ROUTER
             | ffi::zlink_socket_type_t::ZLINK_SOCKET_STREAM
     )
+}
+
+impl crate::internal::RoutedHandle {
+    pub(crate) fn close_native(&self) -> i32 {
+        let handle = self.handle();
+        if handle.is_null() {
+            return 0;
+        }
+        let rc = unsafe { crate::runtime::native::ffi::zlink_close(handle) };
+        if rc == 0 {
+            self.detach();
+        }
+        rc
+    }
 }

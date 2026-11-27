@@ -426,7 +426,7 @@ class Message:
         msg = cls.__new__(cls)
         msg._msg = ZlinkMsg()
         msg._valid = False
-        msg._keepalive = _init_msg_from_buffer(msg._msg, data, borrow=False)
+        msg._keepalive = _init_msg_from_buffer(msg._msg, data)
         msg._valid = True
         return msg
 
@@ -538,15 +538,6 @@ def message_from(data):
 
 def message_allocate(size):
     return Message.allocate(size)
-
-
-def wrap_message_buffer(data):
-    msg = Message.__new__(Message)
-    msg._msg = ZlinkMsg()
-    msg._valid = False
-    msg._keepalive = _init_msg_from_buffer(msg._msg, data, borrow=True)
-    msg._valid = True
-    return msg
 
 
 def create_received_message(*args, **kwargs):

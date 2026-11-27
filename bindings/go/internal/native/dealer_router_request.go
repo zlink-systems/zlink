@@ -95,13 +95,13 @@ func newSendRetryState(
 
 func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
 	if s == nil || s.core == nil || s.payload == nil {
-		return 0, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return 0, newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 	}
 
 	var completionID C.zlink_completion_id_t
 	var rid *C.zlink_routing_id_t
 	if s.hasTarget {
-		value := s.target.toC()
+		value := routingIDToC(s.target)
 		rid = &value
 	}
 	err := submitMultipartFromClones(s.payload.owned, false, func(native *C.zlink_msg_t, count C.size_t) error {
@@ -121,13 +121,13 @@ func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
 
 func (s *requestRetryState) attempt(userContext uintptr) (uint64, error) {
 	if s == nil || s.core == nil || s.payload == nil {
-		return 0, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return 0, newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 	}
 
 	var completionID C.zlink_completion_id_t
 	var ridPointer *C.zlink_routing_id_t
 	if s.hasTarget {
-		rid := s.target.toC()
+		rid := routingIDToC(s.target)
 		ridPointer = &rid
 	}
 	err := submitMultipartFromClones(s.payload.owned, false, func(native *C.zlink_msg_t, count C.size_t) error {
@@ -153,14 +153,14 @@ func (e *completionEntry) attemptSend() bool {
 		return true
 	}
 	if e.send == nil {
-		e.finishSend(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
+		e.finishSend(newSubmitError(SubmitInternalError, int(C.EPROTO)))
 		return true
 	}
 
 	completionID, err := e.send.attempt(e.handleKey)
 	if err == nil {
 		if completionID != 0 {
-			err = &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+			err = newSubmitError(SubmitInternalError, int(C.EPROTO))
 		} else {
 			e.setWritableWaiting(false)
 			e.send.payload.takeSourceOwnership()
@@ -172,7 +172,7 @@ func (e *completionEntry) attemptSend() bool {
 
 	var submitErr *SubmitError
 	if errors.As(err, &submitErr) && submitErr.Result == SubmitBackpressured {
-		if submitErr.internalErrno() == int(C.EAGAIN) && completionID != 0 {
+		if submitErr.InternalErrno() == int(C.EAGAIN) && completionID != 0 {
 			e.send.payload.takeSourceOwnership()
 			e.publishSendWait(completionID)
 			if activateErr := e.setWritableWaiting(true); activateErr != nil {
@@ -190,7 +190,7 @@ func (e *completionEntry) attemptSend() bool {
 			}
 			return false
 		}
-		err = &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+		err = newSubmitError(SubmitInternalError, int(C.EPROTO))
 	}
 
 	e.setWritableWaiting(false)
@@ -209,10 +209,10 @@ func submitManagedSend(
 		return nil, err
 	}
 	if core == nil || core.isClosed() {
-		return nil, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return nil, newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 	}
 	if target != nil && target.Size() == 0 {
-		return nil, &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return nil, newSubmitError(SubmitInvalidArgument, int(C.EINVAL))
 	}
 
 	send, err := newSendRetryState(core, target, parts)
@@ -229,7 +229,7 @@ func submitManagedSend(
 	if owner.shutdown {
 		owner.mu.Unlock()
 		send.payload.close()
-		return nil, &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.ESHUTDOWN)}
+		return nil, newSubmitError(SubmitInvalidState, int(C.ESHUTDOWN))
 	}
 	// Only the in-flight count is recorded before the native call. A completion
 	// entry is created after Core returns a wait token.
@@ -244,11 +244,11 @@ func submitManagedSend(
 	}
 	var submitErr *SubmitError
 	if !errors.As(err, &submitErr) || submitErr.Result != SubmitBackpressured ||
-		submitErr.internalErrno() != int(C.EAGAIN) || completionID == 0 {
+		submitErr.InternalErrno() != int(C.EAGAIN) || completionID == 0 {
 		send.payload.close()
 		owner.discardEarlyWritable(key)
 		if err == nil || (submitErr != nil && submitErr.Result == SubmitBackpressured) {
-			return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+			return nil, newSubmitError(SubmitInternalError, int(C.EPROTO))
 		}
 		return nil, err
 	}
@@ -286,10 +286,10 @@ func submitCompletionRequest(
 		return nil, err
 	}
 	if core == nil || core.isClosed() {
-		return nil, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return nil, newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 	}
 	if target != nil && target.Size() == 0 {
-		return nil, &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return nil, newSubmitError(SubmitInvalidArgument, int(C.EINVAL))
 	}
 	timeoutMillis, err := requestTimeoutValue(timeout)
 	if err != nil {
@@ -321,7 +321,7 @@ func submitCompletionRequest(
 	var completionID C.zlink_completion_id_t
 	var ridPointer *C.zlink_routing_id_t
 	if target != nil {
-		rid := target.toC()
+		rid := routingIDToC(*target)
 		ridPointer = &rid
 	}
 	err = submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
@@ -335,7 +335,7 @@ func submitCompletionRequest(
 			entry.attemptMu.Unlock()
 			entry.failSubmit()
 			owner.unregister(entry)
-			return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+			return nil, newSubmitError(SubmitInternalError, int(C.EPROTO))
 		}
 		entry.finishAdmitted(nil)
 		entry.publish(uint64(completionID))
@@ -345,7 +345,7 @@ func submitCompletionRequest(
 
 	var submitErr *SubmitError
 	if errors.As(err, &submitErr) && submitErr.Result == SubmitBackpressured &&
-		submitErr.internalErrno() == int(C.EAGAIN) && completionID != 0 {
+		submitErr.InternalErrno() == int(C.EAGAIN) && completionID != 0 {
 		retry, snapshotErr := newRequestRetryState(core, target, timeoutMillis, parts)
 		entry.request = retry
 		entry.publishSendWait(uint64(completionID))
@@ -378,12 +378,12 @@ func submitCompletionRequest(
 		owner.unregister(entry)
 		return nil, err
 	}
-	return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+	return nil, newSubmitError(SubmitInternalError, int(C.EPROTO))
 }
 
 func requestTimeoutValue(timeout time.Duration) (uint32, error) {
 	if timeout < 0 {
-		return 0, &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return 0, newSubmitError(SubmitInvalidArgument, int(C.EINVAL))
 	}
 	if timeout == 0 {
 		return 0, nil
@@ -404,7 +404,7 @@ func requestTimeoutValue(timeout time.Duration) (uint32, error) {
 func requestWaitActivationError(err error) error {
 	var submitErr *SubmitError
 	if errors.As(err, &submitErr) && submitErr.Result == SubmitTerminated {
-		return &RequestError{Result: RequestTerminated, nativeErrno: submitErr.internalErrno()}
+		return newRequestError(RequestTerminated, submitErr.InternalErrno())
 	}
 	return err
 }

@@ -390,9 +390,24 @@ internal static class TestHostScenarioConfigurator
     {
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddSingleton<UserSpotJoinObserver>();
+        var actorId = options.ActorId ?? "cross-lang-user-spot-actor";
+        if (Environment.GetEnvironmentVariable("ZLINK_CROSS_FAIL_JOIN_COMPLETION") == "1")
+        {
+            var senderRid =
+                Environment.GetEnvironmentVariable("ZLINK_CROSS_LATE_SENDER_RID")
+                ?? throw new InvalidOperationException("Missing ZLINK_CROSS_LATE_SENDER_RID.");
+            services.AddSingleton(provider => new SealedJoinObservation(
+                provider.GetRequiredService<TestHostEventSink>(),
+                actorId,
+                senderRid
+            ));
+        }
         if (!string.IsNullOrWhiteSpace(options.EventFilePath))
         {
-            services.AddSingleton(new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
+            services.AddSingleton(provider => new TestHostMessageFlowListener(
+                options.EventFilePath + ".flow",
+                provider.GetService<SealedJoinObservation>()
+            ));
         }
         services.AddZLinkFramework(framework =>
         {
@@ -465,13 +480,15 @@ internal static class TestHostScenarioConfigurator
             provider.GetRequiredService<TestHostEventSink>(),
             options.SpotId
                 ?? throw new InvalidOperationException("user-spot-target mode requires --spot-id."),
-            options.ActorId ?? "cross-lang-user-spot-actor",
+            actorId,
             options.MeshName ?? "cross.user-spot-join",
             options.PeerRid
                 ?? throw new InvalidOperationException(
                     "user-spot-target mode requires --peer-rid."
                 ),
-            options.PlacementWeight ?? 0
+            options.PlacementWeight ?? 0,
+            provider.GetService<SealedJoinObservation>(),
+            provider.GetService<TestHostMessageFlowListener>()
         ));
     }
 
