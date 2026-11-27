@@ -641,8 +641,10 @@ Instance cold activation follows this order.
 
 ## 15. Error Handling
 
-When a handler returns an exception, the send handler records it through
-the application's logger/telemetry provider and metrics. A request handler
+When a handler returns an exception, the send handler records the failure as a
+`zlink.dispatch_error` with `reason=handler_exception`. Whether it is recorded follows the
+diagnostics level in [Message flow tracing §4](../06-observability/03-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope--level-and-sampling);
+at `Off` it isn't recorded. No separate metric exists for this failure. A request handler
 generates the same request's framework error reply. Provider failure does
 not change the original dispatch result, and no separate public error
 observer is provided.

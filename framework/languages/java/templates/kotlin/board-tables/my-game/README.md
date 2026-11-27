@@ -1,17 +1,24 @@
+[한국어](README.ko.md)
+
 # MyGame board tables
 
-This project is a four-player board table server written in Kotlin. The Session node accepts STREAM connections, binds each connection to a Player Actor, and relays messages. The Table User Spot owns seats, chips, cards, and turns. The Player Actor keeps no copy of game state. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
+This project is a four-player board table server written in Kotlin. The Session node accepts STREAM connections, binds each connection to a Player Actor, and relays messages. The Table User Spot owns seats, chips, cards, and turns. The Player Actor tracks its own matchmaking ticket. The Matchmaker node hosts the Pool Spot and assigns rooms. The Play nodes call the API node over a ClientServer Channel. A Player Actor loads its chips once before seating, and the Table Spot commits all seat balances to Redis together before sending the round result. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
 
 ```mermaid
 flowchart LR
-  players[Players] -->|STREAM| session["Session node"]
-  session -->|relay| table["Play node ×N (table)"]
-  table -->|Location / lease| location[Location Store]
+  players[Players] -->|STREAM| session[Session node]
+  session -->|relay| table[Table node ×N]
+  table -->|Queue / entry report| pool[Matchmaker node]
+  pool -->|PrepareRoom / CommitRoom| table
+  table -->|RoomPrepared| pool
+  table -->|ClientServer Channel| api[API node · Actor DB]
+  api -->|Player balances| location[Redis]
+  table -->|Location / lease| location
 ```
 
 ## Prerequisites
 
-Docker with Compose v2 and Linux containers, network access to Maven Central and the Gradle Plugin Portal, and PowerShell 7 on Windows. JDK 25 is required only for local process debugging. The Gradle wrapper is included; public package versions are pinned in `build.gradle.kts`.
+Docker with Compose v2 and Linux containers, network access to Maven Central and the Gradle Plugin Portal, and PowerShell 7 on Windows. Install JDK 25 to run the server or the e2e client locally. The Windows `.cmd` launchers use PowerShell 7 with a process-scoped execution policy and restore the previous console code page on exit. The Gradle wrapper is included. `build.gradle.kts` pins the public ZLink Framework, STREAM connector, and Java binding packages. [Pinned package versions](AGENTS.md#project-overview)
 
 ## Build
 
@@ -24,20 +31,40 @@ Linux/WSL:
 Windows:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
+
+## Run the local server
+
+Start Docker, then run the server in its own terminal.
+
+```sh
+./run-server.sh
+```
+
+```powershell
+.\run-server.cmd
+```
+
+The launcher builds the server and starts Redis, the API node, both Table nodes, Matchmaker, and Session. Once all nodes are ready, use the Session STREAM address printed on the `Server ready: ws://127.0.0.1:<port>` line. Press Ctrl+C in that terminal to stop its nodes and remove its Redis Compose project.
+
+From another terminal, run `./run-e2e.sh` or `.\run-e2e.cmd`. The script discovers the running server through `.logs/server.json` and runs `table`, `reconnect`, `match`, and `match-cancel` against it. Select scenarios with `--scenario match` or `-Scenario match`. The `update` and `persist` scenarios restart nodes and require an isolated e2e run. Stop the foreground server before selecting either scenario.
 
 ## Client connection
 
 ### Endpoint and first packet
 
-The Session client STREAM listener defaults to `tcp://127.0.0.1:0` in `server/config/session.json`. Port `0` asks the OS for a free port; use the actual `streamEndpoint` in the process line `READY <json>`, which also contains `id` and `meshEndpoint`. TCP has no URL path. Web browsers, Unity WebGL, and Cocos Creator web cannot connect to this default TCP listener; they require a separately configured WebSocket deployment.
+Use the Session address from `Server ready:` or the `streamEndpoint` field of the Session node's `READY <json>` record. The default is `ws://127.0.0.1:0` in `server/config/session.json`. The OS chooses the port, and the WebSocket uses path `/`. Browsers, Unity WebGL, and Cocos Creator web can connect from the same host. HTTPS pages require `wss://`; remote clients need an externally reachable listener.
 
 Loopback is reachable only inside the same host/network namespace. Keep a deployment running for external clients, bind to a reachable interface and port, and expose that port from containers. The Docker e2e deployment is temporary and is removed after the run. Mesh listeners and Redis are not game-client endpoints.
 
-Send `JoinTableRequest(playerId, tableId)` first. Successful seating produces a `TableView` push; register the receiver before sending. `ActionRejected` reports rejection.
+Send `JoinTableRequest(playerId, tableId)` to join a specific table. Successful seating produces a `TableView` push. `ActionRejected` reports rejection.
+
+Send an empty `FindMatch` to join the matchmaking queue. The Session assigns a player ID when this is the first packet. `MatchQueued` returns a ticket ID, which the client can pass to `CancelMatch`. The Pool pairs the two longest-waiting players. The Pool records the pair as preparing and sends `PrepareRoom` to the Play nodes’ `room-provisioner-board` Instance Spot. That Spot creates the Table User Spot and forwards `PrepareRoom` to it. The Table sends `RoomPrepared` to the Pool, which handles it in a new turn. The Pool commits the seats after both Actors report successful entry. Each player receives `MatchFound` followed by `TableView` and uses the existing game messages at that table. The Pool allows 10 seconds for both Actors to enter. Waiting tickets expire after 120 seconds, and a disconnected waiting ticket has up to 15 seconds of grace.
 
 After admission, `SessionInfoRequest` uses `connector.kotlin().request<SessionInfo>(SessionInfoRequest()).await()` for a correlated `SessionInfo` reply. The first game operation above uses `send(...).await()` and server pushes. This template does not authenticate player identity; add identity validation before Actor binding for production.
+
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to matchmaking with `FindMatch` on the bound Session. Omit `reconnect` or send `false` for first entry.
 
 ### Connector installation
 
@@ -59,7 +86,7 @@ Use the same connector release as this template pins in `build.gradle.kts`, `ext
 
 ### Kotlin connection example
 
-The example uses the same public connector and Kotlin coroutine wrapper as `e2e/src/main/kotlin/MyGame/e2e/Client.kt`. Save it as `e2e/src/main/kotlin/MyGame/e2e/ConnectOnce.kt` in a copy of the template. It defines a suspending function to call from your application coroutine while the deployment is running; compile it with `./gradlew :e2e:compileKotlin`.
+The example uses the same public connector and Kotlin coroutine wrapper as `e2e/src/main/kotlin/MyGame/e2e/Client.kt`. Save it as `e2e/src/main/kotlin/MyGame/e2e/ConnectOnce.kt` in a copy of the template. It defines a suspending function to call from your application coroutine while the deployment is running; compile it with `./gradlew --no-daemon --max-workers=4 :e2e:compileKotlin`.
 
 ```kotlin
 package MyGame.e2e
@@ -113,39 +140,42 @@ suspend fun connectOnce(endpoint: String, playerId: String) {
 }
 ```
 
-## Docker e2e
+## Isolated e2e
 
-Docker builds a shared node image for all roles and a runner image. The pinned Eclipse Temurin JDK/JRE bases are defined by the Dockerfile ARGs. The runner uses the Docker socket to create sibling nodes sharing its network namespace, preserving loopback listeners and stdin/stdout control. Each invocation removes its containers, network and image tags; cleanup errors return exit 1. Logs remain in `.logs/`.
+When no foreground server is running, `run-e2e` starts an isolated run. Docker builds a shared node image for all roles and a runner image. The pinned Eclipse Temurin JDK/JRE bases are defined by the Dockerfile ARGs. The runner uses the Docker socket to create sibling nodes sharing its network namespace, preserving loopback listeners and stdin/stdout control. Each invocation removes its containers, network and image tags; cleanup errors return exit 1. Logs remain in `.logs/`.
 
-For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Local mode uses JDK 25 and Compose Redis. Scenario and structure options work in both modes.
+For local process debugging, run `./run-e2e.sh --local` or `.\run-e2e.cmd -Local`. Local mode uses JDK 25 and Compose Redis. Scenario and structure options work in both modes.
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,update,persist
 ./run-e2e.sh --check-structure
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update,persist
+.\run-e2e.cmd -CheckStructure
 ```
 
-The runner checks the structure, then starts Redis in a uniquely named Compose project, two play nodes (table), and the Session node. The OS assigns the Redis, mesh, and STREAM ports. Each run keeps its key prefix, configuration, stdout, stderr, and message flow records under `.logs/run-<id>/`. Cleanup stops only the processes and the Compose project that the run created. The exit code is 1 when a scenario or the cleanup fails.
+The console prints a header and result for each scenario and a final pass count. The runner checks the structure, then starts Redis in a uniquely named Compose project, an API node, two Table nodes, a Matchmaker node, and the Session node. The OS assigns the Redis, API channel, mesh, and STREAM ports. Each run keeps its key prefix, configuration, stdout, stderr, and message flow records under `.logs/run-<id>/`. Cleanup stops only the processes and the Compose project that the run created. The exit code is 1 when a scenario or the cleanup fails.
 
 | Scenario | Observable behavior |
 | --- | --- |
 | `table` | Seat assignment, private cards, rejection of server-originated packets, out-of-turn bets, out-of-range values (`integer-out-of-range`), and insufficient chips. Each rejection has `retryAfterMs: 0` and leaves table state unchanged. Settlement reports `cardCount: 0` for every seat; a private-hand query returns an empty list. |
 | `reconnect` | The `SessionInfo` sessionId changes while actorId and objectGeneration stay the same. Seat, cards, and turn persist; settlement clears every hand and a later private-hand query returns an empty list. |
+| `match` | Two queued players receive the same room ID and distinct seats, then settle a hand. |
+| `match-cancel` | A queued player cancels with reason `cancelled`. Two subsequent players match. |
 | `update` | Both clients keep their `SessionInfo` before and after drain. Table state persists through settlement on another node and source replacement; settlement clears every hand, and a later private-hand query returns an empty list. |
+| `persist` | The runner restarts Session, Play, and Matchmaker while the API node and Redis remain running. A fresh Actor with the same player ID loads its settled chips. The previous table ID returns `not-seated` on reconnect. A fresh join uses a new table ID. |
 
 `SessionInfo` carries the Session ID and the ID and generation of the bound Actor. `TableView` carries only the table state. The Session node answers `SessionInfoRequest`. A request handler sends its response to the requesting Actor's bound session; other state pushes use the public Actor send API.
 
 ## Structure and extension
 
-`server/shared` provides messages, constants, configuration, and the common bootstrap. `server/session` provides STREAM, Actor binding, and relay. `server/table` provides the game, the Entry Spot, and the relocation adapter. `e2e` provides the public stream connector client and the process runner. The project uses the default typed JSON serializer. Spring Boot supplies the public Framework bootstrap and constructor injection and does not run an HTTP server.
+`server/shared` provides messages, constants, configuration, and the common bootstrap. `server/session` provides STREAM, Actor binding, and relay. `server/table` provides the game, the Entry Spot, and the relocation adapters. `server/matchmaker` hosts the in-memory Pool Spot `pool-board`. Edit `MatchRule.kt` to change how the Pool chooses a pair. `server/api` serves `LoadPlayer` and `CommitRound` on `player-data`. Redis stores the balances and the round commit record under the deployment prefix’s `players:` keys. Use a fresh table ID when creating a new table whose hand numbering starts over within the same deployment prefix. `e2e` provides the public stream connector client and the process runner. The project uses the default typed JSON serializer. Spring Boot supplies the public Framework bootstrap and constructor injection and does not run an HTTP server.
 
-The Table Spot uses the default SPOT_WIDE execution gate. State changes are not protected by a separate lock or queue. The Table adapter stores only application state as JSON, and the Player adapter's application state is empty. The Framework transfers Actor identity, generation, membership, and session routes.
+The Table Spot uses the default SPOT_WIDE execution gate. State changes are not protected by a separate lock or queue. The Table adapter stores only application state as JSON, and the Player adapter stores the chips and current matchmaking state. The Framework transfers Actor identity, generation, membership, and session routes.
 
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 
@@ -161,20 +191,26 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 
 ## Deployment sequence
 
-Prepare Redis, then set the endpoints and the shared key prefix in `server/config/*.json` for the target environment. Start play nodes A and B (table) first and wait for `READY`, then start the Session node. Node IDs must match between the configuration and the structure file. Starting a replacement process with the same ID still gives it a new routing identity from the Framework.
+Prepare Redis, then set the endpoints and the shared key prefix in `server/config/*.json` for the target environment. Start the API node, Table nodes A and B, and the Matchmaker node, wait for `READY` from each, then start the Session node. Node IDs must match between the configuration and the structure file. Starting a replacement process with the same ID still gives it a new routing identity from the Framework.
 
 Example server commands (JDK 25):
 
 ```sh
+java --enable-native-access=ALL-UNNAMED -cp 'server/api/build/install/api/lib/*' MyGame.api.ProgramKt server/config/api.json
 java --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.ProgramKt server/config/table-a.json
 java --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.ProgramKt server/config/table-b.json
+java --enable-native-access=ALL-UNNAMED -cp 'server/matchmaker/build/install/matchmaker/lib/*' MyGame.matchmaker.ProgramKt server/config/matchmaker.json
 java --enable-native-access=ALL-UNNAMED -cp 'server/session/build/install/session/lib/*' MyGame.session.ProgramKt server/config/session.json
 ```
 
-Writing `drain` to a play node (table)'s stdin produces `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN` in that order. The process prints `SAFE_TO_SHUTDOWN` after confirming it from runtime observation. Then send `shutdown`, wait for `STOPPED`, and start a replacement process with the same configuration. `READY` includes the actual listener endpoint.
+Writing `drain` to a Table process's stdin produces `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN` in that order. The process prints `SAFE_TO_SHUTDOWN` after confirming it from runtime observation. Then send `shutdown`, wait for `STOPPED`, and start a replacement process with the same configuration. `READY` includes the actual listener endpoint.
 
 The Windows runner starts the JDK 25 that Gradle selected directly. The `lib/*` classpath avoids the cmd classpath length limit. For manual runs, use the JDK 25 `java.exe`, quote the classpath wildcard, and keep the `--enable-native-access=ALL-UNNAMED` argument.
 
-The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on play nodes (table) only; there are no fixed User Spots in this template.
+The e2e runner sets each node's optional `tableCapacity` to the number of scenarios in that deployment through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry Spots belong to the Table nodes. Matchmaker starts the fixed `pool-board` Instance Spot.
 
 Before the scenarios, the runner executes the server table's `--check-domain` mode. It checks seven domain boundaries and reports `Domain checks: 7/7 passed`, then verifies the `ActionRejected` JSON contract. `retryAfterMs` is a signed 32-bit JSON integer with the lower camel case property name; chips, pot, and hand numbers remain 64-bit integers.
+
+## Known issues
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.

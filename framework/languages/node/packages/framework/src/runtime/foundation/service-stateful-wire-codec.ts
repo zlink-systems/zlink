@@ -2114,7 +2114,6 @@ export function decodeStatefulReply(
     | 'spotRequest'
     | 'actorRequest'
     | 'actorLookup'
-    | 'actorDestroy'
     | 'actorJoin'
     | 'streamBind'
     | 'streamUnbind'

@@ -93,8 +93,9 @@ Outbound queue 수락, route resolve 또는 remote reply를 기다리는 중에 
 | Runtime이 신규 admission을 중단함 | `ShuttingDown` |
 
 `Send`가 완료된 뒤 target activation, admission 또는 handler 실행이 실패해도 이미 완료된
-call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와 message-flow trace로
-기록한다. 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
+call의 결과를 바꾸지 않는다. Framework는 이 실패를 [runtime metrics](../06-observability/02-runtime-metrics.ko.md)가 정한
+metric과 [message flow tracing §4](../06-observability/03-message-flow-tracing.ko.md#4-기록-범위-설정--level과-sampling)의 level을 따르는
+`zlink.dispatch_error`로 기록한다. 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 ## 5. Request 완료와 실패
 

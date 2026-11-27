@@ -129,7 +129,8 @@ public final class Client implements AutoCloseable {
             Object event =
                     queue.poll(Math.max(0, expires - System.nanoTime()), TimeUnit.NANOSECONDS);
             if (event == null)
-                throw new IllegalStateException("Timed out waiting for action result, received=" + history);
+                throw new IllegalStateException(
+                        "Timed out waiting for action result, received=" + history);
             if (event instanceof Exception error) throw error;
             pending.add(event);
         }

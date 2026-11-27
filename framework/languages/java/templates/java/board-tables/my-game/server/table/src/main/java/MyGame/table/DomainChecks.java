@@ -3,6 +3,7 @@ package MyGame.table;
 import MyGame.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
+
 import java.security.SecureRandom;
 import java.util.*;
 import java.util.function.IntUnaryOperator;
@@ -46,7 +47,7 @@ final class DomainChecks {
     private static void shuffledDeckContainsEveryCardOnce() {
         var table = table(secureRandomIndex());
         require(
-                table.admit("p1") && table.admit("p2"),
+                table.admit("p1", Rules.INITIAL_CHIPS) && table.admit("p2", Rules.INITIAL_CHIPS),
                 "Could not prepare shuffled deck");
         require(table.startDomain("p1") == null, "Deck shuffle failed");
 
@@ -64,7 +65,7 @@ final class DomainChecks {
     private static void injectedRandomProducesDeterministicOrder() {
         var table = table(bound -> bound - 1);
         require(
-                table.admit("p1") && table.admit("p2"),
+                table.admit("p1", Rules.INITIAL_CHIPS) && table.admit("p2", Rules.INITIAL_CHIPS),
                 "Could not prepare deterministic shuffle");
         require(table.startDomain("p1") == null, "Injected random source failed");
         require(
@@ -77,7 +78,9 @@ final class DomainChecks {
     private static void settlementClearsAllPrivateHands() {
         var table = table(bound -> bound - 1);
         for (int i = 0; i < Rules.SEATS; i++)
-            require(table.admit("p" + i), "Could not prepare settlement cards");
+            require(
+                    table.admit("p" + i, Rules.INITIAL_CHIPS),
+                    "Could not prepare settlement cards");
         require(table.startDomain("p0") == null, "Could not start settlement hand");
 
         HandResult result = null;
@@ -86,9 +89,7 @@ final class DomainChecks {
             require(outcome.rejection() == null, "Valid settlement bet was rejected");
             if (i == Rules.SEATS - 1) result = table.settleDomain(outcome);
             else
-                require(
-                        outcome.settlement() == null,
-                        "Settlement ended before every player acted");
+                require(outcome.settlement() == null, "Settlement ended before every player acted");
         }
         require(
                 result != null
@@ -150,7 +151,9 @@ final class DomainChecks {
 
     private static void handNumberOverflowRejectionIsAtomic() {
         var table = table(secureRandomIndex());
-        require(table.admit("p1") && table.admit("p2"), "Could not prepare hand-number boundary");
+        require(
+                table.admit("p1", Rules.INITIAL_CHIPS) && table.admit("p2", Rules.INITIAL_CHIPS),
+                "Could not prepare hand-number boundary");
         table.state.handNumber = Rules.MAX_CONTRACT_INTEGER;
         JsonNode before = snapshot(table);
         require(
@@ -162,7 +165,8 @@ final class DomainChecks {
     private static Table playingTable() {
         var table = table(secureRandomIndex());
         require(
-                table.admit("p1") && table.admit("p2"), "Could not prepare bet boundary");
+                table.admit("p1", Rules.INITIAL_CHIPS) && table.admit("p2", Rules.INITIAL_CHIPS),
+                "Could not prepare bet boundary");
         table.state.seats.get(0).cards = List.of(11, 24);
         table.state.seats.get(1).cards = List.of(0, 13);
         table.state.handNumber = 1;
@@ -172,7 +176,7 @@ final class DomainChecks {
     }
 
     private static Table table(IntUnaryOperator randomIndex) {
-        return new Table(null, null, null, randomIndex);
+        return new Table(null, null, null, null, randomIndex);
     }
 
     private static IntUnaryOperator secureRandomIndex() {
@@ -191,5 +195,4 @@ final class DomainChecks {
     private static void require(boolean condition, String message) {
         if (!condition) throw new IllegalStateException(message);
     }
-
 }

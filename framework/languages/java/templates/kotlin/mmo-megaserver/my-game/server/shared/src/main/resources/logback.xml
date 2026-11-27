@@ -3,5 +3,12 @@
     <target>System.err</target>
     <encoder><pattern>%date %-5level %logger - %msg%n</pattern></encoder>
   </appender>
+  <appender name="MANAGED" class="ch.qos.logback.core.ConsoleAppender">
+    <target>${MyGame.flowTarget:-System.err}</target>
+    <encoder><charset>UTF-8</charset><pattern>${MyGame.flowPrefix:-}%msg%n</pattern></encoder>
+  </appender>
+  <logger name="systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer" level="INFO" additivity="false">
+    <appender-ref ref="MANAGED"/>
+  </logger>
   <root level="INFO"><appender-ref ref="STDERR"/></root>
 </configuration>

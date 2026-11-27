@@ -45,15 +45,18 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
+        System.out.println("Player entered Room " + context.spotId());
         return broadcast(view());
     }
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
+        System.out.println("Player left " + context.spotId());
         return CompletableFuture.completedFuture(null);
     }
 
     private RoomView view() {
-        return new RoomView(context.spotId(), config.id(), state.view(), state.phase(), state.winner());
+        return new RoomView(
+                context.spotId(), config.id(), state.view(), state.phase(), state.winner());
     }
 
     public CompletionStage<Void> current(Player actor) {
@@ -63,7 +66,11 @@ public final class Room implements ZLinkSpot<Player> {
     public CompletionStage<Void> move(Player actor, MoveRequest request) {
         var rejected = state.move(actor.context().actorId(), request);
         if (rejected != null) return reply(actor, rejected);
-        var player = state.view().stream().filter(p -> p.playerId().equals(actor.context().actorId())).findFirst().orElseThrow();
+        var player =
+                state.view().stream()
+                        .filter(p -> p.playerId().equals(actor.context().actorId()))
+                        .findFirst()
+                        .orElseThrow();
         return reply(actor, new MoveResult(player.x(), player.y(), request.sequence()))
                 .thenCompose(ignored -> broadcast(view()));
     }
@@ -81,6 +88,8 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     private CompletionStage<Void> broadcast(Object message) {
+        if (message instanceof MatchEnded ended)
+            System.out.println("Match ended in " + context.spotId() + ", winner " + ended.winner());
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
         for (var player : state.view())
             sends =

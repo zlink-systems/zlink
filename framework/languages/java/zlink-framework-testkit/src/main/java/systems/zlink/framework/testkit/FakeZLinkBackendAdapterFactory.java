@@ -976,16 +976,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                                         routeReply)),
                         requestAdmission);
             }
-            if (isRoutedBoundSessionSendRequest(parts)) {
-                return requestReply(
-                        CompletableFuture.completedFuture(
-                                new ZLinkBackendReceived(
-                                        Optional.empty(),
-                                        Optional.empty(),
-                                        Optional.empty(),
-                                        List.of())),
-                        requestAdmission);
-            }
             Message reply = jsonStringMessage("reply");
             try {
                 return requestReply(
@@ -1500,9 +1490,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                     joinedPayload.close();
                     rejectedPayload.close();
                 }
-            }
-            if (isRoutedBoundSessionSendRequest(parts)) {
-                return requestReply(CompletableFuture.completedFuture(List.of()), requestAdmission);
             }
             Message reply = jsonStringMessage("reply");
             try {
@@ -2118,12 +2105,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
     private static boolean isRoutedActorJoinRequest(List<Message> parts) {
         return parts.size() >= 2
                 && ZLinkActorSpotRoutePackets.JOIN_SPOT_PACKET_NAME.equals(firstPart(parts));
-    }
-
-    private static boolean isRoutedBoundSessionSendRequest(List<Message> parts) {
-        return parts.size() >= 1
-                && ZLinkActorSpotRoutePackets.BOUND_SESSION_SEND_PACKET_NAME.equals(
-                        firstPart(parts));
     }
 
     private static List<Message> copyMessages(List<Message> parts) {

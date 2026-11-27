@@ -336,17 +336,9 @@ internal readonly record struct ActorDestroyOperation(
     ulong OwnerLeaseGeneration
 );
 
-internal sealed record ActorDestroyCompletion(bool Destroyed) : MeshRecordPayload;
-
-internal sealed record ActorDestroyOperationTerminal(
-    RequestResult Result,
-    ServiceWireConstants.FrameworkErrorCode FailureCode,
-    ActorDestroyCompletion? Completion = null
-);
-
 internal interface IActorDestroyOperationTarget
 {
-    ValueTask<ActorDestroyOperationTerminal> DestroyAsync(
+    ValueTask<bool> DestroyAsync(
         ActorDestroyOperation operation,
         CancellationToken cancellationToken
     );
@@ -984,7 +976,6 @@ internal struct MeshReceiveRecord
         KindData as UserSpotCreateCompletion;
     public UserSpotCloseCompletion? UserSpotCloseCompletion => KindData as UserSpotCloseCompletion;
     public ActorCreateCompletion? ActorCreateCompletion => KindData as ActorCreateCompletion;
-    public ActorDestroyCompletion? ActorDestroyCompletion => KindData as ActorDestroyCompletion;
     public MeshSendReadyData? SendReady => KindData as MeshSendReadyData;
 
     internal ZLinkManagedMeshNode.NativeApplicationReply? NativeApplicationReply =>
@@ -1244,14 +1235,6 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
         string stableType,
         ObjectReservationFence reservation,
         ulong deadlineUnixMs,
-        out MeshOperationId operationId,
-        TimeSpan timeout = default
-    );
-    SubmitResult DestroyActorRemote(
-        ActorRef actor,
-        ulong targetNodeGeneration,
-        ulong authorityOwnerGeneration,
-        ulong ownerLeaseGeneration,
         out MeshOperationId operationId,
         TimeSpan timeout = default
     );

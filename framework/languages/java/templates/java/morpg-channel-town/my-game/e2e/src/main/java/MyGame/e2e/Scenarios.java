@@ -9,8 +9,7 @@ public final class Scenarios {
 
     private static void equal(Object expected, Object actual) {
         Structure.require(
-                Objects.equals(expected, actual),
-                "Expected " + expected + ", got " + actual);
+                Objects.equals(expected, actual), "Expected " + expected + ", got " + actual);
     }
 
     private static void sameState(DungeonView expected, DungeonView actual) {
@@ -45,39 +44,47 @@ public final class Scenarios {
         leader.connect(channel);
         leader.next(TownView.class, view -> view.townId().equals(Names.townId(channel)));
         member.connect(channel);
-        var together = leader.next(
-                TownView.class,
-                view -> view.players().containsAll(List.of(leader.playerId, member.playerId)));
+        var together =
+                leader.next(
+                        TownView.class,
+                        view ->
+                                view.players()
+                                        .containsAll(List.of(leader.playerId, member.playerId)));
         equal(
                 together,
                 member.next(
                         TownView.class,
-                        view -> view.players().containsAll(List.of(leader.playerId, member.playerId))));
+                        view ->
+                                view.players()
+                                        .containsAll(List.of(leader.playerId, member.playerId))));
 
         leader.send(new CreatePartyRequest());
-        var created = leader.next(
-                TownView.class,
-                view -> view.parties().stream()
-                        .anyMatch(item -> item.members().equals(List.of(leader.playerId))));
+        var created =
+                leader.next(
+                        TownView.class,
+                        view ->
+                                view.parties().stream()
+                                        .anyMatch(
+                                                item ->
+                                                        item.members()
+                                                                .equals(List.of(leader.playerId))));
         var leaderParty = party(created, List.of(leader.playerId));
         String partyId = leaderParty.partyId();
         Structure.require(Names.validId(partyId, "party-"), "Party ID format");
 
         member.send(new JoinPartyRequest(partyId));
-        var expectedParty = new PartyView(
-                partyId,
-                List.of(leader.playerId, member.playerId),
-                RunPhase.Forming,
-                null);
-        var joined = leader.next(
-                TownView.class,
-                view -> view.parties().contains(expectedParty));
+        var expectedParty =
+                new PartyView(
+                        partyId, List.of(leader.playerId, member.playerId), RunPhase.Forming, null);
+        var joined = leader.next(TownView.class, view -> view.parties().contains(expectedParty));
         equal(joined, member.next(TownView.class, view -> view.parties().contains(expectedParty)));
 
         member.send(new EnterDungeonRequest());
         equal(
                 new ActionRejected(Rules.NOT_LEADER),
-                member.next(ActionRejected.class, rejected -> Rules.NOT_LEADER.equals(rejected.reason())));
+                member.next(
+                        ActionRejected.class,
+                        rejected -> Rules.NOT_LEADER.equals(rejected.reason())));
         var unchanged = queryTown(member);
         var forming = party(unchanged, List.of(leader.playerId, member.playerId));
         equal(RunPhase.Forming, forming.phase());
@@ -93,12 +100,14 @@ public final class Scenarios {
 
         leader.send(new EnterDungeonRequest());
         leader.send(new EnterDungeonRequest());
-        var leaderView = leader.next(
-                DungeonView.class,
-                view -> view.partyId().equals(partyId) && view.phase() == RunPhase.Active);
-        var memberView = member.next(
-                DungeonView.class,
-                view -> view.partyId().equals(partyId) && view.phase() == RunPhase.Active);
+        var leaderView =
+                leader.next(
+                        DungeonView.class,
+                        view -> view.partyId().equals(partyId) && view.phase() == RunPhase.Active);
+        var memberView =
+                member.next(
+                        DungeonView.class,
+                        view -> view.partyId().equals(partyId) && view.phase() == RunPhase.Active);
         equal(leaderView, memberView);
         equal(Names.dungeonId(leaderView.runId()), leaderView.dungeonId());
         Structure.require(Names.validId(leaderView.runId(), "run-"), "Run ID format");
@@ -110,7 +119,8 @@ public final class Scenarios {
     }
 
     private static DungeonView secondParty(String endpoint, DungeonView first) throws Exception {
-        try (var p3 = new Client(endpoint, "p3"); var p4 = new Client(endpoint, "p4")) {
+        try (var p3 = new Client(endpoint, "p3-" + UUID.randomUUID());
+                var p4 = new Client(endpoint, "p4-" + UUID.randomUUID())) {
             var fresh = enter(p3, p4, 1);
             Structure.require(
                     !fresh.dungeonId().equals(first.dungeonId())
@@ -137,16 +147,25 @@ public final class Scenarios {
         equal("townA", initial.nodeId());
         var before = player.sessionInfo();
 
-        try (var observer = new Client(endpoint, "channel-observer")) {
+        try (var observer = new Client(endpoint, "channel-observer-" + UUID.randomUUID())) {
             observer.connect(1);
             observer.next(
                     TownView.class,
-                    view -> view.players().containsAll(List.of(player.playerId, observer.playerId)));
+                    view ->
+                            view.players()
+                                    .containsAll(List.of(player.playerId, observer.playerId)));
             player.send(new CreatePartyRequest());
-            var forming = player.next(
-                    TownView.class,
-                    view -> view.parties().stream()
-                            .anyMatch(item -> item.members().equals(List.of(player.playerId))));
+            var forming =
+                    player.next(
+                            TownView.class,
+                            view ->
+                                    view.parties().stream()
+                                            .anyMatch(
+                                                    item ->
+                                                            item.members()
+                                                                    .equals(
+                                                                            List.of(
+                                                                                    player.playerId))));
             String partyId = party(forming, List.of(player.playerId)).partyId();
             Structure.require(Names.validId(partyId, "party-"), "Party ID format");
 
@@ -161,21 +180,28 @@ public final class Scenarios {
             observer.send(new ViewRequest());
             observer.next(
                     TownView.class,
-                    view -> view.parties().stream()
-                            .anyMatch(item -> item.partyId().equals(partyId)));
+                    view ->
+                            view.parties().stream()
+                                    .anyMatch(item -> item.partyId().equals(partyId)));
             observer.clear();
             observer.send(new ViewRequest());
             observer.next(TownView.class);
             player.send(new ChangeChannelRequest(2));
-            var changed = player.next(
-                    TownView.class,
-                    view -> view.townId().equals(Names.townId(2)));
-            var sourceLeft = observer.next(
-                    TownView.class,
-                    view -> !view.players().contains(player.playerId)
-                            && view.parties().stream().noneMatch(item -> item.partyId().equals(partyId)));
+            var changed =
+                    player.next(TownView.class, view -> view.townId().equals(Names.townId(2)));
+            var sourceLeft =
+                    observer.next(
+                            TownView.class,
+                            view ->
+                                    !view.players().contains(player.playerId)
+                                            && view.parties().stream()
+                                                    .noneMatch(
+                                                            item ->
+                                                                    item.partyId()
+                                                                            .equals(partyId)));
             equal("townB", changed.nodeId());
-            Structure.require(changed.players().contains(player.playerId), "Player missing from town-2");
+            Structure.require(
+                    changed.players().contains(player.playerId), "Player missing from town-2");
             Structure.require(
                     changed.parties().stream().noneMatch(item -> item.partyId().equals(partyId)),
                     "Forming party followed channel change");
@@ -227,19 +253,34 @@ public final class Scenarios {
                     var completedState = before;
                     a.clear();
                     a.send(new ViewRequest());
-                    var completedDungeon = a.next(
-                            DungeonView.class,
-                            view -> Client.sameDungeonState(completedState, view));
+                    var completedDungeon =
+                            a.next(
+                                    DungeonView.class,
+                                    view -> Client.sameDungeonState(completedState, view));
                     townObserver.connect(2);
                     townObserver.send(new ViewRequest());
-                    var completedParty = townObserver.next(
-                            TownView.class,
-                            view -> view.parties().stream()
-                                    .anyMatch(item -> item.partyId().equals(completedState.partyId())
-                                            && item.phase() == RunPhase.Completed
-                                            && Objects.equals(item.runId(), completedState.runId())));
+                    var completedParty =
+                            townObserver.next(
+                                    TownView.class,
+                                    view ->
+                                            view.parties().stream()
+                                                    .anyMatch(
+                                                            item ->
+                                                                    item.partyId()
+                                                                                    .equals(
+                                                                                            completedState
+                                                                                                    .partyId())
+                                                                            && item.phase()
+                                                                                    == RunPhase
+                                                                                            .Completed
+                                                                            && Objects.equals(
+                                                                                    item.runId(),
+                                                                                    completedState
+                                                                                            .runId())));
                     equal(completedState, completedDungeon);
-                    equal(RunPhase.Completed, party(completedParty, completedState.partyId()).phase());
+                    equal(
+                            RunPhase.Completed,
+                            party(completedParty, completedState.partyId()).phase());
                     a.send(new AdvanceRequest());
                     equal(
                             new ActionRejected(Rules.RUN_NOT_ACTIVE),
@@ -274,8 +315,7 @@ public final class Scenarios {
                     equal(after, b.view(before, true));
                     sameState(before, after);
                     Structure.require(
-                            !before.nodeId().equals(after.nodeId()),
-                            "Dungeon did not relocate");
+                            !before.nodeId().equals(after.nodeId()), "Dungeon did not relocate");
                     nodes.replace(before.nodeId());
                     var fresh = secondParty(nodes.endpoint, before);
                     Structure.require(

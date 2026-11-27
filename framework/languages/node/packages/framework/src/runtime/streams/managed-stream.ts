@@ -25,7 +25,11 @@ import type {
   ZLinkBackendSendFlags,
   ZLinkBackendStreamSocket
 } from '../backend/contracts';
-import { RequestResult, isZLinkBackendResultError } from '../backend/runtime-values';
+import {
+  RequestResult,
+  isBackendNotConnectedError,
+  isZLinkBackendResultError
+} from '../backend/runtime-values';
 import { ZLinkBufferMessage as NativeMessage } from '../backend/runtime-message';
 import type {
   StreamSessionActorAuthorityFence,
@@ -404,7 +408,12 @@ export class ZLinkManagedStream implements ZLinkStream {
   }
 
   async enqueueActorUnbound(actorSlot: number): Promise<void> {
-    await this.submitActorBindingControl(encodeActorUnboundFrame(actorSlot));
+    if (this.transportClosed) return;
+    try {
+      await this.submitActorBindingControl(encodeActorUnboundFrame(actorSlot));
+    } catch (error) {
+      if (!isBackendNotConnectedError(error)) throw error;
+    }
   }
 
   private async submitActorBindingControl(frame: Uint8Array): Promise<void> {

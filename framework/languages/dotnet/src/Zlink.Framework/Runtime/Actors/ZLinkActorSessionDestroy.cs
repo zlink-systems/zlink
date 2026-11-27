@@ -7,7 +7,8 @@ internal sealed partial class ZLinkActorSessionManager
     public async ValueTask DestroyActorAsync(
         RoutingId entrySpotNodeRid,
         IZLinkActor actor,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        bool publishClosing = false
     )
     {
         ArgumentNullException.ThrowIfNull(actor);
@@ -52,7 +53,13 @@ internal sealed partial class ZLinkActorSessionManager
                             $"Actor '{actor.Context.ActorId}' is not owned by this Entry Spot."
                         );
 
-                    return (actorRef, state.BeginOrJoinTeardownAttemptOnLane(actorRef));
+                    return (
+                        actorRef,
+                        state.BeginOrJoinTeardownAttemptOnLane(
+                            actorRef,
+                            publishClosing && LocationLifecycle is not null
+                        )
+                    );
                 },
                 cancellationToken
             )
@@ -65,7 +72,8 @@ internal sealed partial class ZLinkActorSessionManager
                 state,
                 transaction.Actor,
                 transaction.Operation,
-                CancellationToken.None
+                CancellationToken.None,
+                publishClosing
             )
             .ConfigureAwait(false);
     }

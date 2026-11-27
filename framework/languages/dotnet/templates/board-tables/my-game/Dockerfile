@@ -8,12 +8,16 @@ COPY server/MyGame.sln server/MyGame.sln
 COPY server/MyGame.Session/MyGame.Session.csproj server/MyGame.Session/
 COPY server/MyGame.Shared/MyGame.Shared.csproj server/MyGame.Shared/
 COPY server/MyGame.Table/MyGame.Table.csproj server/MyGame.Table/
+COPY server/MyGame.Matchmaker/MyGame.Matchmaker.csproj server/MyGame.Matchmaker/
+COPY server/MyGame.Api/MyGame.Api.csproj server/MyGame.Api/
 COPY e2e/MyGame.E2E/MyGame.E2E.csproj e2e/MyGame.E2E/
 RUN dotnet restore server/MyGame.sln
 COPY server server
 COPY e2e e2e
 RUN dotnet publish server/MyGame.Session/MyGame.Session.csproj --no-restore -c Release -o /out/session \
     && dotnet publish server/MyGame.Table/MyGame.Table.csproj --no-restore -c Release -o /out/table \
+    && dotnet publish server/MyGame.Matchmaker/MyGame.Matchmaker.csproj --no-restore -c Release -o /out/matchmaker \
+    && dotnet publish server/MyGame.Api/MyGame.Api.csproj --no-restore -c Release -o /out/api \
     && dotnet publish e2e/MyGame.E2E/MyGame.E2E.csproj --no-restore -c Release -o /out/e2e
 
 FROM ${RUNTIME_IMAGE} AS node

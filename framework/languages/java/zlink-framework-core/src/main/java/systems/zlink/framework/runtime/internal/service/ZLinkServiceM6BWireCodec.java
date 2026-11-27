@@ -111,6 +111,35 @@ public final class ZLinkServiceM6BWireCodec {
                 target);
     }
 
+    public byte[] encodeActorDestroy(long correlation, ActorRouteFence actor) {
+        try {
+            return ServiceWirePilotCodec.encodeActorDestroy27(
+                    new ServiceWirePilotCodec.ActorDestroy27(
+                            correlation,
+                            new ServiceWirePilotCodec.Fence(
+                                    actor.actor().actorId(), actor.actor().generation(),
+                                    actor.actor().nodeRid().toBytes(), actor.targetNodeGeneration(),
+                                    actor.authorityOwnerGeneration(),
+                                            actor.ownerLeaseGeneration())));
+        } catch (IOException failure) {
+            throw protocol("invalid Actor destroy command: " + failure.getMessage());
+        }
+    }
+
+    public ActorRouteFence decodeActorDestroy(byte[] frame) {
+        try {
+            var actor = ServiceWirePilotCodec.decodeActorDestroy27(frame).actor();
+            return new ActorRouteFence(
+                    new ZLinkBackendActorRef(
+                            RoutingId.from(actor.targetNodeRid()), actor.id(), actor.generation()),
+                    actor.targetNodeGeneration(),
+                    actor.expectedAuthorityOwnerGeneration(),
+                    actor.expectedOwnerLeaseGeneration());
+        } catch (IOException failure) {
+            throw protocol("invalid Actor destroy command: " + failure.getMessage());
+        }
+    }
+
     public byte[] encodeActorHeader(
             boolean request,
             int flags,

@@ -507,6 +507,8 @@ public sealed partial class LocationRuntimeTests
                 )
                 .AsTask();
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var mailbox = actor._dispatchMailbox._queue;
+            var runningItem = Assert.IsType<ZLinkSerialWorkItem>(mailbox._active);
             var calls = 0;
             var pending = actor
                 .ExecuteDispatchAsync(
@@ -557,7 +559,8 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
             Assert.False(pending.IsCompleted);
             Assert.Equal(0, calls);
-            var mailbox = actor._dispatchMailbox._queue;
+            // A SpotWide dispatch can return its turn before the shared gate releases its reservation.
+            await runningItem.Completion.WaitAsync(TimeSpan.FromSeconds(5));
             var pendingCount = mailbox.ApplicationPendingCount;
             var rejectedCalls = 0;
             var rejected = actor

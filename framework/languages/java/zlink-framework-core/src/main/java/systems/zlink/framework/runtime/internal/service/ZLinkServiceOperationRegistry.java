@@ -1091,12 +1091,17 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         }
 
         void completeWithFailure(Throwable failure) {
-            terminalKind = FAILURE;
-            terminalFailure = failure;
+            completeWithoutValue(FAILURE, failure);
         }
 
         void completeWithCancellation() {
-            terminalKind = CANCELLATION;
+            completeWithoutValue(CANCELLATION, null);
+        }
+
+        private void completeWithoutValue(int kind, Throwable failure) {
+            if (completion instanceof Operation<?> operation) operation.cancelForwardedWaiter();
+            terminalKind = kind;
+            terminalFailure = failure;
         }
 
         @SuppressWarnings("unchecked")

@@ -611,6 +611,14 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 new UnsupportedOperationException("Remote User Spot create is unavailable"));
     }
 
+    default CompletionStage<Void> sendActorDestroy(ZLinkServiceM6BWireCodec.ActorRouteFence actor) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Actor destroy routing"));
+    }
+
+    default void setActorDestroyHandler(
+            Function<ZLinkServiceM6BWireCodec.ActorRouteFence, CompletionStage<Void>> handler) {}
+
     default CompletionStage<UserSpotCloseResponse> requestUserSpotClose(
             RoutingId targetNodeRid, UserSpotCloseIntent intent, Duration timeout) {
         return CompletableFuture.failedFuture(

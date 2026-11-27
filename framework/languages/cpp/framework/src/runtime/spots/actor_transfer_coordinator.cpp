@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "actor_transfer_coordinator.hpp"
+#include "runtime/dispatch/completion_turn.hpp"
 #include "runtime/execution/serial_application_record.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 
@@ -86,11 +87,11 @@ bool actor_transfer_coordinator_t::is_source_move (const move_state_t &move) noe
            || (move.phase == actor_move_phase_t::reconcile && move.reconcile_context);
 }
 
-std::shared_ptr<task_completion_source_t<void>>
+std::shared_ptr<lane_completion_waiter_t>
 actor_transfer_coordinator_t::close_completion_on_lane (move_state_t &move)
 {
     if (!move.close_completion)
-        move.close_completion = std::make_shared<task_completion_source_t<void>> ();
+        move.close_completion = std::make_shared<lane_completion_waiter_t> ();
     return move.close_completion;
 }
 
@@ -99,7 +100,7 @@ task_t<void> actor_transfer_coordinator_t::wait_for_source_completion (std::stri
     const auto completion = co_await _lane.run_task ([this, &actor_key] {
         const auto found = _moves.find (actor_key);
         if (found == _moves.end () || !is_source_move (found->second))
-            return std::shared_ptr<task_completion_source_t<void>>{};
+            return std::shared_ptr<lane_completion_waiter_t>{};
         return close_completion_on_lane (found->second);
     });
     if (completion)
@@ -113,7 +114,7 @@ task_t<void> actor_transfer_coordinator_t::wait_for_source_completions ()
     // §4); wait_for_source_completion leaves local moves out because the Join
     // that owns one calls it.
     const auto completions = co_await _lane.run_task ([this] {
-        std::vector<std::shared_ptr<task_completion_source_t<void>>> result;
+        std::vector<std::shared_ptr<lane_completion_waiter_t>> result;
         for (auto &[key, move] : _moves) {
             if (move.phase == actor_move_phase_t::local || is_source_move (move))
                 result.push_back (close_completion_on_lane (move));
@@ -129,12 +130,7 @@ void actor_transfer_coordinator_t::erase_move_on_lane (const std::string &actor_
     auto move = _moves.extract (actor_key);
     if (!move || !move.mapped ().close_completion)
         return;
-    const auto completion = std::move (move.mapped ().close_completion);
-    // Continuations may enter the node lane or query this coordinator.
-    // Use the same completion owner as queued state-lane results.
-    detail::dispatch_completion (
-      [completion] { completion->complete (result_t<void>::success ()); }, false,
-      completion.get ());
+    move.mapped ().close_completion->complete ();
 }
 
 task_t<bool> actor_transfer_coordinator_t::try_seal_maintenance_inventory ()

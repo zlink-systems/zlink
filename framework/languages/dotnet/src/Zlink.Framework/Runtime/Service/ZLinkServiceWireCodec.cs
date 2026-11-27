@@ -614,55 +614,6 @@ internal static partial class ZLinkServiceWireCodec
         return true;
     }
 
-    internal static byte[] EncodeActorDestroyReply(
-        ulong correlation,
-        RequestResult terminalResult,
-        ServiceWireConstants.FrameworkErrorCode failureCode,
-        ActorDestroyCompletion? completion
-    )
-    {
-        if (terminalResult != RequestResult.Ok)
-            return EncodeReply(correlation, (int)terminalResult, (uint)failureCode);
-        if (failureCode != ServiceWireConstants.FrameworkErrorCode.None || completion is null)
-            throw new ArgumentOutOfRangeException(nameof(completion));
-        return EncodeReply(
-            correlation,
-            (int)terminalResult,
-            (uint)failureCode,
-            [completion.Destroyed ? (byte)1 : (byte)0]
-        );
-    }
-
-    internal static bool TryDecodeActorDestroyReply(
-        ReplyRecord reply,
-        out ActorDestroyCompletion? completion,
-        out DecodeError error
-    )
-    {
-        completion = null;
-        if (reply.TerminalResult != (int)RequestResult.Ok)
-        {
-            // Transport boundary terminals such as cancellation and shutdown
-            // intentionally have no framework error code. Typed domain
-            // failures carry one, but neither form may carry a success tail.
-            if (reply.Tail.Length != 0)
-            {
-                error = DecodeError.InvalidField;
-                return false;
-            }
-            error = DecodeError.None;
-            return true;
-        }
-        if (reply.FailureCode != 0 || reply.Tail.Length != 1 || reply.Tail[0] > 1)
-        {
-            error = DecodeError.InvalidField;
-            return false;
-        }
-        completion = new ActorDestroyCompletion(reply.Tail[0] == 1);
-        error = DecodeError.None;
-        return true;
-    }
-
     internal static byte[] EncodeUserSpotCreateReply(
         ulong correlation,
         RequestResult terminalResult,

@@ -6,12 +6,19 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectCreationDeadline;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.ActorRouteFence;
+import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.spots.SpotRef;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -221,6 +228,181 @@ final class ZLinkActorLocationCoordinator {
             return CompletableFuture.completedFuture(null);
         }
         return lifecycle.releaseActor(actorType == null ? "" : actorType, actorId);
+    }
+
+    CompletionStage<Boolean> destroy(
+            ActorRef requested,
+            ZLinkInternalMeshNode node,
+            Duration timeout,
+            Function<ActorRef, CompletionStage<Boolean>> localDestroy) {
+        if (lifecycle == null || node == null) {
+            return localDestroy.apply(requested);
+        }
+        long deadline = Math.addExact(System.currentTimeMillis(), timeout.toMillis());
+        ZLinkStoreCancellation open = () -> System.currentTimeMillis() >= deadline;
+        return ZLinkObjectCreationDeadline.classify(
+                lifecycle
+                        .readActorDestroyAuthority(requested.actorId(), open)
+                        .thenCompose(
+                                read -> {
+                                    if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
+                                        return localDestroy.apply(requested);
+                                    }
+                                    if (snapshot.objectGeneration()
+                                            != requested.objectGeneration()) {
+                                        throw new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                                "Actor destroy generation is stale: "
+                                                        + requested.actorId());
+                                    }
+                                    var authority = destroyAuthority(requested.actorId(), snapshot);
+                                    var target = destroyFence(snapshot, authority);
+                                    if (target.actor()
+                                            .nodeRid()
+                                            .equals(node.status().routingId())) {
+                                        if (authority.state()
+                                                == ZLinkActorAuthorityPayloadCodec.State.CLOSING) {
+                                            return localDestroy
+                                                    .apply(requested)
+                                                    .thenCompose(
+                                                            destroyed ->
+                                                                    destroyed
+                                                                            ? CompletableFuture
+                                                                                    .completedFuture(
+                                                                                            true)
+                                                                            : lifecycle
+                                                                                    .releaseEndedActorClosing(
+                                                                                            requested
+                                                                                                    .actorId(),
+                                                                                            snapshot,
+                                                                                            open));
+                                        }
+                                        return localDestroy.apply(requested);
+                                    }
+                                    var release =
+                                            authority.state()
+                                                            == ZLinkActorAuthorityPayloadCodec.State
+                                                                    .CLOSING
+                                                    ? lifecycle.releaseEndedActorClosing(
+                                                            requested.actorId(), snapshot, open)
+                                                    : CompletableFuture.completedFuture(false);
+                                    return release.thenCompose(
+                                            released ->
+                                                    released
+                                                            ? CompletableFuture.completedFuture(
+                                                                    true)
+                                                            : node.sendActorDestroy(target)
+                                                                    .thenCompose(
+                                                                            ignored ->
+                                                                                    observeDestroy(
+                                                                                            requested,
+                                                                                            open)));
+                                }),
+                deadline);
+    }
+
+    CompletionStage<Void> receiveDestroy(
+            ActorRouteFence requested, Function<ActorRef, CompletionStage<Boolean>> localDestroy) {
+        String actorId = requested.actor().actorId();
+        return lifecycle
+                .readActorDestroyAuthority(actorId, () -> false)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            if (requested.actor().generation() != snapshot.objectGeneration()) {
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                        "Actor destroy generation is stale: " + actorId);
+                            }
+                            var authority = destroyAuthority(actorId, snapshot);
+                            if (!requested.equals(destroyFence(snapshot, authority))) {
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "Actor destroy owner fence changed: " + actorId);
+                            }
+                            return localDestroy
+                                    .apply(
+                                            new ActorRef(
+                                                    actorId,
+                                                    snapshot.objectGeneration(),
+                                                    authority.meshName(),
+                                                    authority.nodeRid()))
+                                    .thenApply(ignored -> null);
+                        });
+    }
+
+    private CompletionStage<Boolean> observeDestroy(
+            ActorRef requested, ZLinkStoreCancellation cancellation) {
+        if (cancellation.isCancellationRequested()) {
+            return CompletableFuture.failedFuture(ZLinkObjectCreationDeadline.exceeded(null));
+        }
+        return lifecycle
+                .readActorDestroyAuthority(requested.actorId(), cancellation)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
+                                    || snapshot.objectGeneration() > requested.objectGeneration()) {
+                                return CompletableFuture.completedFuture(true);
+                            }
+                            var released =
+                                    ZLinkAuthoritySnapshot.actorClosing(
+                                                    snapshot.payload(), snapshot.allocation())
+                                            ? lifecycle.releaseEndedActorClosing(
+                                                    requested.actorId(), snapshot, cancellation)
+                                            : CompletableFuture.completedFuture(false);
+                            return released.thenCompose(
+                                    done ->
+                                            done
+                                                    ? CompletableFuture.completedFuture(true)
+                                                    : ZLinkActorCreationCoordinator.awaitConflict()
+                                                            .thenCompose(
+                                                                    ignored ->
+                                                                            observeDestroy(
+                                                                                    requested,
+                                                                                    cancellation)));
+                        });
+    }
+
+    private static ZLinkActorAuthorityPayloadCodec.ActorAuthority destroyAuthority(
+            String actorId, ZLinkAuthoritySnapshot snapshot) {
+        if (snapshot.relocationInProgress()) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Actor is sealed for relocation: " + actorId);
+        }
+        var authority =
+                new ZLinkActorAuthorityPayloadCodec()
+                        .decode(snapshot.payload())
+                        .orElseThrow(
+                                () ->
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                                                "Actor authority payload is invalid: " + actorId));
+        if (authority.state() == ZLinkActorAuthorityPayloadCodec.State.CREATING) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE, "Actor is still creating: " + actorId);
+        }
+        return authority;
+    }
+
+    private static ActorRouteFence destroyFence(
+            ZLinkAuthoritySnapshot snapshot,
+            ZLinkActorAuthorityPayloadCodec.ActorAuthority authority) {
+        return new ActorRouteFence(
+                new ZLinkBackendActorRef(
+                        authority.nodeRid(), authority.actorId(), snapshot.objectGeneration()),
+                authority.nodeGeneration(),
+                snapshot.authorityOwnerGeneration(),
+                snapshot.ownerLeaseGeneration());
+    }
+
+    CompletionStage<Void> publishActorClosing(
+            String actorType, ActorRef actor, long nodeGeneration) {
+        return lifecycle == null
+                ? CompletableFuture.completedFuture(null)
+                : lifecycle.publishActorClosing(actorType, actor, nodeGeneration);
     }
 
     CompletionStage<Void> releaseActorExact(String actorType, ActorRef actor) {

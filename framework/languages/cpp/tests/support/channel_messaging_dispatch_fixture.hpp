@@ -3,7 +3,6 @@
 
 #include "telemetry_observation.hpp"
 #include "runtime/diagnostics/dispatch_events.hpp"
-#include <chrono>
 #include <mutex>
 #include <vector>
 
@@ -13,8 +12,8 @@ inline std::vector<zlink::framework::message_dispatch_error_event_t>
 wait_dispatch_errors (std::vector<zlink::framework::message_dispatch_error_event_t> &events,
                       std::mutex &mutex)
 {
-    zlink::framework::test::acknowledge_delivery (std::chrono::steady_clock::now ()
-                                                  + std::chrono::milliseconds (100));
+    // The barrier orders preceding FIFO deliveries; the test runner bounds the wait (#5358).
+    zlink::framework::test::acknowledge_delivery ();
     std::lock_guard lock (mutex);
     return events;
 }

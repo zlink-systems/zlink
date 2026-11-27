@@ -168,7 +168,8 @@ dispatch 없이 command 20의 `ProtocolError`/`requestProtocolError` terminal을
 ### Decode 검증과 크기 상한
 
 - Decoder는 allocation 전에 complete record 길이, item count, UTF-8 validity와 모든 bound를 검사한다.
-- Metadata frame은 1,024 byte를 넘을 수 없다.
+- Application metadata의 크기는 어느 command가 싣든 한 가지 계산으로 잰다. [ClientServer Channel §5.3](03-client-server-channel.ko.md#53-application-record-계약)처럼 entry 하나를 `ChannelHeader` field 13으로 encoding한 길이(field tag와 length prefix 포함)를 모든 entry에 대해 더하고, 그 합이 1,024 byte를 넘을 수 없다. Metadata frame을 쓰는 command(16·17·23·24·25·39)도 frame을 decode한 entry에 같은 계산을 적용한다. 그래서 한 command에서 받아들인 metadata는 Message Follow 등으로 다른 command(예: 39 → 21·22)에 옮겨도 상한 안에 있다.
+- Metadata frame 자체의 길이 상한 1,024 byte는 decode 전 allocation 방어용이다. Metadata가 유효한지는 위 계산으로만 판단한다.
 - Application payload의 schema 절대 상한은 `applicationPayloadAbsoluteBytes`인 4,294,966,774 byte다.
 - 여러 runtime node가 이름으로 서로를 찾아 message를 주고받는 연결 그룹인
   [RouteMesh](../00-foundation/02-glossary.ko.md#routemesh)의 ServerServer에서는 schema·wire 표현

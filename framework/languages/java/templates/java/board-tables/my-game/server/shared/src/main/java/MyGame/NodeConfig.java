@@ -6,7 +6,8 @@ public record NodeConfig(
         String keyPrefix,
         String meshEndpoint,
         String streamEndpoint,
-        int tableCapacity) {
+        int tableCapacity,
+        String apiEndpoint) {
     public NodeConfig {
         if (tableCapacity < 0)
             throw new IllegalArgumentException("Table capacity must be nonnegative");

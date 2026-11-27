@@ -43,17 +43,19 @@ public final class Geometry {
 
     public record Aabb(Vec3 min, Vec3 max) {
         public boolean contains(Vec3 point) {
-            return point.x() >= min.x() && point.x() <= max.x()
-                    && point.y() >= min.y() && point.y() <= max.y()
-                    && point.z() >= min.z() && point.z() <= max.z();
+            return point.x() >= min.x()
+                    && point.x() <= max.x()
+                    && point.y() >= min.y()
+                    && point.y() <= max.y()
+                    && point.z() >= min.z()
+                    && point.z() <= max.z();
         }
 
         public Double intersect(Vec3 origin, Vec3 direction, double limit) {
             double[] interval = {0, limit};
             if (!slab(origin.x(), direction.x(), min.x(), max.x(), interval)
                     || !slab(origin.y(), direction.y(), min.y(), max.y(), interval)
-                    || !slab(origin.z(), direction.z(), min.z(), max.z(), interval))
-                return null;
+                    || !slab(origin.z(), direction.z(), min.z(), max.z(), interval)) return null;
             return interval[0];
         }
 
@@ -71,14 +73,12 @@ public final class Geometry {
     public static final class ArenaMap {
         private ArenaMap() {}
 
-        public static final Aabb BOUNDS =
-                new Aabb(new Vec3(0, 0, 0), new Vec3(100, 10, 100));
+        public static final Aabb BOUNDS = new Aabb(new Vec3(0, 0, 0), new Vec3(100, 10, 100));
         public static final List<Aabb> WALLS =
                 List.of(
                         new Aabb(new Vec3(49, 0, 20), new Vec3(51, 10, 60)),
                         new Aabb(new Vec3(80, 0, 0), new Vec3(82, 10, 20)));
-        public static final List<Vec3> SPAWNS =
-                List.of(new Vec3(48, 0, 18), new Vec3(52, 0, 18));
+        public static final List<Vec3> SPAWNS = List.of(new Vec3(48, 0, 18), new Vec3(52, 0, 18));
 
         public static Aabb playerBox(Vec3 feet) {
             return new Aabb(
