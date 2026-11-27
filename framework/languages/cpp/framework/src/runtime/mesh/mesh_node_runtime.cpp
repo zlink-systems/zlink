@@ -3513,7 +3513,8 @@ task_t<void> mesh_node_runtime_t::settle_remote_application_actor_join_source (
           || relocated.reason == runtime::stateful::relocation_reason_t::checksum_mismatch;
         const auto authority_lost =
           data_lost
-          || relocated.reason == runtime::stateful::relocation_reason_t::owner_lease_expired;
+          || relocated.reason == runtime::stateful::relocation_reason_t::owner_lease_expired
+          || relocated.reason == runtime::stateful::relocation_reason_t::authority_missing;
         const auto authority_unsettled_at_stop =
           relocated.reason == runtime::stateful::relocation_reason_t::authority_unsettled_at_stop;
         if (!authority_unsettled_at_stop) {
@@ -3543,7 +3544,10 @@ task_t<void> mesh_node_runtime_t::settle_remote_application_actor_join_source (
           "canonical Actor Join relocation did not complete (terminal="
             + std::to_string (static_cast<int> (relocated.terminal))
             + ", reason=" + std::to_string (static_cast<int> (relocated.reason)) + ")"
-            + (authority_unsettled_at_stop ? ": authority unsettled at stop deadline" : ""));
+            + (authority_unsettled_at_stop ? ": authority unsettled at stop deadline"
+               : relocated.reason == runtime::stateful::relocation_reason_t::authority_missing
+                 ? ": authority missing"
+                 : ""));
     }
     const auto followed = relocated.settlement.follow_generations.find (
       std::pair{s->source_actor.kind, s->source_actor.key});

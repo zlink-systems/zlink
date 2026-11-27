@@ -943,7 +943,8 @@ maintenance_runtime_t::apply_relocation_settlement (
             co_return settled.outcome == relocation_authority_t::data_lost
               ? std::pair{relocation_terminal_t::data_lost, relocation_reason_t::authority_conflict}
               : std::pair{relocation_terminal_t::recovery_required,
-                          relocation_reason_t::owner_lease_expired};
+                          settled.authority_missing ? relocation_reason_t::authority_missing
+                                                    : relocation_reason_t::owner_lease_expired};
     }
 }
 

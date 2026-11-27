@@ -985,7 +985,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
     {
         const auto *current = std::get_if<authority_snapshot_t> (&read);
         if (!current)
-            return {relocation_authority_t::source_lease_expired, {}};
+            return {relocation_authority_t::source_lease_expired, {}, true};
         if (current->object_generation == source.object_generation
             && current->authority_owner_generation > source.authority_owner_generation
             && current->authority_owner_generation <= static_cast<std::uint64_t> (INT64_MAX)
