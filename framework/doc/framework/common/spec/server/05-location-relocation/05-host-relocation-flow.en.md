@@ -938,6 +938,7 @@ The path from the source runtime to the current owner is called an
 | STREAM | Excluded from new binding; existing sessions are handled via unit barrier. | Excluded from new binding; infrastructure connection is kept. | Doesn't accept new sessions; only pending reply and binding barrier are processed. |
 | ClientServer server | Excluded from new selection; accepted handlers and reply routes are kept. | Service connection is kept but excluded from new selection. | Closes handler admission; only accepted requests' reply routes are kept. |
 | Classic fanout publisher | Doesn't create new automatic subscriber connections; processes accepted events. | Infrastructure is kept but new publish admission isn't accepted. | Closes publish admission; only accepted events are processed. |
+| New outbound request or send from this host's public client | Accepted. Host-wide admission isn't closed; if the target is a unit sealed on this host, that unit's rules apply. | Accepted. | Ends with the shutdown result (§14). |
 
 An already-accepted request only ends once, via reply, error, timeout, or shutdown. Even
 while an application callback waits, infrastructure execution keeps proceeding with

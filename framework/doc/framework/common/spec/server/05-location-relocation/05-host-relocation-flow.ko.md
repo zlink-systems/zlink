@@ -843,6 +843,7 @@ Source runtime에서 현재 owner까지 message를 보내는 경로를
 | STREAM | 새 binding에서 제외하고 기존 session은 unit barrier로 처리한다. | 새 binding에서 제외하고 infrastructure connection은 유지한다. | 새 session을 받지 않고 pending reply와 binding barrier만 처리한다. |
 | ClientServer server | 새 selection에서 제외하고 accepted handler와 reply route를 유지한다. | Service connection은 유지하지만 새 selection에서 제외한다. | Handler admission을 닫고 accepted request의 reply route만 유지한다. |
 | Classic fanout publisher | 새 automatic subscriber connection을 만들지 않고 accepted event를 처리한다. | Infrastructure는 유지하지만 새 publish admission을 받지 않는다. | Publish admission을 닫고 accepted event만 처리한다. |
+| 이 host의 public client가 내는 새 outbound request·send | 받는다. host 전체 admission을 닫지 않으며, 대상이 이 host에서 seal된 unit이면 그 unit의 규칙을 따른다. | 받는다. | Shutdown 결과로 끝낸다(§14). |
 
 이미 수락한 request는 reply, error, timeout 또는 shutdown 중 하나로 한 번만 끝난다.
 Application callback이 대기해도 infrastructure execution은 request completion, peer
