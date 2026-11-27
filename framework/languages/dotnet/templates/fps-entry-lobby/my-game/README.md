@@ -220,3 +220,22 @@ Wait for the bootstrap owner to report `READY` before starting another play node
 Start Redis, then match A (which bootstraps `matchmaking`), match B, and Session, using each project's `--config server/config/<node>.json` argument. Configure production Redis endpoints, unique key prefixes and listener addresses. Both play nodes register relocation adapters and the same stable types.
 
 Send `drain` on the selected play node (match)'s standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, then `SAFE_TO_SHUTDOWN`. Send `shutdown`, require successful process termination, and start the same role with the same configuration. Read actual bound endpoints from `READY` JSON. The isolated runner performs this sequence without client reconnection.
+
+## Network Sync profile
+
+Run `./run-server.sh --network-sync` or `run-server.cmd --network-sync` from
+the checkout. Use the published STREAM endpoint in the
+[Native Unity demo](../../../../../../plugins/network-sync/connector/unity/network-sync-fps-demo).
+
+Join the same duel with two distinct player IDs. The match Room runs at 30 Hz
+with 20 Hz full snapshots and disables Room relocation. The sync client sends
+a held movement direction and one-shot aim directions. The server applies
+movement and shooting during its simulation step.
+
+Run the standalone scenario with
+`./run-e2e.sh --local --scenario network-sync` or
+`pwsh -NoProfile -File ./run-e2e.ps1 -Local -Scenario network-sync`.
+A checkout build finds the server plugin source automatically. To enable the
+profile in a copy of the template, make `Zlink.NetworkSync.Server` at the pinned
+Framework version available to NuGet (first published with the 0.35 release) and set `EnableNetworkSync=true` in the environment when
+running the scripts.

@@ -1339,8 +1339,9 @@ TEST (ZLinkStateLane, ActorMailboxTasksRetainSubmittedHandleStateAndActorId)
         actor_id.assign ("other");
     });
     EXPECT_TRUE (lookup_result.get ());
-    EXPECT_TRUE (ready_result.get ());
+    ASSERT_TRUE (scheduler->wait_for_pending_work (1, std::chrono::seconds (5)));
     scheduler->run_all ();
+    EXPECT_TRUE (ready_result.get ());
     EXPECT_EQ (1, takes->load ());
     expected_queue.reset ();
     node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
@@ -1363,6 +1364,9 @@ TEST (ZLinkStateLane, ActorReadyRevalidationFailureReachesRuntimeCollector)
     node->actor_spot_ids.emplace ("player:actor", spot->spot_id);
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
     auto serial = node->lane.run ([&] { return spot->ensure_spot_serial_executor (); }).get ();
+    auto queue =
+      node->lane.run ([&] { return serial->actor_executor ("player:actor")->queue (); }).get ();
+    auto root = serial->spot_queue ();
     scheduler->run_all ();
     spot_node_runtime_t spots (node);
     auto takes = std::make_shared<std::atomic<unsigned>> (0);
@@ -1371,17 +1375,15 @@ TEST (ZLinkStateLane, ActorReadyRevalidationFailureReachesRuntimeCollector)
           ++*takes;
           return std::nullopt;
       });
-    ASSERT_TRUE (ready.result ().value ());
     EXPECT_EQ (0u, takes->load ());
-    auto queue =
-      node->lane.run ([&] { return serial->actor_executor ("player:actor")->queue (); }).get ();
-    auto root = serial->spot_queue ();
+    ASSERT_TRUE (scheduler->wait_for_pending_work (1, std::chrono::seconds (5)));
 
     // Publication succeeds before the lane closes. The queued actor-ready
     // control must report its failed membership revalidation without terminating.
     node->lane.close ();
     EXPECT_TRUE (scheduler->run_one ());
     scheduler->run_all ();
+    ASSERT_TRUE (ready.result ().value ());
     EXPECT_EQ (0u, takes->load ());
     try {
         node->runtime_failures ()->rethrow_if_failed ();

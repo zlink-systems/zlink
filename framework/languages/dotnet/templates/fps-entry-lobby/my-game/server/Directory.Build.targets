@@ -1,0 +1,6 @@
+<Project>
+  <ItemGroup Condition="'$(EnableNetworkSync)' == 'true' and '$(OutputType)' == 'Exe'">
+    <ProjectReference Include="$(NetworkSyncServerProject)" Condition="Exists('$(NetworkSyncServerProject)')" />
+    <PackageReference Include="Zlink.NetworkSync.Server" Condition="!Exists('$(NetworkSyncServerProject)')" />
+  </ItemGroup>
+</Project>

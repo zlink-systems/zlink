@@ -562,10 +562,6 @@ struct aggregate_fence_t
     std::uint64_t aggregate_generation = 0;
     // Carries the manifest digest across private aggregate retries.
     std::optional<inventory_digest_t> inventory_digest;
-    // Target relocation commit metadata is projected into the same participant
-    // rows as the new owner, before the aggregate commit becomes visible.
-    std::vector<std::pair<authority_key_t, std::shared_ptr<const authority_aggregate_t>>>
-      relocation_participants;
     std::vector<store_put_t> relocation_replies;
 };
 struct aggregate_prepared_t
@@ -659,6 +655,8 @@ class location_repository_t
         const std::lock_guard lock (_reclaim_mutex);
         _reclaim_margin = margin;
     }
+    virtual task_t<void> ensure_store_format (std::stop_token) { co_return; }
+
     virtual task_t<void> refresh_capacity_metrics (std::string mesh_name, zlink::routing_id_t rid)
     {
         co_return;
@@ -878,6 +876,16 @@ class location_repository_t
                 detail::make_cancellation_exception ("aggregate read cancelled")));
         return task_t<std::optional<std::vector<aggregate_participant_t>>> (
           result_t<std::optional<std::vector<aggregate_participant_t>>>::success (std::nullopt));
+    }
+    virtual task_t<bool>
+    seal_relocation_inventory (aggregate_fence_t, std::string, std::vector<aggregate_participant_t>)
+    {
+        co_return false;
+    }
+    virtual task_t<std::optional<std::vector<aggregate_participant_t>>>
+    read_relocation_inventory (aggregate_fence_t, std::string)
+    {
+        co_return std::nullopt;
     }
     virtual task_t<std::int64_t> remove_all_by_owner (location_owner_token_t owner) = 0;
     virtual task_t<std::int64_t>

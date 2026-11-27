@@ -1,6 +1,10 @@
 import { startActorTeardown } from '../actors/actor-runtime-state';
 import type { ZLinkExecutionPolicy } from '../admission';
-import { ZLinkUserSpotExecutionMode } from '../../contracts';
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException,
+  ZLinkUserSpotExecutionMode
+} from '../../contracts';
 import { ZLinkActorSerialExecutor } from '../actors';
 import type {
   ZLinkActorHandoffDispatch,
@@ -21,9 +25,12 @@ export type ZLinkActorPacketTurnDispatch = (
   ...args: Parameters<ZLinkActorHandoffDispatch>
 ) => ReturnType<ZLinkActorHandoffDispatch>;
 
-class ActorJoinCompletionSealedError extends Error {
+class ActorJoinCompletionSealedError extends ZLinkFrameworkException {
   constructor() {
-    super('Actor Join completion did not release application dispatch.');
+    super(
+      ZLinkFrameworkErrorKind.Unavailable,
+      'Actor Join completion did not release application dispatch.'
+    );
   }
 }
 

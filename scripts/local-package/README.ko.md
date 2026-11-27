@@ -97,7 +97,7 @@ scripts/local-package/build-wsl.sh dotnet java node
 ```
 
 Cache key·도구 버전 조회와 cache 정리는 다음 명령을 사용한다.
-공유 정책은 내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/dev/development-workflow.ko.md`) §4.1에서 정한다.
+공유 정책은 내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/handbook/zlink-development-workflow.ko.md` §4.1)에서 정한다.
 
 ```bash
 scripts/local-package/build-wsl.sh --cache-key

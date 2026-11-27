@@ -171,7 +171,7 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
     // send can never resolve it; that was ST-B1's "leave" marker never
     // firing). This drives the actual production sender
     // (spot_node_runtime_t::send_actor_leave_notification, reached via the
-    // same on_actor_leave_notification hook app.cpp wires to
+    // same on_actor_leave_notification hook app_framework_assembly.cpp wires to
     // application_mesh->send_to_node) and the actual production receiver
     // (spot_route_internal_dispatcher_t::dispatch_send ->
     // submit_remote_actor_leave), connected by a stand-in for the wire hop.

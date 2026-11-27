@@ -236,7 +236,7 @@ jobs:
         run: |
           .\scripts\ci\framework-java-test-results.ps1 `
             -Mode summarize `
-            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results", "framework/languages/java/zlink-framework-locations-redis/build/test-results", "framework/languages/java/zlink-framework-locations-etcd/build/test-results" `
+            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results", "framework/languages/java/zlink-framework-locations-redis/build/test-results", "framework/languages/java/zlink-framework-locations-etcd/build/test-results", "framework/languages/java/zlink-framework-kotlin/build/test-results", "framework/languages/java/zlink-framework-testkit/build/test-results", "framework/languages/java/zlink-framework-provider-abstractions/build/test-results", "framework/languages/java/zlink-framework-codec-protobuf/build/test-results", "framework/languages/java/zlink-framework-codec-msgpack/build/test-results", "framework/languages/java/zlink-http-client/build/test-results", "framework/languages/java/zlink-http-client-kotlin/build/test-results" `
             -OutputPath ".artifacts/framework-java-results/${{ matrix.target.name }}" `
             -Platform "${{ matrix.target.name }}" `
             -MinimumTests $env:FRAMEWORK_JAVA_MIN_TESTS

@@ -323,16 +323,14 @@ class aggregate_authority_port_t
 {
   public:
     virtual ~aggregate_authority_port_t () = default;
-    virtual aggregate_publish_result_t
-    prepare (const std::vector<object_ref_t> &sources,
-             std::string target_node_id,
-             location_owner_token_t target_owner,
-             std::string relocation_reference,
-             std::uint32_t checksum_crc32c,
-             inventory_digest_t inventory_digest,
-             relocation_authority_fence_t source_fence,
-             const protocol::relocation_prepare_t *prepare = nullptr,
-             std::span<const store_put_t> replies = {}) = 0;
+    virtual aggregate_publish_result_t prepare (const std::vector<object_ref_t> &sources,
+                                                std::string target_node_id,
+                                                location_owner_token_t target_owner,
+                                                std::string relocation_reference,
+                                                std::uint32_t checksum_crc32c,
+                                                inventory_digest_t inventory_digest,
+                                                relocation_authority_fence_t source_fence,
+                                                std::span<const store_put_t> replies = {}) = 0;
     virtual aggregate_publish_result_t commit (aggregate_relocation_fence_t fence) = 0;
     virtual void abort (aggregate_relocation_fence_t fence) = 0;
 };

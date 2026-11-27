@@ -17,10 +17,10 @@ final class ZLinkUserSpotRetireScheduler {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(cancellation, "cancellation");
         ZLinkSpotRetireControl.StageRequest stage = request.source().stageRequest();
-        return ZLinkRelocationHandOff.run(
+        return ZLinkRelocationHandOff.runWithAuthority(
                         request.client(),
                         stage,
-                        ignoredSettlement ->
+                        () ->
                                 request.source()
                                         .relayCapturedIngress(request.client(), request.timeout()),
                         request.timeout(),
@@ -38,13 +38,13 @@ final class ZLinkUserSpotRetireScheduler {
     private static CompletionStage<Void> settle(
             RemoteRequest request,
             ZLinkSpotRetireControl.StageRequest stage,
-            ZLinkRelocationTransitionClient.Settlement settlement) {
+            ZLinkRelocationTransitionClient.AuthoritySettlement settlement) {
         var source = request.source();
-        return switch (settlement) {
+        return switch (settlement.outcome()) {
             case TARGET_COMMITTED -> {
                 yield ZLinkRelocationHandOff.completeSourceCleanup(
                         List.of(
-                                source::completeSourceBarrierCommit,
+                                () -> source.completeSourceBarrierCommit(settlement.target()),
                                 () -> request.sourceCleanup().cleanup(),
                                 source::discardInitialAfterCommit));
             }
@@ -53,7 +53,8 @@ final class ZLinkUserSpotRetireScheduler {
                             .whenComplete(
                                     (ignored, failure) ->
                                             source.metrics.complete(
-                                                    failure == null ? settlement : null, false))
+                                                    failure == null ? settlement.outcome() : null,
+                                                    false))
                             .thenCompose(
                                     ignored ->
                                             CompletableFuture.failedFuture(

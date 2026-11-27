@@ -17,10 +17,10 @@ namespace zlink::framework::test
 using namespace zlink::framework::runtime;
 using namespace std::chrono_literals;
 
-class paused_aggregate_page_store_t final : public location_store_t
+class paused_aggregate_commit_store_t final : public location_store_t
 {
   public:
-    explicit paused_aggregate_page_store_t (location_store_t &store) : inner (store) {}
+    explicit paused_aggregate_commit_store_t (location_store_t &store) : inner (store) {}
     task_t<store_read_result_t> read (store_key_t key) override
     {
         return inner.read (std::move (key));
@@ -31,42 +31,57 @@ class paused_aggregate_page_store_t final : public location_store_t
     }
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
-        const bool page = std::any_of (
-          request.mutations.begin (), request.mutations.end (), [] (const auto &mutation) {
-              return std::visit (
-                [] (const auto &value) {
-                    return value.key.value.starts_with ("zlink:v11:aggregate-commit:");
-                },
-                mutation);
-          });
-        auto written = co_await inner.write (std::move (request));
-        if (page && std::holds_alternative<store_write_applied_t> (written)) {
-            page_written.complete (result_t<bool>::success (true));
+        const bool aborting =
+          interrupt_abort_reply
+          && std::ranges::any_of (request.mutations, [] (const auto &mutation) {
+                 const auto *put = std::get_if<store_put_t> (&mutation);
+                 return put && put->key.value.starts_with ("zlink:v11:aggregate:")
+                        && nlohmann::json::parse (put->bytes).at ("state") == "aborted";
+             });
+        const bool committing = std::ranges::any_of (request.mutations, [] (const auto &mutation) {
+            const auto *put = std::get_if<store_put_t> (&mutation);
+            if (!put || !put->key.value.starts_with ("zlink:v11:aggregate:"))
+                return false;
+            const auto record = nlohmann::json::parse (put->bytes);
+            return record.at ("state") == "committed";
+        });
+        if (committing) {
+            commit_waiting.complete (result_t<bool>::success (true));
             co_await release.task ();
+        }
+        auto written = co_await inner.write (std::move (request));
+        if (aborting && std::holds_alternative<store_write_applied_t> (written)) {
+            abort_reply_lost = true;
+            co_return result_t<store_write_result_t>::failure (
+              framework_error_kind_t::internal_failure, "provider lost the aggregate abort reply");
         }
         co_return written;
     }
     location_store_t &inner;
-    task_completion_source_t<bool> page_written;
+    task_completion_source_t<bool> commit_waiting;
     task_completion_source_t<void> release;
+    bool interrupt_abort_reply = false;
+    bool abort_reply_lost = false;
 };
 
 inline task_t<aggregate_commit_result_t>
-observe_aggregate_page_commit (task_t<aggregate_commit_result_t> commit,
-                               task_completion_source_t<bool> &page_written)
+observe_aggregate_commit (task_t<aggregate_commit_result_t> commit,
+                          task_completion_source_t<bool> &commit_waiting)
 {
-    scope_exit_t signal_terminal ([&] { page_written.complete (result_t<bool>::success (false)); });
+    scope_exit_t signal_terminal (
+      [&] { commit_waiting.complete (result_t<bool>::success (false)); });
     co_return co_await commit;
 }
 
 template <typename TBytes>
-void aggregate_page_read_keeps_source_version_until_commit (
+void aggregate_read_keeps_source_version_until_commit (
   location_store_t &store,
   TBytes bytes,
-  authority_aggregate_codec::json_t relocation_record = nullptr)
+  authority_aggregate_codec::json_t relocation_record = nullptr,
+  bool interrupt_abort = false)
 {
     namespace stateful = zlink::framework::runtime::stateful;
-    paused_aggregate_page_store_t provider (store);
+    paused_aggregate_commit_store_t provider (store);
     provider_location_repository_t repository (provider);
     repository.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto make_target = [&] (const std::string &id) {
@@ -196,34 +211,57 @@ void aggregate_page_read_keeps_source_version_until_commit (
     const auto prepared = repository.prepare_aggregate (aggregate).result ().value ();
     ASSERT_TRUE (std::holds_alternative<aggregate_prepared_t> (prepared))
       << "prepare result variant " << prepared.index ();
-    auto fence = std::get<aggregate_prepared_t> (prepared).fence;
-    const auto relocation_id =
-      authority_aggregate_codec::wire_uuid (relocation.high, relocation.low);
-    if (target_attempt != 0) {
-        const relocation_completion::source_t requester{
-          source.owner.owner_id, static_cast<std::uint64_t> (source.owner.lease_generation),
-          zlink::routing_id_t::from (std::string (source.node_rid.value ())).to_hex (), 1};
-        fence.relocation_replies = {
-          relocation_completion::accepted ({relocation_id, key.value, requester,
-                                            "00000000000000010000000000000001", 11, target.owner}),
-          relocation_completion::accepted ({relocation_id,
-                                            aggregate.participants.front ().key.value, requester,
-                                            "00000000000000010000000000000002", 12, target.owner})};
-    }
-    const auto read_replies = [&] {
-        const auto read =
-          store.scan ({relocation_completion::prefix (relocation_id), {}, 10}).result ().value ();
-        return std::get<store_scan_page_t> (read).items.size ();
-    };
+    const auto fence = std::get<aggregate_prepared_t> (prepared).fence;
     auto pending =
-      observe_aggregate_page_commit (repository.commit_aggregate (fence), provider.page_written);
+      observe_aggregate_commit (repository.commit_aggregate (fence), provider.commit_waiting);
     scope_exit_t release_commit ([&] {
         provider.release.complete (result_t<void>::success ());
         (void) pending.result ();
     });
-    ASSERT_TRUE (provider.page_written.task ().result ().value ());
+    ASSERT_TRUE (provider.commit_waiting.task ().result ().value ());
     EXPECT_FALSE (pending.await_ready ());
-    EXPECT_EQ (read_replies (), 0u);
+    if (interrupt_abort) {
+        provider.interrupt_abort_reply = true;
+        EXPECT_EQ (repository.abort_aggregate (fence).result ().value (),
+                   aggregate_abort_result_t::aborted);
+        EXPECT_TRUE (provider.abort_reply_lost);
+        release_commit.run ();
+        EXPECT_EQ (pending.result ().value (), aggregate_commit_result_t::stale);
+
+        // The new repository has no knowledge of the interrupted caller.
+        provider_location_repository_t recovered (store);
+        const auto attempt = recovered
+                               .compare_exchange_authority (key, before.store_version,
+                                                            authority_put_t{bytes ("preserve")})
+                               .result ()
+                               .value ();
+        ASSERT_TRUE (std::holds_alternative<authority_conflict_t> (attempt));
+        const auto &conflict = std::get<authority_conflict_t> (attempt);
+        ASSERT_TRUE (std::holds_alternative<authority_snapshot_t> (conflict.current));
+        EXPECT_EQ (std::get<authority_snapshot_t> (conflict.current).payload, before.payload);
+        const auto restored =
+          std::get<authority_snapshot_t> (recovered.read_authority (key).result ().value ());
+        EXPECT_EQ (restored.payload, before.payload);
+        EXPECT_EQ (restored.owner.owner_id, source.owner.owner_id);
+        EXPECT_NE (restored.store_version, before.store_version);
+        const auto changed = recovered
+                               .compare_exchange_authority (key, restored.store_version,
+                                                            authority_put_t{bytes ("updated")})
+                               .result ()
+                               .value ();
+        EXPECT_TRUE (std::holds_alternative<authority_stored_t> (changed));
+        const auto nodes = recovered.list_mesh_nodes_core (target.mesh_name).result ().value ();
+        const auto target_rid = zlink::routing_id_t::from (std::string (target.node_rid.value ()));
+        const auto target_node =
+          std::find_if (nodes.items.begin (), nodes.items.end (),
+                        [&] (const auto &node) { return node.rid == target_rid; });
+        ASSERT_NE (target_node, nodes.items.end ());
+        EXPECT_EQ (target_node->capacity.actors.active, 0);
+        EXPECT_EQ (target_node->capacity.actors.reserved, 0);
+        EXPECT_EQ (target_node->capacity.spots.active, 0);
+        EXPECT_EQ (target_node->capacity.spots.reserved, 0);
+        return;
+    }
     // Release the commit even if an observation fails, so the fixture owns no pending work.
     const auto read = repository.read_authority (key).result ().value ();
     const auto during = std::get<authority_snapshot_t> (read);
@@ -255,10 +293,9 @@ void aggregate_page_read_keeps_source_version_until_commit (
         .value ()));
     auto settlement = adapter.settle_source_relocation (source_fence, {participant}, false);
     EXPECT_EQ (settlement.outcome, stateful::relocation_authority_t::unsettled)
-      << "A staged page must not report source_preserved";
+      << "A prepared authority must remain unsettled before commit";
     release_commit.run ();
     EXPECT_EQ (pending.result ().value (), aggregate_commit_result_t::committed);
-    EXPECT_EQ (read_replies (), fence.relocation_replies.size ());
     // Source settlement remains eligible to observe the terminal target owner.
     if (settlement.outcome == stateful::relocation_authority_t::unsettled)
         settlement = adapter.settle_source_relocation (source_fence, {participant}, false);
@@ -267,7 +304,14 @@ void aggregate_page_read_keeps_source_version_until_commit (
     if (!relocation_record.is_null ()) {
         const auto target_read = repository.read_authority (key).result ().value ();
         const auto &target_authority = std::get<authority_snapshot_t> (target_read);
-        EXPECT_FALSE (target_authority.aggregate && target_authority.aggregate->relocation);
+        // A prepared relocation record is the target of this aggregate commit and
+        // becomes committed; any earlier capture ends with the commit.
+        if (relocation_record.at ("relocation").at ("phase") == "prepared") {
+            ASSERT_TRUE (target_authority.aggregate && target_authority.aggregate->relocation);
+            EXPECT_EQ (target_authority.aggregate->relocation->phase, "committed");
+        } else {
+            EXPECT_FALSE (target_authority.aggregate && target_authority.aggregate->relocation);
+        }
     }
 }
 

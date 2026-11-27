@@ -48,16 +48,14 @@ class memory_aggregate_authority_t final : public aggregate_authority_port_t
     {
     }
 
-    aggregate_publish_result_t
-    prepare (const std::vector<object_ref_t> &sources,
-             std::string target_node_id,
-             zlink::framework::location_owner_token_t target_owner,
-             std::string relocation_reference,
-             std::uint32_t checksum_crc32c,
-             inventory_digest_t inventory_digest,
-             relocation_authority_fence_t,
-             const zlink::framework::runtime::protocol::relocation_prepare_t *,
-             std::span<const zlink::framework::store_put_t>) override;
+    aggregate_publish_result_t prepare (const std::vector<object_ref_t> &sources,
+                                        std::string target_node_id,
+                                        zlink::framework::location_owner_token_t target_owner,
+                                        std::string relocation_reference,
+                                        std::uint32_t checksum_crc32c,
+                                        inventory_digest_t inventory_digest,
+                                        relocation_authority_fence_t,
+                                        std::span<const zlink::framework::store_put_t>) override;
 
     aggregate_publish_result_t commit (aggregate_relocation_fence_t fence) override;
 

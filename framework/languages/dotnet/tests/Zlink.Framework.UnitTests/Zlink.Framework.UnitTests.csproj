@@ -72,6 +72,7 @@
         <Compile Include="Support/PerCallAllocationTests.cs"/>
         <Compile Include="Runtime/PrestartCallTests.cs"/>
         <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
+        <Compile Include="Runtime/InstanceSpotReadyFollowTests.cs"/>
         <Compile Include="Runtime/InstanceIntentAuthorityFollowTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
@@ -87,6 +88,7 @@
         <Compile Include="Runtime/SpotRequestSourceDiscoveryTests.cs"/>
         <Compile Include="Runtime/SourceRequestOwnerContractTests.cs"/>
         <Compile Include="Runtime/HostRelocationSealStageTests.cs"/>
+        <Compile Include="Runtime/SpotWideCompletionTests.cs"/>
         <Compile Include="Runtime/StartupStoreStallTests.cs"/>
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
@@ -136,6 +138,7 @@
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
         <Compile Include="Runtime/ActorHandoffDrainTests.cs"/>
+        <Compile Include="Runtime/ActorDrainCompletionPreflightTests.cs"/>
         <Compile Include="Runtime/JoinCallbackSendTests.cs"/>
         <Compile Include="Runtime/JoinCommitGenerationTests.cs"/>
         <Compile Include="Runtime/RemoteActorSourceLeaveTests.cs"/>
@@ -242,6 +245,8 @@
         <Compile Include="Runtime/ActorRouteCacheConfirmationTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeQueryTests.cs"/>
         <Compile Include="Runtime/InstanceSpotActivationJournalTests.cs"/>
+        <Compile Include="Runtime/InstanceSpotRelocationReplayTests.cs"/>
+        <Compile Include="Runtime/InstanceSpotRelocationCallerTests.cs"/>
         <Compile Include="Runtime/SameTargetInstanceActivationTests.cs"/>
         <Compile Include="Runtime/InstanceSpotSendDeadlineTests.cs"/>
         <Compile Include="Runtime/SpotStoreFailureKindTests.cs"/>
@@ -338,6 +343,7 @@
         <Compile Include="Runtime/ReconciliationRunnerTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.AggregatePublicationProbe.cs"/>
+        <Compile Include="Runtime/RelocationRuntimeTests.AggregateCompletion.cs"/>
         <Compile Include="Runtime/AuditRuntimeFailureReporter.cs"/>
         <Compile Include="Runtime/ActorMembershipOwnershipTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>

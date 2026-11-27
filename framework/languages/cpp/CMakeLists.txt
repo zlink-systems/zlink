@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.20)
 project(zlink_framework_cpp VERSION 0.34.1 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
+# Reject an installable instrumented build before the defaults fetch any dependency.
+option(ZLINK_FRAMEWORK_CPP_TEST_PROBES "Enable creation probes for C++ framework tests (not installable)" OFF)
+option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Install C++ framework and HTTP client package artifacts" ON)
+if(ZLINK_FRAMEWORK_CPP_TEST_PROBES AND ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
+  message(FATAL_ERROR
+    "ZLINK_FRAMEWORK_CPP_TEST_PROBES requires ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF")
+endif()
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
 
 # IDE project trees (Visual Studio, Xcode): group targets into solution
@@ -27,15 +34,9 @@ find_package(Threads REQUIRED)
 option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
 option(ZLINK_FRAMEWORK_CPP_WITH_ETCD "Build the etcd location store extension (requires gRPC)" OFF)
-option(ZLINK_FRAMEWORK_CPP_TEST_PROBES "Enable creation probes for C++ framework tests (not installable)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service foundation tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES "Build C++ framework samples (opt-in; samples/sample-build-common.sh enables it for each samples/<Sample>/run_sample.sh)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE "Build the C++ cross-language e2e host" ON)
-option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Install C++ framework and HTTP client package artifacts" ON)
-if(ZLINK_FRAMEWORK_CPP_TEST_PROBES AND ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
-  message(FATAL_ERROR
-    "ZLINK_FRAMEWORK_CPP_TEST_PROBES requires ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF")
-endif()
 if(ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF}")
@@ -225,6 +226,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/mesh/service_mailbox.cpp
   framework/src/runtime/mesh/service_topology_registry.cpp
   framework/src/runtime/locations/relocation_completion_store.cpp
+  framework/src/runtime/locations/location_store_format.cpp
   framework/src/runtime/locations/service_descriptor_registry.cpp
   framework/src/runtime/fanout/raw_fanout_owner.cpp
   framework/src/runtime/fanout/fanout_subscription.cpp
@@ -241,6 +243,9 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
 
 set(ZLINK_FRAMEWORK_CPP_M6B_RUNTIME_SOURCES
   framework/src/runtime/stateful/public_host_runtime.cpp
+  framework/src/runtime/stateful/public_host_runtime_authority.cpp
+  framework/src/runtime/stateful/public_host_runtime_messaging.cpp
+  framework/src/runtime/stateful/public_host_runtime_relocation.cpp
   framework/src/runtime/stateful/raw_stateful_dispatch.cpp
   framework/src/runtime/stateful/stateful_object_runtime.cpp
   framework/src/runtime/stateful/stream_session_registry.cpp)
@@ -365,6 +370,11 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/handlers/handler_registry.cpp
   framework/src/runtime/dispatch/projection.cpp
   framework/src/runtime/host/app.cpp
+  framework/src/runtime/host/app_actor_gateway.cpp
+  framework/src/runtime/host/app_framework_assembly.cpp
+  framework/src/runtime/host/app_instance_spot.cpp
+  framework/src/runtime/host/app_maintenance.cpp
+  framework/src/runtime/host/app_store_repositories.cpp
   framework/src/runtime/host/relocation_target_eligibility.cpp
   framework/src/runtime/http/http_listener.cpp
   framework/src/runtime/http/http_request_pipeline.cpp
@@ -382,7 +392,10 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/spots/spot_route_packets.cpp
   framework/src/runtime/streams/stream_compression.cpp
   framework/src/runtime/streams/stream_runtime.cpp
+  framework/src/runtime/streams/stream_host_core.cpp
   framework/src/runtime/streams/stream_host_service.cpp
+  framework/src/runtime/streams/stream_host_session.cpp
+  framework/src/runtime/streams/stream_host_transport.cpp
   framework/src/runtime/timers/timer_runtime.cpp
   framework/src/runtime/utils/uuid.cpp
   framework/src/runtime/transport/endpoint.cpp)
@@ -2973,6 +2986,67 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-regression"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_location_store_format
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_store_format.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_store_legacy_aggregate.cpp)
+  target_compile_features(test_cpp_framework_location_store_format PRIVATE cxx_std_20)
+  target_link_zlink_test_harness(test_cpp_framework_location_store_format)
+  target_use_zlink_gtest_main(test_cpp_framework_location_store_format)
+  target_link_libraries(test_cpp_framework_location_store_format PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_location_store_format PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_location_store_format PRIVATE
+    ZLINK_LOCATION_CONTENTION_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/location-contention-v1.json")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_store_format
+    COMMAND test_cpp_framework_location_store_format
+    LABELS "framework-unit;framework-location"
+    TIMEOUT 60)
+
+  add_executable(test_cpp_framework_location_aggregate_abort
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_aggregate_abort.cpp)
+  target_compile_features(test_cpp_framework_location_aggregate_abort PRIVATE cxx_std_20)
+  target_link_zlink_test_harness(test_cpp_framework_location_aggregate_abort)
+  target_use_zlink_gtest_main(test_cpp_framework_location_aggregate_abort)
+  target_link_libraries(test_cpp_framework_location_aggregate_abort PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_location_aggregate_abort PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_aggregate_abort
+    COMMAND test_cpp_framework_location_aggregate_abort
+    LABELS "framework-unit;framework-location"
+    TIMEOUT 60)
+
+  add_executable(test_cpp_framework_location_contention
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_contention.cpp)
+  target_compile_features(test_cpp_framework_location_contention PRIVATE cxx_std_20)
+  target_link_zlink_test_harness(test_cpp_framework_location_contention)
+  target_use_zlink_gtest_main(test_cpp_framework_location_contention)
+  target_link_libraries(test_cpp_framework_location_contention PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_location_contention PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_location_contention PRIVATE
+    ZLINK_LOCATION_CONTENTION_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/location-contention-v1.json")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_contention
+    COMMAND test_cpp_framework_location_contention --gtest_filter=InMemory/*
+    LABELS "framework-unit;framework-location"
+    TIMEOUT 180)
+  if(_zlink_framework_redis_target)
+    target_link_libraries(test_cpp_framework_location_contention PRIVATE zlink::framework_locations_redis)
+    target_compile_definitions(test_cpp_framework_location_contention PRIVATE
+      ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_location_contention_redis
+      COMMAND test_cpp_framework_location_contention --gtest_filter=Redis/*
+      LABELS "framework-extension;framework-location;redis"
+      TIER integration
+      TIMEOUT 180)
+  endif()
+
   add_executable(test_cpp_framework_discarded_authority
     tests/Zlink.Framework.UnitTests/test_cpp_framework_discarded_authority.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_owner_token_release_wait.cpp)
@@ -3094,6 +3168,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_authority_turns.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_return_join.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_join_failure.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_late_ingress.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_entry_placement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relocation_settlement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_deferred_join_reservation.cpp
@@ -3578,6 +3653,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_message_flow
     tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp
     "framework-unit;framework-regression;framework-observability;diagnostics")
+  add_zlink_framework_test(
+    test_cpp_framework_dispatch_failure_flow
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_dispatch_failure_flow.cpp
+    "framework-unit;framework-contract;framework-observability;diagnostics"
+    contract)
+  target_use_zlink_gtest_main(test_cpp_framework_dispatch_failure_flow)
+  set_property(TEST test_cpp_framework_dispatch_failure_flow APPEND PROPERTY
+    ENVIRONMENT "GTEST_FILTER=DispatchFailureFlow.ActorEncodeFailureIsReportedBeforeSubmission:DispatchFailureCodec.*")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_spot_handler_failure_flow
+    COMMAND test_cpp_framework_dispatch_failure_flow
+      --gtest_filter=DispatchFailureFlow.AsyncSpotHandlerFailureRetainsReceivedFlow
+    LABELS "framework-unit;framework-contract;framework-observability;diagnostics"
+    TIER contract
+    TIMEOUT 30)
   add_zlink_framework_test(
     test_cpp_framework_telemetry_process_exit
     tests/Zlink.Framework.UnitTests/test_cpp_framework_telemetry_process_exit.cpp

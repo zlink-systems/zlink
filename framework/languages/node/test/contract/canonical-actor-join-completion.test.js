@@ -26,6 +26,10 @@ const { DefaultZLinkSpotManager } = require('../../packages/framework/dist/runti
 const {
   ZLinkSpotSerialExecutor
 } = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
+const {
+  ZLinkBufferMessage
+} = require('../../packages/framework/dist/runtime/backend/runtime-message');
 
 function fixture({
   entry,
@@ -139,6 +143,9 @@ function fixture({
     },
     completion,
     dispatchApplication: (operation) => mailbox.executeActor('actor-a', operation),
+    admitPackets: (records, dispatch) =>
+      mailbox.admitActorPacketPrefix('actor-a', records, dispatch),
+    close: () => mailbox.close(),
     run: () =>
       DefaultZLinkSpotManager.prototype.finalizeActorJoinRelocation.call(
         manager,
@@ -208,6 +215,94 @@ for (const entry of [false, true]) {
     assert.equal(await f.run(), true);
     assert.deepEqual(f.events, ['joined', 'source-leave', 'completion:accepted', 'opened']);
     assert.equal(await f.dispatchApplication(() => 'ran'), 'ran');
+  });
+}
+
+for (const completionFails of [true, false]) {
+  test(`late same-node Actor request requires successful Join completion (failure=${completionFails})`, async () => {
+    const f = fixture({
+      completionFailure: completionFails ? new Error('application completion failed') : undefined
+    });
+    const handoff = new framework.ZLinkActorHandoffCoordinator({
+      requestSource: () => ({
+        meshName: 'mesh',
+        objectGeneration: 1n,
+        ownerId: 'local-owner',
+        ownerLeaseGeneration: 1n,
+        nodeRid: 'local-node',
+        nodeGeneration: 1n,
+        authorityOwnerGeneration: 1n
+      })
+    });
+    const calls = [];
+    const capture = (name, kind, requestSeq) => {
+      const parts = [
+        ZLinkBufferMessage.from(
+          protocol.encodeStreamHeader({
+            kind,
+            codec: protocol.ZLinkStreamCodec.Json,
+            flags: protocol.ZLinkStreamHeaderFlags.None,
+            requestSeq,
+            name,
+            metadata: new Map()
+          })
+        ),
+        ZLinkBufferMessage.from('{}')
+      ];
+      try {
+        const result = handoff.capture('local', 'actor-a', parts, requestSeq !== undefined);
+        assert.ok(result);
+        return result;
+      } finally {
+        parts.forEach((part) => part.close());
+      }
+    };
+    handoff.beginProvisional('actor-a', 1n);
+    try {
+      await f.run();
+      const started = performance.now();
+      const request = capture('RequestProbe', protocol.ZLinkStreamMessageKind.Request, 1n);
+      const outcome = request.then(
+        (reply) => ({ reply }),
+        (error) => ({ error })
+      );
+      if (completionFails) {
+        await capture('SendProbe', protocol.ZLinkStreamMessageKind.Send);
+        await capture('NotifyProbe', protocol.ZLinkStreamMessageKind.Send);
+      }
+      const admission = handoff.admitDeferredPrefix('actor-a', (records) =>
+        f.admitPackets(records, async (_serial, parts) => {
+          calls.push(protocol.decodeStreamHeader(parts[0].data()).kind);
+          return 'reply';
+        })
+      );
+      let timer;
+      try {
+        const result = await Promise.race([
+          outcome,
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('Late Actor request did not settle within 1 s.')),
+              1_000
+            );
+          })
+        ]);
+        assert.ok(performance.now() - started < 1_000);
+        await admission.terminal;
+        if (completionFails) {
+          assert.deepEqual(calls, []);
+          assert.equal(result.error?.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
+        } else {
+          assert.deepEqual(calls, [protocol.ZLinkStreamMessageKind.Request]);
+          assert.deepEqual(result, { reply: 'reply' });
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    } finally {
+      handoff.cancel('actor-a');
+      await f.close();
+    }
   });
 }
 

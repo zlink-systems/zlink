@@ -735,7 +735,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
     target_spots.set_route_client (route_client_t{});
     // OnLeave travels node-level (the source Entry Spot is fixed to node
     // lifecycle and is never published into mesh spot routing), mirroring
-    // how production (app.cpp) wires actor_leave_notification_sender to
+    // how production (app_framework_assembly.cpp) wires actor_leave_notification_sender to
     // application_mesh->send_to_node.
     target_spots.on_actor_leave_notification (
       [&target] (const zlink::routing_id_t &node_rid,

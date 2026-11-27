@@ -378,7 +378,6 @@ because the descriptor changed.
 |---|---|
 | Concurrent `Relocate` with the same mode and effective target version | Shares the deadline of the first operation. A later call doesn't change the deadline. |
 | Concurrent `Relocate` with a different mode or effective target version | `Blocked/OperationInProgress` without waiting. |
-| `Relocate` of an object whose previous relocation still has completion results to deliver (`pendingDeliveries` > 0) | `Blocked/OperationInProgress` without waiting. Recording the reason follows [Location runtime §9.3](01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed). |
 | `Relocate` again after `Blocked` | `Blocked` isn't stored, so host conditions are re-checked from the start. |
 | `Relocate` again in `Relocated` | Returns the first `Relocated/None`'s mode and effective target version. |
 | Concurrent `Shutdown` | Shares the same operation and stores the terminal result. |
@@ -905,7 +904,12 @@ generation — is called a
 A language supporting standard cooperative cancellation passes a cleanup cancellation
 signal representing the remaining deadline to the Spot closing callback. An
 already-accepted handler's token isn't reused. A callback exception is
-`ForceStopped/TeardownFailed`; deadline expiry is `ForceStopped/DeadlineExceeded`.
+`ForceStopped/TeardownFailed`; deadline expiry is `ForceStopped/DeadlineExceeded`. A relocation unit whose authority is still
+unsettled at the stop deadline isn't treated as an expired owner lease. The unit is recorded as a relocation failure, no
+expired-owner cleanup runs for it (such as failing its pending backlog at once), and its Store authority isn't changed. The
+unit's next owner lookup decides the outcome from the Store authority. A `Draining` source starts `Preserve` for an accepted
+relocation no later than the stop deadline minus the time of one management request (or at the Restore deadline if that's
+earlier). It may start earlier (for example, as soon as shutdown is requested).
 Callback execution isn't guaranteed on hardware failure or `SIGKILL`. It doesn't
 guarantee that a different runtime automatically takes over an interrupted relocation or
 cleanup.

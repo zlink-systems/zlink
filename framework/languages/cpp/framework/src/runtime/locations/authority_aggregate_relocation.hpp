@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
-#include <runtime/locations/location_repository.hpp>
 #include <zlink/framework/contracts/errors/error.hpp>
 #include <zlink/framework/detail/binary_text_codec.hpp>
 
@@ -198,22 +197,18 @@ without_capture (const std::shared_ptr<const authority_aggregate_t> &current)
 
 } // namespace zlink::framework::runtime::authority_aggregate_codec
 
-namespace zlink::framework::runtime
+namespace zlink::framework::runtime::authority_aggregate_codec
 {
+/* The aggregate commit moves the participant to the new owner. A relocation
+ * record the target prepared becomes `committed` in the same step; any other
+ * capture ends with the commit. */
 inline std::shared_ptr<const authority_aggregate_t>
-aggregate_commit_authority (const aggregate_fence_t &fence,
-                            const authority_key_t &key,
-                            const std::shared_ptr<const authority_aggregate_t> &before)
+commit_aggregate_authority (const std::shared_ptr<const authority_aggregate_t> &before)
 {
-    const auto &participants = fence.relocation_participants;
-    if (participants.empty ())
-        return authority_aggregate_codec::without_capture (before);
-    const auto found = std::lower_bound (
-      participants.begin (), participants.end (), key.value,
-      [] (const auto &entry, const auto &value) { return entry.first.value < value; });
-    if (found == participants.end () || found->first.value != key.value)
-        throw framework_exception_t (framework_error_kind_t::data_lost,
-                                     "Missing relocation commit participant");
-    return authority_aggregate_codec::replace (before, found->second->encoded.at ("relocation"));
+    if (!before || !before->relocation || before->relocation->phase != "prepared")
+        return without_capture (before);
+    auto state = before->encoded.at ("relocation");
+    state["phase"] = "committed";
+    return replace (before, std::move (state));
 }
 }
