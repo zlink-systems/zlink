@@ -5,13 +5,13 @@
       "path": "src/zlink/_native/_zlink_native.c:prepare_parts",
       "owner": "Core message allocation and Python input snapshot",
       "cost_class": "allocation",
-      "guard_test": "test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup"
+      "guard_test": "test_raw_hot_path_keeps_gil_release_and_whole_message_calls"
     },
     {
       "path": "src/zlink/_runtime/handles/native_support.py:_ReceivedPartsOwner",
       "owner": "Received owner until caller closes storage",
       "cost_class": "copy",
-      "guard_test": "test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup"
+      "guard_test": "test_raw_hot_path_keeps_gil_release_and_whole_message_calls"
     },
     {
       "path": "src/zlink/_runtime/sockets/socket_base.py:_grow_topic_receive_buffer",
@@ -23,13 +23,13 @@
       "path": "src/zlink/_runtime/messaging/routed_async.py:CompletionOwner",
       "owner": "Socket-local completion registry and drain ownership",
       "cost_class": "lock",
-      "guard_test": "test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup"
+      "guard_test": "test_raw_hot_path_keeps_gil_release_and_whole_message_calls"
     },
     {
       "path": "src/zlink/_native/_zlink_native.c:Py_BEGIN_ALLOW_THREADS",
       "owner": "Core blocking send and receive calls",
       "cost_class": "gil",
-      "guard_test": "test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup"
+      "guard_test": "test_raw_hot_path_keeps_gil_release_and_whole_message_calls"
     },
     {
       "path": "src/zlink/_runtime/messaging/message_materializer.py:Message.data",

@@ -81,7 +81,7 @@ fn poller_busy_close_keeps_registration_and_allows_retry() {
     poller.add_socket(&socket, POLLIN, 1).unwrap();
     let busy = poller.close().unwrap_err();
     assert_eq!(busy.code(), CloseResult::Busy);
-    assert_eq!(busy.native_errno(), libc::EBUSY);
+    assert_eq!(busy.internal_errno(), libc::EBUSY);
     assert_eq!(poller.size().unwrap(), 1);
     poller.close().unwrap();
 }
@@ -105,7 +105,7 @@ fn socket_close_busy_reaches_the_caller_and_keeps_the_socket() {
     let mut socket = context.pair_socket().unwrap();
     let busy = socket.close().unwrap_err();
     assert_eq!(busy.code(), CloseResult::Busy);
-    assert_eq!(busy.native_errno(), libc::EBUSY);
+    assert_eq!(busy.internal_errno(), libc::EBUSY);
     socket.close().unwrap();
 }
 

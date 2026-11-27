@@ -338,7 +338,18 @@ class PubSocketOptions:
 
     @property
     def welcome_message(self):
-        return message_from(self._socket._get_pub_option(self._WELCOME_MSG))
+        try:
+            return message_from(self._socket._get_pub_option(self._WELCOME_MSG))
+        except ConfigError as error:
+            # Core's option getter reports no required size, so a value larger
+            # than the read buffer cannot be told apart from an invalid request.
+            note = (
+                "reading welcome_message failed; Core cannot read back a welcome "
+                "message larger than 256 bytes"
+            )
+            if hasattr(error, "add_note"):
+                error.add_note(note)
+            raise
 
     @welcome_message.setter
     def welcome_message(self, message):

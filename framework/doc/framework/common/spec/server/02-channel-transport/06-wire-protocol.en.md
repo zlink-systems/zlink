@@ -868,6 +868,9 @@ governs validation by the transport, target, and Session owner and defines their
 
 - The target writes terminal completion and delivery state to a new immutable relocation root, then updates `TerminalCompletionCount` and `PendingRelayCount` together via an authority CAS.
 - `replyRelay` uses the original reply route and the source lease fence that identifies that request.
+- The node generation in a request source fence is the sending node's generation carried by the received request record
+  (the ingress source node generation). Only a record without that value (a local request created on this node) uses this
+  node's lifecycle generation.
 - The source sends an authenticated `replyRelayAck` after accepting the terminal result, or after confirming it is already terminal.
 - A closed physical connection is not evidence of terminal delivery.
 

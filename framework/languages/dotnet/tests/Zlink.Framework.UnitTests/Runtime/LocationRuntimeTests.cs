@@ -3751,11 +3751,13 @@ public sealed partial class LocationRuntimeTests
     [Fact]
     public async Task Tokenless_ClaimConflict_RechecksAndConvergesOnTheSameOwnerLease()
     {
-        var store = new ZLinkInMemoryLocationStore();
+        var time = new ControllableTimeProvider();
+        var store = new ZLinkInMemoryLocationStore(time);
         var ambiguous = new AmbiguousCommittedClaimStore(store, hiddenReads: 1);
         var runtime = new ZLinkLocationRuntime(
             new ZLinkLocationOptions { OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(25) },
-            ambiguous
+            ambiguous,
+            time
         );
 
         Assert.False(await runtime.RenewOwnerLeaseOnceAsync());

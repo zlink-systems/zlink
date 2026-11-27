@@ -1036,6 +1036,11 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
               std::runtime_error ("injected native publication failure"))));
         else
             publication.complete (result_t<bool>::success (true));
+        if (loss == -34 || loss == -42 || loss == -43 || loss <= -52) {
+            // Publication confirmation finishes replacing the T reservation on the Location lane.
+            ASSERT_TRUE (lease_access::publication_confirmed (runtime, episode, auto_connect_wait))
+              << "descriptor publication: before advancing the clock";
+        }
         if (loss != -34 && loss != -38 && loss != -40 && loss != -41 && loss != -43 && loss != -45
             && loss != -47 && loss > -52)
             ASSERT_TRUE (wait_operations ("recovery operation"));
@@ -1045,7 +1050,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
           .result ()
           .value ();
         scheduler->run_all ();
-        if (loss == -34 || loss == -38) {
+        if (loss == -38) {
             EXPECT_EQ (0, handlers);
             move_to (episode->cutoff);
             detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
@@ -1140,20 +1145,19 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
               .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
               .result ()
               .value ();
-            if (loss == -43) {
-                move_to (episode->cutoff);
-                detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
-                if (!shared) {
-                    auto cutoff_terminal = episode->terminal.task ();
-                    ASSERT_TRUE (cutoff_terminal.result_for (auto_connect_wait))
-                      << "T latch: outage episode";
-                    ASSERT_TRUE (episode->discarded.load ()) << "T latch: outage episode";
-                    for (std::size_t i = 0; i < 3; ++i) {
-                        auto request = (*discard_requests)[i].task ();
-                        ASSERT_TRUE (request.result_for (auto_connect_wait))
-                          << "gate cancellation request: " << names[i];
-                    }
-                }
+        }
+        if (loss == -34 || loss == -43) {
+            EXPECT_EQ (0, handlers);
+            move_to (episode->cutoff);
+            detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+            auto cutoff_terminal = episode->terminal.task ();
+            ASSERT_TRUE (cutoff_terminal.result_for (auto_connect_wait))
+              << "T latch: outage episode";
+            ASSERT_TRUE (episode->discarded.load ()) << "T latch: outage episode";
+            for (std::size_t i = 0; i < queues.size (); ++i) {
+                auto request = (*discard_requests)[i].task ();
+                ASSERT_TRUE (request.result_for (auto_connect_wait))
+                  << "gate cancellation request: " << names[i];
             }
         }
         if (loss != -38)
