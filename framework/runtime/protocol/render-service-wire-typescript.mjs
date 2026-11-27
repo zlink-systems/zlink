@@ -44,8 +44,6 @@ const readRef = (
   flagValue = "flags",
 ) =>
   `${incrementalRead ? "yield* readIncremental" : "read"}${refName(reference)}(${reader}, context, ${enclosing}, ${flagValue})`;
-const readerRead = (expression) =>
-  incrementalRead ? `yield* ${expression}` : expression;
 const writeRef = (
   reference,
   value,
@@ -442,27 +440,40 @@ function casePredicate(_owner, operation) {
   return `if (!validTerminalFailure(enumWireRequestTerminalResult(value["terminalResult"]), enumWireFrameworkErrorCode(value["failureCode"]))) fail("terminal failure predicate");`;
 }
 
+function readInteger(operation) {
+  const { encoding, width } = operation;
+  const wide = width === 8;
+  const signed = encoding === "i64";
+  if (!incrementalRead) {
+    return wide ? `reader.int64(${signed})` : `reader.${encoding}()`;
+  }
+  const view = `byteView(yield* reader.take(${width}))`;
+  return wide
+    ? `readInt64(${view}, 0, ${signed})`
+    : `${view}.getUint${width * 8}(0)`;
+}
+function writeInteger(operation, expression) {
+  return `writer.${operation.width === 8 ? "u64" : operation.encoding}(${expression})`;
+}
 function scalar(owner, operation) {
   const name = id(owner.name);
-  const wide = operation.encoding.endsWith("64");
-  const read = readerRead(
-    operation.encoding === "i64"
-      ? "reader.i64()"
-      : `reader.u(${operation.width})`,
+  const wide = operation.width === 8;
+  const minimum = literal(
+    wide ? BigInt(operation.minimum) : Number(operation.minimum),
   );
-  const write =
-    operation.encoding === "i64"
-      ? "writer.i64(raw)"
-      : `writer.u(raw, ${operation.width})`;
+  const maximum = literal(
+    wide ? BigInt(operation.maximum) : Number(operation.maximum),
+  );
+  const validate = `if (raw < ${minimum} || raw > ${maximum}) fail(${JSON.stringify(owner.name + " range")});`;
   return {
     type: `export type ${name} = ${wide ? "bigint" : "number"};`,
-    read: `const raw = ${read}; if (raw < ${BigInt(operation.minimum)}n || raw > ${BigInt(operation.maximum)}n) fail(${JSON.stringify(owner.name + " range")}); return ${wide ? "raw" : "Number(raw)"};`,
-    write: `const raw = numeric(value); if (raw < ${BigInt(operation.minimum)}n || raw > ${BigInt(operation.maximum)}n) fail(${JSON.stringify(owner.name + " range")}); ${write};`,
+    read: `const raw = ${readInteger(operation)}; ${validate} return raw;`,
+    write: `const raw = ${wide ? "numeric" : "narrowInteger"}(value); ${validate} ${writeInteger(operation, "raw")};`,
   };
 }
 function enumeration(owner, operation) {
   const name = id(owner.name);
-  const wide = operation.encoding.endsWith("64");
+  const wide = operation.width === 8;
   const values = operation.values
     .map((entry) => JSON.stringify(entry.name))
     .join(" | ");
@@ -481,8 +492,8 @@ function enumeration(owner, operation) {
   return {
     type: `export type ${name} = ${values};`,
     extra: `export function enumWire${name}(value: ${name}): ${wide ? "bigint" : "number"} { switch (value) {\n${indent(encode)}\n} }`,
-    read: `const raw = ${readerRead(operation.encoding === "i64" ? "reader.i64()" : `reader.u(${operation.width})`)}; switch (${wide ? "raw" : "Number(raw)"}) {\n${indent(decode)}\n  default: fail(${JSON.stringify(owner.name + " enum")});\n}`,
-    write: `${operation.encoding === "i64" ? "writer.i64" : "writer.u"}(numeric(enumWire${name}(value))${operation.encoding === "i64" ? "" : `, ${operation.width}`});`,
+    read: `const raw = ${readInteger(operation)}; switch (raw) {\n${indent(decode)}\n  default: fail(${JSON.stringify(owner.name + " enum")});\n}`,
+    write: `${writeInteger(operation, `${wide ? "numeric" : "narrowInteger"}(enumWire${name}(value))`)};`,
   };
 }
 function lengthPrefixed(owner, operation) {
@@ -938,10 +949,10 @@ function renderCommand(command) {
     );
   }
   const magic = header.magic
-    .map((byte) => `Number(reader.u(1)) !== ${byte}`)
+    .map((byte) => `reader.u8() !== ${byte}`)
     .join(" || ");
   const predicates = predicateChecks(command);
-  return `export type ${name}Command = { readonly command: ${JSON.stringify(command.name)}; readonly flags: number; ${properties.join(" ")} };\nexport function decode${name}Command(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ${name}Command { if (!frames.length) fail(${JSON.stringify(command.name + " frames")}); const reader = new Reader(frames[0]); if (${magic} || Number(reader.u(1)) !== ${header.wireMajor} || Number(reader.u(1)) !== ${header.commandId}) fail(${JSON.stringify(command.name + " header")}); const flags = Number(reader.u(1)); ${flagChecks(command, "flags")} const value: any = { command: ${JSON.stringify(command.name)}, flags };\n${indent(fields.map((field) => readField(field)).join("\n"))}\nreader.done(${JSON.stringify(command.name)}); let frameIndex = 1;\n${indent(decodeFrames.join("\n"))}\nif (frameIndex !== frames.length) fail(${JSON.stringify(command.name + " frames")});\n${indent(predicates)}\nreturn value; }\nexport function encode${name}Command(value: ${name}Command, context: ServiceWireDecoderContext): readonly Uint8Array[] { ${flagChecks(command, "value.flags")} ${predicates} const writer = new Writer(); writer.put([${header.magic}, ${header.wireMajor}, ${header.commandId}, value.flags]);\n${indent(fields.map((field) => writeField(field, "writer", "value", "value.flags")).join("\n"))}\nconst frames: Uint8Array[] = [writer.result()];\n${indent(encodeFrames.join("\n"))}\nreturn frames; }\nexport function validate${name}CommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; ${predicates} }`;
+  return `export type ${name}Command = { readonly command: ${JSON.stringify(command.name)}; readonly flags: number; ${properties.join(" ")} };\nexport function decode${name}Command(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ${name}Command { if (!frames.length) fail(${JSON.stringify(command.name + " frames")}); const reader = new Reader(frames[0]); if (${magic} || reader.u8() !== ${header.wireMajor} || reader.u8() !== ${header.commandId}) fail(${JSON.stringify(command.name + " header")}); const flags = reader.u8(); ${flagChecks(command, "flags")} const value: any = { command: ${JSON.stringify(command.name)}, flags };\n${indent(fields.map((field) => readField(field)).join("\n"))}\nreader.done(${JSON.stringify(command.name)}); let frameIndex = 1;\n${indent(decodeFrames.join("\n"))}\nif (frameIndex !== frames.length) fail(${JSON.stringify(command.name + " frames")});\n${indent(predicates)}\nreturn value; }\nexport function encode${name}Command(value: ${name}Command, context: ServiceWireDecoderContext): readonly Uint8Array[] { ${flagChecks(command, "value.flags")} ${predicates} const writer = new Writer(); writer.put([${header.magic}, ${header.wireMajor}, ${header.commandId}, value.flags]);\n${indent(fields.map((field) => writeField(field, "writer", "value", "value.flags")).join("\n"))}\nconst frames: Uint8Array[] = [writer.result()];\n${indent(encodeFrames.join("\n"))}\nreturn frames; }\nexport function validate${name}CommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; ${predicates} }`;
 }
 
 function renderDurable(format) {
@@ -967,9 +978,9 @@ function renderDurable(format) {
     decode: "bytes.length",
   });
   const magic = header.magic
-    .map((byte) => `Number(reader.u(1)) !== ${byte}`)
+    .map((byte) => `reader.u8() !== ${byte}`)
     .join(" || ");
-  return `export function decode${name}DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): ${refName(bodyField.type)} { ${limits.decode} const reader = new Reader(bytes); if (${magic} || Number(reader.u(1)) !== ${header.formatVersion}) fail(${JSON.stringify(format.name + " header")}); const flags = ${readRef(header.flagsType, "reader", "{}", "0")}; if (!same(flags, ${literal(header.flags)})) fail(${JSON.stringify(format.name + " flags")}); const length = Number(${readRef(header.bodyLengthType, "reader", "{}", "0")}); const body = reader.take(length); const checksumOffset = reader.offset; const declared = Number(reader.u(4)); reader.done(${JSON.stringify(format.name)}); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail(${JSON.stringify(format.name + " checksum")}); return ${topRead(bodyField.type, "body")}; }\nexport function encode${name}DurableFormat(value: ${refName(bodyField.type)}, context: ServiceWireDecoderContext): Uint8Array { const body = ${topWrite(bodyField.type, "value")}; const writer = new Writer(); writer.put([${header.magic}, ${header.formatVersion}]); ${writeRef(header.flagsType, literal(header.flags), "writer", "{}", "0")}; ${writeRef(header.bodyLengthType, "body.length", "writer", "{}", "0")}; writer.put(body); writer.u(BigInt(crc32c(writer.result())), 4); const bytes = writer.result(); ${limits.encode} return bytes; }`;
+  return `export function decode${name}DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): ${refName(bodyField.type)} { ${limits.decode} const reader = new Reader(bytes); if (${magic} || reader.u8() !== ${header.formatVersion}) fail(${JSON.stringify(format.name + " header")}); const flags = ${readRef(header.flagsType, "reader", "{}", "0")}; if (!same(flags, ${literal(header.flags)})) fail(${JSON.stringify(format.name + " flags")}); const length = Number(${readRef(header.bodyLengthType, "reader", "{}", "0")}); const body = reader.take(length); const checksumOffset = reader.offset; const declared = reader.u32(); reader.done(${JSON.stringify(format.name)}); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail(${JSON.stringify(format.name + " checksum")}); return ${topRead(bodyField.type, "body")}; }\nexport function encode${name}DurableFormat(value: ${refName(bodyField.type)}, context: ServiceWireDecoderContext): Uint8Array { const body = ${topWrite(bodyField.type, "value")}; const writer = new Writer(); writer.put([${header.magic}, ${header.formatVersion}]); ${writeRef(header.flagsType, literal(header.flags), "writer", "{}", "0")}; ${writeRef(header.bodyLengthType, "body.length", "writer", "{}", "0")}; writer.put(body); writer.u32(crc32c(writer.result())); const bytes = writer.result(); ${limits.encode} return bytes; }`;
 }
 function renderLogical(format) {
   const name = id(format.name);
@@ -1102,12 +1113,74 @@ function validTerminalFailure(terminal: number, failure: number): boolean { if (
 const encoder = new TextEncoder(); const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 function utf8(value: unknown): Uint8Array { const text = value as string; for (let index = 0; index < text.length; ++index) { const unit = text.charCodeAt(index); if (unit >= 0xd800 && unit <= 0xdbff) { const next = text.charCodeAt(++index); if (!(next >= 0xdc00 && next <= 0xdfff)) fail("lone UTF-16 surrogate"); } else if (unit >= 0xdc00 && unit <= 0xdfff) fail("lone UTF-16 surrogate"); } return encoder.encode(text); }
 function decodeUtf8(bytes: Uint8Array, label: string): string { try { return decoder.decode(bytes); } catch { return fail(label + " UTF-8"); } }
-class Reader { offset = 0; constructor(readonly bytes: Uint8Array, readonly end = bytes.length) {} get remaining(): number { return this.end - this.offset; } take(length: number): Uint8Array { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("truncated service-wire value"); const value = this.bytes.subarray(this.offset, this.offset + length); this.offset += length; return value; } bounded(length: number): Reader { return new Reader(this.take(length)); } u(width: number): bigint { let value = 0n; for (const byte of this.take(width)) value = (value << 8n) | BigInt(byte); return value; } i64(): bigint { const value = this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " trailing bytes"); } }
-interface IncrementalInput { readonly offset: number; readonly remaining: number; take(length: number): Generator<void, Uint8Array, void>; bytes(length: number): Generator<void, Uint8Array, void>; text(length: number, forbidNul: boolean, label: string): Generator<void, string, void>; bounded(length: number): IncrementalInput; u(width: number): Generator<void, bigint, void>; i64(): Generator<void, bigint, void>; done(label: string): void; }
-class IncrementalReader implements IncrementalInput { offset = 0; private chunk: Uint8Array = new Uint8Array(); private chunkOffset = 0; bufferedInputByteCount = 0; get remaining(): number { return this.chunk.length - this.chunkOffset; } supply(chunk: Uint8Array): void { if (this.remaining) throw new Error("incremental reader still owns caller input"); this.chunk = chunk; this.chunkOffset = 0; } release(): void { if (this.remaining) throw new Error("incremental reader did not consume caller input"); this.discard(); } discard(): void { this.chunk = new Uint8Array(); this.chunkOffset = 0; } *take(length: number): Generator<void, Uint8Array, void> { if (!Number.isSafeInteger(length) || length < 0 || length > 8) fail("invalid incremental scalar read length"); const value = new Uint8Array(length); let filled = 0; while (filled < length) { const available = this.remaining; if (available === 0) { this.bufferedInputByteCount = filled; yield; continue; } const count = Math.min(length - filled, available); value.set(this.chunk.subarray(this.chunkOffset, this.chunkOffset + count), filled); this.chunkOffset += count; this.offset += count; filled += count; } this.bufferedInputByteCount = 0; return value; } *bytes(length: number): Generator<void, Uint8Array, void> { if (!Number.isSafeInteger(length) || length < 0) fail("invalid incremental content length"); let value: Uint8Array; try { value = new Uint8Array(length); } catch { return capacityFail("incremental content capacity"); } let filled = 0; while (filled < length) { const available = this.remaining; if (available === 0) { this.bufferedInputByteCount = 0; yield; continue; } const count = Math.min(length - filled, available); value.set(this.chunk.subarray(this.chunkOffset, this.chunkOffset + count), filled); this.chunkOffset += count; this.offset += count; filled += count; } return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { if (!Number.isSafeInteger(length) || length < 0) fail("invalid incremental text length"); let value = "", remaining = length, codePoint = 0, needed = 0, minimum = 0; while (remaining > 0) { if (this.remaining === 0) { this.bufferedInputByteCount = 0; yield; continue; } const byte = this.chunk[this.chunkOffset++]; ++this.offset; --remaining; if (needed === 0) { if (byte <= 0x7f) { if (forbidNul && byte === 0) fail(label + " NUL"); try { value += String.fromCodePoint(byte); } catch { return capacityFail(label + " capacity"); } continue; } if (byte >= 0xc2 && byte <= 0xdf) { codePoint = byte & 0x1f; needed = 1; minimum = 0x80; continue; } if (byte >= 0xe0 && byte <= 0xef) { codePoint = byte & 0x0f; needed = 2; minimum = 0x800; continue; } if (byte >= 0xf0 && byte <= 0xf4) { codePoint = byte & 0x07; needed = 3; minimum = 0x10000; continue; } fail(label + " UTF-8"); } if ((byte & 0xc0) !== 0x80) fail(label + " UTF-8"); codePoint = (codePoint << 6) | (byte & 0x3f); if (--needed === 0) { if (codePoint < minimum || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff) || (forbidNul && codePoint === 0)) fail(label + " UTF-8"); try { value += String.fromCodePoint(codePoint); } catch { return capacityFail(label + " capacity"); } } } if (needed !== 0) fail(label + " UTF-8"); return value; } bounded(length: number): IncrementalInput { if (!Number.isSafeInteger(length) || length < 0) fail("invalid bounded read length"); return new IncrementalBoundedReader(this, length); } *u(width: number): Generator<void, bigint, void> { let value = 0n; for (const byte of yield* this.take(width)) value = (value << 8n) | BigInt(byte); return value; } *i64(): Generator<void, bigint, void> { const value = yield* this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
-class IncrementalBoundedReader implements IncrementalInput { offset = 0; constructor(private readonly source: IncrementalReader, public remaining: number) {} private check(length: number): void { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("bounded service-wire value overflow"); } private consumed(length: number): void { this.remaining -= length; this.offset += length; } *take(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.source.take(length); this.consumed(length); return value; } *bytes(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.source.bytes(length); this.consumed(length); return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { this.check(length); const value = yield* this.source.text(length, forbidNul, label); this.consumed(length); return value; } bounded(length: number): IncrementalInput { this.check(length); return new IncrementalNestedBoundedReader(this, length); } *u(width: number): Generator<void, bigint, void> { let value = 0n; for (const byte of yield* this.take(width)) value = (value << 8n) | BigInt(byte); return value; } *i64(): Generator<void, bigint, void> { const value = yield* this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
-class IncrementalNestedBoundedReader implements IncrementalInput { offset = 0; constructor(private readonly parent: IncrementalInput, public remaining: number) {} private check(length: number): void { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("bounded service-wire value overflow"); } private consumed(length: number): void { this.remaining -= length; this.offset += length; } *take(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.parent.take(length); this.consumed(length); return value; } *bytes(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.parent.bytes(length); this.consumed(length); return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { this.check(length); const value = yield* this.parent.text(length, forbidNul, label); this.consumed(length); return value; } bounded(length: number): IncrementalInput { this.check(length); return new IncrementalNestedBoundedReader(this, length); } *u(width: number): Generator<void, bigint, void> { let value = 0n; for (const byte of yield* this.take(width)) value = (value << 8n) | BigInt(byte); return value; } *i64(): Generator<void, bigint, void> { const value = yield* this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
-class Writer { readonly chunks: Uint8Array[] = []; length = 0; put(bytes: Iterable<number>): void { const chunk = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes); if (!chunk.length) return; this.chunks.push(chunk); this.length += chunk.length; } u(value: bigint, width: number): void { const bytes = new Uint8Array(width); for (let index = width - 1; index >= 0; --index) { bytes[index] = Number(value & 255n); value >>= 8n; } this.put(bytes); } i64(value: bigint): void { this.u(BigInt.asUintN(64, value), 8); } result(): Uint8Array { if (!this.chunks.length) return new Uint8Array(); if (this.chunks.length === 1) return this.chunks[0]; const result = new Uint8Array(this.length); let offset = 0; for (const chunk of this.chunks) { result.set(chunk, offset); offset += chunk.length; } return result; } }
+function narrowInteger(value: number): number {
+  return Number.isInteger(value) ? value : Number(numeric(value));
+}
+function byteView(bytes: Uint8Array): DataView {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+}
+function readInt64(view: DataView, offset: number, signed: boolean): bigint {
+  const high = signed ? view.getInt32(offset) : view.getUint32(offset);
+  const low = view.getUint32(offset + 4);
+  return (BigInt(high) << 32n) | BigInt(low);
+}
+class Reader {
+  offset = 0;
+  private readonly view: DataView;
+  constructor(readonly bytes: Uint8Array) { this.view = byteView(bytes); }
+  get remaining(): number { return this.bytes.length - this.offset; }
+  private advance(length: number): number {
+    if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("truncated service-wire value");
+    const offset = this.offset;
+    this.offset += length;
+    return offset;
+  }
+  take(length: number): Uint8Array { const offset = this.advance(length); return this.bytes.subarray(offset, this.offset); }
+  bounded(length: number): Reader { return new Reader(this.take(length)); }
+  u8(): number { return this.view.getUint8(this.advance(1)); }
+  u16(): number { return this.view.getUint16(this.advance(2)); }
+  u32(): number { return this.view.getUint32(this.advance(4)); }
+  int64(signed: boolean): bigint { return readInt64(this.view, this.advance(8), signed); }
+  done(label: string): void { if (this.remaining) fail(label + " trailing bytes"); }
+}
+interface IncrementalInput { readonly offset: number; readonly remaining: number; take(length: number): Generator<void, Uint8Array, void>; bytes(length: number): Generator<void, Uint8Array, void>; text(length: number, forbidNul: boolean, label: string): Generator<void, string, void>; bounded(length: number): IncrementalInput; done(label: string): void; }
+class IncrementalReader implements IncrementalInput { offset = 0; private chunk: Uint8Array = new Uint8Array(); private chunkOffset = 0; bufferedInputByteCount = 0; get remaining(): number { return this.chunk.length - this.chunkOffset; } supply(chunk: Uint8Array): void { if (this.remaining) throw new Error("incremental reader still owns caller input"); this.chunk = chunk; this.chunkOffset = 0; } release(): void { if (this.remaining) throw new Error("incremental reader did not consume caller input"); this.discard(); } discard(): void { this.chunk = new Uint8Array(); this.chunkOffset = 0; } *take(length: number): Generator<void, Uint8Array, void> { if (!Number.isSafeInteger(length) || length < 0 || length > 8) fail("invalid incremental scalar read length"); const value = new Uint8Array(length); let filled = 0; while (filled < length) { const available = this.remaining; if (available === 0) { this.bufferedInputByteCount = filled; yield; continue; } const count = Math.min(length - filled, available); value.set(this.chunk.subarray(this.chunkOffset, this.chunkOffset + count), filled); this.chunkOffset += count; this.offset += count; filled += count; } this.bufferedInputByteCount = 0; return value; } *bytes(length: number): Generator<void, Uint8Array, void> { if (!Number.isSafeInteger(length) || length < 0) fail("invalid incremental content length"); let value: Uint8Array; try { value = new Uint8Array(length); } catch { return capacityFail("incremental content capacity"); } let filled = 0; while (filled < length) { const available = this.remaining; if (available === 0) { this.bufferedInputByteCount = 0; yield; continue; } const count = Math.min(length - filled, available); value.set(this.chunk.subarray(this.chunkOffset, this.chunkOffset + count), filled); this.chunkOffset += count; this.offset += count; filled += count; } return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { if (!Number.isSafeInteger(length) || length < 0) fail("invalid incremental text length"); let value = "", remaining = length, codePoint = 0, needed = 0, minimum = 0; while (remaining > 0) { if (this.remaining === 0) { this.bufferedInputByteCount = 0; yield; continue; } const byte = this.chunk[this.chunkOffset++]; ++this.offset; --remaining; if (needed === 0) { if (byte <= 0x7f) { if (forbidNul && byte === 0) fail(label + " NUL"); try { value += String.fromCodePoint(byte); } catch { return capacityFail(label + " capacity"); } continue; } if (byte >= 0xc2 && byte <= 0xdf) { codePoint = byte & 0x1f; needed = 1; minimum = 0x80; continue; } if (byte >= 0xe0 && byte <= 0xef) { codePoint = byte & 0x0f; needed = 2; minimum = 0x800; continue; } if (byte >= 0xf0 && byte <= 0xf4) { codePoint = byte & 0x07; needed = 3; minimum = 0x10000; continue; } fail(label + " UTF-8"); } if ((byte & 0xc0) !== 0x80) fail(label + " UTF-8"); codePoint = (codePoint << 6) | (byte & 0x3f); if (--needed === 0) { if (codePoint < minimum || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff) || (forbidNul && codePoint === 0)) fail(label + " UTF-8"); try { value += String.fromCodePoint(codePoint); } catch { return capacityFail(label + " capacity"); } } } if (needed !== 0) fail(label + " UTF-8"); return value; } bounded(length: number): IncrementalInput { if (!Number.isSafeInteger(length) || length < 0) fail("invalid bounded read length"); return new IncrementalBoundedReader(this, length); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
+class IncrementalBoundedReader implements IncrementalInput { offset = 0; constructor(private readonly source: IncrementalReader, public remaining: number) {} private check(length: number): void { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("bounded service-wire value overflow"); } private consumed(length: number): void { this.remaining -= length; this.offset += length; } *take(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.source.take(length); this.consumed(length); return value; } *bytes(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.source.bytes(length); this.consumed(length); return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { this.check(length); const value = yield* this.source.text(length, forbidNul, label); this.consumed(length); return value; } bounded(length: number): IncrementalInput { this.check(length); return new IncrementalNestedBoundedReader(this, length); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
+class IncrementalNestedBoundedReader implements IncrementalInput { offset = 0; constructor(private readonly parent: IncrementalInput, public remaining: number) {} private check(length: number): void { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("bounded service-wire value overflow"); } private consumed(length: number): void { this.remaining -= length; this.offset += length; } *take(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.parent.take(length); this.consumed(length); return value; } *bytes(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.parent.bytes(length); this.consumed(length); return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { this.check(length); const value = yield* this.parent.text(length, forbidNul, label); this.consumed(length); return value; } bounded(length: number): IncrementalInput { this.check(length); return new IncrementalNestedBoundedReader(this, length); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
+function writeUint32(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = value >>> 24;
+  bytes[offset + 1] = value >>> 16;
+  bytes[offset + 2] = value >>> 8;
+  bytes[offset + 3] = value;
+}
+class Writer {
+  readonly chunks: Uint8Array[] = [];
+  length = 0;
+  put(bytes: Iterable<number>): void { const chunk = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes); if (!chunk.length) return; this.chunks.push(chunk); this.length += chunk.length; }
+  u8(value: number): void {
+    const bytes = new Uint8Array(1);
+    bytes[0] = value;
+    this.put(bytes);
+  }
+  u16(value: number): void {
+    const bytes = new Uint8Array(2);
+    bytes[0] = value >>> 8;
+    bytes[1] = value;
+    this.put(bytes);
+  }
+  u32(value: number): void {
+    const bytes = new Uint8Array(4);
+    writeUint32(bytes, 0, value);
+    this.put(bytes);
+  }
+  u64(value: bigint): void {
+    const bytes = new Uint8Array(8);
+    writeUint32(bytes, 0, Number(value >> 32n));
+    writeUint32(bytes, 4, Number(BigInt.asUintN(32, value)));
+    this.put(bytes);
+  }
+  result(): Uint8Array { if (!this.chunks.length) return new Uint8Array(); if (this.chunks.length === 1) return this.chunks[0]; const result = new Uint8Array(this.length); let offset = 0; for (const chunk of this.chunks) { result.set(chunk, offset); offset += chunk.length; } return result; }
+}
 function compareBytes(left: Uint8Array, right: Uint8Array): number { const count = Math.min(left.length, right.length); for (let index = 0; index < count; ++index) if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1; return left.length === right.length ? 0 : left.length < right.length ? -1 : 1; }
 function compareBigint(left: bigint, right: bigint): number { return left < right ? -1 : left > right ? 1 : 0; }
 function compareResults(results: readonly number[]): number { for (const result of results) if (result) return result; return 0; }

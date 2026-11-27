@@ -5,6 +5,7 @@ namespace Zlink.Framework.Runtime.Spots;
 internal sealed class ZLinkActorMessageFollower
 {
     private const int DirectReplyCapacity = 4096;
+    internal static readonly TimeSpan DirectReplyRouteRetention = TimeSpan.FromHours(24);
     private readonly ZLinkFrameworkRuntime _runtime;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<
         MessageFollowKey,
@@ -13,10 +14,7 @@ internal sealed class ZLinkActorMessageFollower
     private readonly ZLinkDirectReplyCompletionRegistry<
         DirectReplyKey,
         PendingDirectReply
-    > _directReplyCompletions = new(
-        DirectReplyCapacity,
-        ZLinkRelocationReplyLifetime.TerminalRetention
-    );
+    > _directReplyCompletions = new(DirectReplyCapacity, DirectReplyRouteRetention);
 
     public ZLinkActorMessageFollower(ZLinkFrameworkRuntime runtime)
     {
@@ -410,8 +408,7 @@ internal sealed class ZLinkActorMessageFollower
             // Keep the expired route claimable during terminal retention. The
             // first late reply observes IsExpired and completes it without
             // invoking the callback; a route with no reply is retired below.
-            await Task.Delay(ZLinkRelocationReplyLifetime.TerminalRetention, cancellationToken)
-                .ConfigureAwait(false);
+            await Task.Delay(DirectReplyRouteRetention, cancellationToken).ConfigureAwait(false);
         }
         finally
         {

@@ -183,8 +183,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - **Workflow (from 2026-09-10)**: every piece of work is a GitHub Issue; each Issue gets a branch
   `<area>/<issue-number>-<slug>` plus a worktree and lands on main through a PR. main changes only
   through PRs (document-only edits too; the only exception is release tags).
-  Milestones are releases, the Project board is status. Owned by
-  internal document (`zlink/dev/development-workflow.md` in the private repository zlink-systems/docs).
+  Milestones identify releases; the Project board tracks status.
 - Branches, commits, pushes and merges happen only on an explicit request, and the working
   branch follows the Issue-branch rule (`AGENTS.md` §1).
 - Before opening a PR, run `scripts/dev/pre-pr.sh` and paste its final `pre-pr:`
@@ -220,7 +219,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   binding (`<language>/vX.Y.N`) → framework (`framework-<language>/vA.B.C`). Workflows, triggers,
   channels and verification commands are owned by
   [`doc/building/release-pipeline.md`](doc/building/release-pipeline.md); accounts and secrets by
-  internal document (`zlink/building/release-accounts.md` in the private repository zlink-systems/docs); ConanCenter and vcpkg go
+  internal document (`zlink/ops/release-accounts.md` in the private repository zlink-systems/docs); ConanCenter and vcpkg go
   through PRs ([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).
 - Supported platforms are linux-x64, linux-arm64, macos-arm64 and windows-x64. Intel
   Mac is unsupported from Core up and never appears in CI matrices or prebuilds.

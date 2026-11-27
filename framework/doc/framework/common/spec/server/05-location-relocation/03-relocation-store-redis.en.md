@@ -7,8 +7,7 @@ title: "Relocation Store Provider SPI and the Official Redis Implementation"
 [Location And Relocation Topic Table Of Contents](README.en.md) · [Spec Table Of Contents](../README.en.md) · [Previous: 02. Location Store (Redis)](02-location-store-redis.en.md) · [Next: 04. Complete Actor And Spot Relocation Flow](04-relocation-flow.en.md)
 
 > Defines the public provider interface (SPI) of the Relocation Store — which holds the byte
-> payload needed for the Instance Spot cold-activation record and the completion record of a
-> request that finishes after relocation — and the key format and data type the official Redis
+> payload needed for the Instance Spot cold-activation record — and the key format and data type the official Redis
 > implementation must follow for cross-language interoperability.
 
 ## 1. The Contract This Document Fixes
@@ -19,12 +18,11 @@ that holds this owner and lifecycle state and coordinates creation authority is 
 [Location Store](../00-foundation/02-glossary.en.md#location-store). The Relocation Store doesn't manage this
 authority — it only holds, by reference, the payload before it's published to the Location Store
 and the payload that's already published. The order in which the two Stores are linked to carry
-out recovery and completion recording is defined by [Location Runtime](01-location-runtime.en.md).
+out recovery is defined by [Location Runtime](01-location-runtime.en.md).
 
 This document defines the public provider interface of the
 [Relocation Store](../00-foundation/02-glossary.en.md#relocation-store), which holds the
-byte payload needed for the Instance Spot cold-activation record and the completion records of
-requests that finish after relocation. An interface the Framework calls and an external provider
+byte payload needed for the Instance Spot cold-activation record. An interface the Framework calls and an external provider
 implements, like this one, is called an SPI. A provider developer must use the reference the
 Framework issued, unchanged, as the key to store the payload, and must use that same reference to
 read the payload, extend its retention period, and delete it.
@@ -136,7 +134,7 @@ The only values the provider needs to interpret are reference, payload, and rete
 
 This chunk-and-leading-index format is a common blob format independent of the kind of payload
 stored. Since the Actor/Spot relocation handoff payload doesn't pass through this provider, the
-figures above apply to the activation envelope and completion-record payloads.
+figures above apply to the activation envelope. Results of requests that finish after relocation are Location Store rows, not this provider ([Location runtime §9.3](01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed)).
 
 **The provider doesn't create or change the reference.** Even for the same content, if the
 Framework specifies different references, they're stored as separate values. A deleted or expired

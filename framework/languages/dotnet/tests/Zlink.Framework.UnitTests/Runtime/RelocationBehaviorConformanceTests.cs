@@ -1432,6 +1432,12 @@ public sealed partial class RelocationBehaviorConformanceTests
     [Fact]
     public async Task ActorJoin_target_cutover_wait_is_a_warning_and_only_the_verified_cutover_commits()
     {
+        using var flowListener = Environment.GetEnvironmentVariable(
+            RelocationBehaviorHost.FlowPathEnvironmentVariable
+        )
+            is { } flowPath
+            ? new TestHostMessageFlowListener(flowPath)
+            : null;
         var trace = new RelocationBehaviorTrace();
         var targetTime = new ControllableTimeProvider();
         var cutover = new CanonicalRelocationTransportProbe(trace, holdTargetReady: true);
@@ -1561,13 +1567,15 @@ public sealed partial class RelocationBehaviorConformanceTests
             Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
             await trace.WaitAsync("sourceMembershipLeaveStarted");
 
+            // The original cutover releases its publication after the Join callback.
+            await WaitUntilAsync(() => GetTargetAttemptState(target.Runtime).Count == 0);
             var authorityMutations = trace.TargetAuthorityMutationCount;
             var lifecycleAttempts = trace.TargetLifecycleAttemptCount;
             var publicCompletions = trace.Events.Count(static value =>
                 value == "publicJoinCompleted"
             );
 
-            await cutover.ReplayCutoverAsync(CancellationToken.None);
+            await cutover.DeliverCapturedCutoverAsync();
             Assert.Equal(authorityMutations, trace.TargetAuthorityMutationCount);
             Assert.Equal(lifecycleAttempts, trace.TargetLifecycleAttemptCount);
             Assert.Equal(

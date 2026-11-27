@@ -2410,14 +2410,22 @@ public sealed partial class RelocationRuntimeTests
         using var current = MessageFollowSpotReceived(messageFollowHopCount: 1);
         using var looped = MessageFollowSpotReceived(messageFollowHopCount: 8);
 
-        Assert.True(messageFollow.MatchesSourceRoute(current, 5, owner, now));
-        Assert.False(
-            messageFollow.MatchesSourceRoute(current, 5, owner, now + TimeSpan.FromSeconds(31))
-        );
-        Assert.False(messageFollow.MatchesSourceRoute(looped, 5, owner, now));
+        Assert.True(Matches(current, now));
+        Assert.False(Matches(current, now + TimeSpan.FromSeconds(31)));
+        Assert.False(Matches(looped, now));
         Assert.True(messageFollow.TryAcquire(64, out var lease));
         Assert.False(messageFollow.TryAcquire(0, out _));
         lease!.Dispose();
+
+        bool Matches(ZLinkBackendRouteReceived received, TimeSpan timestamp) =>
+            messageFollow.MatchesSourceRoute(
+                5,
+                received.TargetNodeGeneration,
+                received.AuthorityOwnerGeneration,
+                received.OwnerLeaseGeneration,
+                received.MessageFollowHopCount,
+                timestamp
+            );
     }
 
     [Fact]
@@ -3725,12 +3733,6 @@ public sealed partial class RelocationRuntimeTests
             requestSource: requestSource
         );
         return ZLinkSpotAcceptedJournal.Encode(received, 44);
-    }
-
-    [Fact]
-    public void RelocationReplyRouteRetentionCoversLateCompletionRecovery()
-    {
-        Assert.Equal(TimeSpan.FromHours(24), ZLinkRelocationReplyLifetime.TerminalRetention);
     }
 
     [Fact]

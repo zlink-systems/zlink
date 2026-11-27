@@ -1,6 +1,8 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -108,6 +110,78 @@ public sealed class RelocationCompletionStoreTests
     }
 
     [Fact]
+    public async Task AlreadyTerminalAckFromAnotherSourceFenceLeavesTheReplyRowPending()
+    {
+        await using var host = await RelocationBehaviorHost.StartAsync(
+            "reply-row-ack",
+            new RelocationBehaviorTrace(),
+            new ZLinkInMemoryProviderLocationStore(),
+            new SynchronizedRelocationStore(),
+            false
+        );
+        var node = host.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName);
+        var current = node.LocalRequestSource;
+        var rid = current.NodeRid;
+        var expected = current with { OwnerId = "previous-request-owner", NodeGeneration = 1 };
+        Assert.NotEqual(expected.NodeGeneration, current.NodeGeneration);
+        var (_, repository, store, row) = await SeedAsync(
+            requestSource: new(
+                expected.OwnerId,
+                expected.LeaseGeneration,
+                rid.ToHex(),
+                expected.NodeGeneration
+            )
+        );
+        var pending = await store.PublishAsync(row, static () => "BAUG", default);
+        Assert.NotNull(pending);
+
+        var relay = new ZLinkServiceWireCodec.ReplyRelayRecord(
+            new MeshOperationId(1, 2),
+            row.Entry.ReplyRouteId,
+            new ZLinkServiceWireCodec.RelocationWireId(1, 1),
+            current.NodeGeneration,
+            new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                current.OwnerId,
+                current.LeaseGeneration,
+                rid,
+                current.NodeGeneration,
+                "reply-row-root"
+            ),
+            1,
+            1,
+            (uint)RequestResult.Ok,
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
+
+        var ack = await node.RelayRelocationReplyAsync(
+            rid,
+            relay,
+            current,
+            [],
+            TimeSpan.FromSeconds(1),
+            default
+        );
+        Assert.Equal((byte)ZLinkRelocationReplyCompletionState.AlreadyTerminal, ack.Status);
+        Assert.Equal(current, ack.RequestSource);
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            node.RelayRelocationReplyAsync(
+                    rid,
+                    relay,
+                    expected,
+                    [],
+                    TimeSpan.FromMilliseconds(50),
+                    default
+                )
+                .AsTask()
+        );
+        Assert.Equal(
+            pending,
+            Assert.Single(await repository.ReadRelocationRepliesAsync(row.RelocationId, default))
+        );
+        Assert.Equal(ZLinkRelocationCompletionDelivery.Pending, pending.Entry.Delivery);
+    }
+
+    [Fact]
     public async Task SourceLeaseEvidenceUsesTheOriginalLeaseGenerationAndStoreTime()
     {
         var clock = new ControllableTimeProvider();
@@ -180,7 +254,7 @@ public sealed class RelocationCompletionStoreTests
         ZLinkProviderLocationRepository Repository,
         ZLinkRelocationCompletionStore Store,
         ZLinkRelocationReplyRow Row
-    )> SeedAsync(TimeProvider? clock = null)
+    )> SeedAsync(TimeProvider? clock = null, ZLinkCanonicalRequestSourceFence? requestSource = null)
     {
         var provider = new LossyProvider(new ZLinkInMemoryProviderLocationStore(clock));
         var repository = new ZLinkProviderLocationRepository(provider);
@@ -202,7 +276,7 @@ public sealed class RelocationCompletionStoreTests
                 "00000000000000010000000000000002",
                 5,
                 "AQID",
-                new(source.OwnerId, (ulong)source.LeaseGeneration, "01", 12)
+                requestSource ?? new(source.OwnerId, (ulong)source.LeaseGeneration, "01", 12)
             )
         );
         var accepted = row with

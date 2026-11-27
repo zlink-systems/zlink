@@ -407,6 +407,67 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     @Test
+    void exactCloseReachesTransportUntilPhysicalDisconnectRetiresTheBinding() throws Exception {
+        var stream = new FakeStream();
+        var runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        var session =
+                new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
+                        RoutingId.from("session-owner"),
+                        3,
+                        "session-owner",
+                        3,
+                        SESSION,
+                        stream.nativeBindingGeneration);
+        var request = new ZLinkServiceM6BWireCodec.BoundSessionClose(17, "actor-1", 7, session);
+        var stale = new ZLinkServiceM6BWireCodec.BoundSessionClose(18, "actor-1", 8, session);
+        var callback = new CompletableFuture<List<Message>>();
+        stream.pendingDisconnectNotification = callback;
+        var disconnected = runtime.notifyDisconnectedAll().toCompletableFuture();
+        var closes = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.IntFunction<CompletionStage<Void>> close =
+                actorSlot -> {
+                    closes.incrementAndGet();
+                    return CompletableFuture.completedFuture(null);
+                };
+
+        try {
+            assertEquals(1, stream.disconnectNotifications);
+            assertFalse(disconnected.isDone());
+            var mismatch =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    runtime.closeCurrentBinding(stale, () -> true, close)
+                                            .toCompletableFuture()
+                                            .join());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    assertInstanceOf(ZLinkFrameworkException.class, mismatch.getCause()).kind());
+            assertEquals(0, closes.get());
+            runtime.closeCurrentBinding(request, () -> true, close)
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            assertFalse(disconnected.isDone());
+        } finally {
+            callback.complete(List.of(Message.from(stream.disconnectReply)));
+        }
+
+        disconnected.get(5, TimeUnit.SECONDS);
+        var retired =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                runtime.closeCurrentBinding(request, () -> true, close)
+                                        .toCompletableFuture()
+                                        .join());
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                assertInstanceOf(ZLinkFrameworkException.class, retired.getCause()).kind());
+        assertEquals(1, closes.get());
+    }
+
+    @Test
     void sameSessionMixedSendAndRequestPreserveAcceptedSequence() {
         FakeStream stream = new FakeStream();
         ZLinkSessionActorsRuntime runtime = runtime(stream);

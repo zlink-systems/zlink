@@ -2645,17 +2645,11 @@ public sealed partial class StatefulServiceRuntimeTests
             (uint)RequestResult.Ok,
             ServiceWireConstants.FrameworkErrorCode.None
         );
-        var stalePayload = new[] { Message.From(new byte[] { 113 }) };
-        try
-        {
-            var completion = restartedCaller.TryCompleteRelocationReply(oldRelay, stalePayload);
-            Assert.Equal(ZLinkRelocationReplyCompletionState.NotFound, completion.State);
-            Assert.Equal(default, completion.RequestSource);
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(stalePayload);
-        }
+        using var stalePayload = Message.From(new byte[] { 113 });
+        var completion = restartedCaller.TryCompleteRelocationReply(oldRelay, [stalePayload]);
+        Assert.Equal(ZLinkRelocationReplyCompletionState.AlreadyTerminal, completion.State);
+        Assert.Equal(restartedSource, completion.RequestSource);
+        Assert.Throws<ObjectDisposedException>(() => stalePayload.AsReadOnlySpan());
 
         using var ready = new MeshReadyBatch();
         restartedCaller.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);

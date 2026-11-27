@@ -7,7 +7,8 @@ internal sealed class MatchRun(
     string root,
     RunOutcome outcome,
     string runDirectory,
-    bool foreground = false
+    bool foreground = false,
+    bool networkSync = false
 ) : IAsyncDisposable
 {
     public RunOutcome Outcome { get; } = outcome;
@@ -90,6 +91,7 @@ internal sealed class MatchRun(
         {
             RedisEndpoint = redisEndpoint,
             RoomCapacity = foreground ? settings.RoomCapacity : 1,
+            NetworkSync = networkSync,
             KeyPrefix = project + ":",
             MeshEndpoint = "tcp://127.0.0.1:0",
             StreamEndpoint = settings.StreamEndpoint is null ? null : "ws://127.0.0.1:0",

@@ -888,8 +888,7 @@ Raw socket 종류가 달라도 request, reply, routed source, payload lifecycle�
 - request-reply 수신 결과는 별도 protocol-specific 결과 타입으로 갈라지면
   안 된다. 예를 들어 `DealerReceived`, `RouterReceived` 처럼
   request 의미를 socket 종류별 public 타입으로 나누는 표면은 canonical 이 아니다.
-- request 의 의미는 socket 종류와 무관하다. `request_seq` 가 있으면
-  request-reply context 가 있는 수신 결과이고, 없으면 ordinary receive 결과다.
+- `Received`의 유효한 `ReplyToken`은 ROUTER가 수신한 REQUEST에 대한 응답 권한을 나타낸다.
 - reply target, send-back target, source routing metadata 는 `Received` 내부
   context 로 캡슐화한다. 사용자가 request 를 처리하기 위해 socket 종류별
   frame 형식이나 내부 dispatch 규칙을 알아야 하면 안 된다.
@@ -963,7 +962,7 @@ Raw operation builder 시작점은 **송신·요청·응답·게시 표면**에�
 - 시작점은 즉시 전송하지 않고 `SendOp`, `RequestOp`, `ReplyOp` 같은 언어별 operation builder를 반환한다.
   서로 다른 시작점이라도 multipart payload 표현은 모두 `.message(...)`
   반복으로 통일한다.
-- `.messages(...)`, `.flags(...)`, `.timeout(...)`, native suspension 완료
+- `.messages(...)`, publish의 `.flags(...)`, request의 `.timeout(...)`, native suspension 완료
   마지막 실행 메서드 같은 builder convenience도 public 이면 builder contract의 일부다.
   runtime 내부 shortcut으로만 정의하지 않는다. async 완료 마지막 실행 메서드의
   언어별 이름과 의미는 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.ko.md)에
@@ -1038,25 +1037,23 @@ Raw builder는 `routerSocket.request(rid).message(part).submit()`처럼 사용�
   바인딩 runtime은 내부에서 `zlink_router_recv()` 를 사용하고, public
   표면에는 aggregate routed recv와 [공통 request 완료 표면](async-coroutine-policy.ko.md#6-언어별-terminal-interface)만 노출한다.
   direct receive callback 은 제공하지 않는다.
-- `ROUTER` 의 선택 route snapshot(`zlink_router_routes_snapshot()`)과 `ZLINK_POLLROUTE` 는
+
+#### Socket Readiness Snapshots
+
+- `ROUTER` 의 선택 route snapshot(`zlink_router_routes_snapshot()`)과 `ZLINK_POLLROUTE` (64)는
   [Core ROUTER §10.1](../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)이 정한
   의미대로 투영한다. Route generation 은 0이 아닌 opaque equality token 이며 부호나 크기로 순서를
   판단하지 않는다.
 - connect 가능한 raw socket 의 연결 상태 snapshot(`zlink_socket_connection_attempts_snapshot()`)과
-  `ZLINK_POLLCONNECT` 는 [Core socket](../../../core/doc/spec/core/socket/README.ko.md#zlink_socket_connection_attempts_snapshot)이
+  `ZLINK_POLLCONNECT` (128)는
+  [Core socket](../../../core/doc/spec/core/socket/README.ko.md#zlink_socket_connection_attempts_snapshot)이
   정한 의미대로 손실 없이 투영한다. 상태·실패 원인·단계는 닫힌 언어 enum 으로, `intent_id`·`revision` 은 0이
   아닌 opaque equality token 으로 공개한다. `last_failure_id` 는 실패 이력이 없으면 0이고 실패 뒤에는 0이 아닌 opaque
   equality token 이다. 어느 값도 부호나 크기로 순서를 판단하지 않는다.
   Readiness 는 기존 Poller 와 비동기 진행 경로로 전달한다. 바인딩은 monitor event 이력이나 timer polling 으로
   연결 결과를 추정하지 않으며, 실패 상태를 담은 정상 snapshot 을 request 실패로 바꾸지 않는다. 조회 자체의
   오류만 기존 config 오류로 전달한다. 이 표면이 없는 Core 와 함께 load 되면 대체 동작 없이 거부한다.
-- core raw `STREAM` 은 `recv`, raw callback (`zlink_recv_handler()`),
-  packet callback (`zlink_stream_packet_handler()`) 의 세 모드 중 하나를
-  선택하는 예외 타입이다. 고수준 바인딩의 canonical public 계약은
-  `recv` 와 packet callback surface 만 노출한다. raw direct callback 은
-  바인딩 내부 primitive 로만 사용하며, public API 로 추가하려면 먼저 이
-  정책 문서와 해당 언어 spec 을 함께 바꾸어 별도 raw/low-level surface 로
-  분리해야 한다.
+
 #### SPOT channel과 dispatch 표면
 
 공개 SPOT channel과 dispatch 연산은 [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 소유한다.
@@ -1223,17 +1220,9 @@ SpotNode HWM 옵션은 [Framework API](../../../framework/doc/framework/common/s
   `0..10000`, 기본값은 `100`이다. `0`은 새 outbound 선택에서 제외를 뜻한다.
   대응하는 제출 실패 코드는 `ZLINK_SUBMIT_NOT_ADMITTED` (값 13) 이며,
   모든 바인딩의 `SubmitError` 매핑에 포함되어야 한다.
-- core raw `STREAM` 은 다음 세 수신 모드 중 하나만 선택할 수 있다:
-  (a) `zlink_recv()` 기반 blocking/non-blocking recv, (b) `zlink_recv_handler()`
-  raw direct callback, (c) `zlink_stream_packet_handler()` 빅엔디언
-  `u16 header_size + u32 body_size + header + body` 프레이밍 packet callback.
-  두 번째 attach 시 `EBUSY` 가 반환된다. 고수준 바인딩은 public 으로
-  노출한 `STREAM` receive surface 들 사이에 같은 배타 규칙을 유지해야
-  한다. `detachStream`, `streamDetach`, callback detach 같은 별도 public
-  해제 API 는 core 공개 계약에 없으므로 canonical binding surface 에
-  추가하지 않는다. 수신 모드 해제와 callback 정리는 socket close 가 맡는다.
-- `zlink_recv_handler()` 는 raw `STREAM` 전용이다. `PAIR`/`DEALER`/`SUB`/
-  `XSUB`/`ROUTER` 에 attach 하면 `ZLINK_HANDLER_NOT_SUPPORTED` 로 실패한다.
+- Raw STREAM의 RAW·PACKET 모드와 수신 배타 규칙은
+  [Core STREAM](../../../core/doc/spec/core/socket/08-stream.ko.md)을 따른다. 언어별 공개 수신 방식은
+  [Socket Capability Matrix](#socket-capability-matrix)를 따른다.
 - socket 기본값: `ZLINK_ROUTER_OPT_MANDATORY` = `1`,
   `ZLINK_OPT_RID_DUPLICATE_POLICY` = `ZLINK_RID_DUPLICATE_REJECT`,
   `ZLINK_PUB_OPT_NODROP` = `0`.
@@ -1430,10 +1419,7 @@ Actor의 공개 service 계약은 [Framework API](../../../framework/doc/framewo
    - `.NET` / `Java` / `Node` / `Python` / `C++` 는 public
      `trySend`, `tryRecv`, `tryRequest` 를 두지 않는다.
    - C ABI 는 blocking 과 non-blocking 을 함수 인자의 `flags` 로 표현한다.
-   - wrapper binding 의 send/publish/request와 Core ABI가 send flag를 받는 reply
-     계열은 builder 의 `.flags(...)` 단계로 non-blocking submit 을 표현한다.
-     operation 시작점 시그니처에 별도 `flags` 인자를 늘리지 않는다. Raw terminal
-     reply는 Core ABI에 send flag가 없으므로 flag 단계를 노출하지 않는다.
+   - 고수준 send·request·reply의 제출 방식과 publish flags는 [Flags 정책](#flags-정책)을 따른다.
    - wrapper binding 의 data-plane `recv`, routed recv, `subscribe` 는
      caller-provided result storage 를 채우고, 반환값은 "데이터를 받았는가"만
      표현한다.
@@ -1549,14 +1535,11 @@ C API 의 **함수별 typed result enum 구조를 모든 바인딩이 그대로 
 
 ### Flags 정책
 
-모든 raw 데이터 경로 함수는 `flags` 선택 항목을 갖고 언어별 시그니처 또는 builder의 `flags(...)` 단계로 표현한다.
-
-| 함수 계열 | flags 용도 |
+| 함수 계열 | 고수준 바인딩의 flags 용도 |
 |---|---|
-| `send`, `publish`, `reply` | `DONTWAIT` — non-blocking submit |
-| `recv`, `subscribe`, `receiveSubscriptionEvent` | `DONTWAIT` — non-blocking receive |
-| `request` (callback) | `DONTWAIT` — non-blocking submit |
-| `request` (비동기 완료) | flags 없음 — 언어별 완료 객체 반환 경로를 사용 |
+| `send`, `request`, `reply` | 완료·제출 계약은 [비동기 완료 표면 정책](async-coroutine-policy.ko.md#1-operation과-완료-경계)을 따르며 public flags 단계는 없다. |
+| `publish` | builder의 `.flags(...)` 단계에서 Core publish flag 선택 |
+| `recv`, `subscribe`, `receiveSubscriptionEvent` | caller-provided 저장소와 함께 받는 `DONTWAIT`로 non-blocking receive 선택 |
 
 - flags 기본값은 `0` (blocking).
 - non-blocking 호출의 temporary 상태는 언어별 public 계약에 맞춰 전달한다.
@@ -1571,12 +1554,8 @@ C API 의 **함수별 typed result enum 구조를 모든 바인딩이 그대로 
     - binding-local 실패만 `-1`을 반환하고 `errno`를 설정
   - return-based 언어 (C/Go/Rust): 에러 반환 (C=result enum,
     Go=`error`, Rust=`Err(E)`).
-- 언어별 flags 표현:
-  - C: `int flags = 0` (C ABI는 builder 정책 적용 안 됨)
-  - C++ / Java / .NET / Node / Python / Go / Rust raw 송신·요청·응답·게시 표면: builder의 `.flags(...)` 단계로 표현한다. operation 시작점
-    시그니처에 별도 `flags` 인자나 `_with_flags` 변형을 두지 않는다.
-  - C++ / Java / .NET / Node / Python / Go / Rust data-plane recv/subscribe 표면:
-    caller-provided output storage와 함께 `flags` 인자를 받는다.
+- C는 Core ABI 함수의 `flags` 인자를 사용한다. 고수준 operation 시작점에는 별도 flags 인자나 `_with_flags`
+  변형을 두지 않는다.
 
 ### 네이밍 정책
 
@@ -1702,7 +1681,6 @@ builder 는 하나 이상의 `Message` 를 누적해서 multipart payload 를 �
 | `mutable_data` / `as_mut_bytes()` | mutable view | allocated payload 를 채우는 mutable view |
 | `copy_to(destination)` | `int` / `bool` | caller-provided buffer 로 payload 복사 |
 | `to_string()` / `as_str()` | `string` / result | UTF-8 decode convenience |
-| `get_property(name)` | `string?` / result | native message string property 조회 |
 | `ref_count()` | `int` | native storage reference count 진단값 |
 | `close()` / `Dispose()` / `Drop` | — | native storage 정리. 언어별 lifecycle 관용구 적용 |
 
@@ -1721,7 +1699,6 @@ builder 는 하나 이상의 `Message` 를 누적해서 multipart payload 를 �
 | read view | `AsReadOnlySpan()` | `dataBuffer()` | `data()` | `data` | `as_bytes()` | `bytes()` | `Data()` |
 | mutable view | `AsSpan()` | `mutableDataBuffer()` | `data()` | `data` | `data_mut()` | `bytes()` / `data()` | `Data()` |
 | UTF-8 decode | `GetString()` | `toUtf8String()` | `toString()` / `getString()` | `to_string()` / `decode` helper | `as_str()` | `to_string()` | `String()` / `Text()` |
-| property | `GetProperty(name)` | `getProperty(name)` | `getProperty(name)` | `get_property(name)` | `get_property(name)` | `property(name)` | `GetProperty(name)` |
 | refcount | `RefCount` | `refCount()` | `refCount()` | `ref_count()` | `ref_count()` | `ref_count()` | `RefCount()` |
 
 규칙:
@@ -1742,8 +1719,6 @@ builder 는 하나 이상의 `Message` 를 누적해서 multipart payload 를 �
   API(`data`, `as_bytes`, `AsReadOnlySpan` 등)로 분리한다.
 - read / mutable view 는 message 가 close / dispose / drop 되기 전까지만
   유효하다. 바인딩은 close 뒤 view 사용을 보장하지 않는다.
-- `get_property(name)` 은 native message metadata 를 읽는 진단/interop API 다.
-  property 쓰기 API 는 공통 필수 계약이 아니다.
 - `ref_count()` 는 진단값이다. reference count 값으로 ownership 정책이나 send
   가능 여부를 판단하는 public contract 를 만들면 안 된다.
 - RAII 언어(C++, Rust)는 `close()`를 명시 노출하지 않아도 된다. 명시 lifecycle
@@ -1754,7 +1729,7 @@ builder 는 하나 이상의 `Message` 를 누적해서 multipart payload 를 �
 - Pool에 반환된 `Message` wrapper identity는 나중 receive에서 다시 사용될 수 있다. Application은
   반환된 wrapper를 `Map`, `WeakMap`이나 별도 metadata의 key로 보관하거나 임의 property가 다음
   ownership에도 유지된다고 가정하면 안 된다. Pool 크기와 재사용 순서는 public contract가 아니다.
-- closed / moved-from message 에 대한 `size`, `data`, `get_property` 동작은
+- closed / moved-from message 에 대한 `size`와 `data` 동작은
   언어별 관례를 따르되, 빈 값 반환인지 예외/에러인지 문서화해야 한다.
 
 #### `TopicMessage`
@@ -1797,8 +1772,7 @@ builder 를 제공하고, request-reply 결과는 `reply()` builder 도 함께 �
 builder 단계로 누적한다.
 
 `Received` 는 socket 종류별 message wrapper 가 아니다. request 의 의미는
-DEALER와 ROUTER에서 동일하며, `request_seq`와 reply context로만
-표현한다. binding은 `DealerReceived` / `RouterReceived` 같은
+`ReplyToken`과 reply context로 표현한다. binding은 `DealerReceived` / `RouterReceived` 같은
 protocol-specific public 결과 타입을 새 canonical 표면으로 추가하면 안 된다.
 기존 binding 에 이런 타입이 있으면 제거하고, 새 코드, sample, perf, framework
 연동은 `Received` 를 사용해야 한다.
@@ -1806,53 +1780,34 @@ protocol-specific public 결과 타입을 새 canonical 표면으로 추가하�
 | 구성 | 타입 | 의미 |
 |------|------|------|
 | `routing_id` | `RoutingId?` | 송신자 routing id (router=peer_rid) |
-| `request_seq` | `uint64?` | request-reply 모드일 때 설정, 아니면 null |
+| `reply_token` | `ReplyToken?` | ROUTER가 REQUEST를 수신했을 때만 설정 |
 | `parts` | `List<Message>` | multipart payload |
 | `is_single_part()` | `bool` | 동일 |
 | `first_part()` | `Message` | 동일 |
 | `single_part_or_throw()` | `Message` | 동일 |
 | `send()` | `SendOp` | 이 `Received` 의 송신자에게 일반 routed message 를 보내는 operation builder. routed source context 가 없으면 submit 시점에 `SubmitError` |
-| `reply()` | `ReplyOp` | request 였을 때만 유효한 reply operation builder. `request_seq` 없거나 reply context 가 invalid 하면 submit 시점에 `SubmitError` |
+| `reply()` | `ReplyOp` | request 였을 때만 유효한 reply operation builder. `ReplyToken`이 없거나 reply context가 유효하지 않으면 submit 시점에 `SubmitError` |
 | `close()` / 동등 | — | 동일 |
 
 .NET 에서는 `Received.Create()` 가 caller-provided recv 저장소를 만드는
 canonical 생성 경로다. `Received` 는 public concrete contract 타입으로 유지한다.
 
-`request_seq` 규칙:
-- `null` / `None` / empty `Optional` / `hasRequestSeq == false` 는 ordinary
-  receive 결과를 뜻한다.
-- `0` 은 public high-level `Received` 에서 "request 있음"으로 노출하지 않는다.
-  core out-param 의 `request_seq == 0` 은 high-level binding 에서 absent 로
-  변환한다.
-- non-zero `request_seq` 는 request-reply context 가 있는 수신 결과를 뜻한다.
-  이 의미는 DEALER / ROUTER에서 동일하다.
-- request/reply message type 같은 substrate 세부 구분은 public `Received`
-  의미를 갈라서는 안 된다. 그런 값이 실제 public 계약으로 필요하면
-  protocol-specific 결과 타입이 아니라 `Received` 의 공통 metadata 로만
-  노출한다.
+`ReplyToken`의 생성과 유효 범위는 [ReplyToken 정책](async-coroutine-policy.ko.md#5-replytoken과-reply)을 따른다.
 
 `send()` 규칙:
-- request 여부와 무관하다. `request_seq` 가 없어도 routed source context 가
-  있으면 호출할 수 있다.
+- routed source context가 있으면 호출할 수 있다.
 - `send()` 는 request-reply 의미를 갖지 않는다. 단순히 이 `Received` 를 보낸
   쪽으로 일반 routed message 를 보낸다.
 - `ROUTER`와 `STREAM` 수신 결과는 peer routing id로 보낸다. 공개 Spot 수신 결과는 [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)를 따른다.
-- payload 누적과 `flags(...)` 같은 옵션은 `SendOp` builder 단계로 표현하며,
-  `DONTWAIT` 같은 non-blocking submit flag 도 builder 의 `.flags(...)`
-  단계로 전달한다.
+- payload는 `SendOp` builder 단계로 누적한다.
 
 `reply()` 규칙:
-- **`request_seq` 가 `null` 이면 호출 금지**. 호출 시 builder 의 submit 단계에서
-  `SubmitError` 계열로 처리한다. `request_seq == 0`, 잘못된 `(routing_id,
-  request_seq)` 조합 등 invalid reply context 도 같은 submit domain 으로
-  본다.
+- `ReplyToken`이 없거나 reply context가 유효하지 않으면 submit에서 `SubmitError`를 반환한다.
 - `Received` 가 내부적으로 source socket 참조를 보유한다 (binding 이 recv /
   handler 에서 Received 를 만들 때 주입).
 - socket 이 close 된 후 `reply().submit()` 호출하면 `SubmitError(TERMINATED)`.
-- 서버 측 사용자가 `(peerRid, requestSeq)` 를 따로 보관할 필요 없음 —
-  `Received` 하나로 완결.
-- 별도 `router.reply(peerRid, seq).message(...).submit()` 경로도 pull-mode
-  호환성 위해 남겨두되, **권장 경로는 `received.reply().message(...).submit()`**.
+- `received.reply().message(...).submit()`은 `Received`의 source context를 사용한다. 명시적 ROUTER 응답은
+  `router.reply(peerRid, token).message(...).submit()`으로 제출한다.
 
 #### `SubscriptionEvent`
 
@@ -1995,12 +1950,12 @@ message-count option이나 count↔byte alias는 제공하지 않는다.
 - 이 표는 `core/include/zlink.h` C API를 기준으로 각 소켓 타입이 가져야 할
   능력을 정의한다.
 - 이 표는 모든 언어 바인딩에 공통으로 적용되는 공개 기능 계약이다.
-  바인딩마다 기능성이 달라지면 안 된다.
+  STREAM 패킷 수신 방식은 아래 수신 능력 표와 언어별 계약을 따른다.
 - 언어별 차이는 케이싱, overload, nullable, exception/error 표현처럼
   같은 기능을 해당 언어 관례에 맞게 드러내는 방식에만 허용된다.
 - 각 바인딩은 이 표를 정답으로 삼아 surface test를 작성한다.
 - `Y`는 모든 바인딩이 해당 능력을 반드시 public API로 노출해야 함을
-  의미한다.
+  의미한다. `선택`은 언어별 스펙에 정의한 경우에만 제공하는 능력이다.
 - `—`는 어떤 바인딩도 해당 능력을 public API로 노출하면 안 됨을
   의미한다.
 
@@ -2033,6 +1988,7 @@ socket 이라 `connect`, `disconnect` 를 노출하지 않지만, 받아들인 �
 | `recv` | Y | Y | Y | — | — | — | — | Y |
 | `subscribe` | — | — | — | — | Y | — | Y | — |
 | `receiveSubscriptionEvent` | — | — | — | — | — | Y | — | — |
+| STREAM packet 수신 | — | — | — | — | — | — | — | Y |
 
 #### Subscription Management
 
@@ -2045,15 +2001,15 @@ socket 이라 `connect`, `disconnect` 를 노출하지 않지만, 받아들인 �
 
 | Capability | Pair | Dealer | Router | Pub | Sub | XPub | XSub | Stream |
 |---|---|---|---|---|---|---|---|---|
-| `setPacketHandler` | — | — | — | — | — | — | — | Y |
+| `setPacketHandler` | — | — | — | — | — | — | — | 선택 |
 | `onReceive` | — | — | — | — | — | — | — | — |
 | `onSubscribe` | — | — | — | — | — | — | — | — |
 
-`STREAM` public surface 는 `recv` 와 `setPacketHandler` 를 제공해야 한다.
-raw direct callback `onReceive` 는 canonical public binding API 가 아니다.
-이미 한 수신 모드가 걸려 있는 상태에서 다른 모드 attach 를 시도하면
-`HandlerResult::BUSY` (또는 동등한 `EBUSY`) 를 반환한다. public
-`detachStream` / `streamDetach` 류 해제 API 는 제공하지 않는다.
+`STREAM`은 raw `recv`와 프레이밍된 패킷 수신을 제공한다. 패킷은 언어별
+계약에 따라 `recv_packet` 계열로 pull 수신하거나 `setPacketHandler` 계열로
+전달받는다. 콜백을 제공하는 경우 다른 수신 모드가 활성일 때 등록하면
+`HandlerResult::BUSY` 또는 동등한 `EBUSY`를 반환한다. 소켓을 닫으면 수신
+모드와 콜백이 해제된다.
 
 #### Typed Option Capabilities
 
@@ -2089,7 +2045,7 @@ raw direct callback `onReceive` 는 canonical public binding API 가 아니다.
   - `XPubSocket`에 `onSubscribe` 콜백 금지 —
     XPub는 `receiveSubscriptionEvent`만 허용된다.
   - `STREAM` raw direct callback `onReceive` 및 `detachStream` 류 해제 API 금지 —
-    canonical surface 는 `recv` / `setPacketHandler` / `close` 조합이다.
+    패킷 수신 방식은 위 기능 표와 언어별 스펙을 따른다.
   - socket 공통 TLS helper(`setTlsServer`, `setTlsClient` 또는 동등한 이름) 누락
     금지 — TLS 설정은 transport 공통 기능이므로 모든 raw socket 타입에서 같은
     위치에 있어야 한다.
@@ -3072,12 +3028,12 @@ guide, spec signature에 노출하지 않는다.
 | Blocking API named directly | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Non-blocking receive uses flags + empty result | C raw `DONTWAIT` | Required | Required | Required | Required | Required | Required | Required |
 | Non-blocking send explicit outcome | Core enum/result | Required | Required | Required | Required | Required | Required | Required |
-| Public flags surface | Raw C flags | `int flags` | `SendFlags` / `RecvFlags` | `SendFlags` overload | `flags SendFlags` | `SendFlags` via `.flags(...)` builder step | `flags?: SendFlags` | keyword `flags` |
+| Public flags surface | Core ABI flags | Receive / publish | Receive / publish | Receive / publish | Receive / publish | Receive / publish | Receive / publish | Receive / publish |
 | Typed option surface | N/A raw C options | Required | Required | Required | Required | Required | Required | Required |
 | Socket TLS helpers | `zlink_set_tls_*` | Required | Required | Required | Required | Required | Required | Required |
 | Socket Capability Matrix 준수 | Core 기준 | Required | Required | Required | Required | Required | Required | Required |
 | `onReceive` callback | STREAM raw fn ptr | Internal-only | Internal-only | Internal-only | Internal-only | Internal-only | Internal-only | Internal-only |
-| `setPacketHandler` callback registration | STREAM packet fn ptr | Required | Required | Required | Required | Required | Required | Required |
+| STREAM packet 수신 | `zlink_stream_recv_packet` | Pull | Pull | Pull | Pull | Pull | Pull | Pull |
 | HWM-managed send completion | Core-owned completion | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `connect` 차단 | N/A | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `disconnectRid` 제공 | N/A | Required | Required | Required | Required | Required | Required | Required |
@@ -3587,7 +3543,7 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
 2. **이름 정규화 완료**
    - 모든 public API가 Naming Policy의 canonical 이름을 사용한다.
    - deprecated alias가 남아 있지 않다.
-   - Raw callback 표면의 `setPacketHandler`가 해당 역할에 맞게 존재한다.
+   - STREAM 패킷 수신 이름은 해당 언어의 공개 계약과 일치한다.
 
 3. **얕은 래퍼 제거**
    - native 함수를 1:1로 감싸기만 하는 public 타입이 없다.
@@ -3747,7 +3703,7 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
 | C++ | C++20 | — | CMake 3.10+ |
 | .NET | C# 12 | .NET 8.0 | MSBuild |
 | Java | Java 25 | JDK 25 | Gradle 9.3.0 |
-| Go | Go 1.22+ | — | Go modules |
+| Go | [`go.mod`](../../go/go.mod) | — | Go modules |
 | Rust | Rust 2024 edition | MSRV 1.85+ | Cargo |
 | Node | TypeScript 5.8 | Node 22+ | npm |
 | Python | Python 3.9 | CPython 3.9+ | setuptools 68+ |

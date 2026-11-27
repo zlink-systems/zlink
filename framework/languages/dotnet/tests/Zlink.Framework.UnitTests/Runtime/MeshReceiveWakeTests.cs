@@ -415,6 +415,72 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task RequestRegistryOnlyContainsRequestsWaitingForDirectOrRelayedReplies()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "registry-in-flight");
+        var source = SetRequestSource(node);
+        var actor = CreateRegistrationActor(node, "registry-in-flight-actor");
+        using var request = Message.From("request");
+        using var reply = Message.From(BitConverter.GetBytes(7));
+        const int requestCount = 6;
+        var completions = Enumerable
+            .Range(0, requestCount)
+            .Select(_ =>
+                RequestActor(
+                    node,
+                    actor,
+                    request,
+                    CancellationToken.None,
+                    parts => BitConverter.ToInt32(Assert.Single(parts).AsReadOnlySpan())
+                )
+            )
+            .ToArray();
+        Assert.Equal(requestCount, node.PendingOperationCount);
+
+        using var ready = new MeshReadyBatch();
+        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+        var completed = 0;
+        for (var index = 0; index < ready.Count; index++)
+        {
+            using var claim = ready.TakeClaim(index);
+            using var received = new MeshReceiveBatch();
+            Assert.True(claim.Receive(received, RecvFlags.DontWait));
+            for (var record = 0; record < received.Count; record++)
+            {
+                var receivedRequest = received[record];
+                var relay = Relay(receivedRequest.OperationId);
+                if (completed % 2 == 0)
+                {
+                    Assert.Equal(SubmitResult.Ok, receivedRequest.Reply([reply]));
+                }
+                else
+                {
+                    var accepted = node.TryCompleteRelocationReply(relay, [Message.From(reply)]);
+                    Assert.Equal(
+                        ZLinkRelocationReplyCompletionState.TerminalReceived,
+                        accepted.State
+                    );
+                    Assert.Equal(source, accepted.RequestSource);
+                }
+                completed++;
+                Assert.Equal(requestCount - completed, node.PendingOperationCount);
+
+                using var duplicate = Message.From("duplicate");
+                var discarded = node.TryCompleteRelocationReply(relay, [duplicate]);
+                Assert.Equal(ZLinkRelocationReplyCompletionState.AlreadyTerminal, discarded.State);
+                Assert.Equal(source, discarded.RequestSource);
+                Assert.Throws<ObjectDisposedException>(() => duplicate.AsReadOnlySpan());
+            }
+        }
+
+        Assert.Equal(requestCount, completed);
+        var results = await Task.WhenAll(completions).WaitAsync(CompletionBound);
+        Assert.All(results, result => Assert.Equal(7, result));
+        Assert.Equal(0, node.PendingOperationCount);
+    }
+
+    [Fact]
     public async Task DuplicateRelocationRegistrationPreservesTheOriginalReference()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

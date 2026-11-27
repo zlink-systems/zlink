@@ -6,7 +6,7 @@ title: "Relocation Store provider SPI와 공식 Redis 구현"
 
 [Location·Relocation 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 02. Location Store (Redis)](02-location-store-redis.ko.md) · [다음: 04. Actor와 Spot relocation 전체 흐름](04-relocation-flow.ko.md)
 
-> Instance Spot cold activation 기록과 relocation 뒤 완료되는 request의 완료 기록에 필요한
+> Instance Spot cold activation 기록에 필요한
 > byte payload를 보관하는 Relocation Store의 공개 provider interface(SPI)와, 공식 Redis
 > 구현이 언어 간 상호 운용을 위해 반드시 따라야 하는 key·data type을 정의한다.
 
@@ -16,10 +16,10 @@ title: "Relocation Store provider SPI와 공식 Redis 구현"
 node를 [owner](../00-foundation/02-glossary.ko.md#owner)라고 한다. 이 owner와 lifecycle 상태를 보관하고
 생성 권한을 조정하는 저장소가 [Location Store](../00-foundation/02-glossary.ko.md#location-store)다.
 Relocation Store는 이 authority를 관리하지 않고, Location Store에 게시하기 전의 payload와
-이미 게시된 payload만 reference로 보관한다. 두 Store를 연결하여 복구와 완료 기록을 진행하는
+이미 게시된 payload만 reference로 보관한다. 두 Store를 연결하여 복구를 진행하는
 순서는 [Location runtime](01-location-runtime.ko.md)이 정한다.
 
-이 문서는 Instance Spot cold activation 기록과 relocation 뒤 완료되는 request의 완료 기록에
+이 문서는 Instance Spot cold activation 기록에
 필요한 byte payload를 보관하는 [Relocation Store](../00-foundation/02-glossary.ko.md#relocation-store)의
 공개 provider interface를 정의한다. 이처럼
 Framework가 호출하고 외부 provider가 구현하는 interface를 SPI라고 한다. Provider 개발자는
@@ -128,7 +128,7 @@ Provider가 해석해야 하는 값은 reference, payload, retention뿐이다.
 
 이 chunk와 맨 앞 목록 형식은 저장하는 payload 종류와 무관한 공통 blob 형식이다. Actor·Spot
 relocation의 handoff payload는 이 provider를 거치지 않으므로, 위 수치는 activation
-envelope와 완료 기록 payload에 적용된다.
+envelope에 적용된다. Relocation 뒤 완료되는 request의 결과는 이 provider가 아니라 Location Store row다([Location runtime §9.3](01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다)).
 
 **Provider는 reference를 만들거나 바꾸지 않는다.** 같은 content라도 Framework가 서로 다른
 reference를 지정하면 별개의 value로 저장한다. 삭제되거나 만료된 reference를 다른 bytes에

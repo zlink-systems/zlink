@@ -1,7 +1,15 @@
+using Zlink.Framework.Runtime.Spots;
+
 namespace Zlink.Framework.UnitTests;
 
 public sealed class DirectReplyCompletionRegistryTests
 {
+    [Fact]
+    public void MessageFollowDirectReplyRouteRetentionCoversLateCompletionRecovery()
+    {
+        Assert.Equal(TimeSpan.FromHours(24), ZLinkActorMessageFollower.DirectReplyRouteRetention);
+    }
+
     [Theory]
     [InlineData(5)]
     [InlineData(-5)]

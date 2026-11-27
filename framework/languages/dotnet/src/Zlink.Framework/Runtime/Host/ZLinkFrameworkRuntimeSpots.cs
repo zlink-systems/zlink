@@ -285,7 +285,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             if (completion.State != ZLinkRelocationReplyCompletionState.NotFound)
                 return completion;
         }
-        return default;
+        // The receiving MeshNode supplies its current fence when no registry owns the operation.
+        return physicalSource.Node.RequestOperations.TryCompleteRelocationReply(relay, payload);
     }
 
     internal ValueTask<ZLinkSpotNodeRuntime> GetMeshNodeRuntimeAsync(string meshName)
