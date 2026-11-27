@@ -332,7 +332,7 @@ Location Store를 공유하는 모든 node는 같은 형식을 쓴다 — v11 no
    `Conflict`나 응답 유실이면 그 record와 counter key를 다시 읽고 다음 중 하나로 정한다. 옛 record가 없으면 이
    batch나 다른 node의 batch가 옮긴 것이므로 끝난 것으로 본다. 옛 record의 bytes가 바뀌었으면 새 bytes로 다시
    시도한다. 옛 record의 bytes가 그대로인데 대상 counter key가 하나라도 있으면, 정상 batch는 두 상태를 함께
-   바꾸므로 이 상태를 고칠 writer가 없다. 다시 시도하지 않고 startup configuration error로 멈춘다. 값이 `0`인 counter key는 Put하지 않는다(없는 key는 `0`). 옛 record key의 RID
+   바꾸므로 이 상태를 고칠 writer가 없다. 다시 시도하지 않고 startup configuration error로 멈춘다. 값이 `0`인 counter key는 Put하지 않는다(없는 key는 `0`). 그런 key는 "대상 counter key"에 들지 않는다 — `Missing` 조건, 남은 counter key 확인과 §4 key 상한 모두 Put하는 key만 센다. 옛 record key의 RID
    부분은 decode한 bytes를 현재 descriptor의 raw RID bytes와 표시 문자열 양쪽에 비교해, 일치하는 descriptor가
    정확히 하나면 그 RID의 `routingIdHex`로, 하나도 없으면 그 bytes를 그대로(literal) RoutingId로 해석한
    `routingIdHex`로 옮긴다. 옛 record 값은 nested 형식과 flat 형식(`actorsActive` 등 차원·상태를 이름에 붙인
