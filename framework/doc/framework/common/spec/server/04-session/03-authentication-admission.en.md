@@ -200,7 +200,8 @@ error at startup. When it's `false`, the other stage 2 settings aren't read.
 #### 3.5.1 Queue Spot and Epoch
 
 - The queue Spot is one Instance Spot per RouteMesh that holds the authentication STREAM registration, with Spot ID
-  `$zlink.admission-queue`. The Framework prepares it by sending the first `$zlink.admission.enqueue` or the first node
+  `$zlink.admission-queue/<RouteMeshName>`. Spot IDs are global names in the Location Store, not scoped by mesh, so the
+  RouteMesh name keeps RouteMeshes that share a Store from colliding (within the Spot ID length limit). The Framework prepares it by sending the first `$zlink.admission.enqueue` or the first node
   report (§3.5.3) with an `InstanceSpot(...)` intent. Placement follows the existing Instance Spot placement rules; there's
   no separate placement authority.
 - The epoch is a nonzero unsigned 64-bit integer that the queue Spot incarnation generates from a CSPRNG when it
@@ -231,7 +232,7 @@ error at startup. When it's `false`, the other stage 2 settings aren't read.
 
 - Every node with stage 2 on sends the queue Spot a `NodeReport` Spot request once per second. It carries the node RID,
   the stage 1 limit, the current in-flight count, the SessionRids whose tickets were used since the previous report,
-  the SessionRids of waiting sessions that ended since the previous report, and, with a global limit, the permit IDs it holds and the largest permit ID it has received. The Spot returns the current epoch in
+  the SessionRids of waiting sessions that ended since the previous report, and, with a global limit, the permit IDs it holds and the highest contiguous finished request sequence (below). The Spot returns the current epoch in
   the Response. These reports are Framework-internal Spot messages, not client wire.
 - The Spot treats only reports received within the last 3 seconds as valid. It issues no tickets to sessions on a node
   without a valid report.
@@ -244,16 +245,18 @@ error at startup. When it's `false`, the other stage 2 settings aren't read.
   authentication executions across the whole mesh. A ticket is only an admission right; the queue Spot grants the
   execution permit separately.
   - Before a node passes an authentication with a valid ticket to the handler, it sends the queue Spot one `AdmitPermit` Spot
-    request carrying the node RID, the node owner lease (`ownerId`, `leaseGeneration`), the SessionRid, and the ticket's epoch.
+    request carrying the node RID, the node owner lease (`ownerId`, `leaseGeneration`), the SessionRid, the ticket's epoch,
+    and `requestSeq`, a request sequence that increases monotonically within the node incarnation; the Spot records it on the permit.
     While `executing permits < AdmissionGlobalLimit` and the epoch is current, the Spot answers with a permit ID (a nonzero
     64-bit value); otherwise it rejects with `unavailable` + queueRequired, as in the first row of §3.4. A rejected connection
     waits again per §3.5.5.
   - When the handler ends (success, failure, or cancellation), the node returns the permit with a `ReleasePermit` Spot send. The
     Spot treats repeated returns of the same permit as idempotent.
-  - The Spot records the node owner lease of each permit and reclaims every permit of a node whose lease ended. Permit IDs increase
-    monotonically within a Spot incarnation. A node report (§3.5.3) carries the permit IDs the node holds and the largest
-    permit ID it has received; the Spot reclaims only permits at or below that value that are missing from the list. A grant
-    that arrives after the report isn't reclaimed.
+  - The Spot records the node owner lease of each permit and reclaims every permit of a node whose lease ended. A node report (§3.5.3)
+    carries the permit IDs the node holds and the highest contiguous `requestSeq` such that every `AdmitPermit` at or below it
+    has finished (answered, or abandoned at the default timeout). The Spot reclaims only permits whose `requestSeq` is at or
+    below that value and that are missing from the list. A permit whose answer was lost is therefore reclaimed after that
+    request's timeout, and reordered answers never reclaim the permit of a request still in flight.
   - `AdmitPermit` waits for the Framework Spot request's default timeout (no new setting or timer). If it fails or no answer
     arrives in that time, the handler doesn't run and the request ends with `unavailable`. With a global limit, nothing is let past the limit when the Spot is absent.
   - Ticket reuse, delayed use reports, report expiry, and epoch changes don't affect the permit count. The cost, with stage 2 and
