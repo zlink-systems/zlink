@@ -116,10 +116,7 @@ export class RelocationCompletionStore {
           completionDataLost('Completion chunk disappeared during renew.');
       }
     }
-    if (
-      crc32c(bytes) !== manifest.totalChecksumCrc32c ||
-      sha256(bytes) !== completion.sha256
-    )
+    if (crc32c(bytes) !== manifest.totalChecksumCrc32c || sha256(bytes) !== completion.sha256)
       completionDataLost('Completion payload checksum differs.');
     const record = decodeRelocationCompletionRecord(bytes);
     if (
