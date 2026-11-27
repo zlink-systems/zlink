@@ -1,0 +1,28 @@
+name: Network sync protocol
+
+# network-sync plugin의 wire v1 정의와 공용 fixture가 서로 맞는지 본다(#3774).
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/network-sync/protocol/**"
+      - ".github/workflows/network-sync-protocol.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "plugins/network-sync/protocol/**"
+      - ".github/workflows/network-sync-protocol.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate wire definition and fixtures
+        run: python3 plugins/network-sync/protocol/validate.py
