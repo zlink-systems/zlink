@@ -2017,7 +2017,7 @@ export class DefaultZLinkSpotManager {
     owner: ReadyRecord,
     record: ReceiveRecord,
     admit?: ZLinkMeshDispatchAdmission,
-    relocationAdmission?: import('../foundation/service-stateful-runtime').ServiceSpotTargetAdmission
+    relocationAdmission = record.spotTargetAdmission
   ): Promise<void> {
     const spotId = owner.spotId as unknown as RoutingId | null;
     if (spotId === null) {

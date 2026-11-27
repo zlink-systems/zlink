@@ -152,12 +152,13 @@ import {
   ReadyOwnerKind,
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
-import type {
-  ServiceRelocationRequest,
-  ServiceRelocationRequestAdmission,
-  ServiceSpotMessageFollowSeal,
-  ServiceSpotTargetAdmission,
-  ServiceStatefulMailboxData
+import {
+  instanceRouteFromAuthority,
+  type ServiceRelocationRequest,
+  type ServiceRelocationRequestAdmission,
+  type ServiceSpotMessageFollowSeal,
+  type ServiceSpotTargetAdmission,
+  type ServiceStatefulMailboxData
 } from '../foundation/service-stateful-runtime';
 import {
   M6bServiceWireCommand,
@@ -5184,7 +5185,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const key =
       request.kind === 'actor'
         ? encodeAuthorityKey('actor', request.target.actor.actorId)
-        : encodeAuthorityKey('user_spot', request.target.spot.spotId);
+        : encodeAuthorityKey(
+            request.kind === 'instanceSpot' ? 'instance_spot' : 'user_spot',
+            request.target.spot.spotId
+          );
     const generation =
       request.kind === 'actor' ? request.target.actor.generation : request.target.spot.generation;
     const nodeRid =
@@ -5210,9 +5214,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       const participant = reservation.prepared.plan.participants.find(
         (value) => value.key.value === key.value
       )!;
-      const confirm = async (signal?: AbortSignal): Promise<boolean> => {
+      const confirm = async (signal?: AbortSignal): Promise<ZLinkAuthoritySnapshot | undefined> => {
         const current = await this.requireLocationStore().readAuthority(key, signal);
-        if (current.kind !== 'snapshot') return false;
+        if (current.kind !== 'snapshot') return undefined;
         const relocation = current.relocation;
         const owner = this.options.currentOwner();
         const sameStage =
@@ -5226,8 +5230,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         // Authority publication can be cleared while the original Store read is pending.
         // After opening, confirm the exact current target fence for the reserved request.
         const publicationCleared = stage.phase === 'open' && relocation === undefined;
-        return (
-          (sameStage || publicationCleared) &&
+        return (sameStage || publicationCleared) &&
           current.allocation.state === 'active' &&
           current.objectGeneration === generation &&
           current.authorityOwnerGeneration === fence.authorityOwnerGeneration &&
@@ -5244,13 +5247,18 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           owner.leaseGeneration === target.ownerLeaseGeneration &&
           !(await this.exactSourceLeaseExpired(owner, signal)) &&
           stage.phase !== 'failed'
-        );
+          ? current
+          : undefined;
       };
       if (request.kind === 'actor') {
         return {
           kind: 'actor',
           route: (...args) =>
-            this.options.actorTransfer.captureTargetRequest(meshName, confirm, ...args)
+            this.options.actorTransfer.captureTargetRequest(
+              meshName,
+              async (signal) => (await confirm(signal)) !== undefined,
+              ...args
+            )
         };
       }
       if (hidden.activation !== undefined) {
@@ -5869,16 +5877,10 @@ function publishRelocatedSpotRoutes(
   };
   node?.rememberSpotRoute?.(route);
   if (authority.allocation.objectKind === 'instance_spot') {
-    node?.registerInstanceIntent?.(authority.allocation.stableType, {
-      targetSpotId: spotId,
-      objectGeneration: authority.objectGeneration,
-      targetNodeRid: route.targetNodeRid,
-      targetNodeGeneration: route.targetNodeGeneration,
-      ownerId: authority.ownerId,
-      authorityOwnerGeneration: route.authorityOwnerGeneration,
-      leaseGeneration: route.ownerLeaseGeneration,
-      storeVersion: route.storeVersion
-    });
+    node?.registerInstanceIntent?.(
+      authority.allocation.stableType,
+      instanceRouteFromAuthority(spotId, authority)
+    );
   }
 }
 

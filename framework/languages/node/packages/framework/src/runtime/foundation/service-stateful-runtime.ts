@@ -268,14 +268,14 @@ export interface ServiceSpotTargetAdmission {
 
 export type ServiceRelocationRequest =
   | { readonly kind: 'actor'; readonly target: ServiceActorRouteFence }
-  | { readonly kind: 'spot'; readonly target: ServiceSpotRouteFence };
+  | { readonly kind: 'spot' | 'instanceSpot'; readonly target: ServiceSpotRouteFence };
 
 export type ServiceRelocationRequestAdmission =
   | { readonly kind: 'actor'; readonly route: ServiceRelocationActorIngressRouter }
   | {
       readonly kind: 'spot';
       readonly activation: import('../spots/spot-activation-state').ZLinkSpotActivation;
-      confirm(signal?: AbortSignal): Promise<boolean>;
+      confirm(signal?: AbortSignal): Promise<ZLinkAuthoritySnapshot | undefined>;
     };
 
 export type ServiceRelocationRequestAdmissionResolver = (
@@ -2961,24 +2961,67 @@ export class ServiceStatefulRuntime {
         return this.enqueueInstanceSpot(ingress, record, payloadFrame!, metadataFrame);
       }
       case 'instanceSpotFollow': {
-        const route = this.readyInstanceFollowRoute(record.target);
-        if (route !== undefined) {
-          return this.enqueueInstanceSpot(
+        let route = this.readyInstanceFollowRoute(record.target);
+        let staged:
+          | {
+              readonly route: ServiceInstanceRouteFence;
+              readonly target: ServiceInstanceApplicationTarget;
+              readonly admission: ServiceSpotTargetAdmission;
+            }
+          | undefined;
+        if (route === undefined) {
+          const admission = this.relocationRequestAdmission?.({
+            kind: 'instanceSpot',
+            target: record.target
+          });
+          if (admission?.kind === 'spot') {
+            const confirmed = admission.confirm();
+            const authority = await confirmed;
+            route = this.readyInstanceFollowRoute(record.target);
+            if (route === undefined && authority !== undefined) {
+              const target = {
+                targetSpotId: record.target.spot.spotId,
+                stableType: authority.allocation.stableType,
+                objectGeneration: authority.objectGeneration
+              };
+              staged = {
+                route: instanceRouteFromAuthority(target.targetSpotId, authority),
+                target,
+                admission: { activation: admission.activation, confirmed: confirmed.then(Boolean) }
+              };
+            }
+          }
+        }
+        const localRoute = route ?? staged?.route;
+        if (localRoute !== undefined) {
+          const message: ServiceReadyInstanceRecord = {
+            kind: 'instanceSpot',
+            activation: 'ready',
+            instanceIntent: false,
+            operationKind: 'send',
+            operation: { high: 0n, low: 0n },
+            sourceNodeRid: record.sourceNodeRid,
+            sourceNodeGeneration: record.sourceNodeGeneration,
+            ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
+            route: localRoute
+          };
+          if (staged === undefined) {
+            return this.enqueueInstanceSpot(ingress, message, payloadFrame!, metadataFrame);
+          }
+          const queued = this.enqueueActivatedInstanceSpot(
             ingress,
-            {
-              kind: 'instanceSpot',
-              activation: 'ready',
-              instanceIntent: false,
-              operationKind: 'send',
-              operation: { high: 0n, low: 0n },
-              sourceNodeRid: record.sourceNodeRid,
-              sourceNodeGeneration: record.sourceNodeGeneration,
-              ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
-              route
-            },
+            message,
             payloadFrame!,
-            metadataFrame
+            { ref: record.target.spot },
+            undefined,
+            this.instanceApplicationTerminalCompletion(staged.target),
+            metadataFrame,
+            undefined,
+            staged.target,
+            staged.admission
           );
+          if (queued === 'application') ingress.onAdmitted?.();
+          return queued;
         }
         const next = this.findSpotMessageFollow(record.target, 'instanceSpot')?.target;
         if (next === undefined || record.messageFollowHopCount === 8) {
@@ -3144,7 +3187,8 @@ export class ServiceStatefulRuntime {
     onTerminalCompletion?: NonNullable<ServiceStatefulMailboxData['onTerminalCompletion']>,
     metadataFrame?: Buffer,
     onHandlerTurnStarted?: () => void,
-    applicationTargetOverride?: ServiceInstanceApplicationTarget
+    applicationTargetOverride?: ServiceInstanceApplicationTarget,
+    spotTargetAdmission?: ServiceSpotTargetAdmission
   ): RawServicePumpResult {
     let operationKey: string | undefined;
     if (record.activation === 'missing') {
@@ -3191,6 +3235,7 @@ export class ServiceStatefulRuntime {
       ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
       targetSpot: spot.ref,
       activationRecord: record,
+      ...(spotTargetAdmission === undefined ? {} : { spotTargetAdmission }),
       ...(record.activation === 'missing' ? { deadlineUnixMs: record.deadlineUnixMs } : {}),
       ...(metadataFrame === undefined ? {} : { applicationMetadata: metadataFrame }),
       ...(terminalCompletion === undefined ? {} : { onTerminalCompletion: terminalCompletion }),
@@ -6128,7 +6173,7 @@ export class ServiceStatefulRuntime {
       };
       void Promise.resolve()
         .then(async () => {
-          if (!(await admission.confirm(signal))) return reject();
+          if ((await admission.confirm(signal)) === undefined) return reject();
           await this.acceptRequestSource(ingress, signal);
           signal?.throwIfAborted();
           ingress.onAdmitted?.();
@@ -7106,6 +7151,30 @@ function instanceSpotFollowUnavailable(spotId: string): ZLinkFrameworkException 
     ZLinkFrameworkInternalErrorKind.SpotMoving,
     `Instance Spot '${spotId}' has no available Message Follow route.`
   );
+}
+
+export function instanceRouteFromAuthority(
+  spotId: string,
+  authority: Pick<
+    ZLinkAuthoritySnapshot,
+    | 'allocation'
+    | 'objectGeneration'
+    | 'authorityOwnerGeneration'
+    | 'ownerId'
+    | 'ownerLeaseGeneration'
+    | 'storeVersion'
+  >
+): ServiceInstanceRouteFence {
+  return {
+    targetSpotId: spotId,
+    objectGeneration: authority.objectGeneration,
+    targetNodeRid: String(authority.allocation.descriptor.rid),
+    targetNodeGeneration: authority.allocation.descriptorLifecycleGeneration,
+    ownerId: authority.ownerId,
+    authorityOwnerGeneration: authority.authorityOwnerGeneration,
+    leaseGeneration: authority.ownerLeaseGeneration,
+    storeVersion: authority.storeVersion.value
+  };
 }
 
 function instanceRouteAsDirectRoute(route: ServiceInstanceRouteFence): ServiceDirectSpotRouteFence {
