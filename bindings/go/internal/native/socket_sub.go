@@ -23,10 +23,6 @@ func newSubSocket(ctx *Context, socketType C.zlink_socket_type_t) (*SubSocket, e
 	}, nil
 }
 
-func (s *SubSocket) SubscriptionAt(index int) (string, bool, error) {
-	return subscriptionAt(s.raw(), index)
-}
-
 func (s *SubSocket) TopicsCount() (int, error) {
 	return s.connectionSocket.getSubIntOption(C.ZLINK_SUB_OPT_TOPICS_COUNT)
 }

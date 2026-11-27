@@ -93,7 +93,7 @@ raise `ConnectError`, and TLS configuration failures raise `ConfigError`.
 
 SUB and XSUB configure and remove filters with `set_subscription(topic)` and `unset_subscription(topic)`.
 `subscription_at(index)` returns the filter and whether it is a pattern, or `None` if the index has no
-entry. XPUB uses `receive_subscription_event_into(event: SubscriptionEvent, *, flags: int = 0) -> bool` to
+entry. The binding calls `zlink_subscription_at` once with its buffer. An OK result, including an empty filter, ends the query; only a too-small-buffer result (`ENOBUFS`) is retried once with the length Core returned. An out-of-range index (`ENOENT`) is reported as no entry, not as an error; every other failure raises `ConfigError`. XPUB uses `receive_subscription_event_into(event: SubscriptionEvent, *, flags: int = 0) -> bool` to
 fill storage created with `create_subscription_event()`.
 
 Every socket exposes the `options` property. Use `router_options`, `dealer_options`, and `stream_options`

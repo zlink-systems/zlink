@@ -85,7 +85,7 @@ handle, FFI symbol, native struct를 public type으로 노출하지 않는다.
 TLS 설정 실패는 `ConfigError`로 전달한다.
 
 SUB와 XSUB는 `set_subscription(topic)`과 `unset_subscription(topic)`으로 filter를 설정·해제한다.
-`subscription_at(index)`는 filter와 pattern 여부를 반환하고 해당 인덱스가 없으면 `None`을 반환한다. XPUB의
+`subscription_at(index)`는 filter와 pattern 여부를 반환하고 해당 인덱스가 없으면 `None`을 반환한다. 바인딩은 자기 버퍼로 `zlink_subscription_at`를 한 번 부른다. 빈 filter를 포함해 OK 결과면 조회를 끝내고, 버퍼가 작다는 결과(`ENOBUFS`)일 때만 Core가 돌려준 길이로 한 번 더 부른다. 범위 밖 인덱스(`ENOENT`)는 오류가 아니라 항목 없음으로 반환하고, 그 밖의 실패는 `ConfigError`로 낸다. XPUB의
 `receive_subscription_event_into(event: SubscriptionEvent, *, flags: int = 0) -> bool`는
 `create_subscription_event()`로 만든 저장소를 채운다.
 
