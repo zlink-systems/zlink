@@ -15,6 +15,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     );
 
     private readonly ZLinkSessionContext _context;
+    private readonly ZLinkAdmissionQueueNode? _admissionQueue;
+    private readonly string? _streamName;
+    private bool _enqueuedForAdmission;
     private readonly ZLinkMessageFlowTracer _flow;
     private readonly ILogger _logger;
     private readonly ZLinkStreamSessionLiveness _liveness;
@@ -71,7 +74,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         bool requireConnectionReady = false,
         ZLinkStreamNodeRegistration? livenessOptions = null,
         ZLinkStreamSessionLiveness.Reader? readerLiveness = null,
-        Action<LivenessTimer>? markLivenessDue = null
+        Action<LivenessTimer>? markLivenessDue = null,
+        ZLinkAdmissionQueueNode? admissionQueue = null
     )
     {
         AsyncServiceScope scope = default;
@@ -92,7 +96,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 requireConnectionReady,
                 livenessOptions,
                 readerLiveness,
-                markLivenessDue
+                markLivenessDue,
+                admissionQueue
             );
             session.Initialize(headerSessionType);
             return session;
@@ -124,10 +129,13 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         bool requireConnectionReady,
         ZLinkStreamNodeRegistration? livenessOptions,
         ZLinkStreamSessionLiveness.Reader? readerLiveness,
-        Action<LivenessTimer>? markLivenessDue
+        Action<LivenessTimer>? markLivenessDue,
+        ZLinkAdmissionQueueNode? admissionQueue
     )
     {
         _scope = scope;
+        _admissionQueue = admissionQueue;
+        _streamName = livenessOptions?.StreamNodeName;
         _socket = socket;
         _transport = transport;
         _timeProvider = timeProvider;
@@ -236,6 +244,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         await CaptureAsync(DisposeTerminalCallbackStopAsync).ConfigureAwait(false);
         await CaptureAsync(() => new ValueTask(cleanup)).ConfigureAwait(false);
         Capture(() => _removeSession(Stream.SessionId));
+        if (_enqueuedForAdmission)
+            Capture(() => _admissionQueue!.Ended(_streamName!, Stream.RoutingId!.Value));
         await CaptureAsync(_handlerInstances.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_scope.DisposeAsync).ConfigureAwait(false);
         if (failures.Count > 0)
@@ -720,6 +730,17 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                     }
                 );
 
+            if (
+                _admissionQueue is { } queue
+                && decoded.Kind == ZlinkStreamMessageKind.Request
+                && decoded.Name == ZLinkAdmissionQueueNode.EnqueueName
+            )
+            {
+                await DispatchAdmissionEnqueueAsync(queue, decoded, payload, cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
+
             var dispatch = _context.EnterDispatch(decoded, authentication);
             if (dispatch is null)
             {
@@ -763,6 +784,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                     );
                 return;
             }
+            ulong permit = 0;
             try
             {
                 var decodedPayload = ZLinkStreamPacketPayloadCodec.DecodeMessage(
@@ -777,6 +799,38 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 await ZLinkApplicationJobQueueInvocation
                     .ReleaseForHandlerStartAsync()
                     .ConfigureAwait(false);
+                if (
+                    _admissionQueue is { } admissionQueue
+                    && authentication is { QueueEpoch: > 0 } lease
+                )
+                {
+                    var decision = await admissionQueue
+                        .AdmitAsync(
+                            _streamName!,
+                            Stream.RoutingId!.Value,
+                            lease.QueueEpoch,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    if (!decision.Granted)
+                    {
+                        await ReplyAdmissionErrorAsync(
+                                decoded,
+                                new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.Unavailable,
+                                    "Authentication permit unavailable."
+                                ),
+                                decision.QueueRequired
+                                    ? ZLinkAdmissionQueueNode.QueueRequired
+                                    : ZlinkStreamMetadata.Empty,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false);
+                        return;
+                    }
+                    permit = decision.Id;
+                    admissionQueue.Used(_streamName!, Stream.RoutingId!.Value);
+                }
                 if (_flow.Enabled(ZLinkMessageFlowOutcome.Dispatched))
                     _flow.Trace(
                         new ZLinkMessageFlowEvent(
@@ -811,9 +865,106 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             finally
             {
                 _context.ExitDispatch();
+                if (permit != 0)
+                    _admissionQueue!.Release(permit);
             }
         }
     }
+
+    private async ValueTask DispatchAdmissionEnqueueAsync(
+        ZLinkAdmissionQueueNode queue,
+        ZlinkStreamHeader header,
+        Message payload,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            if (
+                header.Codec != ZlinkStreamCodec.Json
+                || ZLinkStreamPacketPayloadCodec.Decode(
+                    header,
+                    payload,
+                    typeof(AdmissionEnqueuePayload),
+                    _runtime.Registration.Codecs,
+                    _runtime.Registration.StreamCompressionCodec
+                )
+                    is null
+            )
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ProtocolError,
+                    "Invalid admission enqueue payload."
+                );
+
+            await ZLinkApplicationJobQueueInvocation
+                .EnsureQueuedPermitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await ZLinkApplicationJobQueueInvocation
+                .ReleaseForHandlerStartAsync()
+                .ConfigureAwait(false);
+            _enqueuedForAdmission = true;
+            var delivery = await queue
+                .EnqueueAsync(_streamName!, Stream.RoutingId!.Value, cancellationToken)
+                .ConfigureAwait(false);
+            await ZLinkAdmissionStreamPackets
+                .DeliverAsync(Stream, delivery, header, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ZLinkStreamPayloadDecodeException error)
+        {
+            await ReplyAdmissionErrorAsync(
+                    header,
+                    error,
+                    ZlinkStreamMetadata.Empty,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        catch (Exception error)
+            when (ZLinkAdmissionQueueNode.IsSpotRequestFailure(error, cancellationToken))
+        {
+            _runtime.ErrorSink.ReportRuntimeTaskException("admission-queue-enqueue", error);
+            await ReplyAdmissionErrorAsync(
+                    header,
+                    error,
+                    ZlinkStreamMetadata.Empty,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask ReplyAdmissionErrorAsync(
+        ZlinkStreamHeader header,
+        Exception error,
+        ZlinkStreamMetadata metadata,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            if (_flow.DispatchErrorsEnabled)
+                _flow.TraceDispatchError(
+                    new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.StreamSession,
+                        ZLinkDispatchMessageKind.Request,
+                        ZLinkDispatchErrorReason.Backpressure,
+                        ZLinkDispatchErrorAction.ReplyError,
+                        header.Name,
+                        SourceRid: Stream.SessionId,
+                        CorrelationId: header.CorrelationId,
+                        Exception: error
+                    )
+                );
+            var (_, frame) = ZLinkSessionStreamTransport.EncodeError(header, error, metadata);
+            await ZLinkSessionStreamTransport
+                .SubmitAsync(Stream, frame, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception failure) when (IsClosedReplyFailure(failure)) { }
+    }
+
+    private sealed record AdmissionEnqueuePayload;
 
     internal async ValueTask CloseForProtocolErrorAsync(Exception error)
     {

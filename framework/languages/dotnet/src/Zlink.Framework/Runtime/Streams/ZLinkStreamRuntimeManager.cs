@@ -1,3 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.Runtime.Timers;
+
 namespace Zlink.Framework.Runtime.Streams;
 
 internal sealed class ZLinkStreamRuntimeManager(
@@ -9,6 +12,7 @@ internal sealed class ZLinkStreamRuntimeManager(
     private readonly HashSet<IZLinkBackendStreamSocket> _unattachedSockets = [];
     private Task? _disposeTask;
     private IDisposable? _authenticationAdmissionMetrics;
+    private ZLinkTimer? _admissionReportTimer;
 
     public ValueTask DisposeAsync() =>
         new(
@@ -17,6 +21,8 @@ internal sealed class ZLinkStreamRuntimeManager(
                 async () =>
                 {
                     var failures = new ZLinkFailureCollector();
+                    if (_admissionReportTimer is { } timer)
+                        await failures.CaptureAsync(timer.DisposeAsync).ConfigureAwait(false);
                     foreach (var socket in _unattachedSockets.ToArray())
                         await failures
                             .CaptureAsync(async () =>
@@ -53,6 +59,22 @@ internal sealed class ZLinkStreamRuntimeManager(
                 authenticationAdmission.InFlight
             );
 
+        ZLinkAdmissionQueueNode? queue = null;
+        if (registration.AdmissionQueue is { } config)
+        {
+            queue = new ZLinkAdmissionQueueNode(
+                config,
+                state.SpotNodes[
+                    ZLinkSpotNodeName.FromBoundary(config.MeshName, nameof(config.MeshName))
+                ],
+                services.GetRequiredService<ZLinkLocationLifecycle>(),
+                services.GetRequiredService<IZLinkSpotClient>(),
+                state,
+                authenticationAdmission,
+                authenticationOptions.Limit
+            );
+        }
+
         foreach (var streamNodeRegistration in registration.StreamNodes.Values)
         {
             var socket = state.Context.CreateStreamSocket(
@@ -75,7 +97,8 @@ internal sealed class ZLinkStreamRuntimeManager(
                     actorDispatchEnabled: streamNodeRegistration.ActorDispatchEnabled,
                     maxMessageSize: streamNodeRegistration.SocketConfig.MaxMessageSize,
                     applicationJobQueue: state.ApplicationJobQueue,
-                    authenticationAdmission: authenticationAdmission
+                    authenticationAdmission: authenticationAdmission,
+                    admissionQueue: queue
                 );
             }
             catch (Exception error)
@@ -137,5 +160,19 @@ internal sealed class ZLinkStreamRuntimeManager(
                 )
                 .ConfigureAwait(false);
         }
+        if (queue is not null)
+            _admissionReportTimer = new ZLinkTimer(
+                "admission-queue-report",
+                TimeSpan.FromSeconds(1),
+                new ZLinkTimerOptions(),
+                state.StopTokenSource.Token,
+                queue.ReportAsync,
+                (_, error, _, _) =>
+                {
+                    state.ErrorSink.ReportRuntimeTaskException("admission-queue-report", error);
+                    return ValueTask.CompletedTask;
+                },
+                scheduler: state.TimerScheduler
+            );
     }
 }
