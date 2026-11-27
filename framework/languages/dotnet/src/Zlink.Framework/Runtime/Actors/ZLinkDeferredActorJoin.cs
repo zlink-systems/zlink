@@ -313,7 +313,21 @@ internal sealed class ZLinkDeferredActorJoin(
             // Source cleanup failures belong to the infrastructure task owner,
             // outside the public completion conversion above.
             if (relayed is not null)
-                await relayed.SourceCleanup().ConfigureAwait(false);
+                try
+                {
+                    await relayed.SourceCleanup().ConfigureAwait(false);
+                }
+                catch (Locations.ZLinkAuthorityUnsettledAtStopException)
+                    when (completion is null)
+                {
+                    //  Host relocation §14: the stop deadline passed with the authority
+                    //  undecided. The stopping node does not settle it, so the waiting
+                    //  Join caller is told to retry.
+                    completion = new ZLinkActorJoinCompletion.Failed(
+                        _operationId,
+                        ZLinkFrameworkErrorKind.Unavailable
+                    );
+                }
             if (completion is not null)
                 await runtime
                     .DeliverActorJoinCompletionAsync(

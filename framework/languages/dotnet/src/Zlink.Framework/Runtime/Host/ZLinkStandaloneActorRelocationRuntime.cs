@@ -381,7 +381,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         ),
                     registration.Locations.Options.PollingInterval,
                     cancellationToken,
-                    () => sourceNode.Node.ObservePeerRoute(target.Rid)
+                    () => sourceNode.Node.ObservePeerRoute(target.Rid),
+                    runtime.ForceStopToken
                 )
                 .ConfigureAwait(false);
             if (settlement.Outcome != ZLinkSourceSettlement.TargetCommitted)
@@ -432,6 +433,17 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 .ConfigureAwait(false);
             sourceTerminalized = true;
             return ZLinkStandaloneActorRelocationResult.Committed;
+        }
+        catch (ZLinkAuthorityUnsettledAtStopException unsettled)
+        {
+            //  Host relocation §14: no Store call and no authority change after the
+            //  stop deadline; the source keeps every copy and the next owner lookup decides.
+            throw new ZLinkActorRelocationFailureException(
+                ZLinkFrameworkRelocationReason.RelocationFailed,
+                ZLinkRelocationCommitKnowledge.Unknown,
+                false,
+                unsettled
+            );
         }
         catch (Exception error) when (settled is null)
         {
@@ -541,13 +553,19 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         Func<CancellationToken, ValueTask> submitBoundary,
         TimeSpan pollingInterval,
         CancellationToken cancellationToken,
-        Func<ZLinkPeerRouteObservation> observeRoute
+        Func<ZLinkPeerRouteObservation> observeRoute,
+        CancellationToken stopDeadline = default
     )
     {
         var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(authorityStore);
         ulong submittedGeneration = 0;
         while (true)
         {
+            //  Host relocation §14: at the stop deadline an undecided unit stays as it
+            //  is. The source neither reads nor writes the Store for it again; the
+            //  next owner lookup decides from the Store authority.
+            if (stopDeadline.IsCancellationRequested)
+                throw new ZLinkAuthorityUnsettledAtStopException();
             //  The Restore deadline is reached by time or by the caller's
             //  cancellation; from then on the Store calls that settle the
             //  attempt are no longer cancelled, and the source lease bounds
@@ -555,7 +573,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             var settleNow =
                 cancellationToken.IsCancellationRequested
                 || Stopwatch.GetElapsedTime(0) >= restoreDeadline;
-            var token = settleNow ? CancellationToken.None : cancellationToken;
+            var token = settleNow ? stopDeadline : cancellationToken;
             ZLinkAuthorityReadResult? read = null;
             try
             {
@@ -627,6 +645,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                             )
                             .ConfigureAwait(false);
                     }
+                    catch (OperationCanceledException) when (stopDeadline.IsCancellationRequested)
+                    {
+                        throw new ZLinkAuthorityUnsettledAtStopException();
+                    }
                     catch (Exception error)
                         when (ZLinkLocationStoreFailure.IsIndeterminate(error, token))
                     {
@@ -635,7 +657,14 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     if (preserved is not null)
                         return new(ZLinkSourceSettlement.SourcePreserved, preserved);
                 }
-                await Task.Delay(pollingInterval, CancellationToken.None).ConfigureAwait(false);
+                try
+                {
+                    await Task.Delay(pollingInterval, stopDeadline).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stopDeadline.IsCancellationRequested)
+                {
+                    throw new ZLinkAuthorityUnsettledAtStopException();
+                }
                 continue;
             }
             var route = observeRoute();
