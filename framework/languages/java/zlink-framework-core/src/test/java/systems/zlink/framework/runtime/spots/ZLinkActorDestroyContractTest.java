@@ -2,6 +2,8 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import static systems.zlink.framework.runtime.spots.ZLinkRemoteSpotRequestFixture.intercept;
+
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -19,6 +21,8 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locations.ZLinkLocationPage;
+import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
@@ -182,12 +186,16 @@ final class ZLinkActorDestroyContractTest {
 
     @Test
     void remoteDestroyWithoutAdmittedOwnerIsUnavailable() throws Exception {
+        long testDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         var locations = new ZLinkInMemoryLocationStore();
         var repository = new ZLinkProviderLocationRepository(locations);
+        String ownerRid = "destroy-owner";
+        String callerRid = "destroy-caller";
         var key = ZLinkAuthorityKeyCodec.actor(ACTOR_ID);
         var wire = new ZLinkServiceM6AWireCodec();
         var deadline = new DefaultZLinkFrameworkOptions().defaultRequestTimeout();
-        try (var owner = start(locations);
+        try (var owner =
+                        start(locations, ownerRid, null, localMeshDiscovery(repository, ownerRid));
                 var context = Zlink.createContext();
                 var unadmittedPeer = context.createRouterSocket();
                 var poller = Zlink.createPoller();
@@ -203,11 +211,17 @@ final class ZLinkActorDestroyContractTest {
             poller.add(unadmittedPeer, 0, PollEventFlags.POLLIN);
             var events = new PollEvents(1);
             try (var caller =
-                    start(locations, "destroy-caller", unadmittedPeer.options().lastEndpoint())) {
-                unadmittedPeer.options().recvTimeout(Duration.ofSeconds(5));
+                    start(
+                            locations,
+                            callerRid,
+                            unadmittedPeer.options().lastEndpoint(),
+                            localMeshDiscovery(repository, callerRid))) {
                 do {
+                    var remaining = Duration.ofNanos(testDeadline - System.nanoTime());
                     assertTrue(
-                            unadmittedPeer.recv(inbound, RecvFlags.NONE), "expected caller HELLO");
+                            remaining.isPositive() && poller.wait(events, remaining) > 0,
+                            "expected caller HELLO");
+                    assertTrue(unadmittedPeer.recv(inbound, RecvFlags.DONT_WAIT));
                 } while (inbound.parts().getFirst().isEmpty());
                 assertEquals(
                         ServiceWireConstants.COMMAND_HELLO,
@@ -221,8 +235,8 @@ final class ZLinkActorDestroyContractTest {
                                 ExecutionException.class,
                                 () ->
                                         destroy.get(
-                                                deadline.plusSeconds(5).toMillis(),
-                                                TimeUnit.MILLISECONDS));
+                                                testDeadline - System.nanoTime(),
+                                                TimeUnit.NANOSECONDS));
                 var elapsed = Duration.ofNanos(System.nanoTime() - started);
 
                 int sent = 0;
@@ -459,6 +473,32 @@ final class ZLinkActorDestroyContractTest {
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             assertEquals(current, await(manager.find(ACTOR_ID)).orElseThrow());
         }
+    }
+
+    private static ZLinkFrameworkRuntimeTestAccess.Construction localMeshDiscovery(
+            ZLinkLocationRepository repository, String localRid) {
+        // Each runtime can validate its own descriptor and shares the same actor authority.
+        var rid = RoutingId.from(localRid);
+        var isolated =
+                intercept(
+                        repository,
+                        "listMeshNodes",
+                        args -> {
+                            var listed =
+                                    repository.listMeshNodes(
+                                            (String) args[0], (ZLinkPageRequest) args[1]);
+                            return listed.thenApply(
+                                    page -> {
+                                        var local =
+                                                page.items().stream()
+                                                        .filter(node -> node.rid().equals(rid))
+                                                        .toList();
+                                        return new ZLinkLocationPage<>(
+                                                local, page.continuationToken());
+                                    });
+                        });
+        return new ZLinkFrameworkRuntimeTestAccess.Construction()
+                .locationStores(ZLinkRegisteredLocationStores.fromUnified(isolated));
     }
 
     private static boolean isClosingPut(ZLinkAuthorityMutation mutation) {
