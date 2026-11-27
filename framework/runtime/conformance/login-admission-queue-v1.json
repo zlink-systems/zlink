@@ -435,6 +435,67 @@
       ]
     },
     {
+      "name": "budget-capped-by-global-limit",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:219",
+      "given": {
+        "globalLimit": 2,
+        "runningPermits": 1,
+        "unusedUnexpiredTickets": 0,
+        "reports": [
+          {
+            "node": "n",
+            "limit": 5,
+            "inFlight": 0,
+            "issuedSinceReport": 0
+          }
+        ],
+        "waiting": [
+          "a",
+          "b",
+          "c"
+        ]
+      },
+      "steps": [
+        {
+          "action": "calculateBudget",
+          "expect": {
+            "budget": 1
+          }
+        },
+        {
+          "action": "issue",
+          "expect": {
+            "ticketSessions": [
+              "a"
+            ],
+            "remaining": [
+              "b",
+              "c"
+            ]
+          }
+        },
+        {
+          "action": "calculateBudget",
+          "note": "a's ticket is unused and unexpired",
+          "expect": {
+            "budget": 0
+          }
+        },
+        {
+          "action": "releasePermit",
+          "expect": {
+            "runningPermits": 0
+          }
+        },
+        {
+          "action": "calculateBudget",
+          "expect": {
+            "budget": 1
+          }
+        }
+      ]
+    },
+    {
       "name": "stale-report-no-issuance",
       "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:195",
       "given": {
@@ -517,6 +578,69 @@
             "runningPermits": 1
           },
           "requestSeq": 1
+        }
+      ]
+    },
+    {
+      "name": "denied-ticket-invalidated-and-waiter-at-node-front",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:221",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [
+          {
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3
+          }
+        ],
+        "waiting": [
+          {
+            "node": "n2",
+            "sessionRid": "s3"
+          }
+        ],
+        "issuedTickets": [
+          {
+            "node": "n2",
+            "sessionRid": "s2",
+            "ticket": "T2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "requestSeq": 1,
+          "expect": {
+            "granted": false,
+            "runningPermits": 1
+          }
+        },
+        {
+          "action": "enqueue",
+          "node": "n2",
+          "sessionRid": "s2",
+          "expect": {
+            "position": 1,
+            "newWaiters": 0,
+            "ticket": null
+          }
+        },
+        {
+          "action": "nodeWaiters",
+          "node": "n2",
+          "expect": {
+            "order": [
+              "s2",
+              "s3"
+            ]
+          }
         }
       ]
     },
