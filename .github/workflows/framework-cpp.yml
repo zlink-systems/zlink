@@ -40,6 +40,13 @@ on:
 #      - "scripts/local-package/cpp/**"
 #      - "scripts/local-package/sync-version.py"
   workflow_dispatch:
+    inputs:
+      queue_checks_only:
+        # PR verification dispatch (ci-rules, 2026-11-27): Linux queue checks only, no Windows job.
+        description: Run the checks used to admit a pull request (Linux only).
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       skip_tests:

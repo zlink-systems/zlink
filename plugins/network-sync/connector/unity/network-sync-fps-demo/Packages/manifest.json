@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "com.zlink.network-sync": "file:../../com.zlink.network-sync",
+    "com.unity.test-framework": "1.4.6",
+    "com.unity.modules.imgui": "1.0.0",
+    "com.unity.modules.inputlegacy": "1.0.0"
+  },
+  "testables": ["com.zlink.network-sync"]
+}

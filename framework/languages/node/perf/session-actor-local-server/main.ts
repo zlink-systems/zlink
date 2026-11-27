@@ -37,7 +37,7 @@ runRole(
         .setAdvertiseHost('127.0.0.1')
         .objects()
         .server()
-        .addEntrySpot(PerfEntrySpot)
+        .addEntrySpot(PerfEntrySpot, PERF_ACTOR_TYPE)
         .addActorFactory(PERF_ACTOR_TYPE, PerfActorFactory, (factory) =>
           factory.disableRelocation()
         );

@@ -552,8 +552,8 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
         .value ();
     ASSERT_TRUE (std::holds_alternative<object_committed_t> (recreated_commit));
 
-    // A stored INT64_MAX is exhausted before an aggregate record transition;
-    // neither its counter bytes nor the gated authority record may change.
+    // Installing an authority marker allocates its target owner generation.
+    // An exhausted counter leaves the authority version and counter bytes intact.
     const auto exhausted_actor =
       std::get<authority_snapshot_t> (reopened.read_authority (actor_key).result ().value ());
     const auto exhausted_spot =
@@ -562,10 +562,6 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     exhausted_aggregate.aggregate_id.value[15] = std::byte{5};
     exhausted_aggregate.participants[0].expected_store_version = exhausted_actor.store_version;
     exhausted_aggregate.participants[1].expected_store_version = exhausted_spot.store_version;
-    const auto exhausted_prepared =
-      reopened.prepare_aggregate (exhausted_aggregate).result ().value ();
-    const auto *exhausted_fence = std::get_if<aggregate_prepared_t> (&exhausted_prepared);
-    ASSERT_NE (exhausted_fence, nullptr);
     const auto &authority_counter_key = authority_owner_generation_counter_key;
     const auto counter_before =
       std::get<store_found_t> (provider.read (authority_counter_key).result ().value ());
@@ -577,8 +573,8 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
                  .mutations = {store_put_t{authority_counter_key, bytes (maximum), std::nullopt}}})
         .result ()
         .value ()));
-    EXPECT_EQ (reopened.commit_aggregate (exhausted_fence->fence).result ().value (),
-               aggregate_commit_result_t::generation_exhausted);
+    EXPECT_TRUE (std::holds_alternative<authority_generation_exhausted_t> (
+      reopened.prepare_aggregate (exhausted_aggregate).result ().value ()));
     EXPECT_EQ (std::get<store_found_t> (provider.read (authority_counter_key).result ().value ())
                  .value.bytes,
                bytes (maximum));

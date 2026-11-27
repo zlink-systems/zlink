@@ -161,8 +161,9 @@ export class ZLinkRoutedSpotPacketDispatch {
         : this.options.claimApplicationWork?.(activation.meshName);
     const originalRecord = context.activationRecord?.activationRecord;
     const instanceIntent =
-      originalRecord?.activation === 'missing' ||
-      (originalRecord?.activation === 'ready' && originalRecord.instanceIntent);
+      context.relocationAdmission === undefined &&
+      (originalRecord?.activation === 'missing' ||
+        (originalRecord?.activation === 'ready' && originalRecord.instanceIntent));
     const runHandler = (failure?: unknown) =>
       runOutsideZLinkActorExecution(async () => {
         try {
@@ -240,7 +241,7 @@ export class ZLinkRoutedSpotPacketDispatch {
         }
       });
     try {
-      if (!returnResponse) {
+      if (!returnResponse && context.relocationAdmission === undefined) {
         detached = true;
         const detachedApplicationPermit = detachApplicationJobPermit();
         try {
@@ -300,7 +301,7 @@ export class ZLinkRoutedSpotPacketDispatch {
             : activation.serial.executeRelocationRequest(
                 runHandler,
                 workOptions,
-                context.relocationAdmission.confirmed
+                context.relocationAdmission
               )
         );
       }
