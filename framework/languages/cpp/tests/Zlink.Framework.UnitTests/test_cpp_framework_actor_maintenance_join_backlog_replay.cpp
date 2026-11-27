@@ -4,6 +4,7 @@
 #include "../support/actor_maintenance_join_packets.hpp"
 #include "../support/actor_maintenance_join_replay_access.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/execution/serial_application_record.hpp"
@@ -42,6 +43,17 @@ void local_join_backlog (backlog_case_t scenario)
     configure (host, evidence_owner, first_rid,
                std::make_shared<fw::runtime::in_memory_location_store_t> (),
                std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    auto late_send_dropped = std::make_shared<fw::task_completion_source_t<void>> ();
+    if (evidence.fail_completion) {
+        fw::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+          host.app.add_zlink_framework ().configure_dispatch (),
+          [late_send_dropped] (const fw::message_dispatch_error_event_t &event) {
+              if (event.actor_id == actor_id && event.packet_name == probe_t::packet_name
+                  && event.message_kind == fw::dispatch_message_kind_t::actor_send
+                  && event.action == fw::dispatch_error_action_t::drop)
+                  late_send_dropped->complete (fw::result_t<void>::success ());
+          });
+    }
     host.start ();
     ASSERT_TRUE (ready (host));
     auto services = host.app.advanced ().services ().build_provider ();
@@ -140,36 +152,19 @@ void local_join_backlog (backlog_case_t scenario)
         auto sealed_queue = actor_queue (fw::spot_id_t (local_spot));
         ASSERT_TRUE (sealed_queue);
         (void) sealed_queue->pending_messages ().result ().value ();
-        EXPECT_EQ (state->actor_transfer_coordinator->phase (key),
-                   fw::detail::actor_move_phase_t::local);
+        EXPECT_TRUE (state->actor_transfer_coordinator->blocks_dispatch (key));
+        ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), probe_t{3}).async ().result ());
+        const auto dropped = late_send_dropped->task ().result_for (wait_budget);
+        EXPECT_TRUE (dropped && *dropped);
         {
             std::lock_guard lock (evidence.mutex);
-            // This later one-record batch owns its own admission future.
-            evidence.joined_send_captured = fw::task_completion_source_t<void>{};
-            auto *source = &evidence.joined_send_captured;
-            evidence.joined_admission_completion = observations_t::joined_admission_batch_t{
-              1, [source] { source->complete (fw::result_t<void>::success ()); }};
+            EXPECT_EQ (evidence.backlog_appends, backlog_before_join + 2);
+            EXPECT_TRUE (evidence.handled_payloads.empty ());
+            ASSERT_EQ (evidence.completions.size (), 1u);
+            EXPECT_TRUE (
+              std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.front ()));
         }
-        ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), probe_t{3}).async ().result ());
-        std::unique_lock lock (evidence.mutex);
-        ASSERT_TRUE (evidence.changed.wait_for (
-          lock, wait_budget, [&] { return evidence.backlog_appends == backlog_before_join + 3; }));
-        const auto admission = evidence.joined_send_captured.task ();
-        lock.unlock ();
-        // Backlog retention and native admission publish on independent owners.
-        // Observe this batch's completion instead of assuming their callback order.
-        const auto captured = admission.result_for (wait_budget);
-        ASSERT_TRUE (captured);
-        ASSERT_TRUE (*captured);
-        lock.lock ();
-        EXPECT_TRUE (evidence.joined_send_captured.task ().await_ready ());
-        EXPECT_TRUE (evidence.handled_payloads.empty ());
-        EXPECT_EQ (evidence.completions.size (), 1u);
-        EXPECT_TRUE (
-          std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.front ()));
-        lock.unlock ();
-        // The queue control future observes published work while keeping the
-        // host executor available for the later canonical ingress.
+        // Observe published queue work before recovering the retained prefix.
         (void) sealed_queue->pending_messages ().result ().value ();
         const auto actor = state->lane
                              .run ([&] {
@@ -181,7 +176,7 @@ void local_join_backlog (backlog_case_t scenario)
         fw::detail::spot_node_runtime_t runtime (state);
         runtime.seal_actor_application_suffix (actor, {}).result ().value ();
         auto backlog = state->actor_transfer_coordinator->cancel_move (key);
-        EXPECT_EQ (backlog.size (), 3u);
+        EXPECT_EQ (backlog.size (), 2u);
         std::vector<int> durable_payloads;
         std::vector<std::pair<std::uint64_t, std::uint64_t>> durable_operations;
         for (const auto &packet : backlog) {
@@ -211,7 +206,7 @@ void local_join_backlog (backlog_case_t scenario)
               });
         }
         std::sort (durable_payloads.begin (), durable_payloads.end ());
-        EXPECT_EQ (durable_payloads, (std::vector<int>{1, 2, 3}));
+        EXPECT_EQ (durable_payloads, (std::vector<int>{1, 2}));
         std::sort (durable_operations.begin (), durable_operations.end ());
         EXPECT_EQ (std::adjacent_find (durable_operations.begin (), durable_operations.end ()),
                    durable_operations.end ());

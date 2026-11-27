@@ -251,7 +251,10 @@ void stream_host_service_t::listener_t::run_core_stream ()
           zlink::monitor_event::disconnected | zlink::monitor_event::connection_ready));
         _core_socket->bind (_stream.bind_endpoint);
         _bound_endpoint = _core_socket->options ().last_endpoint ();
+        const bool started = start_ingress ();
         mark_started ();
+        if (!started)
+            return;
         _core_poller = std::make_unique<zlink::poller_t> ();
         auto &poller = *_core_poller;
         poller.add (*_core_socket,
@@ -944,10 +947,10 @@ std::function<bool ()>
 stream_host_service_test_access_t::probe_core_session_gate (stream_host_service_t &service,
                                                             const zlink::routing_id_t &rid)
 {
-    auto &listener = *service._listeners.at (0);
-    const std::lock_guard lock (listener._core_sessions_mutex);
+    const auto listener = service.listener_snapshot ().at (0);
+    const std::lock_guard lock (listener->_core_sessions_mutex);
     auto session =
-      listener._core_sessions.at (stateful::stream_session_registry_t::connection_key (rid))
+      listener->_core_sessions.at (stateful::stream_session_registry_t::connection_key (rid))
         .session;
     return [session = std::move (session)] {
         const std::unique_lock lock (session->gate, std::try_to_lock);
@@ -959,7 +962,7 @@ stream_host_service_test_access_t::probe_core_session_gate (stream_host_service_
 void stream_host_service_test_access_t::create_core_sessions (
   stream_host_service_t &service, const std::vector<zlink::routing_id_t> &rids)
 {
-    for (const auto &listener : service._listeners) {
+    for (const auto &listener : service.listener_snapshot ()) {
         if (!listener->_core_socket)
             continue;
         for (const auto &rid : rids)
@@ -972,7 +975,7 @@ void stream_host_service_test_access_t::create_core_sessions (
 void stream_host_service_test_access_t::deliver_core_monitor_event (
   stream_host_service_t &service, const zlink::monitor_event_t &event)
 {
-    for (const auto &listener : service._listeners) {
+    for (const auto &listener : service.listener_snapshot ()) {
         if (listener->_core_socket) {
             listener->handle_core_monitor_event (event);
             return;
@@ -984,7 +987,7 @@ void stream_host_service_test_access_t::deliver_core_monitor_event (
 void stream_host_service_test_access_t::expire_core_sessions (
   stream_host_service_t &service, const std::vector<zlink::routing_id_t> &rids)
 {
-    for (const auto &listener : service._listeners) {
+    for (const auto &listener : service.listener_snapshot ()) {
         if (!listener->_core_socket)
             continue;
         for (const auto &rid : rids) {

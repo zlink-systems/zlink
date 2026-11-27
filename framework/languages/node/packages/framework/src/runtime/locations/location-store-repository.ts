@@ -21,7 +21,6 @@ import { decodeActorAuthorityPayload } from '../actors/actor-authority-payload-c
 import { ZLinkSpotKind } from '../../contracts';
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { createHash, randomUUID } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
 import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
 import {
   type ZLinkClientServerServerDescriptor,
@@ -604,9 +603,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                       authorityOwnerGeneration: generations.values[1]!
                     }),
                 payload: Buffer.from(mutation.payload),
-                ...(mutation.relocation === undefined
-                  ? {}
-                  : { relocation: mutation.relocation ?? undefined })
+                ...(aggregateAbort !== undefined && record.snapshot.relocation !== undefined
+                  ? // The Preserve aborts the prepared relocation in the same write.
+                    { relocation: { ...record.snapshot.relocation, phase: 'aborted' as const } }
+                  : mutation.relocation === undefined
+                    ? {}
+                    : { relocation: mutation.relocation ?? undefined })
               }
             };
       const actor =
@@ -1240,13 +1242,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     mutation: ZLinkAuthorityMutation,
     signal?: AbortSignal
   ): Promise<ZLinkStoreWriteRequest | 'changed' | undefined> {
-    const { relocation, payload } = record.snapshot;
+    // Only a source Preserve that keeps the payload and leaves the relocation record to this
+    // repository competes with the target NewOwner; every other write to a held row conflicts.
     if (
       mutation.kind !== 'put' ||
       mutation.generationTransition !== 'preserve' ||
-      !isPreparedAuthorityRelocation(relocation, marker.aggregateId) ||
-      Buffer.compare(payload, mutation.payload) !== 0 ||
-      !isDeepStrictEqual(mutation.relocation, { ...relocation, phase: 'aborted' })
+      mutation.relocation !== undefined ||
+      Buffer.compare(record.snapshot.payload, mutation.payload) !== 0 ||
+      !isPreparedAuthorityRelocation(record.snapshot.relocation, marker.aggregateId)
     ) {
       return undefined;
     }

@@ -520,7 +520,7 @@ fn ownerless_async_request_fails_fast_and_reacquires_through_public_poller() {
 
 #[test]
 fn completion_owner_source_has_no_background_reactor() {
-    let source = include_str!("../src/internal/completion_owner.rs");
+    let source = include_str!("../src/runtime/messaging/completion_owner.rs");
     for forbidden in [
         "std::thread::spawn",
         "runtime_loop",
@@ -639,10 +639,7 @@ fn submit_result_backpressure_admits_after_writable_then_completes_reply() {
         .common_options()
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
-    router
-        .common_options()
-        .set_receive_timeout(5000)
-        .unwrap();
+    router.common_options().set_receive_timeout(5000).unwrap();
     router
         .bind("inproc://rust-submit-result-backpressured")
         .unwrap();

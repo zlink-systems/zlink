@@ -24,7 +24,7 @@ pkgsite -http=:6060
 
 ## Public Surface Summary
 
-The exported Go package reflects the Core 0.17.0 raw-socket contract.
+The exported Go package reflects the Core raw-socket contract of the binding version.
 
 - multipart-only public send/receive APIs
 - send and request builders expose one `Submit(context.Context)` terminal;
@@ -65,10 +65,13 @@ the caller receives the context error and the retained packet is released. A
 payload-free entry remains until that exact native token is pulled, and the
 canceled packet is not retransmitted.
 
+- `ConnectionAttemptsSnapshot()` on every raw socket except STREAM returns one row per
+  outbound connection; register `PollConnect` on a Poller to learn when to read it,
+  and a successful snapshot releases that readiness
 - raw option bags and raw flags are not exposed publicly
 - socket-specific capabilities are exposed only on concrete socket types
 - monitor open APIs take typed masks and default to `ALL` when omitted
-- all Core 0.17.0 monitor mask and delivered event values have typed constants;
+- all Core monitor mask and delivered event values have typed constants;
   use `MonitorEventMask` for opening and `MonitorEventType` for event values
 - poller registrations borrow socket and timer handles; remove a source before
   closing it and serialize one poller's add/modify/remove/wait operations

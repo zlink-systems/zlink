@@ -84,9 +84,9 @@ no RPATH; the loader only looks beside the image).
 Redis must be at `127.0.0.1:6379`; the Spot, Actor and Location steps use it as the Location
 Store. The block below starts Redis with Docker, starts the Server and Client, and waits for
 both `/ops/ready` endpoints to return HTTP 200. Send Actor requests once both hosts reach
-`Serving`. Each host needs about 20 seconds to reach `Serving` on a fresh Redis: it uses a
+`Serving`. The Server takes about 20 seconds to reach `Serving` on a fresh Redis. It uses a
 fixed routing id, so it waits three fencing margins (15 seconds by default) before it claims that
-id, and publishes its descriptor on the next lease renewal. Handler and filter logs go to **stderr**.
+id and publishes its descriptor on the next lease renewal. Handler and filter logs go to **stderr**.
 
 **Linux · macOS · WSL — bash**
 
@@ -337,15 +337,16 @@ names the node's routing id. Operations commands only.
 
 ```console
 $ curl http://127.0.0.1:5180/ops/nodes/game-server-1/status
-{"calledBy":"game-client-1","channelName":"","meshName":"game","uptime":"10s"}
+{"calledBy":"game-388cbafe-f139-4e61-9c0a-361168e3e822","channelName":"","meshName":"game","uptime":"10s"}
 
 $ curl -i http://127.0.0.1:5180/ops/nodes/no-such-node/status
 HTTP/1.1 404 Not Found
 {"correlationId":"http-6","error":"not_found","message":"MeshNode request target was not found"}
 ```
 
-An empty `channelName` is the point. The receiver must fix its id with `set_routing_id`, and the
-caller must map that id to an endpoint with `peer_connections().connect(routing_id, endpoint)`.
+An empty `channelName` indicates a direct call. The Framework generates a new Client RID on each run.
+The receiver must fix its id with `set_routing_id`, and the caller must map that id to an endpoint
+with `peer_connections().connect(routing_id, endpoint)`.
 
 ### 3. Channel messaging -- ClientServer
 

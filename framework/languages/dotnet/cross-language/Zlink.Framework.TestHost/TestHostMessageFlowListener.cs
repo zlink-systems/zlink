@@ -7,7 +7,7 @@ internal sealed class TestHostMessageFlowListener : IDisposable
     private readonly object _fileGate = new();
     private readonly ActivityListener _listener;
 
-    public TestHostMessageFlowListener(string filePath)
+    public TestHostMessageFlowListener(string filePath, SealedJoinObservation? sealedJoin = null)
     {
         _filePath = filePath;
         if (Path.GetDirectoryName(filePath) is { Length: > 0 } directory)
@@ -18,7 +18,11 @@ internal sealed class TestHostMessageFlowListener : IDisposable
             ShouldListenTo = static source => source.Name == ActivitySourceName,
             Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllData,
-            ActivityStopped = Capture,
+            ActivityStopped = activity =>
+            {
+                Capture(activity);
+                sealedJoin?.ObserveIngress(activity);
+            },
         };
         ActivitySource.AddActivityListener(_listener);
     }
@@ -59,10 +63,35 @@ internal sealed class TestHostMessageFlowListener : IDisposable
             + $" event={activity.OperationName}"
             + $" started={activity.StartTimeUtc:O}"
             + $" duration_ticks={activity.Duration.Ticks}"
+            + FormatSourceRid(activity)
+            + FormatTag(activity, "reason")
+            + FormatTag(activity, "action")
+            + FormatTag(activity, "error_message")
             + $" tags={System.Text.Json.JsonSerializer.Serialize(activity.TagObjects.ToDictionary(tag => tag.Key, tag => tag.Value))}";
         lock (_fileGate)
             File.AppendAllText(_filePath, line + Environment.NewLine);
     }
+
+    // The Framework tags routing ids as hex; the stage script matches the text.
+    private static string FormatSourceRid(Activity activity)
+    {
+        if (Tag(activity, "source_rid") is not { } hex)
+            return string.Empty;
+        try
+        {
+            var text = System.Text.Encoding.UTF8.GetString(Convert.FromHexString(hex));
+            return text.All(char.IsAscii) && text.All(c => !char.IsControl(c))
+                ? $" source_rid={text}"
+                : $" source_rid={hex}";
+        }
+        catch (FormatException)
+        {
+            return $" source_rid={hex}";
+        }
+    }
+
+    private static string FormatTag(Activity activity, string name) =>
+        Tag(activity, name) is { } value ? $" {name}={value}" : string.Empty;
 
     private static string? Tag(Activity activity, string name) =>
         activity.GetTagItem(name)?.ToString();

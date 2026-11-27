@@ -11,8 +11,8 @@ title: "Go 바인딩 공개 계약"
 > **이 장이 정의하는 것** — Go binding이 Core raw C API 위에
 > 제공하는 공개 type·ownership·오류 계약.
 
-이 문서는 공통 스펙의 소켓별 능력을 Go의 공개 타입과 메서드로 정의한다. 정확한 이름과 signature는
-`bindings/go/contracts/`와 module root의 공개 선언을 따른다.
+이 문서는 공통 스펙의 소켓별 능력을 Go의 공개 타입과 메서드로 정의한다. 공개 API의 정확한 이름과
+signature는 module root의 선언을 따른다.
 
 | 절 | 다루는 내용 |
 |---|---|
@@ -31,12 +31,13 @@ title: "Go 바인딩 공개 계약"
 ## Module과 공개 package
 
 Go module의 import path는 `zlink.systems/zlink`이다. 일반적인 consumer는 module
-root의 `zlink` package를 import한다. `zlink.systems/zlink/contracts`는 같은
-계약을 분류해 선언하는 public projection이며 root package가 이를 다시 export한다.
+root의 `zlink` package를 import한다. `zlink.systems/zlink/contracts`는 열거형·상수·결과·오류와
+런타임 자원을 참조하지 않는 값 구조체를 정의하며, root package가 이를 다시 export한다. 구체 핸들과
+native 상태를 포함하는 공개 타입은 `internal/native`가 구현하고 root package가 노출한다.
+Context·소켓·Poller·Timer·SocketMonitor 구체 핸들의 별도 계약 인터페이스 선언 여부는 후속 결정으로 남긴다.
 
-Runtime handle, cgo declaration, native struct, completion drain state와 buffer
-marshalling은 `internal/native`의 구현 세부사항이다. 이 타입과 package는 consumer
-계약이 아니다.
+root가 노출하는 구체 핸들 타입의 내부 필드, cgo 선언, native 구조체, completion drain 상태와 buffer
+marshalling은 `internal/native`의 구현 세부사항이다. 이 내부 상태와 package는 consumer 계약이 아니다.
 
 - Package 계약은 Core raw C API를 투영한다.
 - Context, Message, raw socket, monitor, poller, timer와 utility는 포함하지만 Spot, Actor, MeshNode와 service operation은 포함하지 않는다.
@@ -117,7 +118,7 @@ message를 반환한다. `CopyTo(destination)`와 `TryCopyTo(destination)`는 ca
 제공한다.
 
 Routing ID 생성자는 `NewRoutingID`, `NewRoutingIDString`, `NewRoutingIDUint32`, `NewRoutingIDUUIDBytes`,
-`NewRoutingIDFromHex`다.
+`NewRoutingIDFromHex`다. 크기·입력 오류를 생성 시점에 받으려면 `TryNewRoutingID`·`TryNewRoutingIDFromHex`가 `*ConfigError`(`ConfigInvalidArgument`)를 반환한다(`New*`는 오류를 버리고 빈 값을 반환한다). `RoutingID.Uint32()`와 `UUIDBytes()`는 4바이트·16바이트 ID를 typed 값으로 꺼내며 형식이 다르면 `ok=false`다.
 
 | Builder 경로 | ownership 규칙 |
 |---|---|
@@ -199,7 +200,7 @@ PUB·XPUB의 `PubSocketOptions`를 반환한다. ROUTER의
 반환한다. `RouterRoute`는 `RoutingID`, `RouteGeneration`을 제공한다. Route generation은 0이 아닌 opaque
 token이며 동등성만 비교한다. `PollRoute`는 선택 route 변경을 알린다.
 
-연결 시도 snapshot은 outbound 연결 등록마다 한 행을 반환한다. 목표 표면(**미구현**, #5749)은 STREAM을 제외한 raw 소켓의
+연결 시도 snapshot은 outbound 연결 등록마다 한 행을 반환한다. 표면은 STREAM을 제외한 raw 소켓의
 `ConnectionAttemptsSnapshot() ([]ConnectionAttempt, error)`과 Poller의 `PollConnect`다.
 `ConnectionAttempt`는 `Endpoint`, `IntentID`, `Revision`, `LastFailureID`, `State`, `LastFailure`를 담는다.
 `ConnectionFailure`의 필드는 `Kind`, `Stage`, `NormalizedErrno`, `DisconnectReason`다. 상태, 실패 원인,
@@ -237,7 +238,7 @@ event를 선택하고 여러 mask는 OR로 합친다. `MonitorHwmBytes(0)`은 Co
 지정하면 호출 순서상 마지막 값이 적용된다.
 
 `MonitorStatus`는 pending message count와 별도로 `SndPendingBytes`와 `RcvPendingBytes`를
-노출한다. `CoreHwmBudgetSnapshot`은 ABI version/size, configured/resolved memory
+노출한다. `StateFlags`·`DetailFlags`(`uint32`)는 `State()`·`Detail()`이 typed 값(`MonitorStateFlags`, `MonitorStatusDetailFlags`)으로 돌려주고 `Has(flag)`로 비트를 확인한다. 소켓의 raw int `SetRidDuplicatePolicy`·`RidDuplicatePolicy`는 Deprecated이며 typed `CommonOptions()` 메서드를 쓴다. `CoreHwmBudgetSnapshot`은 ABI version/size, configured/resolved memory
 limit, configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/
 current/peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
 monitor/instance aggregate, application/completion queue count,

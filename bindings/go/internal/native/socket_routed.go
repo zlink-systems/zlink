@@ -12,6 +12,7 @@ import "C"
 import (
 	"context"
 	"time"
+	"zlink.systems/zlink/contracts"
 )
 
 type routedSocket struct {
@@ -21,13 +22,13 @@ type routedSocket struct {
 
 func (s *routedSocket) reply(rid RoutingID, token ReplyToken, parts ...*Message) error {
 	if token.owner == nil || token.value == 0 || token.owner != s.replyOwner {
-		return &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return newSubmitError(SubmitInvalidArgument, int(C.EINVAL))
 	}
 	handle := s.raw()
 	if handle == nil {
-		return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 	}
-	target := rid.toC()
+	target := routingIDToC(rid)
 	return submitMultipartFromClones(parts, true, func(native *C.zlink_msg_t, count C.size_t) error {
 		rc79, errno79 := C.zlink_reply(
 			handle, &target, C.zlink_reply_token_t(token.value), native, count)
@@ -38,7 +39,7 @@ func (s *routedSocket) reply(rid RoutingID, token ReplyToken, parts ...*Message)
 func (s *routedSocket) recvInto(out *Received, flags RecvFlags) error {
 	handle := s.raw()
 	if handle == nil {
-		return &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newRecvError(RecvInvalidHandle, int(C.EFAULT))
 	}
 	reuse := out.beginReceive()
 	var sourceRID *C.zlink_routing_id_t
@@ -90,7 +91,7 @@ func (s *routedSocket) replaceRoutedReceived(
 
 func (s *routedSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	if out == nil {
-		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return false, newRecvError(RecvInvalidHandle, int(C.EFAULT))
 	}
 	if err := s.recvInto(out, flags); err != nil {
 		if isNoData(err) {
@@ -119,13 +120,7 @@ func (s *RouterSocket) Reply(rid RoutingID, token ReplyToken) ReplyOp {
 	})
 }
 
-// RouterRoute is one selected ROUTER route: the peer routing id and the
-// opaque nonzero generation of the route Core selected for it. Compare
-// generations only for equality.
-type RouterRoute struct {
-	RoutingID       RoutingID
-	RouteGeneration uint64
-}
+type RouterRoute = contracts.RouterRoute
 
 // RoutesSnapshot returns every selected route atomically, one row per
 // routing id. A successful call clears PollRoute readiness unless a later

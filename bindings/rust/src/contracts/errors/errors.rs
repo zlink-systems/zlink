@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub use crate::results::{
+pub use crate::contracts::errors::results::{
     BindResult, CloseResult, ConfigResult, ConnectResult, HandlerResult, RecvResult, RequestResult,
     SubmitResult,
 };
