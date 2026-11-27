@@ -269,13 +269,14 @@ final class ZLinkActorDestroyContractTest {
 
     @Test
     void remoteDestroyWithoutAdmittedOwnerIsUnavailable() throws Exception {
+        long testDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         var locations = new ZLinkInMemoryLocationStore();
         var repository = new ZLinkProviderLocationRepository(locations);
+        String ownerRid = "destroy-owner";
+        String callerRid = "destroy-caller";
         var key = ZLinkAuthorityKeyCodec.actor(ACTOR_ID);
         var wire = new ZLinkServiceM6AWireCodec();
         var deadline = new DefaultZLinkFrameworkOptions().defaultRequestTimeout();
-        String ownerRid = "destroy-owner";
-        String callerRid = "destroy-caller";
         try (var owner =
                         start(locations, ownerRid, null, localMeshDiscovery(repository, ownerRid));
                 var context = Zlink.createContext();
@@ -298,9 +299,8 @@ final class ZLinkActorDestroyContractTest {
                             callerRid,
                             unadmittedPeer.options().lastEndpoint(),
                             localMeshDiscovery(repository, callerRid))) {
-                long helloDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                 do {
-                    var remaining = Duration.ofNanos(helloDeadline - System.nanoTime());
+                    var remaining = Duration.ofNanos(testDeadline - System.nanoTime());
                     assertTrue(
                             remaining.isPositive() && poller.wait(events, remaining) > 0,
                             "expected caller HELLO");
@@ -318,8 +318,8 @@ final class ZLinkActorDestroyContractTest {
                                 ExecutionException.class,
                                 () ->
                                         destroy.get(
-                                                deadline.plusSeconds(5).toMillis(),
-                                                TimeUnit.MILLISECONDS));
+                                                testDeadline - System.nanoTime(),
+                                                TimeUnit.NANOSECONDS));
                 var elapsed = Duration.ofNanos(System.nanoTime() - started);
 
                 int sent = 0;
@@ -560,26 +560,26 @@ final class ZLinkActorDestroyContractTest {
 
     private static ZLinkFrameworkRuntimeTestAccess.Construction localMeshDiscovery(
             ZLinkLocationRepository repository, String localRid) {
-        // Each runtime validates its own descriptor and shares the same actor authority.
+        // Each runtime can validate its own descriptor and shares the same actor authority.
         var rid = RoutingId.from(localRid);
         var isolated =
                 intercept(
                         repository,
                         "listMeshNodes",
-                        args ->
-                                repository
-                                        .listMeshNodes((String) args[0], (ZLinkPageRequest) args[1])
-                                        .thenApply(
-                                                page ->
-                                                        new ZLinkLocationPage<>(
-                                                                page.items().stream()
-                                                                        .filter(
-                                                                                node ->
-                                                                                        node.rid()
-                                                                                                .equals(
-                                                                                                        rid))
-                                                                        .toList(),
-                                                                page.continuationToken())));
+                        args -> {
+                            var listed =
+                                    repository.listMeshNodes(
+                                            (String) args[0], (ZLinkPageRequest) args[1]);
+                            return listed.thenApply(
+                                    page -> {
+                                        var local =
+                                                page.items().stream()
+                                                        .filter(node -> node.rid().equals(rid))
+                                                        .toList();
+                                        return new ZLinkLocationPage<>(
+                                                local, page.continuationToken());
+                                    });
+                        });
         return new ZLinkFrameworkRuntimeTestAccess.Construction()
                 .locationStores(ZLinkRegisteredLocationStores.fromUnified(isolated));
     }
