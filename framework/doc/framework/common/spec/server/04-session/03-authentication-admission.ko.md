@@ -216,6 +216,9 @@ Connector는 다음과 같이 처리한다.
   예산도 node마다 센다: `예산(N) = max(0, 한도 − 처리 중 수 − 그 보고 뒤 N의 대기자에게 낸 ticket 수)`. Spot은 보고를
   받을 때와 대기자가 들어올 때 각 node의 예산만큼 그 node 대기자에게 enqueue 순서대로 ticket을 낸다. 그래서 순서는
   node 안에서 FIFO이고 mesh 전체로는 근사 FIFO다.
+- 전역 상한(아래)이 있으면 발급 예산에도 넣는다: `예산(N) = min(node 예산(N), max(0, AdmissionGlobalLimit − 실행 중 permit 수 − 아직 쓰이지 않은 미만료 발급 ticket 수))`.
+  그래서 permit이 빌 만큼만 ticket이 나간다. `AdmitPermit`이 `granted=false`를 받은 연결의 ticket은 그 자리에서 무효가 되고, Spot은 그
+  대기자를 그 node FIFO의 맨 앞에 다시 둔다. 그 연결이 다시 enqueue하면 같은 ticket이 아니라 현재 순번을 받는다.
 - **전역 상한.** 설정 값 `AdmissionGlobalLimit`(양의 정수, 선택)이 있으면 mesh 전체의 동시 인증 실행 수를 이 값으로 막는다.
   Ticket은 입장 자격일 뿐이고, 실행 permit은 대기열 Spot이 따로 준다.
   - Node는 유효한 ticket을 가진 인증을 handler에 넣기 전에 대기열 Spot에 `AdmitPermit` Spot request를 한 번 보낸다. 내용은 node
