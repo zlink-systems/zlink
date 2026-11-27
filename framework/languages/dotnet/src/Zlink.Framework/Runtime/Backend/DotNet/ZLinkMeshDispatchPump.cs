@@ -716,6 +716,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             requestSource: requestSource,
             deadlineUnixMs: ZLinkMeshRecordAdapters.NormalizeDeadline(record.DeadlineUnixMs),
             payloadOwner: payloadOwner,
+            instanceIntent: record.InstanceIntent,
             readyInstanceRoute: record.ReadyInstanceRoute
         );
         state.Routes.Enqueue(route);

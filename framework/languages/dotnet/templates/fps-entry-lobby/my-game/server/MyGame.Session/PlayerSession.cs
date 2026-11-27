@@ -2,10 +2,17 @@ using MyGame.Shared;
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Streams;
+#if NETWORK_SYNC
+using Zlink.NetworkSync.Server;
+#endif
 
 namespace MyGame.Session;
 
-public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManager actors)
+public sealed class PlayerSession(
+    IZLinkSessionContext context,
+    IZLinkActorManager actors,
+    NodeSettings settings
+)
     : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
@@ -28,16 +35,18 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
         CancellationToken cancellationToken
     )
     {
-        if (
-            dispatch.PacketName
-            is not (
-                nameof(QueueRequest)
-                or nameof(RoomViewRequest)
-                or nameof(MoveRequest)
-                or nameof(ShootRequest)
-                or nameof(SessionInfoRequest)
-            )
-        )
+#if NETWORK_SYNC
+        if (settings.NetworkSync && await NetworkSyncSession.TryRelayAsync(
+                dispatch, payload, Context.Actors.Bound.SingleOrDefault()))
+            return;
+#endif
+        var allowed = dispatch.PacketName switch
+        {
+            nameof(QueueRequest) or nameof(SessionInfoRequest) => true,
+            nameof(RoomViewRequest) or nameof(MoveRequest) or nameof(ShootRequest) => !settings.NetworkSync,
+            _ => false,
+        };
+        if (!allowed)
         {
             await Context.Client.Send(new ActionRejected(Rejection.PacketNotAllowed)).Async();
             return;

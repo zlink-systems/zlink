@@ -30,10 +30,10 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
-import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkSpotTypeCapacityDelta;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
@@ -1028,7 +1028,7 @@ final class ZLinkCanonicalRelocationStateMachine
         var prepare = attempt.prepare();
         var object = prepare.object();
         String relocationIdentity = prepare.id() + "/attempt/" + prepare.targetAttemptGeneration();
-        boolean userSpot = object.kind() == 3;
+        boolean spot = object.kind() != ZLinkPlacementObjectKind.ACTOR.value();
         reporter.report(
                 new ZLinkDispatchFailure(
                         ZLinkDispatchErrorSurface.ACTOR_RELOCATION,
@@ -1038,8 +1038,8 @@ final class ZLinkCanonicalRelocationStateMachine
                         "target_prepare_" + stage,
                         null,
                         null,
-                        userSpot ? object.objectId() : null,
-                        userSpot ? null : object.objectId(),
+                        spot ? object.objectId() : null,
+                        spot ? null : object.objectId(),
                         prepare.sourceNodeRid().toString(),
                         relocationIdentity,
                         null,
@@ -1830,9 +1830,10 @@ final class ZLinkCanonicalRelocationStateMachine
                                             new ZLinkCanonicalRelocationProtocol.ObjectFence(
                                                     primary.objectKind(),
                                                     primary.objectId(),
-                                                    "",
+                                                    envelope.object().stableType(),
                                                     primary.objectGeneration(),
-                                                    primary.sourceAuthorityOwnerGeneration()),
+                                                    envelope.object()
+                                                            .expectedAuthorityOwnerGeneration()),
                                             request.sourceNodeRid(),
                                             request.sourceNodeGeneration(),
                                             ZLinkRelocationPayloadTransfer.manifest(
@@ -1956,7 +1957,20 @@ final class ZLinkCanonicalRelocationStateMachine
                                 1,
                                 Optional.of(
                                         new ZLinkSpotTypeCapacityDelta(
-                                                ZLinkPlacementObjectKind.USER_SPOT,
+                                                entries.stream()
+                                                        .map(
+                                                                entry ->
+                                                                        entry.authority()
+                                                                                .snapshot()
+                                                                                .allocation()
+                                                                                .objectKind())
+                                                        .filter(
+                                                                kind ->
+                                                                        kind
+                                                                                != ZLinkPlacementObjectKind
+                                                                                        .ACTOR)
+                                                        .findFirst()
+                                                        .orElseThrow(),
                                                 request.stableType(),
                                                 1)));
         return new ZLinkAggregateRelocationCoordinator.Request(
@@ -1983,6 +1997,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 || envelope.object().kind() != prepare.object().kind()
                 || !envelope.object().objectId().equals(prepare.object().objectId())
                 || envelope.object().objectGeneration() != prepare.object().objectGeneration()
+                || !envelope.object().stableType().equals(prepare.object().stableType())
                 || envelope.object().expectedAuthorityOwnerGeneration()
                         != prepare.object().expectedAuthorityOwnerGeneration()
                 || envelope.applicationVersion() != prepare.applicationVersion()
@@ -2020,14 +2035,14 @@ final class ZLinkCanonicalRelocationStateMachine
             int kind = snapshot.allocation().objectKind().value();
             String objectId;
             String objectType;
-            if (kind == 2) {
+            if (kind != ZLinkPlacementObjectKind.ACTOR.value()) {
                 var decoded =
                         spotCodec
                                 .decode(snapshot.payload())
                                 .orElseThrow(
                                         () ->
                                                 new IllegalStateException(
-                                                        "User Spot authority payload is invalid"));
+                                                        "Spot authority payload is invalid"));
                 objectId = decoded.spotId();
                 objectType = decoded.stableType();
                 targetSpotId = objectId;
@@ -2101,7 +2116,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         meshName,
                         targetSpotId,
                         stableType,
-                        false,
+                        prepare.object().kind() == ZLinkPlacementObjectKind.INSTANCE_SPOT.value(),
                         restorePrimary,
                         rootBytes,
                         participants,
@@ -2187,7 +2202,7 @@ final class ZLinkCanonicalRelocationStateMachine
             int kind = snapshot.allocation().objectKind().value();
             String objectId = "<invalid>";
             String stableType = "<invalid>";
-            if (kind == 2) {
+            if (kind != ZLinkPlacementObjectKind.ACTOR.value()) {
                 var decoded = spotCodec.decode(snapshot.payload());
                 if (decoded.isPresent()) {
                     objectId = decoded.get().spotId();
@@ -2238,8 +2253,10 @@ final class ZLinkCanonicalRelocationStateMachine
                                         new IllegalStateException(
                                                 "relocation primary authority is missing"));
         if (primary.objectGeneration() != prepare.object().objectGeneration()
-                || primary.sourceAuthorityOwnerGeneration()
-                        != prepare.object().expectedAuthorityOwnerGeneration()) {
+                || (primary.objectKind() == ZLinkPlacementObjectKind.INSTANCE_SPOT.value()
+                        ? !primary.stableType().equals(prepare.object().stableType())
+                        : primary.sourceAuthorityOwnerGeneration()
+                                != prepare.object().expectedAuthorityOwnerGeneration())) {
             throw new IllegalStateException("relocation primary authority generation differs");
         }
     }
@@ -2274,7 +2291,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private static ZLinkSpotRetireControl.ParticipantFence primary(
             List<ZLinkSpotRetireControl.ParticipantFence> participants) {
         return participants.stream()
-                .filter(value -> value.objectKind() == 2)
+                .filter(value -> value.objectKind() != ZLinkPlacementObjectKind.ACTOR.value())
                 .findFirst()
                 .orElse(participants.getFirst());
     }

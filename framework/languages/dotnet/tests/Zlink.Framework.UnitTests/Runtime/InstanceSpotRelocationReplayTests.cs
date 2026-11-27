@@ -381,7 +381,7 @@ public sealed partial class EntrySpotActorDispatchTests
             RelocatedRoomRecord(request, javaInput: true),
             RelocatedRoomWire
         );
-        var job = ZLinkRelocationEnvelopeCodec.ProjectCanonicalQueuedJob(
+        var job = ZLinkRelocationEnvelopeCodec.DecodeCanonicalSavedWork(
             1,
             encoded,
             new((byte)Wire.StatefulObjectKind.InstanceSpot, RelocatedRoomType, "room", 17, 0)
@@ -413,7 +413,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         Assert.False(ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(encoded));
         Assert.Throws<InvalidDataException>(() =>
-            ZLinkRelocationEnvelopeCodec.ProjectCanonicalQueuedJob(
+            ZLinkRelocationEnvelopeCodec.DecodeCanonicalSavedWork(
                 1,
                 encoded,
                 new((byte)Wire.StatefulObjectKind.InstanceSpot, RelocatedRoomType, "room", 17, 0)

@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Locations;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -48,6 +49,7 @@ internal sealed class ZLinkActorRuntimeState(
     private ZLinkActorHandlerActivation? _handlerActivation;
     private bool _handlerActivationClosed;
     private Task? _terminalLifecycleCompletion;
+    private ZLinkAuthorityRelocation? _relocationCompletionCandidate;
     private int _contextInvalidated;
 
     internal ZLinkActorRuntimeState(
@@ -100,6 +102,18 @@ internal sealed class ZLinkActorRuntimeState(
     public ZLinkActorContext? Context { get; private set; }
 
     public IZLinkActor? Actor { get; private set; }
+
+    internal ZLinkAuthorityRelocation? RelocationCompletionCandidate =>
+        Volatile.Read(ref _relocationCompletionCandidate);
+
+    internal void TrackRelocationCompletion(ZLinkAuthorityRelocation? relocation)
+    {
+        if (relocation is { Target: not null, Completion.IsReady: false })
+            Volatile.Write(ref _relocationCompletionCandidate, relocation);
+    }
+
+    internal void ClearRelocationCompletionCandidate(ZLinkAuthorityRelocation candidate) =>
+        Interlocked.CompareExchange(ref _relocationCompletionCandidate, null, candidate);
 
     /// <summary>MeshNode that activated this Actor in the current process.</summary>
     internal string? MeshName => Activation?.MeshName ?? Context?.MeshName;

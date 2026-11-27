@@ -907,6 +907,7 @@ internal struct MeshReceiveRecord
         ulong deadlineUnixMs = 0,
         Func<RequestResult, uint, SubmitResult>? terminalReply = null,
         ZLinkMultipartPayloadView? applicationPayloadView = null,
+        bool instanceIntent = false,
         ServiceWireCodec.InstanceRouteV1Case0? readyInstanceRoute = null,
         ZlinkSubmitException? submitFailure = null,
         ZLinkManagedMeshNode.NativeApplicationReply? nativeApplicationReply = null
@@ -928,6 +929,7 @@ internal struct MeshReceiveRecord
         TerminalResult = terminalResult;
         FailureErrno = failureErrno;
         _kindData = readyInstanceRoute ?? (object?)kindData;
+        InstanceIntent = instanceIntent;
         _replyRoute = reply ?? (object?)nativeApplicationReply;
         _terminalReply = terminalReply;
         _joinReply = joinReply;
@@ -963,6 +965,7 @@ internal struct MeshReceiveRecord
     public byte MessageFollowHopCount { get; }
     public ulong ReplyRouteId { get; }
     public ulong DeadlineUnixMs { get; }
+    internal bool InstanceIntent { get; }
     internal ServiceWireCodec.InstanceRouteV1Case0? ReadyInstanceRoute =>
         _kindData as ServiceWireCodec.InstanceRouteV1Case0;
     public MeshRecordPayload? KindData => _kindData as MeshRecordPayload;

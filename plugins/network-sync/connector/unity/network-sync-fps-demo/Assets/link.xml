@@ -1,0 +1,5 @@
+<linker>
+  <assembly fullname="Zlink.NetworkSync" preserve="all" />
+  <assembly fullname="Systems.Zlink.Stream.Connector" preserve="all" />
+  <assembly fullname="Zlink.NetworkSync.FpsDemo" preserve="all" />
+</linker>

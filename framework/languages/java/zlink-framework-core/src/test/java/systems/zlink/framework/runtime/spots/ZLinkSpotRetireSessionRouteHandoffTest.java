@@ -29,9 +29,11 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotAggregateStagingOwner.PreparedSpot;
 import systems.zlink.framework.runtime.spots.ZLinkUserSpotAggregateStagingOwner.StagingBackend;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
@@ -594,14 +596,14 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
 
     private static final class TestStagingBackend implements StagingBackend {
         @Override
-        public CompletionStage<Object> prepareSpot(
+        public CompletionStage<PreparedSpot> prepareSpot(
                 ZLinkUserSpotAggregateStagingOwner.Request request) {
-            return CompletableFuture.completedFuture("prepared-spot");
+            return CompletableFuture.completedFuture(new TestPreparedSpot("prepared-spot"));
         }
 
         @Override
         public CompletionStage<Void> restoreSpot(
-                Object preparedSpot,
+                PreparedSpot preparedSpot,
                 ZLinkUserSpotAggregateStagingOwner.Request request,
                 systems.zlink.framework.actors.ZLinkRelocationCancellation cancellation) {
             return CompletableFuture.completedFuture(null);
@@ -623,7 +625,7 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
 
         @Override
         public CompletionStage<Void> enqueueIngress(
-                Object preparedSpot,
+                PreparedSpot preparedSpot,
                 List<systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn>
                         dispatches,
                 String laneId,
@@ -634,13 +636,13 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
         }
 
         @Override
-        public CompletionStage<Void> publishSpot(Object preparedSpot) {
+        public CompletionStage<Void> publishSpot(PreparedSpot preparedSpot) {
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public void publishActor(
-                Object preparedSpot,
+                PreparedSpot preparedSpot,
                 Object preparedActor,
                 String targetSpotId,
                 Long targetOwnerGeneration) {}
@@ -649,7 +651,7 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
         public void completeActor(Object preparedActor) {}
 
         @Override
-        public void publishTimers(Object preparedSpot) {}
+        public void publishTimers(PreparedSpot preparedSpot) {}
 
         @Override
         public CompletionStage<Void> discardActor(Object preparedActor) {
@@ -657,7 +659,7 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
         }
 
         @Override
-        public CompletionStage<Void> discardSpot(Object preparedSpot) {
+        public CompletionStage<Void> discardSpot(PreparedSpot preparedSpot) {
             return CompletableFuture.completedFuture(null);
         }
     }

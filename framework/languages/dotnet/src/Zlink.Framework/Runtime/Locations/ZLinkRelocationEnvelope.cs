@@ -689,7 +689,7 @@ internal static class ZLinkRelocationEnvelopeCodec
                     "The relocation saved-work participant or order is invalid."
                 );
             var frozen = ServiceWireCodec.EncodeFrozenRecord(work.Record, context);
-            var job = ProjectCanonicalQueuedJob(
+            var job = DecodeCanonicalSavedWork(
                 order,
                 frozen,
                 work.Record,
@@ -867,31 +867,34 @@ internal static class ZLinkRelocationEnvelopeCodec
         return envelope;
     }
 
-    internal static ZLinkRelocationQueuedJob ProjectCanonicalQueuedJob(
+    internal static ZLinkRelocationQueuedJob DecodeCanonicalSavedWork(
         ulong order,
         byte[] encoded,
         ZLinkServiceWireCodec.RelocationObjectRecord identity
     ) =>
-        ProjectCanonicalQueuedJob(
+        DecodeCanonicalSavedWork(
             order,
             encoded,
-            ServiceWireCodec.DecodeFrozenRecord(encoded, FrozenWireContext(encoded.Length)),
+            encoded.Length != 0
+            && encoded[0] == (byte)ServiceWireCodec.MeshRecordKind.InstanceSpotActivation
+                ? ServiceWireCodec.DecodeFrozenRecord(encoded, FrozenWireContext(encoded.Length))
+                : null,
             identity,
             out _
         );
 
-    private static ZLinkRelocationQueuedJob ProjectCanonicalQueuedJob(
+    private static ZLinkRelocationQueuedJob DecodeCanonicalSavedWork(
         ulong order,
         byte[] encoded,
-        ServiceWireCodec.FrozenRecord wire,
+        ServiceWireCodec.FrozenRecord? wire,
         ZLinkServiceWireCodec.RelocationObjectRecord identity,
         out CanonicalSavedWorkOperation? operation
     )
     {
         ZLinkCanonicalAcceptedRequest? projection;
-        if (wire.Body is ServiceWireCodec.FrozenRecordBodyCase13 instance)
+        if (wire is { Body: ServiceWireCodec.FrozenRecordBodyCase13 instance } instanceRecord)
         {
-            ValidateInstanceOperation(wire, instance);
+            ValidateInstanceOperation(instanceRecord, instance);
             if (instance.Route is not ServiceWireCodec.InstanceRouteV1Case0 route)
                 throw new InvalidDataException(
                     "Accepted Instance Spot work requires a Ready route."
@@ -904,7 +907,7 @@ internal static class ZLinkRelocationEnvelopeCodec
                 throw new InvalidDataException(
                     "The accepted Instance Spot work addresses another incarnation."
                 );
-            var (ownerId, lease, nodeRid, generation, sourceSpotId) = wire.Source switch
+            var (ownerId, lease, nodeRid, generation, sourceSpotId) = instanceRecord.Source switch
             {
                 ServiceWireCodec.FrozenSourceIdentityCase0 node => (
                     node.SourceOwnerId.Value,
@@ -938,8 +941,8 @@ internal static class ZLinkRelocationEnvelopeCodec
                     "The relocation saved work source kind is invalid."
                 ),
             };
-            var high = wire.OperationId.High.Value;
-            var low = wire.OperationId.Low.Value;
+            var high = instanceRecord.OperationId.High.Value;
+            var low = instanceRecord.OperationId.Low.Value;
             operation =
                 high == 0 && low == 0
                     ? null
@@ -956,7 +959,7 @@ internal static class ZLinkRelocationEnvelopeCodec
                 sourceSpotId,
                 high,
                 low,
-                wire.ReplyRoute is ServiceWireCodec.FrozenReplyRouteCase4 reply
+                instanceRecord.ReplyRoute is ServiceWireCodec.FrozenReplyRouteCase4 reply
                     ? reply.ReplyRouteId.Value
                     : 0,
                 route.TargetSpotId.Value,
@@ -965,7 +968,7 @@ internal static class ZLinkRelocationEnvelopeCodec
                 route.TargetNodeGeneration.Value,
                 route.Authority.AuthorityOwnerGeneration.Value,
                 route.Authority.LeaseGeneration.Value,
-                wire.Metadata is { } metadata
+                instanceRecord.Metadata is { } metadata
                     ? new ZLinkMessageMetadata(
                         metadata.Entries.ToDictionary(
                             static entry => entry.Key.Value,
