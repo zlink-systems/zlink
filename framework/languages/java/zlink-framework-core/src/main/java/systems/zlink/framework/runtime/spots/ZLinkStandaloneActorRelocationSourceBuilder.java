@@ -27,6 +27,7 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -1269,7 +1270,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     .thenCompose(ignored -> finishCapture(retained))
                     .thenCompose(
                             relayed ->
-                                    installRelocationForward(settlement)
+                                    installRelocationForward(settlement, relayed)
                                             .thenApply(ignored -> relayed))
                     .thenCompose(
                             relayed ->
@@ -1362,7 +1363,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         }
 
         private CompletionStage<Void> installRelocationForward(
-                CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement> settlement) {
+                CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement> settlement,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> relayed) {
             var targetFence =
                     settlement.thenApply(
                             result -> {
@@ -1392,7 +1394,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                     owned.actorId(),
                                     owned.snapshot().objectGeneration()),
                             targetFence)
-                    .thenCompose(ignored -> bindCommittedReplies());
+                    .thenCompose(ignored -> bindCommittedReplies(relayed));
         }
 
         private ZLinkServiceM6BWireCodec.ActorRouteFence sourceRoute() {
@@ -1418,7 +1420,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     stageRequest.targetOwnerLeaseGeneration());
         }
 
-        private CompletionStage<Void> bindCommittedReplies() {
+        private CompletionStage<Void> bindCommittedReplies(
+                List<ZLinkSerialExecutionQueue.QueuedRecord> relayed) {
             ZLinkSpotRetireControl.ParticipantFence participant =
                     stageRequest.participants().stream()
                             .filter(value -> value.objectId().equals(owned.actorId()))
@@ -1427,18 +1430,18 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                     () ->
                                             new IllegalStateException(
                                                     "Actor relocation participant is missing"));
-            return captureCompletion.thenCompose(
-                    journal ->
-                            relocationReplies.bindCanonicalRelocationRepliesAsync(
-                                    Map.of("actor:" + owned.actorId(), journal),
-                                    stageRequest.targetNodeRid(),
-                                    stageRequest.targetNodeGeneration(),
-                                    Map.of(
-                                            owned.actorId(),
-                                            new ZLinkSpotRelocationReplyRoutes.CommittedFence(
-                                                    participant.authorityKey(),
-                                                    1L,
-                                                    stageRequest.fence().aggregateGeneration()))));
+            var journal = new ArrayList<>(seal.captured());
+            journal.addAll(relayed);
+            return relocationReplies.bindCanonicalRelocationRepliesAsync(
+                    Map.of("actor:" + owned.actorId(), journal),
+                    stageRequest.targetNodeRid(),
+                    stageRequest.targetNodeGeneration(),
+                    Map.of(
+                            owned.actorId(),
+                            new ZLinkSpotRelocationReplyRoutes.CommittedFence(
+                                    participant.authorityKey(),
+                                    1L,
+                                    stageRequest.fence().aggregateGeneration())));
         }
 
         CompletionStage<Void> completeSourceQueueCommit() {
