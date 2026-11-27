@@ -355,6 +355,10 @@ Common shapes
 | `Connection` | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `streamName` string · `sessionRid` b64 |
 | `Delivery` | `streamName` string · `sessionRid` b64 · `kind` `"position"`\|`"ticket"` · `position?` int32 (1-based) · `estimatedWaitMs?` int32 · `ticket?` b64 (66 chars) · `expiresInMs?` int32. With `kind` `position`, `position` and `estimatedWaitMs` are required; with `ticket`, `ticket` and `expiresInMs` are |
 
+A response travels in the same application payload envelope as its request, and its packet name is the request name
+followed by `.reply` (`$zlink.admission-queue.enqueue.reply`, `.report.reply`, `.admit-permit.reply`). `release-permit` is a
+send and has no response.
+
 | Message | Kind | Request | Response |
 |---|---|---|---|
 | `$zlink.admission-queue.enqueue` | request | `connection` Connection | `epoch` dec · `delivery` Delivery |
