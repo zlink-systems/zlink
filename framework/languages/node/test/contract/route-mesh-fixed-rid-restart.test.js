@@ -1,9 +1,11 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { randomUUID } = require('node:crypto');
+const { randomInt, randomUUID } = require('node:crypto');
+const { readFileSync } = require('node:fs');
 const { setTimeout: delay } = require('node:timers/promises');
 const test = require('node:test');
+const { BindResult } = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 const telemetry = require('./helpers/telemetry-log-capture');
@@ -12,6 +14,10 @@ const { ZLinkRedisLocationStore } = require('../../packages/framework-locations-
 const {
   ZLinkAutoConnectReconciler
 } = require('../../packages/framework/dist/runtime/locations/auto-connect-reconciler');
+
+const FIRST_NON_PRIVILEGED_PORT = 1024;
+// IANA dynamic/private port range: https://www.iana.org/assignments/service-names-port-numbers/
+const IANA_DYNAMIC_PORT_START = 49152;
 
 class Notice {
   constructor(value) {
@@ -157,14 +163,32 @@ test(
     let game;
     let shared;
     try {
+      const ephemeralStart =
+        process.platform === 'linux'
+          ? Number(
+              readFileSync('/proc/sys/net/ipv4/ip_local_port_range', 'utf8').trim().split(/\s+/)[0]
+            )
+          : IANA_DYNAMIC_PORT_START;
+      const portCount = ephemeralStart - FIRST_NON_PRIVILEGED_PORT;
+      assert.ok(portCount > 0, 'no non-privileged port below the ephemeral range');
+      const firstPort = randomInt(portCount);
+      let bind;
       game = await start('game', 'tcp://127.0.0.1:0');
+      for (let offset = 0; offset < portCount; offset++) {
+        bind = `tcp://127.0.0.1:${FIRST_NON_PRIVILEGED_PORT + ((firstPort + offset) % portCount)}`;
+        try {
+          shared = await start('shared', bind);
+          break;
+        } catch (error) {
+          if (error.code !== BindResult.AddrInUse) throw error;
+        }
+      }
+      assert.ok(shared, 'no available port outside the ephemeral range');
       const descriptorStore = game.host.locationOwner.currentStores.locationStore;
       let previous;
-      let bind = 'tcp://127.0.0.1:0';
       const restarts = process.env.ZLINK_NODE_FIXED_RID_RESTARTS === '40' ? 40 : 12;
       for (let iteration = 0; iteration <= restarts; iteration++) {
-        shared = await start('shared', bind);
-        bind = shared.node.status().localEndpoint;
+        if (iteration > 0) shared = await start('shared', bind);
         const generation = shared.node.status().lifecycleGeneration;
         assert.notEqual(generation, previous);
         previous = generation;
@@ -173,6 +197,7 @@ test(
         assert.equal(descriptors.length, 2);
         const published = descriptors.find(({ rid }) => String(rid) === 'shared');
         assert.equal(published.lifecycleGeneration, generation);
+        assert.equal(published.endpoint, shared.node.status().localEndpoint);
         const owner = await descriptorStore.readOwnerLease(published.ownerId);
         assert.equal(owner.kind, 'found');
         assert.equal(owner.token.leaseGeneration, published.leaseGeneration);
