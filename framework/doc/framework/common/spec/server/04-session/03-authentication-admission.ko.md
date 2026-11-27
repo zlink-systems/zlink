@@ -205,24 +205,30 @@ Connector는 다음과 같이 처리한다.
 #### 3.5.3 Node 보고와 ticket 발급
 
 - 2단계가 켜진 node는 1초마다 대기열 Spot에 `NodeReport` Spot request를 보낸다. 내용은 node RID, 1단계 한도, 현재
-  처리 중 수, 직전 보고 뒤 사용된 ticket의 SessionRid 목록, 직전 보고 뒤 끝난 대기 session의 SessionRid 목록이다.
+  처리 중 수, 직전 보고 뒤 사용된 ticket의 SessionRid 목록, 직전 보고 뒤 끝난 대기 session의 SessionRid 목록, 전역 상한이 있을 때 쥐고 있는 permit ID 목록이다.
   Spot은 그 Response로 현재 epoch를 돌려준다. 이 보고는 Framework 내부 Spot 메시지이고 client wire가 아니다.
 - Spot은 3초 안에 받은 보고만 유효로 본다. 유효 보고가 없는 node의 session에는 ticket을 내지 않는다.
 - 대기자는 SessionRid와 그 session의 node RID로 기록한다. Ticket은 그 session의 node에서만 쓸 수 있으므로 발급
   예산도 node마다 센다: `예산(N) = max(0, 한도 − 처리 중 수 − 그 보고 뒤 N의 대기자에게 낸 ticket 수)`. Spot은 보고를
   받을 때와 대기자가 들어올 때 각 node의 예산만큼 그 node 대기자에게 enqueue 순서대로 ticket을 낸다. 그래서 순서는
   node 안에서 FIFO이고 mesh 전체로는 근사 FIFO다.
-- **전역 상한.** 설정 값 `AdmissionGlobalLimit`(양의 정수, 선택)이 있으면 Spot은 ticket을 하나 낼 때마다
-  `Σ(유효 보고의 처리 중 수) + 아직 사용으로 보고되지 않은 미만료 ticket 수 < AdmissionGlobalLimit`일 때만 낸다.
-  조건을 넘으면 node 예산이 남아 있어도 내지 않고 다음 보고나 ticket 만료를 기다린다. 이 값이 없으면 node별 예산만 쓴다.
-  - 2단계가 켜진 node는 유효한 ticket이 없는 인증을 모두 §3.4 첫 행으로 handler 실행 전에 거절하므로, handler에
-    들어오는 인증은 모두 이 Spot이 낸 ticket을 갖는다. 그래서 Spot 안의 이 계산이 mesh 전체의 동시 인증 수를 막는다.
-    별도 Store counter를 두지 않는다.
-  - Ticket은 node 보고의 사용 목록에 오르기 전까지 미사용으로 센다. 사용 중인 ticket이 처리 중 수와 함께 두 번 세어질
-    수 있지만 상한을 넘는 쪽으로는 틀리지 않는다.
-  - 대기열 Spot이 새 incarnation이 되면 epoch가 바뀌어 이전 ticket은 모두 무효이고(§3.5.1), 유효 보고를 받기 전에는
-    ticket을 내지 않으므로 재준비 직후에도 상한을 넘겨 내지 않는다.
-  - 모든 node에 같은 값을 설정한다. Spot은 자기 incarnation이 도는 node의 설정 값을 쓴다.
+- **전역 상한.** 설정 값 `AdmissionGlobalLimit`(양의 정수, 선택)이 있으면 mesh 전체의 동시 인증 실행 수를 이 값으로 막는다.
+  Ticket은 입장 자격일 뿐이고, 실행 permit은 대기열 Spot이 따로 준다.
+  - Node는 유효한 ticket을 가진 인증을 handler에 넣기 전에 대기열 Spot에 `AdmitPermit` Spot request를 한 번 보낸다. 내용은 node
+    RID, node owner lease(`ownerId`, `leaseGeneration`), SessionRid와 ticket의 epoch다. Spot은 `실행 중 permit 수 < AdmissionGlobalLimit`
+    이고 epoch가 현재 값이면 permit ID(0이 아닌 64-bit)를 Response로 주고, 아니면 §3.4 첫 행과 같은 `unavailable`+queueRequired로
+    거절한다. 거절된 연결은 §3.5.5대로 다시 대기한다.
+  - Node는 handler가 끝나면(성공·실패·취소 모두) `ReleasePermit` Spot send로 permit을 반납한다. Spot은 같은 permit의 반납을
+    멱등으로 처리한다.
+  - Spot은 permit마다 node owner lease를 기록하고, 그 lease가 끝난 node의 permit을 모두 회수한다. 다음 node 보고(§3.5.3)에 없는
+    permit도 회수한다 — 보고는 그 node가 쥐고 있는 permit ID 목록을 함께 보낸다.
+  - `AdmitPermit`이 실패하거나 Spot 응답이 인증 request deadline 안에 오지 않으면 handler를 실행하지 않고 `unavailable`로 끝낸다.
+    전역 상한이 있으면 Spot이 없을 때 넘겨 들여보내지 않는다.
+  - Ticket 재사용, 사용 보고 지연, 보고 만료와 epoch 전환은 permit 수에 영향을 주지 않는다. 비용은 2단계와 전역 상한을 켰을 때
+    인증마다 Spot 왕복 1회와 반납 send 1회다.
+  - 모든 node에 같은 값을 설정한다. Spot은 자기 incarnation이 도는 node의 설정 값을 쓴다. 새 incarnation은 permit 수 0에서
+    시작하지만, 이전 incarnation의 permit을 쥔 node는 새 epoch를 받은 보고 Response 뒤 그 permit을 반납한 것으로 보고 새로 셀
+    permit에 포함하지 않으므로, incarnation 전환 직후에는 상한을 잠시 넘을 수 있다. 그 폭은 전환 시점에 실행 중이던 인증 수 이하다.
 - 예상 대기 `estimatedWaitMs`는 `ceil(position × 1000 / r)`이고, r은 최근 30초 동안 낸 ticket 수 ÷ 30(초당)이다.
   r이 0이면 `position × 1000`이다. 결과는 2^31 − 1에서 자른다. `position`은 1부터 시작하는 mesh 전체 순번이다.
 - 같은 SessionRid의 `$zlink.admission.enqueue`는 멱등이다. 이미 대기 중이면 현재 순번을, ticket을 받고 아직 쓰지
