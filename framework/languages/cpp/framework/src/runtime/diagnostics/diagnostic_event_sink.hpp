@@ -28,6 +28,25 @@ class diagnostic_event_sink_t
         std::string message;
     };
 
+    static std::exception_ptr innermost_exception (std::exception_ptr exception) noexcept
+    {
+        while (exception) {
+            try {
+                std::rethrow_exception (exception);
+            }
+            catch (const std::nested_exception &error) {
+                if (auto nested = error.nested_ptr ()) {
+                    exception = std::move (nested);
+                    continue;
+                }
+            }
+            catch (...) {
+            }
+            break;
+        }
+        return exception;
+    }
+
     static exception_summary_t exception_summary (const std::exception_ptr &exception)
     {
         if (!exception)

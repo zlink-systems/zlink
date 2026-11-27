@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/instance_spot_metrics.hpp"
 #include "runtime/dispatch/application_record.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
@@ -470,8 +471,9 @@ struct instance_spot_activation_result_t
     // Releases the accepted application turn only after its reply is handed
     // to the transport. Instance Spot close waits on this terminal.
     std::function<void ()> accepted_turn_terminal;
-    // Preserve the original failure for diagnostics alongside its wire classification.
+    // Preserve the original failure and receive flow alongside the wire classification.
     std::exception_ptr exception;
+    std::optional<flow_value_t> terminal_flow;
 };
 
 struct instance_spot_activation_materializer_t

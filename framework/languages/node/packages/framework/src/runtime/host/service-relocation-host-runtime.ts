@@ -198,7 +198,9 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
   frameworkRelocationFailureCode,
-  internalFrameworkErrorKindFromWireFailureCode
+  internalFrameworkErrorKindFromWireFailureCode,
+  internalFrameworkWireReply,
+  requestResultToPublicErrorKind
 } from '../framework-errors-internal';
 import {
   compareInventoryAuthorityKeys,
@@ -284,7 +286,8 @@ interface ZLinkHostRelocationOptions {
   readonly locationStore: () => ZLinkLocationStore | undefined;
   readonly relocationStore?: ZLinkRelocationStore;
   readonly currentOwner: () => ZLinkLocationOwnerToken | undefined;
-  readonly targetAdmissionSealed?: () => boolean;
+  readonly shutdownRequested?: () => AbortSignal;
+  readonly shutdownDeadline?: () => AbortSignal | undefined;
   readonly requestPeerReconcile?: (meshName: string, peerRid: string) => Promise<void>;
   readonly sourceQuiescenceChanged?: () => void;
   readonly liveDescriptors: (
@@ -765,12 +768,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
 
   /** Spec 28 §4.4: the target owner alone orders shutdown seal and verified cutover. */
   private targetStageSealed(stage: LocalStage): boolean {
-    return !stage.cutoverReceived && this.targetAdmissionSealed();
+    return !stage.cutoverReceived && this.relocationStopping();
   }
 
   /** The Shutdown admission seal: closed once the target owner starts shutdown. */
-  private targetAdmissionSealed(): boolean {
-    return this.disposed || this.options.targetAdmissionSealed?.() === true;
+  private relocationStopping(): boolean {
+    return this.disposed || this.options.shutdownRequested?.().aborted === true;
   }
 
   completeActorJoinSourceCleanup(actorId: string): void {
@@ -2907,9 +2910,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       advertisedReceiveChunkLimitBytes
     );
     const plan = planRelocationChunks(encoded, chunkLimitBytes);
-    // The unit's original Restore absolute deadline authorizes the source
-    // Preserve fence (Location runtime §10). Caller cancellation cannot
-    // advance that deadline. The target keeps no deadline of its own.
+    // Host shutdown can end the Restore wait and require source settlement.
+    // Caller cancellation alone does not advance the Preserve deadline.
+    const shutdown = this.options.shutdownRequested?.();
+    const restoreSignal =
+      shutdown === undefined || signal === undefined
+        ? (shutdown ?? signal)
+        : AbortSignal.any([shutdown, signal]);
     const restoreDeadlineReached = () => performance.now() >= controlDeadlineAtMs;
     let settlement:
       Awaited<ReturnType<ZLinkHostServiceRelocationRuntime['settleSourceAuthority']>> | undefined =
@@ -2945,7 +2952,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           meshName,
           target.rid,
           prepare,
-          signal,
+          restoreSignal,
           controlDeadlineAtMs,
           async (attemptSignal) => {
             settlement = undefined;
@@ -3391,8 +3398,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   /**
    * The one source authority settlement after request creation (Location runtime
    * §6.1·§10, spec 28 §4.4). It reads the Store until the target commit or
-   * the Restore deadline. From the Restore deadline it runs the source
-   * Preserve fence: a CAS on the StoreVersion expected by target NewOwner
+   * the Restore deadline or host shutdown (host relocation §14). It then runs
+   * the source Preserve fence: a CAS on the StoreVersion expected by target NewOwner
    * excludes a late target commit. `target`: the
    * target committed. `source`: Preserve fenced the target out while the
    * source owner lease was valid. `lost`: the source owner lease ended first
@@ -3411,29 +3418,29 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const owner = { ownerId: primary.ownerId, leaseGeneration: primary.ownerLeaseGeneration };
     const store = this.requireLocationStore();
     for (;;) {
-      if (this.disposed) {
-        this.completeSourceRelocationMetric(relocationMetric, undefined, true);
-        throw new ServiceRelocationRuntimeStoppedError();
-      }
-      if (window !== undefined) await this.resendSourceCutover(window);
-      const observed = await this.readSourceSettlement(envelope, primary, target).catch(
+      // The stop deadline prevents new Store calls without cancelling a submitted call.
+      const observed = await this.readSourceSettlement(store, envelope, primary, target).catch(
         (error: unknown) => {
+          this.options.shutdownDeadline?.()?.throwIfAborted();
           if (!isIndeterminateLocationStoreFailure(error)) throw error;
           return undefined;
         }
       );
       if (observed?.kind === 'target') return observed;
       if (observed?.kind === 'other') return 'lost';
-      if (restoreDeadlineReached() && observed?.kind === 'source') {
+      const preserve = this.relocationStopping() || restoreDeadlineReached();
+      if (preserve && observed?.kind === 'source') {
         // An unreadable lease is an uncertain result, not an expiry.
+        this.options.shutdownDeadline?.()?.throwIfAborted();
         if (
-          await this.exactSourceLeaseExpired(owner).catch((error: unknown) => {
+          await this.exactSourceLeaseExpired(owner, undefined, store).catch((error: unknown) => {
             if (!isIndeterminateLocationStoreFailure(error)) throw error;
             return false;
           })
         )
           return 'lost';
         const publication = this.codec.read(observed.current.payload);
+        this.options.shutdownDeadline?.()?.throwIfAborted();
         const preserved = await store
           .compareExchangeAuthority(
             { value: primaryKey(envelope) } as ZLinkAuthorityKey,
@@ -3460,6 +3467,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           return 'source';
         }
       }
+      if (this.disposed) {
+        this.completeSourceRelocationMetric(relocationMetric, undefined, true);
+        throw new ServiceRelocationRuntimeStoppedError();
+      }
+      if (!preserve && window !== undefined) await this.resendSourceCutover(window);
       // The caller awaits this settlement, so the retry timer keeps the loop alive.
       await new Promise<void>((resolve) =>
         setTimeout(resolve, RELOCATION_AUTHORITY_POLL_INTERVAL_MS)
@@ -3468,6 +3480,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   private async readSourceSettlement(
+    store: ZLinkLocationStore,
     envelope: ServiceRelocationEnvelope,
     primary: ZLinkAuthoritySnapshot,
     target: ServiceWireRelocationTarget
@@ -3481,7 +3494,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const followAuthorities = new Map<string, ZLinkAuthoritySnapshot>();
     let primaryCurrent: ZLinkAuthoritySnapshot | undefined;
     for (const participant of envelope.participants) {
-      const current = await this.requireLocationStore().readAuthority({
+      this.options.shutdownDeadline?.()?.throwIfAborted();
+      const current = await store.readAuthority({
         value: participant.key
       } as ZLinkAuthorityKey);
       if (current.kind !== 'snapshot') return { kind: 'other' };
@@ -3617,7 +3631,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): Promise<ServiceMaintenanceRelocationReady> {
     // Host relocation flow 05: a sealed target refuses a new PREPARE before any
     // staging. The typed ShuttingDown reaches the source as relocationFailed.
-    if (this.targetAdmissionSealed()) {
+    if (this.relocationStopping()) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ShuttingDown,
         'Relocation target admission is sealed for shutdown.'
@@ -4781,9 +4795,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
 
   private async exactSourceLeaseExpired(
     source: Pick<ServiceWireRequestSourceFence, 'ownerId' | 'leaseGeneration'>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    store = this.requireLocationStore()
   ): Promise<boolean> {
-    const lease = await this.requireLocationStore().readOwnerLease(source.ownerId, signal);
+    const lease = await store.readOwnerLease(source.ownerId, signal);
     return (
       lease.kind === 'missing' ||
       lease.token.ownerId !== source.ownerId ||
@@ -6872,6 +6887,11 @@ function maintenanceReplyRelay(
   flowEnabled: boolean
 ): ServiceMaintenanceReplyRelay {
   const value = completion.result.ok ? completion.result.response : undefined;
+  const terminal = completion.result.ok
+    ? { terminalResult: RequestResult.Ok, failureCode: ServiceWireFrameworkErrorCode.none }
+    : internalFrameworkWireReply(
+        completion.result.errorKind ?? ZLinkFrameworkInternalErrorKind.RequestFailed
+      );
   const direct = packet.messageFollowOrigin?.requestSource !== undefined;
   const application =
     direct && completion.result.ok
@@ -6897,10 +6917,7 @@ function maintenanceReplyRelay(
     replyRouteId: BigInt(completion.source.replyRouteId),
     participantId,
     sequence: BigInt(completion.index + 1),
-    terminalResult: completion.result.ok ? RequestResult.Ok : RequestResult.InternalError,
-    failureCode: completion.result.ok
-      ? ServiceWireFrameworkErrorCode.none
-      : ServiceWireFrameworkErrorCode.requestFailed,
+    ...terminal,
     ...(application !== undefined
       ? {
           payload: {
@@ -6939,7 +6956,14 @@ function handoffResultFromRelay(relay: ServiceMaintenanceReplyRelay): ZLinkActor
   const index = Number(relay.sequence - 1n);
   return relay.terminalResult === RequestResult.Ok
     ? { index, ok: true, ...(value === undefined ? {} : { response: value }) }
-    : { index, ok: false, error: `Actor handoff failed with framework code ${relay.failureCode}.` };
+    : {
+        index,
+        ok: false,
+        error: `Actor handoff failed with framework code ${relay.failureCode}.`,
+        errorKind:
+          internalFrameworkErrorKindFromWireFailureCode(relay.failureCode) ??
+          requestResultToPublicErrorKind(relay.terminalResult)
+      };
 }
 
 function wireIdText(value: { readonly high: bigint; readonly low: bigint }): string {
