@@ -669,7 +669,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                             : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
             completion = new ZLinkActorJoinCompletion.Failed(admission.operationId(), kind);
         }
-        return actors.invokeActorLifecycle(actor, () -> actor.onJoinCompleted(completion));
+        return actors.deliverActorJoinCompletion(prepared, completion);
     }
 
     private static boolean sameCanonicalAdmission(

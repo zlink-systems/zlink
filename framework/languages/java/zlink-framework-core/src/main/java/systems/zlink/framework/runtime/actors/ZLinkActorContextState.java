@@ -161,8 +161,8 @@ final class ZLinkActorContextState {
         }
     }
 
-    void sealDeferredJoin(Object claim) {
-        deferredJoinClaim.compareAndSet(claim, JOIN_COMPLETION_SEALED);
+    void sealDeferredJoin() {
+        deferredJoinClaim.set(JOIN_COMPLETION_SEALED);
     }
 
     void requireApplicationExecution() {
