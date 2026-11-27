@@ -854,9 +854,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const record = await this.completionStore().read(authority);
     for (const entry of record.entries) {
       if (entry.delivery !== 'pending') continue;
-      const stored = decodeMaintenanceReplyRelay(
-        decodeMultipartParts(Buffer.from(entry.reply, 'base64'), (part) => part)
-      );
       const status = this.requireMeshNode(meshName).status();
       const owner = this.options.currentOwner();
       if (
@@ -871,29 +868,22 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         nodeRid: decodeRoutingId('', entry.source.nodeRid),
         nodeGeneration: BigInt(entry.source.nodeGeneration)
       };
-      const relay = {
-        ...stored,
-        coordinator: {
-          ownerId: owner.ownerId,
-          leaseGeneration: owner.leaseGeneration,
-          nodeRid: status.routingId,
-          nodeGeneration: status.lifecycleGeneration,
-          expectedAuthorityStoreVersion: authority.storeVersion.value
-        }
+      const coordinator: ServiceWireRelocationCoordinatorFence = {
+        ownerId: owner.ownerId,
+        leaseGeneration: owner.leaseGeneration,
+        nodeRid: status.routingId,
+        nodeGeneration: status.lifecycleGeneration,
+        expectedAuthorityStoreVersion: authority.storeVersion.value
       };
-      const delivery = await this.sendReplyRelay(
+      authority = await this.deliverStoredCompletion(
         meshName,
-        source.nodeRid,
-        relay,
-        source,
-        undefined,
-        this.completionRetention(key, authority)
-      );
-      authority = await this.updateCompletion(
         key,
         record.relocationId,
-        (store, current) => store.acknowledge(key, current, entry, delivery),
-        authority
+        entry,
+        source,
+        coordinator,
+        authority,
+        (acknowledge) => acknowledge()
       );
     }
     return authority;
@@ -4434,7 +4424,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       result
     };
     const source = handoffSourceFence(packet.source);
-    let relay = maintenanceReplyRelay(
+    const relay = maintenanceReplyRelay(
       stage,
       coordinator,
       participantId,
@@ -4472,31 +4462,58 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       entry =
         record.entries.find((value) => sameCompletionIdentity(value, entry)) ??
         completionDataLost('Published completion is missing.');
-      relay = decodeMaintenanceReplyRelay(
-        decodeMultipartParts(Buffer.from(entry.reply, 'base64'), (part) => part)
-      );
       return published;
     });
     stage.lane = publish;
     const published = await publish;
+    return await this.deliverStoredCompletion(
+      meshName,
+      key,
+      stage.staging.envelope.aggregateId,
+      entry,
+      source,
+      coordinator,
+      published,
+      (acknowledge) => {
+        const scheduled = stage.lane.then(acknowledge);
+        stage.lane = scheduled;
+        return scheduled;
+      }
+    );
+  }
+
+  private async deliverStoredCompletion(
+    meshName: string,
+    key: ZLinkAuthorityKey,
+    relocationId: string,
+    entry: RelocationCompletionEntry,
+    source: ServiceWireRequestSourceFence,
+    coordinator: ServiceWireRelocationCoordinatorFence,
+    authority: ZLinkAuthoritySnapshot,
+    scheduleAcknowledgement: (
+      acknowledge: () => Promise<ZLinkAuthoritySnapshot>
+    ) => Promise<ZLinkAuthoritySnapshot>
+  ): Promise<ZLinkAuthoritySnapshot> {
+    const stored = decodeMaintenanceReplyRelay(
+      decodeMultipartParts(Buffer.from(entry.reply, 'base64'), (part) => part)
+    );
+    const relay = { ...stored, coordinator };
     const delivery = await this.sendReplyRelay(
       meshName,
       source.nodeRid,
       relay,
       source,
       undefined,
-      this.completionRetention(key, published)
+      this.completionRetention(key, authority)
     );
-    const acknowledge = stage.lane.then(() =>
+    const acknowledge = () =>
       this.updateCompletion(
         key,
-        stage.staging.envelope.aggregateId,
-        (store, authority) => store.acknowledge(key, authority, entry, delivery),
-        published
-      )
-    );
-    stage.lane = acknowledge;
-    return await acknowledge;
+        relocationId,
+        (store, current) => store.acknowledge(key, current, entry, delivery),
+        authority
+      );
+    return await scheduleAcknowledgement(acknowledge);
   }
 
   private completionRetention(key: ZLinkAuthorityKey, published: ZLinkAuthoritySnapshot) {
