@@ -1343,13 +1343,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.requireStateful().sealSpotMessageFollowIngress(source);
   }
 
+  freezeSpotRelocationIngress(seal: ServiceSpotMessageFollowSeal) {
+    return this.requireStateful().freezeSpotRelocationIngress(seal);
+  }
+
   abortSpotMessageFollowIngress(seal: ServiceSpotMessageFollowSeal): boolean {
     return this.requireStateful().abortSpotMessageFollowIngress(seal);
   }
 
   commitSpotMessageFollowIngress(
     seal: ServiceSpotMessageFollowSeal,
-    target: ServiceDirectSpotRouteFence | null,
+    target: (ServiceDirectSpotRouteFence & { readonly ownerId?: string }) | null,
     durationMs: number
   ): Promise<boolean> {
     return this.requireStateful().commitSpotMessageFollowIngress(seal, target, durationMs);
@@ -2771,9 +2775,44 @@ function replyActorJoinNotSupported(): SubmitResultValue {
   return SubmitResult.NotSupported;
 }
 
+export function decodeRelocatedInstanceSpotRecord(
+  frozen: import('../../foundation/service-stateful-wire-codec').ServiceWireFrozenRecord,
+  reply: NonNullable<ServiceStatefulMailboxData['reply']>
+): ReceiveRecord {
+  const record = frozen.instanceSpot!;
+  const payload = frozen.applicationPayload!;
+  const mailbox: ServiceMailboxRecord = {
+    owner: `spot:${record.route.targetSpotId}`,
+    domain: 'application',
+    parts: [],
+    sourceRoutingId: frozen.source.nodeRid,
+    correlation: record.replyRouteId
+  };
+  return {
+    ...decodeStatefulRecord(
+      mailbox,
+      {
+        receiveKind: ReceiveKind.InstanceSpotActivation,
+        operationKind: frozen.operationKind,
+        sourceSpotId: record.sourceSpotId,
+        activationRecord: record,
+        applicationMetadata: frozen.metadataFrame,
+        ...(record.replyRouteId === undefined ? {} : { reply })
+      },
+      {
+        packetName: payload.packetName,
+        contentType: payload.contentType,
+        payload: payload.bytes
+      }
+    ),
+    operationId: frozen.operationId
+  };
+}
+
 function decodeStatefulRecord(
   record: ServiceMailboxRecord,
-  stateful: ServiceStatefulMailboxData
+  stateful: ServiceStatefulMailboxData,
+  relocatedApplication?: ServiceApplicationPayload
 ): ReceiveRecord {
   const payloadFrame = record.parts.length < 2 ? undefined : record.parts[1];
   const canonicalActorJoin =
@@ -2782,11 +2821,13 @@ function decodeStatefulRecord(
   const canonicalActorJoinPayload =
     stateful.operationKind === OperationKind.ActorJoin &&
     stateful.canonicalApplicationPayload !== undefined;
-  const application = canonicalActorJoinPayload
-    ? stateful.canonicalApplicationPayload
-    : payloadFrame === undefined
-      ? undefined
-      : decodeMultipartApplicationPayloadView(payloadFrame);
+  const application =
+    relocatedApplication ??
+    (canonicalActorJoinPayload
+      ? stateful.canonicalApplicationPayload
+      : payloadFrame === undefined
+        ? undefined
+        : decodeMultipartApplicationPayloadView(payloadFrame));
   const operationId =
     record.correlation === undefined
       ? { high: 0n, low: 0n }

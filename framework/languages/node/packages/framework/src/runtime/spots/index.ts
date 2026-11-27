@@ -2016,7 +2016,8 @@ export class DefaultZLinkSpotManager {
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord,
-    admit?: ZLinkMeshDispatchAdmission
+    admit?: ZLinkMeshDispatchAdmission,
+    relocationAdmission?: import('../foundation/service-stateful-runtime').ServiceSpotTargetAdmission
   ): Promise<void> {
     const spotId = owner.spotId as unknown as RoutingId | null;
     if (spotId === null) {
@@ -2047,14 +2048,19 @@ export class DefaultZLinkSpotManager {
       );
       try {
         const dispatch = async () => {
-          await this.ensureInstanceApplicationActivation(meshName, spotId);
-          const activation = this.resolveApplicationActivation(spotId, meshName);
+          if (relocationAdmission === undefined)
+            await this.ensureInstanceApplicationActivation(meshName, spotId);
+          const activation =
+            relocationAdmission?.activation ?? this.resolveApplicationActivation(spotId, meshName);
           if (activation === undefined || activation.domain.kind !== 'instance') {
             throw new ZLinkConfigurationException(
               `MeshNode Instance Spot target '${String(spotId)}' is not active.`
             );
           }
-          const target = this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId);
+          const target =
+            relocationAdmission === undefined
+              ? this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId)
+              : undefined;
           if (
             target !== undefined &&
             activation.domain.objectGeneration !== target.objectGeneration
@@ -2075,6 +2081,10 @@ export class DefaultZLinkSpotManager {
             contentType: envelope.header.contentType,
             awaitFirstHandlerTurn: record.kind === ReceiveKind.InstanceSpotActivation,
             activationRecord: record,
+            relocationAdmission,
+            ...(relocationAdmission !== undefined && envelope.header.deadline !== null
+              ? { relocationDeadlineUnixMs: Date.parse(envelope.header.deadline) }
+              : {}),
             onOneWayError:
               this.options.dispatchErrors?.captureEnabled() === true
                 ? (error: unknown) =>

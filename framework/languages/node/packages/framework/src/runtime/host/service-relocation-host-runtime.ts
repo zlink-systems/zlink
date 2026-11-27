@@ -79,6 +79,7 @@ import {
   type ZLinkActorRuntimeState,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors/actor-runtime-state';
+import { decodeRelocatedInstanceSpotRecord } from '../backend/node/node-raw-mesh-backend';
 import type { ZLinkBackendMeshNode, ZLinkMeshCompletionTable } from '../backend';
 import { RequestResult, SubmitResult, ZLinkBackendResultError } from '../backend/runtime-values';
 import type { ZLinkFrameworkRegistration } from '../configuration';
@@ -147,12 +148,16 @@ import {
 import {
   MeshPeerRuntimeState,
   ReceiveKind,
+  ReadyDomain,
+  ReadyOwnerKind,
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
 import type {
   ServiceRelocationRequest,
   ServiceRelocationRequestAdmission,
-  ServiceSpotMessageFollowSeal
+  ServiceSpotMessageFollowSeal,
+  ServiceSpotTargetAdmission,
+  ServiceStatefulMailboxData
 } from '../foundation/service-stateful-runtime';
 import {
   M6bServiceWireCommand,
@@ -169,7 +174,6 @@ import {
   encodeSessionRelocationSeal,
   encodeSessionRelocationSealed,
   serviceSessionRelocationIdentityKey,
-  type ServiceMaintenanceRelocationControl,
   type ServiceMaintenanceRelocationCutover,
   type ServiceMaintenanceRelocationData,
   type ServiceMaintenanceRelocationFailed,
@@ -182,6 +186,7 @@ import {
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed,
   type ServiceWireOperationId,
+  type ServiceWireFrozenRecord,
   type ServiceWireRelocationCoordinatorFence,
   type ServiceWireRelocationObject,
   type ServiceWireRelocationTarget,
@@ -290,6 +295,7 @@ interface ZLinkHostRelocationOptions {
   readonly meshNode: (meshName: string) => ZLinkBackendMeshNode | undefined;
   readonly completions: (meshName: string) => ZLinkMeshCompletionTable | undefined;
   readonly spotManager: () => DefaultZLinkSpotManager | undefined;
+  readonly acquireSpotReplayPermit?: ServiceSpotTargetAdmission['preparePermit'];
   readonly ensureEntryActivation?: (meshName: string) => Promise<void>;
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly actorTransfer: ZLinkActorTransferRuntime;
@@ -317,20 +323,38 @@ interface RelocationTargetRequirement {
   readonly count: number;
 }
 
-interface LocalHidden extends ServiceRelocationHiddenObject {
+interface LocalHiddenBase extends ServiceRelocationHiddenObject {
   readonly participant: ServiceRelocationParticipant;
-  readonly actor?: ZLinkActor;
-  readonly cancelIngress?: (reason?: unknown) => void;
-  readonly activation?: ZLinkSpotActivation;
   initialized: boolean;
+  targetAuthorityOwnerGeneration?: bigint;
+}
+
+interface LocalActorHidden extends LocalHiddenBase {
+  readonly actor: ZLinkActor;
+  readonly activation?: undefined;
+  readonly cancelIngress?: (reason?: unknown) => void;
   replayStart?: Promise<void>;
   onReplayResult?: (
     packet: ZLinkActorHandoffPacket,
     result: ZLinkActorHandoffResult
   ) => Promise<void>;
   readonly replayPackets: ZLinkActorHandoffPacket[];
-  targetAuthorityOwnerGeneration?: bigint;
 }
+
+interface LocalSpotHidden extends LocalHiddenBase {
+  readonly actor?: undefined;
+  readonly activation: ZLinkSpotActivation;
+  readonly cancelIngress?: undefined;
+  replayCompletion?: Promise<void>;
+  onReplayResult?: (
+    record: ServiceWireFrozenRecord,
+    sequence: bigint,
+    result: Parameters<NonNullable<ServiceStatefulMailboxData['reply']>>
+  ) => Promise<void>;
+  readonly replayPackets: ServiceWireFrozenRecord[];
+}
+
+type LocalHidden = LocalActorHidden | LocalSpotHidden;
 
 interface LocalStage {
   readonly offer: TargetRelocationOffer;
@@ -1888,6 +1912,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       signal
     );
     const aggregateId = this.reserveRelocationId();
+    const freezeIngress = () =>
+      spotMessageFollowSeal === undefined || kind !== 'instance_spot'
+        ? Promise.resolve([])
+        : this.freezeSpotRelocationIngress(meshName, spotMessageFollowSeal);
     const spotUnit: ServiceRelocationCaptureUnit = {
       authorityKey: spotKey.value,
       objectKind: kind,
@@ -1933,7 +1961,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         spotCapture = await spotCaptureOperation;
         return {
           boundSessionState: Buffer.alloc(0),
-          queuedMessages: [],
+          queuedMessages: (await freezeIngress()).map((record, index) => ({
+            sequence: BigInt(index + 1),
+            payload: record.canonicalBytes
+          })),
           timers: spotCapture!.timers.map(toServiceTimer)
         };
       },
@@ -2125,7 +2156,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         sessions,
         undefined,
         undefined,
-        relocationMetric
+        relocationMetric,
+        freezeIngress
       );
     } catch (error) {
       if (
@@ -2818,7 +2850,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     /** Target's advertised relocation state chunk cap (Actor Join only; spec 15 §4.2). */
     advertisedReceiveChunkLimitBytes?: number,
     controlDeadlineAtMs = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS,
-    relocationMetric?: ZLinkRelocationMetricOperation
+    relocationMetric?: ZLinkRelocationMetricOperation,
+    freezeSpotRelay?: () => Promise<readonly ServiceWireFrozenRecord[]>
   ): Promise<void> {
     if (isRelocationDebugEnabled()) {
       relocationDebug('coordinator.begin', {
@@ -2950,6 +2983,27 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           readonly frame: Buffer;
           readonly canonicalBytes: Buffer;
         }> = [];
+        const appendRelay = (
+          object: ServiceWireRelocationObject,
+          frozenRecord: ServiceWireFrozenRecord
+        ) => {
+          const data = {
+            kind: 'data',
+            relocation,
+            targetAttemptGeneration,
+            coordinator,
+            senderRole: 'source',
+            object,
+            frozenRecord
+          } satisfies ServiceMaintenanceRelocationData;
+          boundaryBatch.push({
+            frame: encodeServiceRelocationControlRequest(data),
+            canonicalBytes: frozenRecord.canonicalBytes
+          });
+        };
+        if (freezeSpotRelay !== undefined) {
+          for (const record of await freezeSpotRelay()) appendRelay(object, record);
+        }
         for (const session of sessions) {
           const participant = captured.envelope.participants.find(
             (value) =>
@@ -2969,19 +3023,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
               coordinator,
               targetFence
             );
-            const data = {
-              kind: 'data',
-              relocation,
-              targetAttemptGeneration,
-              coordinator,
-              senderRole: 'source',
-              object: relocationObjectForParticipant(participant),
-              frozenRecord
-            } satisfies Extract<ServiceMaintenanceRelocationControl, { kind: 'data' }>;
-            boundaryBatch.push({
-              frame: encodeServiceRelocationControlRequest(data),
-              canonicalBytes: frozenRecord.canonicalBytes
-            });
+            appendRelay(relocationObjectForParticipant(participant), frozenRecord);
           }
         }
         const cutoverFrame = encodeServiceRelocationControlRequest({
@@ -3650,8 +3692,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           : error;
       throw new ServiceRelocationDataLostError(String(message));
     }
+<<<<<<< ours
     // Direct Join inventory uses generation 1 (§8.3); Restore attempt is independent.
     const envelope = decodeServiceRelocationEnvelope(payload, 1n);
+=======
+    const envelope = decodeServiceRelocationEnvelope(
+      payload,
+      request.targetAttemptGeneration,
+      request.object.kind
+    );
+>>>>>>> theirs
     const recovery = canonicalActorJoinRecovery(envelope.participants);
     const releaseJoinAdmission =
       recovery === undefined
@@ -3981,6 +4031,73 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         resumeStartedAt = performance.now();
         stage.phase = 'committed';
         authority = await this.targetProgress(stage, authority!, 'activating', signal);
+        const acceptReplyDelivery = async (
+          participant: ServiceRelocationParticipant,
+          execute: () => Promise<ZLinkAuthoritySnapshot | undefined>
+        ) => {
+          try {
+            const acknowledged = await execute();
+            if (
+              acknowledged !== undefined &&
+              isRelocationCompletionReady(acknowledged) &&
+              awaitingDelivery.delete(participant.key) &&
+              awaitingDelivery.size === 0
+            ) {
+              delivered();
+            }
+          } catch (error) {
+            if (requestDelivery !== undefined) deliveryFailed(error);
+            throw error;
+          }
+        };
+        const spotReplayAuthority = authority;
+        for (const [index, participant] of stage.staging.envelope.participants.entries()) {
+          const hidden = stage.staging.hidden.get(participant.key);
+          if (
+            hidden === undefined ||
+            hidden.actor !== undefined ||
+            hidden.replayPackets.length === 0
+          )
+            continue;
+          hidden.onReplayResult = async (
+            record,
+            sequence,
+            [terminalResult, failureCode, payload]
+          ) => {
+            await acceptReplyDelivery(participant, () =>
+              this.publishReplayReply(
+                meshName,
+                stage,
+                { value: participant.key } as ZLinkAuthorityKey,
+                record.source,
+                {
+                  relocation: relocationWireId(stage.staging.envelope.aggregateId),
+                  targetAttemptGeneration: stage.offer.prepare.targetAttemptGeneration,
+                  coordinator: this.targetReplyRelayCoordinator(
+                    meshName,
+                    stage,
+                    spotReplayAuthority
+                  ),
+                  operation: record.operationId,
+                  replyRouteId: record.replyRouteId!,
+                  participantId: BigInt(index + 1),
+                  sequence,
+                  terminalResult,
+                  failureCode,
+                  ...(payload === undefined
+                    ? {}
+                    : {
+                        payload: {
+                          packetName: payload.packetName,
+                          contentType: payload.contentType,
+                          bytes: payload.payload
+                        }
+                      })
+                }
+              )
+            );
+          };
+        }
         await stage.owner.publish(stage.staging, authority, signal);
         authority = await this.targetProgress(stage, authority, 'activated', signal);
         const replayAuthority = authority;
@@ -3991,8 +4108,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           hidden.replayStart = activation;
           hidden.onReplayResult = async (packet, result) => {
             if (!packet.returnResponse || packet.source === undefined) return;
-            try {
-              const acknowledged = await this.relayTerminalReply(
+            await acceptReplyDelivery(participant, () =>
+              this.relayTerminalReply(
                 meshName,
                 stage,
                 this.targetReplyRelayCoordinator(meshName, stage, replayAuthority),
@@ -4000,19 +4117,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
                 packet,
                 result,
                 signal
-              );
-              if (
-                acknowledged !== undefined &&
-                isRelocationCompletionReady(acknowledged) &&
-                awaitingDelivery.delete(participant.key) &&
-                awaitingDelivery.size === 0
-              ) {
-                delivered();
-              }
-            } catch (error) {
-              if (requestDelivery !== undefined) deliveryFailed(error);
-              throw error;
-            }
+              )
+            );
           };
         }
         replayCompletion = stage.owner.normalize(stage.staging, authority, signal);
@@ -4075,6 +4181,21 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     stage: LocalStage,
     request: ServiceMaintenanceRelocationData
   ): void {
+    if (request.object.kind === 'instanceSpot') {
+      const route = request.frozenRecord.instanceSpot?.route;
+      const source = stage.offer.prepare.coordinator;
+      if (
+        !sameRelocationObject(request.object, stage.offer.prepare.object) ||
+        route === undefined ||
+        !routingIdsEqual(route.targetNodeRid, source.nodeRid) ||
+        route.targetNodeGeneration !== source.nodeGeneration ||
+        route.ownerId !== source.ownerId ||
+        route.leaseGeneration !== source.leaseGeneration
+      ) {
+        throw new Error('Relocation data does not target the prepared Instance Spot.');
+      }
+      return;
+    }
     const frozen = request.frozenRecord;
     const target = frozen.target;
     const payload = frozen.applicationPayload;
@@ -4109,11 +4230,21 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     request: ServiceMaintenanceRelocationData,
     signal?: AbortSignal
   ): Promise<void> {
-    const payload = request.frozenRecord.applicationPayload!;
+    const { object, frozenRecord } = request;
+    const key =
+      object.kind === 'instanceSpot'
+        ? encodeAuthorityKey('instance_spot', object.spotId)
+        : encodeAuthorityKey('actor', (object as { actorId: string }).actorId);
     await stage.owner.replayRelayedMessage(
       stage.staging,
-      encodeAuthorityKey('actor', (request.object as { actorId: string }).actorId).value,
-      { sequence: 0n, payload: Buffer.from(payload.bytes) },
+      key.value,
+      {
+        sequence: 0n,
+        payload:
+          object.kind === 'instanceSpot'
+            ? frozenRecord.canonicalBytes
+            : Buffer.from(frozenRecord.applicationPayload!.bytes)
+      },
       signal
     );
   }
@@ -4500,11 +4631,28 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       (_value, index) => BigInt(index + 1) === participantId
     );
     if (participant === undefined) return completionDataLost('Completion participant is missing.');
-    const key = { value: participant.key } as ZLinkAuthorityKey;
+    return await this.publishReplayReply(
+      meshName,
+      stage,
+      { value: participant.key } as ZLinkAuthorityKey,
+      source,
+      relay
+    );
+  }
+
+  private async publishReplayReply(
+    meshName: string,
+    stage: LocalStage,
+    key: ZLinkAuthorityKey,
+    source: ServiceWireRequestSourceFence,
+    relay: ServiceMaintenanceReplyRelay
+  ): Promise<ZLinkAuthoritySnapshot> {
     let entry: RelocationCompletionEntry = {
       objectKey: key.value,
-      operationId: packet.messageFollowContext.operationId,
-      replyRouteId: sourceReplyRoute(packet),
+      operationId:
+        relay.operation.high.toString(16).padStart(16, '0') +
+        relay.operation.low.toString(16).padStart(16, '0'),
+      replyRouteId: relay.replyRouteId.toString(),
       source: {
         ownerId: source.ownerId,
         leaseGeneration: source.leaseGeneration.toString(),
@@ -5153,7 +5301,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           const acceptedRequests = new Map(
             [...stage.staging.hidden].map(([key, hidden]) => [
               key,
-              BigInt(hidden.replayPackets.filter((packet) => packet.returnResponse).length)
+              BigInt(
+                hidden.replayPackets.filter((packet) =>
+                  'returnResponse' in packet
+                    ? packet.returnResponse
+                    : packet.replyRouteId !== undefined
+                ).length
+              )
             ])
           );
           requireRelocationCompletionReservation(
@@ -5532,6 +5686,17 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return result;
   }
 
+  private async freezeSpotRelocationIngress(
+    meshName: string,
+    seal: ServiceSpotMessageFollowSeal
+  ): Promise<readonly ServiceWireFrozenRecord[]> {
+    const node = this.requireMeshNode(meshName);
+    if (node.freezeSpotRelocationIngress === undefined) {
+      throw new Error('Spot relocation ingress capture is unavailable.');
+    }
+    return await node.freezeSpotRelocationIngress(seal);
+  }
+
   private async commitSpotMessageFollow(
     meshName: string,
     seal: ServiceSpotMessageFollowSeal,
@@ -5556,6 +5721,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             targetNodeRid: String(committed.allocation.descriptor.rid),
             targetNodeGeneration: committed.allocation.descriptorLifecycleGeneration,
             authorityOwnerGeneration: committed.authorityOwnerGeneration,
+            ownerId: committed.ownerId,
             ownerLeaseGeneration: committed.ownerLeaseGeneration,
             storeVersion: committed.storeVersion.value
           },
@@ -5882,7 +6048,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     )) as
       | ZLinkActorRelocationAdapter<ZLinkActor>
       | ZLinkSpotRelocationAdapter<ZLinkSpot | ZLinkInstanceSpot>;
-    const instance = (hidden.actor ?? hidden.activation?.spot) as never;
+    const instance = (hidden.actor ?? hidden.activation.spot) as never;
     await restoreRelocationAdapterState(
       adapter as ZLinkRelocationStateAdapterLike<unknown>,
       instance,
@@ -5957,7 +6123,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       );
       this.requireActorManager().adoptCreatedAuthority(actorId, current);
       hidden.targetAuthorityOwnerGeneration = current.authorityOwnerGeneration;
-    } else if (hidden.activation !== undefined) {
+    } else {
       const registration = this.registration(
         hidden.participant.objectKind,
         hidden.participant.stableType
@@ -5985,7 +6151,12 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       }
       await this.requireSpotManager().publishRelocationSpot(
         hidden.activation,
-        applicationSignaled ? () => hidden.activation!.notifyRelocatedBoundary() : undefined
+        applicationSignaled || hidden.replayPackets.length !== 0
+          ? async () => {
+              if (applicationSignaled) await hidden.activation.notifyRelocatedBoundary();
+              this.admitSpotReplay(hidden);
+            }
+          : undefined
       );
       node?.rememberSpotRoute?.({
         spot: {
@@ -6046,7 +6217,26 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     message: ServiceRelocationQueuedMessage
   ): Promise<void> {
     if (hidden.actor === undefined) {
-      throw new Error('Only Actor relocation participants can contain packet backlog.');
+      const frozen = decodeServiceWireFrozenRecord(message.payload);
+      const route = frozen.instanceSpot?.route;
+      const payload = frozen.applicationPayload;
+      if (
+        hidden.participant.objectKind !== 'instance_spot' ||
+        route === undefined ||
+        route.targetSpotId !== String(hidden.activation.spotId) ||
+        route.objectGeneration !== hidden.participant.objectGeneration ||
+        route.authorityOwnerGeneration !== hidden.participant.authorityOwnerGeneration
+      ) {
+        throw new Error('Frozen message does not target the staged Instance Spot.');
+      }
+      if (
+        payload?.packetName !== SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME ||
+        payload.contentType !== SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+      ) {
+        throw new Error('Frozen Instance Spot application envelope is invalid.');
+      }
+      hidden.replayPackets.push(frozen);
+      return;
     }
     const recovery = decodeCanonicalActorJoinRecoverySavedWork(message.payload);
     if (recovery !== undefined) {
@@ -6062,6 +6252,36 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     hidden.replayPackets.push(packet);
   }
 
+  private admitSpotReplay(hidden: LocalSpotHidden): void {
+    const manager = this.requireSpotManager();
+    const admission = {
+      activation: hidden.activation,
+      confirmed: Promise.resolve(true),
+      preparePermit: this.options.acquireSpotReplayPermit
+    };
+    const owner = {
+      ownerKind: ReadyOwnerKind.Spot,
+      domain: ReadyDomain.Application,
+      spotId: hidden.activation.spotId,
+      actor: null
+    };
+    hidden.replayCompletion = Promise.all(
+      hidden.replayPackets.map(async (record, index) => {
+        let terminal: Promise<void> | undefined;
+        const replay = decodeRelocatedInstanceSpotRecord(record, (...result) => {
+          if (terminal !== undefined || hidden.onReplayResult === undefined) return false;
+          terminal = hidden.onReplayResult(record, BigInt(index + 1), result);
+          void terminal.catch(() => undefined);
+          return true;
+        });
+        await manager.dispatchMeshInstance(this.meshName, owner, replay, undefined, admission);
+        await terminal;
+      })
+    ).then(() => undefined);
+    void hidden.replayCompletion.catch(() => undefined);
+    hidden.replayPackets.length = 0;
+  }
+
   async openAdmission(hidden: LocalHidden): Promise<void> {
     if (hidden.actor !== undefined) {
       this.requireActorManager().publishRelocationActor(hidden.actor.context.actorId);
@@ -6074,7 +6294,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
   }
 
   normalize(hidden: LocalHidden): Promise<void> {
-    if (hidden.actor === undefined) return Promise.resolve();
+    if (hidden.actor === undefined) return hidden.replayCompletion ?? Promise.resolve();
     if (hidden.replayStart === undefined || hidden.onReplayResult === undefined) {
       throw new Error('Relocated Actor backlog has no target activation owner.');
     }
@@ -6093,7 +6313,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     if (hidden.actor !== undefined) {
       hidden.cancelIngress?.();
       await this.requireActorManager().abortRelocationActor(hidden.actor.context.actorId);
-    } else if (hidden.activation !== undefined) {
+    } else {
       await this.requireSpotManager().abortRelocationSpot(hidden.activation);
     }
   }
@@ -7507,9 +7727,4 @@ if (isStructuralGuardEnabled()) {
       `relocation join actor:${input.state.actorId}`
     );
   };
-}
-
-function sourceReplyRoute(packet: ZLinkActorHandoffPacket): string {
-  if (packet.source === undefined) return completionDataLost('Completion has no requester.');
-  return packet.source.replyRouteId;
 }
