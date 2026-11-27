@@ -1764,7 +1764,11 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(0, discarded);
             Assert.False(pending.IsCompleted);
             time.Advance(TimeSpan.FromTicks(1));
-            Assert.True(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+            var outageAtT = locations.GetHealthSnapshot().StoreOutage;
+            Assert.NotNull(outageAtT);
+            Assert.Equal(episode.ObservedAt, outageAtT.ObservedAt);
+            Assert.Equal(episode.LeaseOperationStartedAt, outageAtT.LeaseOperationStartedAt);
+            Assert.True(outageAtT.Discarded);
             renewal.Arm();
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
@@ -1781,7 +1785,6 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
             Assert.Equal(factoryCalls, probe.FactoryCalls);
-            Assert.True(locations.GetHealthSnapshot().StoreOutage!.Discarded);
         }
         finally
         {
