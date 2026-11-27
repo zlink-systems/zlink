@@ -325,7 +325,7 @@ def test_writable_completion_rejects_mismatched_send_correlation(mismatch):
 
 
 @pytest.mark.parametrize(
-    ("send_result", "native_errno", "expected_result"),
+    ("send_result", "internal_errno", "expected_result"),
     (
         (ZLINK_SEND_NOT_FOUND, errno.ENOENT, zlink.SubmitResult.NOT_FOUND),
         (ZLINK_SEND_NOT_CONNECTED, errno.ENOTCONN, zlink.SubmitResult.NOT_CONNECTED),
@@ -334,7 +334,7 @@ def test_writable_completion_rejects_mismatched_send_correlation(mismatch):
     ),
 )
 def test_terminal_writable_is_typed_and_never_retried(
-    send_result, native_errno, expected_result
+    send_result, internal_errno, expected_result
 ):
     target = b"terminal-route"
     socket = type("Socket", (), {"_handle": 1})()
@@ -347,7 +347,7 @@ def test_terminal_writable_is_typed_and_never_retried(
         context=entry.context,
         peer_rid=target,
         send_result=send_result,
-        terminal_errno=native_errno,
+        terminal_errno=internal_errno,
     )
 
     closer = _CompletionCloser()
@@ -361,13 +361,13 @@ def test_terminal_writable_is_typed_and_never_retried(
     assert entry.settled
     assert entry._error.result == expected_result
     assert entry._error.internal_errno == (
-        errno.EPROTO if expected_result == zlink.SubmitResult.INTERNAL_ERROR else native_errno
+        errno.EPROTO if expected_result == zlink.SubmitResult.INTERNAL_ERROR else internal_errno
     )
     assert closer.closed == 1
 
 
 @pytest.mark.parametrize(
-    ("send_result", "native_errno", "expected_result"),
+    ("send_result", "internal_errno", "expected_result"),
     (
         (ZLINK_SEND_NOT_FOUND, errno.ENOENT, zlink.SubmitResult.NOT_FOUND),
         (ZLINK_SEND_NOT_CONNECTED, errno.ENOTCONN, zlink.SubmitResult.NOT_CONNECTED),
@@ -376,7 +376,7 @@ def test_terminal_writable_is_typed_and_never_retried(
     ),
 )
 def test_request_terminal_writable_is_typed_and_never_retried(
-    send_result, native_errno, expected_result
+    send_result, internal_errno, expected_result
 ):
     target = b"terminal-request-route"
     socket = type("Socket", (), {"_handle": 1})()
@@ -391,7 +391,7 @@ def test_request_terminal_writable_is_typed_and_never_retried(
         context=entry.context,
         peer_rid=target,
         send_result=send_result,
-        terminal_errno=native_errno,
+        terminal_errno=internal_errno,
     )
 
     closer = _CompletionCloser()
@@ -406,7 +406,7 @@ def test_request_terminal_writable_is_typed_and_never_retried(
     assert isinstance(entry._error, zlink.SubmitError)
     assert entry._error.result == expected_result
     assert entry._error.internal_errno == (
-        errno.EPROTO if expected_result == zlink.SubmitResult.INTERNAL_ERROR else native_errno
+        errno.EPROTO if expected_result == zlink.SubmitResult.INTERNAL_ERROR else internal_errno
     )
     assert closer.closed == 1
 
