@@ -17,4 +17,6 @@ Every defined field is required. `?` allows an explicit `null`; omitting the fie
 
 `u64`, `positive_u64` and `i64` are 64-bit integers within the ranges in the table, written as decimal JSON strings. `disposition` is written as a JSON string holding a name declared under `enums` in `wire-v1.json`, with matching case. Undeclared names, JSON numbers and numeric ordinal strings are rejected. Integer and enum representation follow [framework-json-v1 §5](../../../framework/doc/framework/common/spec/server/00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile).
 
+The server maps each input acceptance reason to one `InputDisposition` (`ToWire` in `plugins/network-sync/server/Simulation/InputFeedback.cs`): `Accepted` → `Accepted`, `Late` → `Late`, `DuplicateTick` and `DuplicateAction` → `Duplicate`, and `WrongMatch`, `WrongEpoch`, `UnknownActor`, `InvalidSize`, `RateLimited`, `InvalidTick` and `TooFarAhead` → `Rejected`. `action_id` must increase per Actor within an epoch; an equal or lower ID is `Duplicate`. An Actor that leaves and rejoins, or a new epoch, starts a new sequence.
+
 Validation: `python3 plugins/network-sync/protocol/validate.py`. It checks only the definition and the fixtures; it does not replace serializer conformance tests in each language.
