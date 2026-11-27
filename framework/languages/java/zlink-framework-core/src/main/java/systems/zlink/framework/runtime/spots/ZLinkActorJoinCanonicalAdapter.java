@@ -138,7 +138,12 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                             CompletionStage<Void> cleanup =
                                     settlement
                                             .thenCompose(outcome -> settleSource(attempt, outcome))
-                                            .thenApply(ignored -> null);
+                                            .handle(
+                                                    (ignored, settleFailure) -> {
+                                                        if (settleFailure == null) return null;
+                                                        throw releaseFailedSettlement(
+                                                                attempt, unwrap(settleFailure));
+                                                    });
                             return CompletableFuture.completedFuture(
                                     new Submission(
                                             new ZLinkBackendActorRef(
@@ -221,6 +226,17 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return ZLinkRelocationHandOff.completeSourceCleanup(
                         List.of(prepared::cleanupLocal, prepared::discardInitialAfterCommit))
                 .thenApply(ignored -> leave);
+    }
+
+    /**
+     * Releases the ledger of a unit whose settlement failed. It does not abort: the abort path may
+     * call the Store, which a unit past the host stop deadline must not do (host relocation flow
+     * section 14).
+     */
+    private CompletionException releaseFailedSettlement(SourceAttempt attempt, Throwable cause) {
+        sources.remove(attempt.goal().sourceActor().actorId(), attempt);
+        attempt.committed().completeExceptionally(cause);
+        return new CompletionException(cause);
     }
 
     /** Restores the source: a failure before relay readiness or a won Preserve fence. */
