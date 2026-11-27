@@ -183,6 +183,7 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-dotnet-java" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-java-node" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "login-admission" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != actor-join-sealed-remote-* ]] \
   && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
   echo "build it with: cmake --build ${BUILD_DIR} --target zlink_cpp_cross_language_host" >&2
@@ -269,7 +270,14 @@ start_node() {
 start_node_user_spot_join() {
   local name="$1"
   shift
-  node "${NODE_USER_SPOT_JOIN_HOST}" "$@" \
+  local node_options="${NODE_OPTIONS:-}" flow_file=""
+  if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" == actor-join-sealed-remote-* ]]; then
+    # The diagnostics worker inherits Node preloads.
+    node_options+=" --require \"${NODE_USER_SPOT_JOIN_HOST%/*}/user_spot_join_flow.cjs\""
+    flow_file="${RUN_DIR}/${name}.events.flow"
+  fi
+  NODE_OPTIONS="${node_options}" ZLINK_CROSS_JOIN_FLOW_FILE="${flow_file}" \
+    node "${NODE_USER_SPOT_JOIN_HOST}" "$@" \
     --ready-file "${RUN_DIR}/${name}.ready" \
     >"${RUN_DIR}/${name}.log" 2>&1 &
   PIDS+=("$!")
@@ -1313,7 +1321,7 @@ outage_command() {
     "outage-error|run=${run_id}|"
 }
 
-start_outage_host() {
+start_user_spot_host() {
   local language="$1" name="$2" role="$3"
   shift 3
   case "${language}" in
@@ -1324,7 +1332,7 @@ start_outage_host() {
     dotnet) start_dotnet "${name}" "user-spot-${role}" "$@" ;;
     java) start_java "${name}" "user-spot-${role}" "$@" ;;
     cpp) start_cpp "${name}" "user-spot-${role}" "$@" --ready-file "${RUN_DIR}/${name}.ready" ;;
-    *) echo "unsupported outage host: ${language}" >&2; return 1 ;;
+    *) echo "unsupported User Spot host: ${language}" >&2; return 1 ;;
   esac
 }
 
@@ -1347,13 +1355,13 @@ stage_outage_relocation() {
     --actor-id cross-lang-user-spot-actor --outage-run-id "${run_id}" --outage-order "${order}")
 
   start_redis "${run_id}-redis" "${redis_port}"
-  start_outage_host "${target}" "${run_id}-target" target "${common[@]}" \
+  start_user_spot_host "${target}" "${run_id}-target" target "${common[@]}" \
     --placement-weight 0 --node-rid "${target_rid}" --peer-rid "${source_rid}" \
     --bind-endpoint "tcp://127.0.0.1:${target_port}" --event-file "${target_events}" \
     --outage-control-prefix "${target_prefix}"
   wait_for_ready "${RUN_DIR}/${run_id}-target.ready" 180
   wait_for_line "${target_events}" 'user-spot-created|spot=cross-lang-user-spot' 30
-  start_outage_host "${source}" "${run_id}-source" source "${common[@]}" \
+  start_user_spot_host "${source}" "${run_id}-source" source "${common[@]}" \
     --node-rid "${source_rid}" --peer-rid "${target_rid}" \
     --bind-endpoint "tcp://127.0.0.1:${source_port}" --event-file "${source_events}" \
     --start-file "${start_file}" --outage-control-prefix "${source_prefix}"
@@ -1379,6 +1387,142 @@ stage_outage_relocation() {
   outage_command "${source_prefix}" "${source_events}" "${run_id}" "$((++source_sequence))" completed
   stop_all
   RESULTS+=("Outage recovery + public relocation: ${source} -> ${target}, ${order}")
+}
+
+stage_actor_join_sealed_remote() {
+  local sender="$1" owner="$2"
+  local fixture="${REPO_ROOT}/framework/runtime/conformance/actor-join-sealed-remote-v1.json"
+  local owner_status request_timeout
+  read -r owner_status request_timeout <<<"$("${PYTHON_BIN[@]}" - "${fixture}" "${sender}" "${owner}" <<'PYTHON'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    fixture = json.load(source)
+if sys.argv[2] not in fixture["senderLanguages"] or sys.argv[3] not in fixture["ownerLanguages"]:
+    sys.exit(f"unknown Actor Join cell: {sys.argv[2]} -> {sys.argv[3]}")
+print(fixture["ownerLanguages"][sys.argv[3]], fixture["expect"]["requestTimeoutMs"])
+PYTHON
+)"
+  if [[ "${owner_status}" != enabled ]]; then
+    echo "Actor Join cell ${sender} -> ${owner}: ${owner_status}" >&2
+    return 2
+  fi
+  if [[ "${sender}" == cpp || "${owner}" == cpp ]] && [[ ! -x "${CPP_HOST}" ]]; then
+    echo "cross-language host is missing: ${CPP_HOST}" >&2
+    return 1
+  fi
+
+  local redis_port setup_port sender_port owner_port
+  read -r redis_port setup_port sender_port owner_port <<<"$(free_port 4)"
+  local setup_rid=node-user-spot-join-source
+  local sender_rid="${sender}-late-actor-sender"
+  local owner_rid="${owner}-user-spot-join-target"
+  local setup_events="${RUN_DIR}/setup.events"
+  local sender_events="${RUN_DIR}/sender.events" owner_events="${RUN_DIR}/owner.events"
+  local start_file="${RUN_DIR}/start" probe_file="${RUN_DIR}/probe"
+  local actor_id=cross-lang-user-spot-actor
+  local common=(--mesh-name cross.user-spot-join --redis-endpoint "127.0.0.1:${redis_port}"
+    --redis-key-prefix zlink-cross-sealed-join --spot-id cross-lang-user-spot --actor-id "${actor_id}")
+
+  start_redis sealed-join-redis "${redis_port}"
+  ZLINK_CROSS_FAIL_JOIN_COMPLETION=1 ZLINK_CROSS_LATE_SENDER_RID="${sender_rid}" \
+    start_user_spot_host "${owner}" owner target "${common[@]}" \
+    --placement-weight 0 --node-rid "${owner_rid}" --peer-rid "${setup_rid}" \
+    --bind-endpoint "tcp://127.0.0.1:${owner_port}" --event-file "${owner_events}"
+  wait_for_ready "${RUN_DIR}/owner.ready" 180
+  wait_for_line "${owner_events}" "user-spot-created|spot=cross-lang-user-spot"
+
+  ZLINK_CROSS_LATE_REQUEST_TIMEOUT_MS="${request_timeout}" \
+    start_user_spot_host "${sender}" sender source "${common[@]}" \
+    --node-rid "${sender_rid}" --peer-rid "${owner_rid}" \
+    --bind-endpoint "tcp://127.0.0.1:${sender_port}" --event-file "${sender_events}" --start-file "${probe_file}"
+  wait_for_line "${sender_events}" 'user-spot-source-peer-ready|ready=true' 180 'user-spot-join-failed|'
+
+  ZLINK_CROSS_JOIN_SETUP=1 start_user_spot_host node setup source "${common[@]}" \
+    --node-rid "${setup_rid}" --peer-rid "${owner_rid}" \
+    --bind-endpoint "tcp://127.0.0.1:${setup_port}" --event-file "${setup_events}" \
+    --start-file "${start_file}"
+  wait_for_line "${setup_events}" 'user-spot-source-peer-ready|ready=true' 90
+  touch "${start_file}"
+  assert_source_actor_create "${setup_events}" "${setup_rid}" "${owner_rid}"
+  wait_for_line "${setup_events}" 'user-spot-join-request-reply|accepted=true' 60
+  wait_for_canonical_actor_join "${owner_events}.flow"
+  wait_for_line "${owner_events}" "late-actor-completion-throw|actor=${actor_id}|nodeRid=${owner_rid}" 60
+  wait_for_line "${owner_events}.flow" 'error_message=cross-language Join completion failure' 15
+
+  wait_for_line "${owner_events}" "late-actor-owner-resumed|nodeRid=${owner_rid}" 60
+
+  # Send has no reply. Capture its owner terminal before permitting the request,
+  # whose sealed rejection carries the same reason.
+  local send_drop="${RUN_DIR}/send-drop.events"
+  touch "${probe_file}"
+  wait_for_line "${sender_events}" 'late-actor-send|submitted=' 15
+  "${PYTHON_BIN[@]}" - "${fixture}" "${owner_events}.flow" "${sender_rid}" "${owner}" >"${send_drop}" <<'PYTHON'
+import json
+from pathlib import Path
+import re
+import sys
+import time
+
+expect = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["expect"]
+flow_path = Path(sys.argv[2])
+sender_rid = sys.argv[3]
+# A listed owner must report its own reason; other owners only need a named reason.
+reason = expect["ownerDropReasons"].get(sys.argv[4])
+reason_field = re.compile(rf" reason={re.escape(reason) if reason else '[A-Za-z_]+'} ")
+deadline = time.monotonic() + 2
+while True:
+    flow = flow_path.read_text(encoding="utf-8").splitlines()
+    dropped = [line for line in flow if f" source_rid={sender_rid} " in line
+               and f" action={expect['sendOwnerAction']} " in line
+               and f" event={expect['ownerDropEvent']} " in line
+               and reason_field.search(line)]
+    if dropped:
+        print(*dropped, sep="\n")
+        break
+    if time.monotonic() >= deadline:
+        break
+    time.sleep(.05)
+PYTHON
+  touch "${probe_file}.request"
+  wait_for_line "${sender_events}" 'late-actor-request|kind=' 15
+  "${PYTHON_BIN[@]}" - "${fixture}" "${sender_events}" "${owner_events}" "${sender_rid}" "${send_drop}" <<'PYTHON'
+import json
+from pathlib import Path
+import sys
+
+expect = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["expect"]
+sender = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
+owner = Path(sys.argv[3]).read_text(encoding="utf-8").splitlines()
+sender_rid = sys.argv[4]
+dropped = Path(sys.argv[5]).read_text(encoding="utf-8").splitlines()
+request, = (line for line in sender if line.startswith("late-actor-request|"))
+print(request)
+kind, elapsed = (field.split("=", 1)[1] for field in request.split("|", 4)[1:3])
+ingress = {line.split("|")[1] for line in owner
+           if line.startswith("late-actor-owner-ingress|") and f"|source={sender_rid}|" in line}
+executed = [line for line in owner
+            if line.startswith(("late-actor-send-executed|", "user-spot-probe-served|"))]
+failures = []
+if kind != expect["requestErrorKind"]:
+    failures.append(f"request returned {kind}, expected {expect['requestErrorKind']}")
+if not 0 <= int(elapsed) < expect["requestMaxElapsedMs"]:
+    failures.append(f"request elapsed {elapsed} ms, expected under {expect['requestMaxElapsedMs']} ms")
+if "late-actor-send|submitted=true" not in sender:
+    failures.append("sender did not submit the send")
+if ingress != {"kind=actorSend", "kind=actorRequest"}:
+    failures.append(f"owner did not observe both packets from {sender_rid}: {sorted(ingress)}")
+if executed:
+    failures.append(f"owner executed application handlers: {executed}")
+if not dropped:
+    failures.append("owner flow lacks the sealed Actor send drop")
+if failures:
+    sys.exit("\n".join(failures))
+print(*dropped, sep="\n")
+PYTHON
+  stop_all
+  echo "cross-language smoke stage=${ZLINK_CPP_CROSS_LANGUAGE_STAGE} result=passed"
 }
 
 # --- User-Spot JoinSpot: .NET source -> Node target, canonical actorJoin(28) --
@@ -2184,6 +2328,11 @@ run_java_cross_stages() {
 }
 
 case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
+  actor-join-sealed-remote-*-*)
+    sealed_cell="${ZLINK_CPP_CROSS_LANGUAGE_STAGE#actor-join-sealed-remote-}"
+    stage_actor_join_sealed_remote "${sealed_cell%%-*}" "${sealed_cell#*-}"
+    exit 0
+    ;;
   login-admission)
     source "${SCRIPT_DIR}/login_admission.sh"
     stage_login_admission
