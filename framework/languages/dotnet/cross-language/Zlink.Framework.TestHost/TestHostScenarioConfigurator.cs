@@ -406,7 +406,9 @@ internal static class TestHostScenarioConfigurator
         {
             services.AddSingleton(provider => new TestHostMessageFlowListener(
                 options.EventFilePath + ".flow",
-                provider.GetService<SealedJoinObservation>()
+                provider.GetService<SealedJoinObservation>() is { } sealedJoin
+                    ? sealedJoin.ObserveIngress
+                    : null
             ));
         }
         services.AddZLinkFramework(framework =>
