@@ -181,6 +181,22 @@ The connector handles it as follows.
 These were fixed by the PM decision (11-25, #4546 stage 2). Changing one changes this section,
 [Stream Connector §5.8](../../stream-connector/32-stream-connector.en.md#58-admission-wait-and-automatic-retry), and the shared fixture together.
 
+#### 3.5.0 Stage 2 Settings
+
+Stage 2 settings sit in the same STREAM session registration options as stage 1 (§1.1). Each language's exact interface
+document sets the language-specific names. If STREAM registrations on one node give different values, that's a
+configuration error at startup.
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `AdmissionQueueEnabled` | Turns stage 2 (the login queue) on. bool | `false` |
+| `AdmissionQueueKey` | Current ticket signing key (§3.5.2). Required when stage 2 is on | none |
+| `AdmissionQueuePreviousKey` | Previous ticket verification key (§3.5.2). Optional | none |
+| `AdmissionGlobalLimit` | Mesh-wide concurrent authentication limit (§3.5.3). Integer in `1..2147483647`, optional | none (per-node budgets only) |
+
+If `AdmissionQueueEnabled` is `true` and `AuthenticationPacketName` or `AdmissionQueueKey` is missing, that's a configuration
+error at startup. When it's `false`, the other stage 2 settings aren't read.
+
 #### 3.5.1 Queue Spot and Epoch
 
 - The queue Spot is one Instance Spot per RouteMesh that holds the authentication STREAM registration, with Spot ID
