@@ -281,7 +281,7 @@
         "cpp": "RequestDuringClosingCasIsUnavailableAndServedAfterCasFailure",
         "dotnet": "RequestDuringClosingCasIsUnavailableAndServedAfterCasFailure",
         "java": "requestDuringClosingCasIsUnavailableAndServedAfterCasFailure",
-        "node": "an Actor request is unavailable during the Closing CAS and is served after it fails"
+        "node": "requestDuringClosingCasIsUnavailableAndServedAfterCasFailure"
       },
       "specClauses": ["ownerDestroy", "closingCasRollback", "actorRequestErrors"],
       "given": { "authority": "oldReady", "ownerLease": "valid", "recreation": "disabled during this scenario" },
@@ -330,7 +330,7 @@
         "cpp": "RemoteDestroyReleasesClosingAfterOwnerLeaseEnds",
         "dotnet": "RemoteDestroyReleasesClosingAfterOwnerLeaseEnds",
         "java": "remoteDestroyReleasesClosingAfterOwnerLeaseEnds",
-        "node": "a remote destroy releases Closing after the owner lease ends"
+        "node": "remoteDestroyReleasesClosingAfterOwnerLeaseEnds"
       },
       "specClauses": ["ownerDestroy", "remoteDestroy", "conditionalRelease", "releaseBatch"],
       "given": {
