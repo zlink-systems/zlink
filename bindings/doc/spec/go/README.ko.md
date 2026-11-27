@@ -118,7 +118,7 @@ message를 반환한다. `CopyTo(destination)`와 `TryCopyTo(destination)`는 ca
 제공한다.
 
 Routing ID 생성자는 `NewRoutingID`, `NewRoutingIDString`, `NewRoutingIDUint32`, `NewRoutingIDUUIDBytes`,
-`NewRoutingIDFromHex`다.
+`NewRoutingIDFromHex`다. 크기·입력 오류를 생성 시점에 받으려면 `TryNewRoutingID`·`TryNewRoutingIDFromHex`가 `*ConfigError`(`ConfigInvalidArgument`)를 반환한다(`New*`는 오류를 버리고 빈 값을 반환한다). `RoutingID.Uint32()`와 `UUIDBytes()`는 4바이트·16바이트 ID를 typed 값으로 꺼내며 형식이 다르면 `ok=false`다.
 
 | Builder 경로 | ownership 규칙 |
 |---|---|
@@ -200,7 +200,7 @@ PUB·XPUB의 `PubSocketOptions`를 반환한다. ROUTER의
 반환한다. `RouterRoute`는 `RoutingID`, `RouteGeneration`을 제공한다. Route generation은 0이 아닌 opaque
 token이며 동등성만 비교한다. `PollRoute`는 선택 route 변경을 알린다.
 
-연결 시도 snapshot은 outbound 연결 등록마다 한 행을 반환한다. 목표 표면(**미구현**, #5749)은 STREAM을 제외한 raw 소켓의
+연결 시도 snapshot은 outbound 연결 등록마다 한 행을 반환한다. 표면은 STREAM을 제외한 raw 소켓의
 `ConnectionAttemptsSnapshot() ([]ConnectionAttempt, error)`과 Poller의 `PollConnect`다.
 `ConnectionAttempt`는 `Endpoint`, `IntentID`, `Revision`, `LastFailureID`, `State`, `LastFailure`를 담는다.
 `ConnectionFailure`의 필드는 `Kind`, `Stage`, `NormalizedErrno`, `DisconnectReason`다. 상태, 실패 원인,

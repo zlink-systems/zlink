@@ -128,7 +128,7 @@ storage. `Size()` and `IsEmpty()` report payload size and emptiness, `String()` 
 string, and `RefCount()` reports the storage reference count.
 
 Routing ID constructors are `NewRoutingID`, `NewRoutingIDString`, `NewRoutingIDUint32`,
-`NewRoutingIDUUIDBytes`, and `NewRoutingIDFromHex`.
+`NewRoutingIDUUIDBytes`, and `NewRoutingIDFromHex`. To receive a size or input error at creation, `TryNewRoutingID` and `TryNewRoutingIDFromHex` return a `*ConfigError` (`ConfigInvalidArgument`); `New*` drops the error and returns the empty value. `RoutingID.Uint32()` and `UUIDBytes()` extract 4-byte and 16-byte IDs as typed values and return `ok=false` for other shapes.
 
 | Builder path | Ownership rule |
 |---|---|
@@ -215,7 +215,7 @@ capacity private.
 Core currently selects. `RouterRoute` exposes `RoutingID`, `RouteGeneration`. The route generation is a
 nonzero opaque token. Compare it only for equality. `PollRoute` signals a change in a selected route.
 
-A connection-attempt snapshot returns one row per outbound connect registration. The target surface (**not implemented yet**, #5749) is
+A connection-attempt snapshot returns one row per outbound connect registration. The surface is
 `ConnectionAttemptsSnapshot() ([]ConnectionAttempt, error)` on raw sockets other than STREAM, with Poller
 readiness `PollConnect`. `ConnectionAttempt` contains `Endpoint`, `IntentID`, `Revision`, `LastFailureID`,
 `State`, `LastFailure`. `ConnectionFailure` contains `Kind`, `Stage`, `NormalizedErrno`,
