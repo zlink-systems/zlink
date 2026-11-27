@@ -50,6 +50,7 @@ exports.ServiceWireCommand = {
     relocationState: 52,
     relocationFailed: 53,
     boundSessionClose: 54,
+    instanceSpotFollow: 55,
 };
 exports.ServiceWireFlag = {
     metadata: 1,

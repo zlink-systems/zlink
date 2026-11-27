@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -587,15 +588,19 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
+        var authorityOwnerGeneration = stage.TargetAuthorityOwnerGeneration;
         await stage
             .Node.Catalog.ValidateRelocatedReservedAsync(
                 stage.Spot,
                 stage.StableType,
                 spotParticipant.ObjectGeneration,
-                stage.TargetAuthorityOwnerGeneration,
+                authorityOwnerGeneration,
                 cancellationToken
             )
             .ConfigureAwait(false);
+        ((ZLinkBackendSpotWrapper)stage.Spot.Activation.NativeSpot).SetAuthorityOwnerGeneration(
+            authorityOwnerGeneration
+        );
         await ReplayInboundAggregateActorsAsync(stage, cancellationToken).ConfigureAwait(false);
         var replayJobs = spotParticipant
             .AcceptedJobs.Concat(stage.SnapshotHeldRecords())
