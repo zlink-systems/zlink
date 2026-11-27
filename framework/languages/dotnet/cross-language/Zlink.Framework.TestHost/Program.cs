@@ -499,6 +499,8 @@ internal sealed class UserSpotTargetHostedService(
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // The flow listener is a lazily built singleton; taking it here makes
+        // it start listening before the first Join, and keeps it alive.
         GC.KeepAlive(flow);
         var serving = false;
         await foreach (var observed in runtime.ObserveAsync(cancellationToken))

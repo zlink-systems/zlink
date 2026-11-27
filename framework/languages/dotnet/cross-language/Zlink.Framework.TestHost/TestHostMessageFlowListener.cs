@@ -10,7 +10,6 @@ internal sealed class TestHostMessageFlowListener : IDisposable
     public TestHostMessageFlowListener(string filePath, SealedJoinObservation? sealedJoin = null)
     {
         _filePath = filePath;
-        sealedJoin?.Attach(this);
         if (Path.GetDirectoryName(filePath) is { Length: > 0 } directory)
             Directory.CreateDirectory(directory);
         File.WriteAllText(filePath, string.Empty);
@@ -50,22 +49,6 @@ internal sealed class TestHostMessageFlowListener : IDisposable
                     && stage.GetString() == detail;
             });
 
-    /// <summary>
-    /// Records the host-injected Join completion failure in the same flow file
-    /// and field form as a framework dispatch error, so the shared stage
-    /// script reads one line per owner language.
-    /// </summary>
-    public void RecordCompletionFailure(string actorId, Exception error)
-    {
-        var line =
-            "zlink flow: label=dotnet-test-host phase= surface=actor_relocation kind=control"
-            + " packet=OnJoinCompleted flow= origin="
-            + $" event=zlink.dispatch_error started={DateTime.UtcNow:O} duration_ticks=0"
-            + $" actor={actorId} action=drop error_message={error.Message}";
-        lock (_fileGate)
-            File.AppendAllText(_filePath, line + Environment.NewLine);
-    }
-
     private void Capture(Activity activity)
     {
         var line =
@@ -81,6 +64,7 @@ internal sealed class TestHostMessageFlowListener : IDisposable
             + $" started={activity.StartTimeUtc:O}"
             + $" duration_ticks={activity.Duration.Ticks}"
             + FormatSourceRid(activity)
+            + FormatTag(activity, "reason")
             + FormatTag(activity, "action")
             + FormatTag(activity, "error_message")
             + $" tags={System.Text.Json.JsonSerializer.Serialize(activity.TagObjects.ToDictionary(tag => tag.Key, tag => tag.Value))}";

@@ -7,7 +7,6 @@ internal sealed class SealedJoinObservation
     private readonly string _actorId;
     private readonly string _senderRid;
     private readonly string _senderRidHex;
-    private TestHostMessageFlowListener? _flow;
 
     public SealedJoinObservation(TestHostEventSink sink, string actorId, string senderRid)
     {
@@ -17,15 +16,12 @@ internal sealed class SealedJoinObservation
         _senderRidHex = RoutingId.From(senderRid).ToHex();
     }
 
-    public void Attach(TestHostMessageFlowListener flow) => _flow = flow;
-
     public void FailCompletion(string actorId, string nodeRid)
     {
         if (actorId != _actorId)
             return;
         _sink.Append($"late-actor-completion-throw|actor={actorId}|nodeRid={nodeRid}");
         var failure = new InvalidOperationException("cross-language Join completion failure");
-        _flow?.RecordCompletionFailure(actorId, failure);
         // The .NET Framework records no target_resume sample for a remote User
         // Spot Join; the completion callback runs only after the target took
         // the authority, so it marks the owner as resumed.
