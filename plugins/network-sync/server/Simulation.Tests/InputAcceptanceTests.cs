@@ -178,7 +178,7 @@ public sealed class InputAcceptanceTests
     }
 
     [Fact]
-    public void ActionIdsRemainUsedAfterActorRejoinsTheSameEpoch()
+    public void RejoiningActorStartsANewActionSequence()
     {
         var clock = new FakeClock();
         var game = new FakeSimulation(clock);
@@ -192,14 +192,34 @@ public sealed class InputAcceptanceTests
 
         Assert.True(match.RemovePlayer("actor"));
         Assert.True(match.AddPlayer("actor"));
-        Assert.Equal(InputDisposition.DuplicateAction,
-            match.SubmitInput("match", epoch, "actor", 2, 20, 100, [new(9, 100)]).Disposition);
-        match.AddPlayer("other");
         Assert.Equal(InputDisposition.Accepted,
-            match.SubmitInput("match", epoch, "other", 2, 20, 3, [new(9, 4)]).Disposition);
+            match.SubmitInput("match", epoch, "actor", 2, 20, 3, [new(1, 4)]).Disposition);
         clock.Advance(33_333);
         match.Wakeup();
 
         Assert.Equal(10, game.State);
+    }
+
+    [Fact]
+    public void EveryAcceptanceReasonMapsToOneWireDisposition()
+    {
+        var expected = new Dictionary<InputDisposition, WireInputDisposition>
+        {
+            [InputDisposition.Accepted] = WireInputDisposition.Accepted,
+            [InputDisposition.Late] = WireInputDisposition.Late,
+            [InputDisposition.DuplicateTick] = WireInputDisposition.Duplicate,
+            [InputDisposition.DuplicateAction] = WireInputDisposition.Duplicate,
+            [InputDisposition.WrongMatch] = WireInputDisposition.Rejected,
+            [InputDisposition.WrongEpoch] = WireInputDisposition.Rejected,
+            [InputDisposition.UnknownActor] = WireInputDisposition.Rejected,
+            [InputDisposition.InvalidSize] = WireInputDisposition.Rejected,
+            [InputDisposition.RateLimited] = WireInputDisposition.Rejected,
+            [InputDisposition.InvalidTick] = WireInputDisposition.Rejected,
+            [InputDisposition.TooFarAhead] = WireInputDisposition.Rejected
+        };
+
+        Assert.Equal(Enum.GetValues<InputDisposition>().OrderBy(value => value), expected.Keys.OrderBy(value => value));
+        foreach (var (reason, wire) in expected)
+            Assert.Equal(wire, reason.ToWire());
     }
 }

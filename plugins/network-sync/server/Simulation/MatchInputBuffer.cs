@@ -20,7 +20,14 @@ internal sealed class MatchInputBuffer<TInput, TAction>(
         return _players.TryAdd(actorId, new());
     }
 
-    public bool RemovePlayer(string actorId) => _players.Remove(actorId);
+    // A rejoining Actor starts a new action sequence; its earlier actions were already applied or dropped.
+    public bool RemovePlayer(string actorId)
+    {
+        if (!_players.Remove(actorId))
+            return false;
+        _lastActionIds.Remove(actorId);
+        return true;
+    }
 
     public InputFeedback Submit(
         string inputMatchId,
