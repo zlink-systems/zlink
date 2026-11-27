@@ -2,8 +2,8 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
-import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 import java.io.IOException;
@@ -203,7 +203,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
                                 })
                         .toList();
         try {
-            return ServiceWirePilotCodec.encodeRelocationEnvelopeV1(
+            return ZLinkServiceRelocationEnvelopeCodec.encode(
                     new ServiceWirePilotCodec.RelocationEnvelopeV1(
                             relocationId.getMostSignificantBits(),
                             relocationId.getLeastSignificantBits(),

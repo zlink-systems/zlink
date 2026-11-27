@@ -12,9 +12,9 @@ title: "Python 바인딩 공개 계약"
 > 공개 타입·소유권·오류 계약.
 
 - 이 문서는 `zlink` Python package가 제공하는 Core raw messaging 계약을 정의한다.
-- 이 문서와 공개 header가 정의하지 않는 기능은 Python binding 계약이 아니다.
+- Python 표면은 공통 스펙의 Core raw 계약을 따른다.
 - Python 3.9 이상 지원과 package 버전은 [배포 metadata](../../../python/pyproject.toml)를 따른다.
-- 현재 native package target은 Linux x86_64이며, 다른 target은 별도 candidate payload와 clean consumer 검증 전까지 이 계약의 지원 범위가 아니다.
+- Native package는 Linux x86_64와 Windows x86_64를 지원한다.
 
 | 절 | 다루는 내용 |
 |---|---|
@@ -51,8 +51,70 @@ handle, FFI symbol, native struct를 public type으로 노출하지 않는다.
 
 주요 factory는 `create_context()`, `create_pair_socket()`, `create_dealer_socket()`,
 `create_router_socket()`, `create_stream_socket()`, `create_pub_socket()`, `create_sub_socket()`,
-`create_poller()`, `create_timer()`, `create_received()`와 `create_message` 계열이다.
-정확한 Python signature는 같은 디렉터리의 contract module과 public header를 함께 기준으로 한다.
+`create_xpub_socket()`, `create_xsub_socket()`, `create_poller()`, `create_poll_events()`,
+`create_timer()`, `create_received()`다. Message는 `allocate_message(size)`와 `Message.from_(value)`로 생성한다.
+
+`Context.shutdown()`은 context의 작업 종료를 요청하고 `Context.recalculate_auto_hwm()`은 Core에 Auto-HWM
+재계산을 요청한다. Package의 `version()`, `has(capability)`, `strerror(code)`는 Core 버전·기능·오류
+문자열을 반환한다.
+
+## 소켓별 능력
+
+소켓별 공통 계약은 [Socket Capability Matrix](../README.ko.md#socket-capability-matrix)를 따른다.
+
+| 소켓 | 제출 | 수신 |
+|---|---|---|
+| PAIR | `send` | `recv_into` |
+| DEALER | `send`, `request` | `recv_into` |
+| ROUTER | `send(routing_id)`, `request`, `reply` | `recv_into` |
+| PUB | `publish` | — |
+| SUB | — | `subscribe_into` |
+| XPUB | `publish` | `receive_subscription_event_into` |
+| XSUB | — | `subscribe_into` |
+| STREAM | `send(routing_id)` | `recv_into`, `recv_packet_into` |
+
+모든 raw 소켓은 `bind`와 `unbind`로 endpoint를 열고 닫으며, `disconnect_rid`로 routing ID에 해당하는 peer
+연결을 끊는다. STREAM을 제외한 소켓은 `connect`로 outbound 연결을 등록하고 `disconnect`로 해제한다.
+
+`set_tls_server(cert: str, key: str, require_client_cert: bool = False)`는 bind 전에 인증서·키와 client
+인증 요구를 설정한다.
+`set_tls_client(ca_cert: Optional[str], hostname: Optional[str], trust_system: bool = False)`는 connect
+전에 CA·서버 이름과 시스템 CA 사용 여부를 설정한다. 두 메서드는 모든 raw 소켓에 공통이다.
+
+연결 메서드는 성공 시 `None`을 반환한다. Core의 `bind` 실패는 `BindError`, 나머지 연결 연산 실패는 `ConnectError`,
+TLS 설정 실패는 `ConfigError`로 전달한다.
+
+SUB와 XSUB는 `set_subscription(topic)`과 `unset_subscription(topic)`으로 filter를 설정·해제한다.
+`subscription_at(index)`는 filter와 pattern 여부를 반환하고 해당 인덱스가 없으면 `None`을 반환한다. XPUB의
+`receive_subscription_event_into(event: SubscriptionEvent, *, flags: int = 0) -> bool`는
+`create_subscription_event()`로 만든 저장소를 채운다.
+
+`options` 속성은 모든 소켓에 공통이다. `router_options`, `dealer_options`, `stream_options`는 해당 소켓에,
+`pub_options`는 PUB·XPUB에, `sub_options`는 SUB·XSUB에 적용한다.
+
+### 소켓 readiness snapshot
+
+`RouterSocket.routes_snapshot() -> List[RouterRoute]`는 Core가 선택한 route를 routing ID마다 한 행으로
+반환한다. `RouterRoute`는 `routing_id`, `route_generation`을 제공한다. Route generation은 0이 아닌 opaque
+token이며 동등성만 비교한다. `PollEventFlag.POLLROUTE`는 선택 route 변경을 알린다.
+
+연결 시도 snapshot은 outbound 연결 등록마다 한 행을 반환한다. 목표 표면(**미구현**, #5752)은 STREAM을 제외한 raw 소켓의
+`connection_attempts_snapshot() -> List[ConnectionAttempt]`과 Poller의 `PollEventFlag.POLLCONNECT`다.
+`ConnectionAttempt`는 `endpoint`, `intent_id`, `revision`, `last_failure_id`, `state`, `last_failure`를
+담는다. `ConnectionFailure`의 필드는 `kind`, `stage`, `normalized_errno`, `disconnect_reason`다. 상태, 실패
+원인, 단계는 각각 닫힌 `ConnectionAttemptState`, `ConnectionFailureKind`, `ConnectionFailureStage` enum으로
+Core 값을 보존한다.
+
+`endpoint`는 UTF-8 endpoint를 담은 `str`이며, `last_failure`는 복구 뒤에도 최근
+실패를 보존하는 `ConnectionFailure`다. `normalized_errno` (`int`)와 `disconnect_reason` (`int`)은
+진단값이다.
+
+`intent_id`와 `revision`은 0이 아닌 `int` opaque token이다. `last_failure_id`는 같은 타입이며
+실패 이력이 없을 때 0이다. 토큰은 동등성만 비교한다. 연결 실패는 snapshot 행에 담고 조회 자체의
+실패만 `ConfigError`로 전달한다. 바인딩은 monitor 이력이나 timer polling으로 연결 결과를 추정하지 않는다.
+
+성공한 snapshot은 반영한 변경의 readiness를 해제한다. Snapshot 종류마다 소켓당 observer를 하나 둔다.
+[공통 snapshot 계약](../README.ko.md#socket-readiness-snapshots)이 두 readiness의 의미를 정한다.
 
 ## Byte HWM과 Auto-HWM
 
@@ -99,6 +161,7 @@ oversize·blocked·aggregate flag, `budget_generation`과 `measurement_epoch`을
   사용하는 호출은 허용하지 않는다.
 - `Message.from_(value)`는 caller 값에서 독립된 native message를 만든다. send submit 성공 뒤
   message part의 native 소유권은 Core send 경로로 이동한다.
+- `Message.copy()`는 원본과 따로 닫을 수 있는 message를 반환한다.
 - `Received`는 caller가 만든 수신 저장 공간이다. `recv_into(received)` 성공 시 parts와 routing
   metadata가 `Received`에 기록되고, `close()` 또는 context manager 종료 시 native parts를 해제한다.
 - `Received`의 `parts`가 제공하는 native view는 owner가 열린 동안만 유효하다. 다른 수명으로 넘겨야
@@ -125,6 +188,19 @@ DEALER와 ROUTER request/reply는 Core routing metadata와 `ReplyToken`을 보�
 `Received.routing_id`는 routing ID이며 다른 identity type으로 변환되지 않는다.
 현재 single-part accessor 이름은 구현·contract test와 같은 `single_part_or_throw()`를 사용한다.
 
+### Poller와 monitor
+
+`Poller`는 `add_socket`·`modify_socket`·`remove_socket`, `add_fd`·`modify_fd`·`remove_fd`,
+`add_timer`·`remove_timer`로 source를 관리한다. Monitor에는
+`add_monitor`·`modify_monitor`·`remove_monitor`를 사용한다. `wait(events, timeout_ms)`는
+`create_poll_events(capacity)`로 만든 `PollEvents`를 채우며 `events.event(index)`는 `source_kind`, `slot`,
+`revents`, `fd`를 담은 `PollEvent`를 반환한다.
+
+[공통 MonitorStatus 계약](../README.ko.md#monitorstatus)에 따라 `MonitorStatus`는 Core ABI v4를 반영한다.
+`abi_version`와 `struct_size`는 반환된 layout을 확인하는 진단값이다. `MonitorEvent`의 `event`, `value`,
+`routing_id`, `local_addr`, `remote_addr`, `connection_id`, `transport_lane`, `flags`는
+[공통 MonitorEvent 계약](../README.ko.md#monitorevent)의 필드 의미와 native layout을 따른다.
+
 ## Receive flow state
 
 `ReceiveFlowState`는 `RUNNING = 0`, `PAUSED = 1`인 `IntEnum`이다.
@@ -133,6 +209,9 @@ errno를 담은 `ConfigError`를 발생시킨다.
 상태·결과·monitor 투영은 [공통 receive-flow 계약](../README.ko.md#receive-flow-projection)을 따른다.
 
 ## Error
+
+함수군별 오류는 [공통 오류 코드 표](../README.ko.md#error-code-표)의 66개 non-OK 코드를 보존한다. 코드의
+열거 타입은 함수군별 `*Result`다. `ErrorCode`는 Core 전용 errno를 열거한다.
 
 Core result를 반환하는 호출은 Python의 대응 error에 `result`, `code`, `native_errno`를 제공한다.
 입력 형식 오류는 호출 전에 검사할 수 있지만, native operation failure를 일반 `ValueError`로 바꾸지
@@ -268,7 +347,7 @@ class Received:
 class StreamSocket:
     def send(self, routing_id: RoutingId) -> SendOp: ...
     def recv_into(
-        self, out: Received, *, flags: RecvFlags = RecvFlags.NONE
+        self, received: Received, *, flags: int = 0
     ) -> bool: ...
     def recv_packet_into(
         self, out: StreamPacket, *, flags: RecvFlags = RecvFlags.NONE

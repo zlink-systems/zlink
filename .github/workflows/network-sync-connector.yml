@@ -1,0 +1,37 @@
+name: Network sync connector
+
+# network-sync Unity connector plugin의 managed 런타임을 빌드하고 Unity 없이 도는 시험을 돌린다(#3774).
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/network-sync/connector/**"
+      - "plugins/network-sync/protocol/**"
+      - ".github/workflows/network-sync-connector.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "plugins/network-sync/connector/**"
+      - "plugins/network-sync/protocol/**"
+      - ".github/workflows/network-sync-connector.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  unity-managed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+      - name: Check format
+        run: |
+          dotnet format plugins/network-sync/connector/unity/com.zlink.network-sync/Runtime/Zlink.NetworkSync.csproj --verify-no-changes
+          dotnet format "plugins/network-sync/connector/unity/com.zlink.network-sync/Tests/Managed~/Zlink.NetworkSync.Tests.csproj" --verify-no-changes
+      - name: Test managed runtime with the shared wire fixtures
+        run: dotnet test "plugins/network-sync/connector/unity/com.zlink.network-sync/Tests/Managed~/Zlink.NetworkSync.Tests.csproj" --nologo

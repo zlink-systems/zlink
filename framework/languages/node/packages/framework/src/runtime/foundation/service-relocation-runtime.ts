@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { AUTHORITY_ENVELOPE_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { decodeAuthorityKey } from '../locations/authority-key-codec';
 import type {
@@ -294,7 +293,7 @@ export function decodeCanonicalRelocationSlot(
 ): CanonicalRelocationSlot | undefined {
   try {
     const reader = new CanonicalReader(payload);
-    const aggregateId = uuid(reader.u64(), reader.u64());
+    const aggregateId = serviceRelocationIdFromWire({ high: reader.u64(), low: reader.u64() });
     if (aggregateId === undefined) return undefined;
     const aggregateGeneration = reader.u64();
     const targetAttemptGeneration = reader.u64();
@@ -542,7 +541,10 @@ export function decodeServiceRelocationEnvelope(
     }
     throw new TypeError('Invalid relocation envelope.', { cause });
   }
-  const aggregateId = uuid(generated.relocationHigh, generated.relocationLow);
+  const aggregateId = serviceRelocationIdFromWire({
+    high: generated.relocationHigh,
+    low: generated.relocationLow
+  });
   if (aggregateId === undefined) throw new TypeError('Invalid relocation identity.');
   positiveBigInt(aggregateGeneration, 'aggregate generation');
   const bindings = new Map(
@@ -703,9 +705,12 @@ function relocationId(value: string): { readonly high: bigint; readonly low: big
   return { high: BigInt(`0x${hex.slice(0, 16)}`), low: BigInt(`0x${hex.slice(16)}`) };
 }
 
-function uuid(high: bigint, low: bigint): string | undefined {
-  if (high === 0n && low === 0n) return undefined;
-  const hex = high.toString(16).padStart(16, '0') + low.toString(16).padStart(16, '0');
+export function serviceRelocationIdFromWire(value: {
+  readonly high: bigint;
+  readonly low: bigint;
+}): string | undefined {
+  if (value.high === 0n && value.low === 0n) return undefined;
+  const hex = value.high.toString(16).padStart(16, '0') + value.low.toString(16).padStart(16, '0');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
@@ -772,50 +777,6 @@ function wireParticipant(
   };
 }
 
-function objectKind(value: unknown): ZLinkPlacementObjectKind {
-  if (value !== 'actor' && value !== 'user_spot' && value !== 'instance_spot') {
-    throw new TypeError('Relocation object kind is invalid.');
-  }
-  return value;
-}
-
-export function inventoryDigest(
-  participants: readonly Pick<
-    ServiceRelocationParticipant,
-    'key' | 'objectKind' | 'stableType' | 'objectGeneration' | 'authorityOwnerGeneration'
-  >[],
-  memberships: readonly ServiceRelocationMembership[] = []
-): string {
-  const identities = participants
-    .map((participant) => ({
-      key: requireText(participant.key, 'participant key'),
-      objectKind: objectKind(participant.objectKind),
-      stableType: requireText(participant.stableType, 'participant stable type'),
-      objectGeneration: positiveBigInt(
-        participant.objectGeneration,
-        'object generation'
-      ).toString(),
-      authorityOwnerGeneration: positiveBigInt(
-        participant.authorityOwnerGeneration,
-        'authority owner generation'
-      ).toString()
-    }))
-    .sort((left, right) => left.key.localeCompare(right.key));
-  if (new Set(identities.map(({ key }) => key)).size !== identities.length) {
-    throw new TypeError('Relocation participants must have unique keys.');
-  }
-  const canonicalMemberships = encodeMemberships(memberships, participants);
-  return createHash('sha256')
-    .update(
-      JSON.stringify({
-        participants: identities,
-        memberships: canonicalMemberships
-      }),
-      'utf8'
-    )
-    .digest('hex');
-}
-
 function decodeAuthorityEnvelope(
   payload: Uint8Array
 ): ServiceRelocationAuthorityEnvelope | undefined {
@@ -857,59 +818,6 @@ function decodeAuthorityEnvelope(
     };
   } catch {
     return undefined;
-  }
-}
-
-function encodeMemberships(
-  memberships: readonly ServiceRelocationMembership[],
-  participants: readonly Pick<
-    ServiceRelocationParticipant,
-    'key' | 'objectKind' | 'objectGeneration'
-  >[]
-) {
-  validateMemberships(memberships, participants);
-  return memberships
-    .map((membership) => ({
-      actorKey: requireText(membership.actorKey, 'membership actor key'),
-      spotKey: requireText(membership.spotKey, 'membership spot key'),
-      spotObjectGeneration: positiveBigInt(
-        membership.spotObjectGeneration,
-        'membership Spot generation'
-      ).toString(),
-      membershipEpoch: positiveBigInt(membership.membershipEpoch, 'membership epoch').toString()
-    }))
-    .sort((left, right) => left.actorKey.localeCompare(right.actorKey));
-}
-
-function validateMemberships(
-  memberships: readonly ServiceRelocationMembership[],
-  participants: readonly Pick<
-    ServiceRelocationParticipant,
-    'key' | 'objectKind' | 'objectGeneration'
-  >[]
-): void {
-  const byKey = new Map(participants.map((participant) => [participant.key, participant]));
-  const actorKeys = new Set<string>();
-  for (const membership of memberships) {
-    const actorKey = requireText(membership.actorKey, 'membership actor key');
-    if (actorKeys.has(actorKey)) {
-      throw new TypeError('Relocation membership Actor keys must be unique.');
-    }
-    actorKeys.add(actorKey);
-    const actor = byKey.get(actorKey);
-    if (actor?.objectKind !== 'actor') {
-      throw new TypeError('Relocation membership must reference an Actor participant.');
-    }
-    const spot = byKey.get(requireText(membership.spotKey, 'membership spot key'));
-    if (
-      spot !== undefined &&
-      (spot.objectKind !== 'user_spot' ||
-        spot.objectGeneration !==
-          positiveBigInt(membership.spotObjectGeneration, 'membership Spot generation'))
-    ) {
-      throw new TypeError('Relocation membership Spot fence does not match its participant.');
-    }
-    positiveBigInt(membership.membershipEpoch, 'membership epoch');
   }
 }
 

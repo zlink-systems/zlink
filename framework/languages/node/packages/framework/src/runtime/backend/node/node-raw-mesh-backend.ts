@@ -1,3 +1,4 @@
+import type { ServiceActorRouteFence } from '../../foundation/service-stateful-wire-codec';
 import type { MeshOperationSubmission } from '../mesh-completion-table';
 import type { RequestRuntime } from '../../foundation/request-runtime';
 import type { PendingOperation } from '../../foundation/operation-registry';
@@ -664,7 +665,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   disconnectPeer(peerRid: unknown, lifecycleGeneration: bigint): void {
     const nodeRoutingId = String(peerRid);
-    const admitted = this.runtime?.topology.peer(nodeRoutingId);
+    const runtime = this.runtime;
+    const admitted = runtime?.topology.peer(nodeRoutingId);
     if (admitted !== undefined && admitted.descriptor.lifecycleGeneration !== lifecycleGeneration) {
       return;
     }
@@ -679,8 +681,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
           intent.endpoint === admittedEndpoint)
     );
     if (found === undefined) {
-      if (admitted !== undefined) {
-        this.runtime?.disconnectPeer(
+      if (admitted === undefined) {
+        runtime?.topology.forgetEndedAdmission(nodeRoutingId, undefined, lifecycleGeneration);
+      } else {
+        runtime?.disconnectPeer(
           admitted.descriptor.advertisedEndpoint,
           nodeRoutingId,
           lifecycleGeneration
@@ -1433,6 +1437,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       OperationKind.ActorLookup,
       this.requireStateful().lookupRemoteActor(String(targetNodeRid), actorId, timeoutMs)
     );
+  }
+
+  sendActorDestroy(fence: ServiceActorRouteFence): Promise<void> {
+    return this.requireStateful().sendActorDestroy(fence);
   }
 
   destroyActor(

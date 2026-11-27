@@ -111,6 +111,35 @@ public final class ZLinkServiceM6BWireCodec {
                 target);
     }
 
+    public byte[] encodeActorDestroy(long correlation, ActorRouteFence actor) {
+        try {
+            return ServiceWirePilotCodec.encodeActorDestroy27(
+                    new ServiceWirePilotCodec.ActorDestroy27(
+                            correlation,
+                            new ServiceWirePilotCodec.Fence(
+                                    actor.actor().actorId(), actor.actor().generation(),
+                                    actor.actor().nodeRid().toBytes(), actor.targetNodeGeneration(),
+                                    actor.authorityOwnerGeneration(),
+                                            actor.ownerLeaseGeneration())));
+        } catch (IOException failure) {
+            throw protocol("invalid Actor destroy command: " + failure.getMessage());
+        }
+    }
+
+    public ActorRouteFence decodeActorDestroy(byte[] frame) {
+        try {
+            var actor = ServiceWirePilotCodec.decodeActorDestroy27(frame).actor();
+            return new ActorRouteFence(
+                    new ZLinkBackendActorRef(
+                            RoutingId.from(actor.targetNodeRid()), actor.id(), actor.generation()),
+                    actor.targetNodeGeneration(),
+                    actor.expectedAuthorityOwnerGeneration(),
+                    actor.expectedOwnerLeaseGeneration());
+        } catch (IOException failure) {
+            throw protocol("invalid Actor destroy command: " + failure.getMessage());
+        }
+    }
+
     public byte[] encodeActorHeader(
             boolean request,
             int flags,
@@ -539,23 +568,7 @@ public final class ZLinkServiceM6BWireCodec {
                                 new ServiceWireCodec.NonzeroU64(cold.deadlineUnixMs()));
             } else {
                 var route = (InstanceRouteFence) message.route();
-                generated =
-                        new ServiceWireCodec.InstanceRouteV1Ready(
-                                ServiceWireCodec.InstanceRouteKind.READY,
-                                new ServiceWireCodec.Rid(route.targetNodeRid().toBytes()),
-                                new ServiceWireCodec.NonzeroU64(route.targetNodeGeneration()),
-                                new ServiceWireCodec.Text8(route.targetSpotId()),
-                                new ServiceWireCodec.AuthorityGenerationFence(
-                                        new ServiceWireCodec.NonzeroU64(route.objectGeneration()),
-                                        new ServiceWireCodec.Text8(route.ownerId()),
-                                        new ServiceWireCodec.NonzeroU64(
-                                                route.authorityOwnerGeneration()),
-                                        new ServiceWireCodec.NonzeroU64(route.leaseGeneration()),
-                                        new ServiceWireCodec.AuthorityStoreVersion(
-                                                route.storeVersion())),
-                                message.instanceIntent()
-                                        ? ServiceWireCodec.Bool8.TRUE
-                                        : ServiceWireCodec.Bool8.FALSE);
+                generated = generatedReadyInstanceRoute(route, message.instanceIntent());
             }
             routeBytes = ServiceWireCodec.encodeInstanceRouteV1(generated, null);
         } catch (IOException failure) {
@@ -577,6 +590,22 @@ public final class ZLinkServiceM6BWireCodec {
             writer.opaqueNonzero(message.replyRouteId(), "replyRouteId");
         }
         return writer.toByteArray();
+    }
+
+    static ServiceWireCodec.InstanceRouteV1Ready generatedReadyInstanceRoute(
+            InstanceRouteFence route, boolean instanceIntent) {
+        return new ServiceWireCodec.InstanceRouteV1Ready(
+                ServiceWireCodec.InstanceRouteKind.READY,
+                new ServiceWireCodec.Rid(route.targetNodeRid().toBytes()),
+                new ServiceWireCodec.NonzeroU64(route.targetNodeGeneration()),
+                new ServiceWireCodec.Text8(route.targetSpotId()),
+                new ServiceWireCodec.AuthorityGenerationFence(
+                        new ServiceWireCodec.NonzeroU64(route.objectGeneration()),
+                        new ServiceWireCodec.Text8(route.ownerId()),
+                        new ServiceWireCodec.NonzeroU64(route.authorityOwnerGeneration()),
+                        new ServiceWireCodec.NonzeroU64(route.leaseGeneration()),
+                        new ServiceWireCodec.AuthorityStoreVersion(route.storeVersion())),
+                instanceIntent ? ServiceWireCodec.Bool8.TRUE : ServiceWireCodec.Bool8.FALSE);
     }
 
     public InstanceSpotMessage decodeInstanceSpotHeader(byte[] frame) {

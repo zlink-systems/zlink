@@ -1022,8 +1022,8 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory (
           framework_error_kind_t error_kind, bool) {
           return detail::invoke_actor_join_completed (
             static_cast<TActor *> (actor),
-            detail::actor_join_completion_from_erased (
-              outcome, operation_id_high, operation_id_low, committed, reply, error_kind));
+            detail::actor_join_completion_from_erased (outcome, operation_id_high, operation_id_low,
+                                                       committed, reply, error_kind));
       },
       relocation, std::move (capture), std::move (restore),
       std::is_same_v<decltype (&TActor::on_duplicate_bind), decltype (&actor_t::on_duplicate_bind)>,

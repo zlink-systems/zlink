@@ -187,7 +187,8 @@ correlation is never used.
 ### Decode Validation and Size Limits
 
 - The decoder checks the complete record length, item count, UTF-8 validity, and every bound before allocating.
-- A metadata frame cannot exceed 1,024 bytes.
+- Application metadata size is measured one way, whichever command carries it: as in [ClientServer Channel §5.3](03-client-server-channel.en.md#53-application-record-contract), encode each entry as `ChannelHeader` field 13 (including the field tag and length prefix) and sum over all entries; the sum cannot exceed 1,024 bytes. Commands that carry a metadata frame (16, 17, 23, 24, 25, 39) apply the same calculation to the entries decoded from the frame. Metadata accepted on one command therefore stays within the limit when it moves to another command, for example through Message Follow (39 → 21, 22).
+- The 1,024-byte limit on the metadata frame's own length is a pre-decode allocation guard. Whether the metadata is valid is decided only by the calculation above.
 - The application payload's absolute schema limit is `applicationPayloadAbsoluteBytes`, 4,294,966,774 bytes.
 - On a [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) — the connection group where
   several runtime nodes find each other by name and exchange messages — ServerServer applies

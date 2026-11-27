@@ -188,9 +188,8 @@ class mesh_node_runtime_t
                                 const mesh_node_descriptor_t &target,
                                 const authority_snapshot_t &authority,
                                 std::chrono::steady_clock::time_point restore_deadline);
-    task_t<bool> application_actor_transfer_in_progress (actor_ref_t actor) const;
-    task_t<result_t<void>> cleanup_application_actor_stateful (actor_ref_t actor);
-    task_t<result_t<bool>> destroy_application_actor (actor_ref_t actor);
+    task_t<result_t<bool>> destroy_application_actor (actor_ref_t actor,
+                                                      std::string expected_store_version = {});
     task_t<runtime::stateful::aggregate_relocation_result_t>
     relocate_application_unit (std::vector<runtime::stateful::object_ref_t> sources,
                                std::vector<std::string> stable_types,

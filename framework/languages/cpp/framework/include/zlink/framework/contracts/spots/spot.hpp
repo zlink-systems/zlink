@@ -2222,8 +2222,8 @@ class spot_node_builder_t
         if constexpr (detail::user_spot_type<TSpot>) {
             callbacks.on_create = [] (void *spot, const zlink::message_t &request,
                                       serializer_registry_t &serializers) {
-                return detail::invoke_spot_create (
-                  static_cast<TSpot *> (spot), message_t::from_raw (request, &serializers));
+                return detail::invoke_spot_create (static_cast<TSpot *> (spot),
+                                                   message_t::from_raw (request, &serializers));
             };
         }
         callbacks.on_initialize = [] (void *spot) {

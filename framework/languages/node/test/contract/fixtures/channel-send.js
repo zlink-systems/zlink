@@ -38,7 +38,7 @@ async function channelSendFixture(dist, backend = false) {
     setReadableHandler(handler) {
       readable = handler;
     },
-    routesSnapshot: () => [],
+    routesSnapshot: () => [{ routingId: 'peer', routeGeneration: 1n }],
     receive: () => received.shift(),
     submitSend: (...args) => submit(...args)
   };

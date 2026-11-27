@@ -214,8 +214,10 @@ internal sealed class ZLinkActorRemoteJoiner(
             ?? throw new InvalidOperationException("Actor handoff requires a location store.");
         var authorityRead = await ExecuteWithDeadlineAsync(
                 token =>
-                    authorityStore.ReadAuthorityAsync(
+                    ReadCaptureAuthorityAsync(
+                        authorityStore,
                         ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.Context.ActorId),
+                        actorState,
                         token
                     ),
                 RemainingTimeout(deadline.Monotonic),
@@ -237,6 +239,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{actor.Context.ActorId}' authority changed before handoff."
             );
+        ZLinkRelocationCompletionStore.RequireCompletionSettled(authority.Snapshot);
         var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(authorityStore);
         var actorAuthorityOwnerGeneration = authority.Snapshot.AuthorityOwnerGeneration;
         var captureRequired = relocation.PolicyKind == 2;

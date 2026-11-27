@@ -13,7 +13,10 @@ import type {
 } from '../../packages/framework/src/runtime/backend/raw-binding-port';
 import { RawServiceMeshRuntime } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
 import { ServiceMailbox } from '../../packages/framework/src/runtime/foundation/service-mailbox';
-import { SERVICE_WIRE_REQUIRED_CAPABILITY } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
+import {
+  SERVICE_WIRE_REQUIRED_CAPABILITY,
+  ServiceWireCommand
+} from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
 import type { ServiceNodeDescriptor } from '../../packages/framework/src/runtime/foundation/service-topology-registry';
 
 function queue(limit = 1n): ApplicationJobQueue {
@@ -178,7 +181,8 @@ test('raw protocol drop closes its retained Core record and permit exactly once'
     },
     received.routeGeneration,
     undefined,
-    () => runtime.liveness.admit(received.sourceRid, received.routeGeneration, performance.now())
+    () => runtime.liveness.admit(received.sourceRid, received.routeGeneration, performance.now()),
+    ServiceWireCommand.admit
   );
   try {
     assert.equal(await runtime.pumpOne(), 'protocolError');

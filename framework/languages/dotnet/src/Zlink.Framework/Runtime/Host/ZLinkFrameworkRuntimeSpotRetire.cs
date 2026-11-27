@@ -611,7 +611,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             var delivery = stage.Spot.Activation.AdmitAcceptedReplayJob(
                 job,
                 stage.SourceMeshName,
-                (reply, ct) => CompleteAcceptedSpotRequestAsync(stage, job, reply, ct)
+                (reply, ct) => CompleteAcceptedReplayAsync(stage, job, reply, ct)
             );
             if (delivery is not null)
                 stage.SpotCapturedRequestDeliveries.Add(delivery);
@@ -708,7 +708,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     )
             )
             .ConfigureAwait(false);
-        stage.CapturedRequestDelivery ??= Task.WhenAll(
+        stage.AdmissionDrainTask ??= Task.WhenAll(
             stage.SpotCapturedRequestDeliveries.Concat(
                 stage.ActorStates.Select(actor =>
                     actor.Handoff.CapturedRequestDelivery(handoffId) ?? Task.CompletedTask
@@ -718,7 +718,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         stage.SpotCapturedRequestDeliveries.Clear();
     }
 
-    private async ValueTask CompleteAcceptedActorReplayAsync(
+    private static ValueTask CompleteAcceptedActorReplayAsync(
         TargetStage stage,
         ZLinkRelocationParticipantEnvelope participant,
         ZLinkRelocationQueuedJob job,
@@ -727,323 +727,43 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"canonical_actor_replay_completion_begin actor={frame.Actor.ActorId} accepted_sequence={job.AcceptedSequence} reply={reply is not null} has_reply_route={job.CanonicalRequest is { ReplyRouteId: not 0 }}"
-        );
-        ZLinkCanonicalTerminalCompletion? completion = null;
-        byte[]? replyFrame = null;
-        var request = job.CanonicalRequest;
-        if (request is { ReplyRouteId: not 0 })
+        cancellationToken.ThrowIfCancellationRequested();
+        if (job.CanonicalRequest is { ReplyRouteId: not 0 })
         {
             if (reply is null)
                 throw new ZLinkRelocationDataLostException(
                     "Actor accepted request replay produced no terminal reply."
                 );
-            replyFrame = reply.ToFrame(frame.Header);
-            completion = ZLinkRelocationEnvelopeCodec.CreateCanonicalTerminalCompletion(
-                request.OperationHigh,
-                request.OperationLow,
-                request.Source.OwnerId,
-                request.Source.OwnerLeaseGeneration,
-                request.Source.NodeRid,
-                request.Source.NodeGeneration,
-                participant.CanonicalParticipantId,
-                job.AcceptedSequence,
-                0,
-                0,
-                new ZLinkCanonicalApplicationPayload(
-                    frame.Header.Name,
-                    DurableActorReplyContentType,
-                    EncodeDurableActorReply(request.ReplyRouteId, replyFrame)
-                )
-            );
+            CaptureAggregateCompletion(stage, participant, job, [reply.ToFrame(frame.Header)]);
         }
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"canonical_actor_replay_handled actor={frame.Actor.ActorId} accepted_sequence={job.AcceptedSequence} has_completion={completion is not null}"
-        );
-        if (completion is not null)
-        {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"canonical_actor_reply_relay_begin actor={frame.Actor.ActorId} accepted_sequence={job.AcceptedSequence} reply_route={request!.ReplyRouteId}"
-            );
-            var acknowledgement = await TryRelayCanonicalReplyAsync(
-                    RoutingId.FromHex(completion.SourceNodeRid),
-                    await CreateCanonicalReplyRelayAsync(
-                            Registration.Locations.ResolveStore()
-                                ?? throw new ZLinkConfigurationException(
-                                    "Location Store is not registered."
-                                ),
-                            stage,
-                            participant,
-                            request!,
-                            completion,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false),
-                    completion,
-                    [replyFrame!],
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"canonical_actor_reply_relay_result actor={frame.Actor.ActorId} accepted_sequence={job.AcceptedSequence} acknowledgement={acknowledgement}"
-            );
-            if (
-                !await CompleteCanonicalReplyDeliveryAsync(
-                        completion,
-                        acknowledgement,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false)
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    "Actor request reply is waiting for its exact source acknowledgement.",
-                    ZLinkRetryAdvice.RetryAfterBackoff
-                );
-        }
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"canonical_actor_replay_completion_end actor={frame.Actor.ActorId} accepted_sequence={job.AcceptedSequence}"
-        );
+        return ValueTask.CompletedTask;
     }
 
-    private async ValueTask CompleteAcceptedSpotRequestAsync(
+    private static ValueTask CompleteAcceptedReplayAsync(
         TargetStage stage,
         ZLinkRelocationQueuedJob job,
         byte[][]? capturedReply,
         CancellationToken cancellationToken
     )
     {
-        var request = job.CanonicalRequest!;
-        if (capturedReply is null)
-            throw new ZLinkRelocationDataLostException(
-                "Canonical request replay completed without a terminal reply."
-            );
-        var participant = stage.SpotParticipant;
-        var completion = ZLinkRelocationEnvelopeCodec.CreateCanonicalTerminalCompletion(
-            request.OperationHigh,
-            request.OperationLow,
-            request.Source.OwnerId,
-            request.Source.OwnerLeaseGeneration,
-            request.Source.NodeRid,
-            request.Source.NodeGeneration,
-            participant.CanonicalParticipantId,
-            job.AcceptedSequence,
-            terminalResult: 0,
-            errorCode: 0,
-            DecodeCanonicalReply(capturedReply)
-        );
-
-        var authorityStore =
-            Registration.Locations.ResolveStore()
-            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
-        var acknowledged = await TryRelayCanonicalReplyAsync(
-                RoutingId.FromHex(completion.SourceNodeRid),
-                await CreateCanonicalReplyRelayAsync(
-                        authorityStore,
-                        stage,
-                        participant,
-                        request,
-                        completion,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false),
-                completion,
-                capturedReply,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (
-            !await CompleteCanonicalReplyDeliveryAsync(completion, acknowledged, cancellationToken)
-                .ConfigureAwait(false)
-        )
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                "The canonical request reply has neither an acknowledgement nor exact source lease expiry proof.",
-                ZLinkRetryAdvice.RetryAfterBackoff
-            );
-    }
-
-    private async ValueTask<bool> CompleteCanonicalReplyDeliveryAsync(
-        ZLinkCanonicalTerminalCompletion completion,
-        ZLinkRelocationReplyAckState acknowledgement,
-        CancellationToken cancellationToken
-    )
-    {
-        if (
-            acknowledgement
-            is ZLinkRelocationReplyAckState.TerminalReceived
-                or ZLinkRelocationReplyAckState.AlreadyTerminal
-        )
-            return true;
-
-        var store =
-            Registration.Locations.ResolveStore()
-            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
-        var lease = await store
-            .ReadOwnerLeaseAsync(completion.SourceOwnerId, cancellationToken)
-            .ConfigureAwait(false);
-        if (!IsExactSourceLeaseExpired(lease, completion))
-            return false;
-        return true;
-    }
-
-    private async ValueTask<ZLinkRelocationReplyAckState> TryRelayCanonicalReplyAsync(
-        RoutingId sourceNodeRid,
-        ZLinkServiceWireCodec.ReplyRelayRecord relay,
-        ZLinkCanonicalTerminalCompletion completion,
-        IReadOnlyList<byte[]> payload,
-        CancellationToken cancellationToken
-    )
-    {
-        try
+        cancellationToken.ThrowIfCancellationRequested();
+        if (stage.Envelope.CanonicalLogicalStream.IsEmpty)
         {
-            return await RelayRelocationReplyAsync(
-                    sourceNodeRid,
-                    relay,
-                    new ZLinkServiceWireCodec.RequestSourceFence(
-                        completion.SourceOwnerId,
-                        completion.SourceOwnerLeaseGeneration,
-                        RoutingId.FromHex(completion.SourceNodeRid),
-                        completion.SourceNodeGeneration
-                    ),
-                    payload,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"canonical_reply_relay_failed operation={completion.OperationHigh:x16}{completion.OperationLow:x16}"
-            );
-            return ZLinkRelocationReplyAckState.NotAcknowledged;
-        }
-    }
-
-    private async ValueTask<ZLinkServiceWireCodec.ReplyRelayRecord> CreateCanonicalReplyRelayAsync(
-        IZLinkLocationRepository authorityStore,
-        TargetStage stage,
-        ZLinkRelocationParticipantEnvelope participant,
-        ZLinkCanonicalAcceptedRequest request,
-        ZLinkCanonicalTerminalCompletion completion,
-        CancellationToken cancellationToken
-    )
-    {
-        var authority = await authorityStore
-            .ReadAuthorityAsync(participant.AuthorityKey, cancellationToken)
-            .ConfigureAwait(false);
-        if (authority is not ZLinkAuthorityReadResult.Found found)
-            throw new ZLinkRelocationDataLostException(
-                "The canonical reply relay authority is missing."
-            );
-        var targetOwner =
-            LocationLifecycle?.OwnerToken
-            ?? throw new ZLinkConfigurationException("Location runtime is not registered.");
-        if (
-            !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                found.Snapshot.Payload.Span,
-                out var canonical
-            )
-            || !IsExactCanonicalReplyRelayTarget(
-                canonical,
-                stage.Envelope.CanonicalRelocationHigh,
-                stage.Envelope.CanonicalRelocationLow,
-                stage.TargetAttemptGeneration,
-                stage.Node.Node.RoutingId,
-                stage.TargetNodeLifecycleGeneration,
-                targetOwner
-            )
-        )
-            throw new ZLinkRelocationDataLostException(
-                "The canonical reply relay target attempt does not match durable authority."
-            );
-        return new ZLinkServiceWireCodec.ReplyRelayRecord(
-            new MeshOperationId(completion.OperationHigh, completion.OperationLow),
-            request.ReplyRouteId,
-            new ZLinkServiceWireCodec.RelocationWireId(
-                stage.Envelope.CanonicalRelocationHigh,
-                stage.Envelope.CanonicalRelocationLow
-            ),
-            canonical.TargetAttemptGeneration,
-            new ZLinkServiceWireCodec.RelocationCoordinatorFence(
-                targetOwner.OwnerId,
-                checked((ulong)targetOwner.LeaseGeneration),
-                stage.Node.Node.RoutingId,
-                stage.TargetNodeLifecycleGeneration,
-                found.Snapshot.StoreVersion
-            ),
-            completion.ParticipantId,
-            completion.AcceptedSequence,
-            completion.TerminalResult,
-            (ServiceWireConstants.FrameworkErrorCode)completion.ErrorCode
-        );
-    }
-
-    internal static bool IsExactCanonicalReplyRelayTarget(
-        ZLinkCanonicalRelocationAuthorityProjection canonical,
-        ulong relocationHigh,
-        ulong relocationLow,
-        ulong targetAttemptGeneration,
-        RoutingId targetNodeRid,
-        ulong targetNodeGeneration,
-        ZLinkLocationOwnerToken targetOwner
-    ) =>
-        targetAttemptGeneration != 0
-        && canonical.TargetAttemptGeneration == targetAttemptGeneration
-        && canonical.RelocationHigh == relocationHigh
-        && canonical.RelocationLow == relocationLow
-        && canonical.State.TargetNodeRid == targetNodeRid.ToHex()
-        && canonical.State.TargetNodeGeneration == targetNodeGeneration
-        && canonical.TargetOwnerId == targetOwner.OwnerId
-        && targetOwner.LeaseGeneration > 0
-        && canonical.TargetOwnerLeaseGeneration == checked((ulong)targetOwner.LeaseGeneration);
-
-    internal static bool IsExactSourceLeaseExpired(
-        ZLinkOwnerLeaseReadResult lease,
-        ZLinkCanonicalTerminalCompletion completion
-    ) =>
-        lease switch
-        {
-            ZLinkOwnerLeaseReadResult.Missing => true,
-            ZLinkOwnerLeaseReadResult.Found found => completion.SourceOwnerLeaseGeneration
-                > long.MaxValue
-                || !StringComparer.Ordinal.Equals(found.Token.OwnerId, completion.SourceOwnerId)
-                || found.Token.LeaseGeneration
-                    != checked((long)completion.SourceOwnerLeaseGeneration)
-                || found.LeaseExpiresAt <= found.StoreNow,
-            _ => false,
-        };
-
-    private static ZLinkCanonicalApplicationPayload DecodeCanonicalReply(
-        IReadOnlyList<byte[]> replyParts
-    )
-    {
-        var parts = ZLinkRawRouterServicePort.CreateMessages(
-            replyParts,
-            static part => Message.From(part)
-        );
-        try
-        {
-            var header = ZLinkEnvelopeCodec.DecodeHeader(parts);
-            if (parts.Length != 2)
+            if (capturedReply is not null)
                 throw new ZLinkRelocationDataLostException(
-                    "Canonical terminal reply must contain header and body parts."
+                    "A legacy relocation reply has no exact request-source fence for service-wire relay."
                 );
-            return new ZLinkCanonicalApplicationPayload(
-                header.MessageName,
-                header.ContentType,
-                parts[1].ToArray()
-            );
         }
-        finally
+        else if (job.CanonicalRequest is { ReplyRouteId: not 0 })
         {
-            ZLinkMessageParts.DisposeAll(parts);
+            if (capturedReply is null)
+                throw new ZLinkRelocationDataLostException(
+                    "Canonical request replay completed without a terminal reply."
+                );
+            CaptureAggregateCompletion(stage, stage.SpotParticipant, job, capturedReply);
         }
+
+        return ValueTask.CompletedTask;
     }
 
     internal async ValueTask AbortInboundSpotAggregateAsync(TargetStage stage)
