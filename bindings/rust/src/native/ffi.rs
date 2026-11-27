@@ -399,6 +399,29 @@ pub struct zlink_router_route_t {
     pub route_generation: u64,
 }
 
+/// One failure record of a connection attempt row (`zlink_connection_failure_t`).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct zlink_connection_failure_t {
+    pub kind: u32,
+    pub stage: u32,
+    pub normalized_errno: i32,
+    pub disconnect_reason: u32,
+}
+
+/// One outbound connection registration row (`zlink_connection_attempt_t`).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct zlink_connection_attempt_t {
+    pub endpoint_offset: usize,
+    pub endpoint_length: usize,
+    pub intent_id: u64,
+    pub revision: u64,
+    pub last_failure_id: u64,
+    pub state: u32,
+    pub last_failure: zlink_connection_failure_t,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum zlink_monitor_source_kind_t {
@@ -758,6 +781,15 @@ unsafe extern "C" {
         capacity: usize,
         route_count_out: *mut usize,
     ) -> c_int;
+    pub fn zlink_socket_connection_attempts_snapshot(
+        socket: *mut c_void,
+        attempts_out: *mut zlink_connection_attempt_t,
+        capacity: usize,
+        attempt_count_out: *mut usize,
+        endpoint_bytes_out: *mut c_char,
+        endpoint_bytes_capacity: usize,
+        endpoint_bytes_required_out: *mut usize,
+    ) -> c_int;
     pub fn zlink_router_recv_route_generation(router: *mut c_void) -> u64;
     pub fn zlink_recv(
         socket: *mut c_void,
@@ -892,4 +924,25 @@ unsafe extern "C" {
     pub fn zlink_proxy(frontend: *mut c_void, backend: *mut c_void, capture: *mut c_void) -> c_int;
     pub fn zlink_has(capability: *const c_char) -> bool;
     pub fn zlink_sleep(seconds: c_int);
+}
+
+#[cfg(test)]
+mod connection_attempt_layout_tests {
+    use super::{zlink_connection_attempt_t, zlink_connection_failure_t};
+    use std::mem::{offset_of, size_of};
+
+    // core/include/zlink/socket/api.h: zlink_connection_failure_t and
+    // zlink_connection_attempt_t (LP64: size_t = 8).
+    #[test]
+    fn connection_attempt_layout_matches_c_abi() {
+        assert_eq!(size_of::<zlink_connection_failure_t>(), 16);
+        assert_eq!(size_of::<zlink_connection_attempt_t>(), 64);
+        assert_eq!(offset_of!(zlink_connection_attempt_t, endpoint_offset), 0);
+        assert_eq!(offset_of!(zlink_connection_attempt_t, endpoint_length), 8);
+        assert_eq!(offset_of!(zlink_connection_attempt_t, intent_id), 16);
+        assert_eq!(offset_of!(zlink_connection_attempt_t, revision), 24);
+        assert_eq!(offset_of!(zlink_connection_attempt_t, last_failure_id), 32);
+        assert_eq!(offset_of!(zlink_connection_attempt_t, state), 40);
+        assert_eq!(offset_of!(zlink_connection_attempt_t, last_failure), 44);
+    }
 }

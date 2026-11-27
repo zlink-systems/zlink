@@ -192,7 +192,7 @@ mod tests {
             if result != SubmitResult::Ok {
                 let error = submit_error_from_rc(result as i32, libc::EIO);
                 assert_eq!(error.code(), result);
-                assert_eq!(error.native_errno(), libc::EIO);
+                assert_eq!(error.internal_errno(), libc::EIO);
             }
         }
     }
@@ -258,7 +258,7 @@ mod tests {
         for (result, expected_errno) in cases {
             let error = request_error_from_result(result);
             assert_eq!(error.code(), result);
-            assert_eq!(error.native_errno(), expected_errno);
+            assert_eq!(error.internal_errno(), expected_errno);
         }
     }
 

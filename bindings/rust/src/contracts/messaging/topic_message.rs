@@ -69,13 +69,7 @@ impl TopicMessage {
 
     /// Consumes the envelope and returns its only part, transferring ownership;
     /// errors unless it holds exactly one part.
-    pub fn single_part(self) -> Result<Message, RecvError> {
-        self.single_part_or_error()
-    }
-
-    /// Consumes the envelope and returns its only part, transferring ownership;
-    /// errors unless it holds exactly one part.
-    pub fn single_part_or_error(mut self) -> Result<Message, RecvError> {
+    pub fn single_part(mut self) -> Result<Message, RecvError> {
         if self.parts.len() != 1 {
             return Err(recv_state_error());
         }
@@ -83,6 +77,12 @@ impl TopicMessage {
             .into_iter()
             .next()
             .expect("single part"))
+    }
+
+    /// Deprecated name of [`single_part`](Self::single_part).
+    #[deprecated(note = "use single_part")]
+    pub fn single_part_or_error(self) -> Result<Message, RecvError> {
+        self.single_part()
     }
 
     /// Consumes the envelope and returns ownership of all its parts.

@@ -4,6 +4,7 @@ use crate::contracts::errors::errors::ConfigError;
 use crate::contracts::messaging::message::{Message, RoutingId};
 use crate::contracts::sockets::dealer_socket::DealerSocket;
 use crate::internal::SocketStorage;
+use crate::runtime::handles::ctx::duration_to_millis;
 use crate::runtime::native::ffi;
 
 impl SocketStorage {
@@ -34,7 +35,7 @@ impl SocketStorage {
         Ok(Duration::from_millis(ms as u64))
     }
     pub(crate) fn set_request_timeout(&self, value: Duration) -> Result<(), ConfigError> {
-        let millis = value.as_millis().min(i32::MAX as u128) as i32;
+        let millis = duration_to_millis(value)?;
         self.set_router_i32_opt(
             ffi::zlink_router_option_t::ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS,
             millis,
@@ -56,7 +57,7 @@ impl DealerSocket {
             .set_dealer_u32_opt(ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_WEIGHT, value)
     }
     pub(crate) fn set_request_timeout(&self, value: Duration) -> Result<(), ConfigError> {
-        let millis = value.as_millis().min(i32::MAX as u128) as i32;
+        let millis = duration_to_millis(value)?;
         crate::runtime::sockets::socket::dealer_inner(self).set_dealer_i32_opt(
             ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS,
             millis,
