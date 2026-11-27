@@ -1164,14 +1164,13 @@ inline bool run_echo_window_round_robin (
         // Wait on the existing poller until the next absolute send deadline;
         // deriving it from epoch + k/rate avoids drift from previous wakeups.
         // Receives and completions can wake this wait before the next send.
-        auto poll_deadline = deadline;
-        if (!submitted && schedule && !schedule->due (perf_multi_metric::now_ns ())) {
-            const auto next_send_deadline = std::chrono::steady_clock::time_point (
-              std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-                std::chrono::nanoseconds (schedule->next_ns ())));
-            poll_deadline = std::min (poll_deadline, next_send_deadline);
-        }
-        const int poll_timeout = submitted ? 0 : remaining_poll_timeout_ms (poll_deadline);
+        int poll_timeout = submitted ? 0 : remaining_poll_timeout_ms (deadline);
+        if (!submitted && schedule && !schedule->due (perf_multi_metric::now_ns ()))
+            poll_timeout = schedule->wait_ms (
+              perf_multi_metric::now_ns (),
+              static_cast<uint64_t> (std::chrono::duration_cast<std::chrono::nanoseconds> (
+                                       deadline.time_since_epoch ())
+                                       .count ()));
         if (poll_timeout <= 0 && !submitted && std::chrono::steady_clock::now () >= deadline)
             break;
         const int poll_rc = zlink_poller_wait (

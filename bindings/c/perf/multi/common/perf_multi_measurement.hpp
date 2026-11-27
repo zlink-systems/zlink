@@ -108,6 +108,15 @@ struct schedule_t
                              : 0);
     }
     bool due (uint64_t now_ns) const { return rate > 0.0 && now_ns >= next_ns (); }
+    // Paced wait: floor to ms, at least 1 ms while time remains, at most 50 ms.
+    int wait_ms (uint64_t now_ns, uint64_t end_ns) const
+    {
+        const uint64_t until = end_ns < next_ns () ? end_ns : next_ns ();
+        if (now_ns >= until)
+            return 0;
+        const uint64_t ms = (until - now_ns) / 1000000ULL;
+        return static_cast<int> (ms < 1 ? 1 : (ms > 50 ? 50 : ms));
+    }
     void accepted (uint64_t now_ns)
     {
         if (now_ns > next_ns () && now_ns - next_ns () > 1000000ULL)

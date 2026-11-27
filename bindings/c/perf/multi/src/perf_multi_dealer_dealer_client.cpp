@@ -497,12 +497,7 @@ inline bool run_send_window (dd_send_state_t *state,
 
         int timeout_ms = submitted ? 0 : dd_wait_ms (deadline, 50);
         if (schedule) {
-            const uint64_t now_ns = perf_multi_metric::now_ns ();
-            const uint64_t next_ns = std::min (active_deadline_ns, schedule->next_ns ());
-            timeout_ms =
-              next_ns > now_ns
-                ? static_cast<int> (std::min<uint64_t> (50, (next_ns - now_ns) / 1000000ULL))
-                : 0;
+            timeout_ms = schedule->wait_ms (perf_multi_metric::now_ns (), active_deadline_ns);
         }
         if (timeout_ms == 0 && !submitted && !schedule)
             break;
