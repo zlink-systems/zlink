@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
+import systems.zlink.framework.runtime.spots.ZLinkRelocationTransitionClient.AuthoritySettlement;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -11,6 +12,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -59,7 +61,7 @@ final class ZLinkRelocationHandOff {
     static CompletionStage<ZLinkRelocationTransitionClient.Settlement> run(
             ZLinkRelocationTransitionClient client,
             ZLinkSpotRetireControl.StageRequest request,
-            java.util.function.Function<
+            Function<
                             CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement>,
                             CompletionStage<Void>>
                     relayCapturedIngress,
@@ -71,7 +73,7 @@ final class ZLinkRelocationHandOff {
     static CompletionStage<ZLinkRelocationTransitionClient.Settlement> run(
             ZLinkRelocationTransitionClient client,
             ZLinkSpotRetireControl.StageRequest request,
-            java.util.function.Function<
+            Function<
                             CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement>,
                             CompletionStage<Void>>
                     relayCapturedIngress,
@@ -90,7 +92,7 @@ final class ZLinkRelocationHandOff {
     static CompletionStage<ZLinkRelocationTransitionClient.Settlement> run(
             ZLinkRelocationTransitionClient client,
             ZLinkSpotRetireControl.StageRequest request,
-            java.util.function.Function<
+            Function<
                             CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement>,
                             CompletionStage<Void>>
                     relayCapturedIngress,
@@ -104,7 +106,7 @@ final class ZLinkRelocationHandOff {
     static CompletionStage<CompletionStage<ZLinkRelocationTransitionClient.Settlement>> runToReady(
             ZLinkRelocationTransitionClient client,
             ZLinkSpotRetireControl.StageRequest request,
-            java.util.function.Function<
+            Function<
                             CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement>,
                             CompletionStage<Void>>
                     relayCapturedIngress,
@@ -122,7 +124,39 @@ final class ZLinkRelocationHandOff {
     static CompletionStage<CompletionStage<ZLinkRelocationTransitionClient.Settlement>> runToReady(
             ZLinkRelocationTransitionClient client,
             ZLinkSpotRetireControl.StageRequest request,
-            java.util.function.Function<
+            Function<
+                            CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement>,
+                            CompletionStage<Void>>
+                    relayCapturedIngress,
+            Duration timeout,
+            Instant restoreDeadline,
+            ZLinkRelocationMetricOperation metrics) {
+        return runToAuthorityReady(
+                        client, request, relayCapturedIngress, timeout, restoreDeadline, metrics)
+                .thenApply(ready -> ready.thenApply(AuthoritySettlement::outcome));
+    }
+
+    static CompletionStage<AuthoritySettlement> runWithAuthority(
+            ZLinkRelocationTransitionClient client,
+            ZLinkSpotRetireControl.StageRequest request,
+            Supplier<CompletionStage<Void>> relayCapturedIngress,
+            Duration timeout,
+            Instant restoreDeadline,
+            ZLinkRelocationMetricOperation metrics) {
+        return runToAuthorityReady(
+                        client,
+                        request,
+                        ignored -> relayCapturedIngress.get(),
+                        timeout,
+                        restoreDeadline,
+                        metrics)
+                .thenCompose(stage -> stage);
+    }
+
+    private static CompletionStage<CompletionStage<AuthoritySettlement>> runToAuthorityReady(
+            ZLinkRelocationTransitionClient client,
+            ZLinkSpotRetireControl.StageRequest request,
+            Function<
                             CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement>,
                             CompletionStage<Void>>
                     relayCapturedIngress,
@@ -149,7 +183,7 @@ final class ZLinkRelocationHandOff {
                                 relay = CompletableFuture.failedFuture(failure);
                             }
                             CompletionStage<Void> capturedRelay = relay;
-                            CompletionStage<ZLinkRelocationTransitionClient.Settlement> settlement =
+                            CompletionStage<AuthoritySettlement> settlement =
                                     ZLinkHandlerStages.fromStageSupplier(
                                                     () ->
                                                             client.settleAuthority(
@@ -172,11 +206,7 @@ final class ZLinkRelocationHandOff {
                                                                     .toCompletableFuture()
                                                                     .cancel(false);
                                                         }
-                                                    })
-                                            .thenApply(
-                                                    ZLinkRelocationTransitionClient
-                                                                    .AuthoritySettlement
-                                                            ::outcome);
+                                                    });
                             CompletionStage<Void> boundary =
                                     capturedRelay.thenCompose(
                                             ignored -> {
@@ -184,7 +214,7 @@ final class ZLinkRelocationHandOff {
                                                         .handle(
                                                                 (result, failure) ->
                                                                         failure != null
-                                                                                || result
+                                                                                || result.outcome()
                                                                                         != ZLinkRelocationTransitionClient
                                                                                                 .Settlement
                                                                                                 .TARGET_COMMITTED)
@@ -200,7 +230,7 @@ final class ZLinkRelocationHandOff {
                                                 settlement.whenComplete(
                                                         (result, failure) -> {
                                                             if (failure != null
-                                                                    || result
+                                                                    || result.outcome()
                                                                             != ZLinkRelocationTransitionClient
                                                                                     .Settlement
                                                                                     .TARGET_COMMITTED) {
@@ -228,7 +258,7 @@ final class ZLinkRelocationHandOff {
                             return settlement
                                     .thenCompose(
                                             result ->
-                                                    result
+                                                    result.outcome()
                                                                     == ZLinkRelocationTransitionClient
                                                                             .Settlement
                                                                             .TARGET_COMMITTED
@@ -242,11 +272,13 @@ final class ZLinkRelocationHandOff {
                                                 // its
                                                 // retained work has resumed, not at the Store
                                                 // fence.
-                                                if (result
+                                                var outcome =
+                                                        result == null ? null : result.outcome();
+                                                if (outcome
                                                         != ZLinkRelocationTransitionClient
                                                                 .Settlement.SOURCE_PRESERVED)
                                                     metrics.complete(
-                                                            result,
+                                                            outcome,
                                                             failure != null
                                                                     && client.sourceStopped());
                                             });

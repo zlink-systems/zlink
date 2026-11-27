@@ -27,6 +27,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMappi
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
@@ -35,6 +36,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReadResult;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
@@ -111,10 +113,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     volatile ZLinkInternalSpotNode.MessageFollowRelayHandler messageFollowRelayHandler;
     volatile ZLinkInternalSpotNode.RelocationStagingIngressHandler relocationStagingIngressHandler;
     private volatile ZLinkInternalSpotNode.SpotAdmissionResolver spotAdmissionResolver;
-    private final Map<
-                    ZLinkServiceM6BWireCodec.SpotRouteFence,
-                    ZLinkServiceM6BWireCodec.SpotRouteFence>
-            relocationSpotForwards = new ConcurrentHashMap<>();
+    private final Map<ZLinkServiceM6BWireCodec.SpotRouteFence, SpotForward> relocationSpotForwards =
+            new ConcurrentHashMap<>();
 
     ZLinkJavaRawSpotNode(ZLinkJavaRawMeshNode owner) {
         this(owner, new ZLinkStateLane());
@@ -249,7 +249,21 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             ZLinkServiceM6BWireCodec.SpotRouteFence source,
             ZLinkServiceM6BWireCodec.SpotRouteFence target,
             Duration retention) {
-        installRelocationForward(relocationSpotForwards, source, target, retention);
+        if (!source.spotId().equals(target.spotId())
+                || source.spotGeneration() != target.spotGeneration()
+                || source.targetNodeRid().equals(target.targetNodeRid())
+                || source.authorityOwnerGeneration() >= target.authorityOwnerGeneration()) {
+            throw new IllegalArgumentException("invalid committed Spot Message Follow fence");
+        }
+        publishSpotForward(source, target, retention, true);
+    }
+
+    @Override
+    public void stageRelocationSpotForward(
+            ZLinkServiceM6BWireCodec.SpotRouteFence source,
+            ZLinkServiceM6BWireCodec.SpotRouteFence target,
+            Duration retention) {
+        publishSpotForward(source, target, retention, false);
     }
 
     @Override
@@ -260,20 +274,49 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return owner.forwardMessageFollowActor(stale, target, parts);
     }
 
-    private static <T> void installRelocationForward(
-            Map<T, T> forwards, T source, T target, Duration retention) {
-        Objects.requireNonNull(source, "source");
-        Objects.requireNonNull(target, "target");
-        Objects.requireNonNull(retention, "retention");
-        if (retention.isNegative() || retention.isZero()) {
+    private void publishSpotForward(
+            ZLinkServiceM6BWireCodec.SpotRouteFence source,
+            ZLinkServiceM6BWireCodec.SpotRouteFence target,
+            Duration retention,
+            boolean committed) {
+        long retentionNanos = retention.toNanos();
+        if (retentionNanos <= 0) {
             throw new IllegalArgumentException("relocation forward retention must be positive");
         }
-        T previous = forwards.putIfAbsent(source, target);
-        if (previous != null && !previous.equals(target)) {
-            throw new IllegalStateException("relocation forward source already has another target");
+        long now = System.nanoTime();
+        var forward = new SpotForward(target, now + retentionNanos, committed);
+        var forwards = relocationSpotForwards;
+        var published =
+                forwards.compute(
+                        source,
+                        (ignored, previous) -> {
+                            if (previous == null
+                                    || previous.expired(now)
+                                    || committed && !previous.committed()) {
+                                return forward;
+                            }
+                            if (!previous.target().equals(target)) {
+                                throw new IllegalStateException(
+                                        "relocation forward source already has another target");
+                            }
+                            return previous;
+                        });
+        if (published == forward) {
+            CompletableFuture.delayedExecutor(retentionNanos, TimeUnit.NANOSECONDS)
+                    .execute(() -> forwards.remove(source, forward));
         }
-        CompletableFuture.delayedExecutor(retention.toMillis(), TimeUnit.MILLISECONDS)
-                .execute(() -> forwards.remove(source, target));
+    }
+
+    private SpotForward spotForward(ZLinkServiceM6BWireCodec.SpotRouteFence source) {
+        var forward = relocationSpotForwards.get(source);
+        return forward == null || forward.expired(System.nanoTime()) ? null : forward;
+    }
+
+    private record SpotForward(
+            ZLinkServiceM6BWireCodec.SpotRouteFence target, long expiresAt, boolean committed) {
+        boolean expired(long now) {
+            return now - expiresAt >= 0;
+        }
     }
 
     @Override
@@ -2035,11 +2078,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             terminalRelease.run();
             return true;
         }
-        ZLinkServiceM6BWireCodec.SpotRouteFence forwarded =
-                relocationSpotForwards.get(header.target());
+        var forwarded = spotForward(header.target());
         if (forwarded != null) {
             boolean accepted =
-                    owner.forwardRelocationSpot(header, forwarded, metadata, parts, reply, failure);
+                    owner.forwardRelocationSpot(
+                            header, forwarded.target(), metadata, parts, reply, failure);
             if (accepted) {
                 terminalRelease.run();
             }
@@ -3552,37 +3595,50 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         ZLinkInternalSpotNode.SpotAdmissionResolver resolver = spotAdmissionResolver;
         if (resolver == null) {
             return enqueueRemoteInstanceSpotAdmitted(
-                    sourceNodeRid, header, metadata, parts, contentType, reply, failure);
+                    sourceNodeRid, header, metadata, parts, contentType, reply, failure, null);
         }
+        var route = (ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route();
         resolver.resolve(
-                        header.route().targetSpotId(),
-                        ((ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route())
-                                .authorityOwnerGeneration(),
+                        route.targetSpotId(),
+                        route.authorityOwnerGeneration(),
                         header.instanceIntent(),
                         false,
-                        (ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route())
+                        route)
                 .whenComplete(
-                        (rejection, readFailure) -> {
-                            if (readFailure != null || rejection != null) {
-                                closeRemoteInstancePayload(parts);
-                                failure.accept(readFailure == null ? rejection : readFailure);
-                            } else if (!enqueueRemoteInstanceSpotAdmitted(
-                                    sourceNodeRid,
-                                    header,
-                                    metadata,
-                                    parts,
-                                    contentType,
-                                    reply,
-                                    failure)) {
-                                // The release ended after the admission read: this node no longer
-                                // holds the route's owner fence, so the message was never accepted.
+                        (rejection, admissionFailure) -> {
+                            if (admissionFailure != null || rejection != null) {
                                 closeRemoteInstancePayload(parts);
                                 failure.accept(
-                                        systems.zlink.framework.runtime.messaging
-                                                .ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
-                                                "Spot owner fence has changed: "
-                                                        + header.route().targetSpotId()));
+                                        admissionFailure == null ? rejection : admissionFailure);
+                                return;
                             }
+                            owner.resolveSourceAuthority(
+                                            sourceNodeRid, header.sourceNodeGeneration())
+                                    .whenComplete(
+                                            (source, readFailure) -> {
+                                                if (readFailure == null
+                                                        && source.isPresent()
+                                                        && enqueueRemoteInstanceSpotAdmitted(
+                                                                sourceNodeRid,
+                                                                header,
+                                                                metadata,
+                                                                parts,
+                                                                contentType,
+                                                                reply,
+                                                                failure,
+                                                                source.orElseThrow())) {
+                                                    return;
+                                                }
+                                                closeRemoteInstancePayload(parts);
+                                                failure.accept(
+                                                        readFailure != null
+                                                                ? readFailure
+                                                                : ZLinkFrameworkErrorOrigin
+                                                                        .ownerFenceRefusal(
+                                                                                "Spot owner fence has changed: "
+                                                                                        + route
+                                                                                                .targetSpotId()));
+                                            });
                         });
         return true;
     }
@@ -3594,8 +3650,10 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             List<Message> parts,
             String contentType,
             InstanceReply reply,
-            Consumer<Throwable> failure) {
-        InstanceAuthority authority = instanceAuthorities.get(header.route().targetSpotId());
+            Consumer<Throwable> failure,
+            ZLinkInternalMeshNode.PeerAuthorityFence sourceAuthority) {
+        var route = (ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route();
+        InstanceAuthority authority = instanceAuthorities.get(route.targetSpotId());
         if (authority == null) {
             return false;
         }
@@ -3603,14 +3661,40 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             owner.executeApplication(
                     () -> {
                         ZLinkBackendReceived received =
-                                reply.progress()
-                                        .receiveInstance(
-                                                sourceNodeRid,
-                                                header,
-                                                metadata,
-                                                parts,
-                                                reply,
-                                                contentType);
+                                sourceAuthority == null
+                                        ? reply.progress()
+                                                .receiveInstance(
+                                                        sourceNodeRid,
+                                                        header,
+                                                        metadata,
+                                                        parts,
+                                                        reply,
+                                                        contentType)
+                                        : reply.progress()
+                                                .receiveInstance(
+                                                        sourceNodeRid,
+                                                        header,
+                                                        metadata,
+                                                        parts,
+                                                        reply,
+                                                        contentType,
+                                                        () ->
+                                                                owner.encodeAcceptedInstanceSpot(
+                                                                        sourceAuthority,
+                                                                        header,
+                                                                        route,
+                                                                        metadata,
+                                                                        parts),
+                                                        (int)
+                                                                Math.min(
+                                                                        Integer.MAX_VALUE,
+                                                                        ZLinkReceiveBatchBudget
+                                                                                .bytesOf(
+                                                                                        parts,
+                                                                                        metadata.length,
+                                                                                        ZLinkServiceFrozenRecordCodec
+                                                                                                .instanceAcceptedRecordOverhead(
+                                                                                                        route))));
                         if (header.instanceIntent()) received.retainActivationMessage(header);
                         CompletionStage<Void> retained;
                         try {
