@@ -30,7 +30,7 @@ function actorPayload(bytes) {
 class ActorDestroyStore {
   constructor(delegate, args, owner, emit) {
     this.delegate = delegate;
-    this.observer = new ZLinkLocationStoreRepository(delegate);
+    this.observer = new ZLinkLocationStoreRepository(this);
     this.authorityKey = encodeAuthorityKey('actor', args['actor-id']);
     this.actorKey = opaqueRecordPreimage('authority', 'actor', args['actor-id']);
     this.owner = owner;
@@ -58,7 +58,11 @@ class ActorDestroyStore {
       ownerId: row.ownerId,
       ownerGeneration: row.authorityOwnerGeneration,
       leaseGeneration: row.ownerLeaseGeneration,
-      nodeGeneration: payload.nodeGeneration
+      nodeGeneration: payload.nodeGeneration,
+      actorId: payload.actorId,
+      actorType: payload.stableType,
+      spot: payload.currentSpotId,
+      spotKind: payload.currentSpotKind
     };
   }
 
@@ -97,7 +101,6 @@ class ActorDestroyStore {
     const { ownerId } = this.originalOwner;
     this.endedLeaseKey = opaqueRecordPreimage('owner-lease', ownerId);
     assert.equal(await this.observer.releaseOwnerLease(this.originalOwner), 'released');
-    this.emit('ownerLeaseEnded');
   }
 
   once(event) {
@@ -199,11 +202,14 @@ class ActorDestroyStore {
       };
     }
     const mutation = request.mutations.find((item) => item.key.value === this.actorKey);
-    if (this.stopping || !mutation) return this.delegate.write(request, signal);
+    const endsLease = request.mutations.some(
+      (item) => item.kind === 'delete' && item.key.value === this.endedLeaseKey
+    );
+    if (this.stopping || (!mutation && !endsLease)) return this.delegate.write(request, signal);
 
     let committed;
     let fields;
-    if (mutation.kind === 'put') {
+    if (mutation?.kind === 'put') {
       const row = decodeJson(mutation.bytes);
       const state = actorPayload(Buffer.from(row.payload, 'base64')).state;
       if (this.owner && state === 'closing') {
@@ -212,10 +218,10 @@ class ActorDestroyStore {
       } else if (!this.owner && state === 'ready' && this.creating) {
         committed = 'newReadyCommitted';
       }
-    } else if (this.owner) {
+    } else if (mutation && this.owner) {
       await this.beforeSubmit('delete', 'ownerDeleteHeld', signal);
       committed = 'ownerDeleteCommitted';
-    } else if (this.originalOwner && ['d', 'f'].includes(this.scenario)) {
+    } else if (mutation && this.originalOwner && ['d', 'f'].includes(this.scenario)) {
       fields = await this.releaseFields(request, signal);
       if (fields) {
         if (this.scenario === 'f') this.once('callerObservedClosingForRelease');
@@ -223,7 +229,12 @@ class ActorDestroyStore {
       }
     }
     const result = await this.delegate.write(request, signal);
-    if (result.kind === 'applied' && committed) this.emit(committed, fields);
+    if (result.kind === 'applied') {
+      const timeUs = result.storeNow.getTime() * 1000;
+      if (endsLease) this.emit('ownerLeaseEnded', {}, timeUs);
+      if (mutation) this.emit('authorityWritten', {}, timeUs);
+      if (committed) this.emit(committed, fields, timeUs);
+    }
     return result;
   }
 

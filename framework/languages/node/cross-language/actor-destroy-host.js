@@ -11,7 +11,7 @@ const {
   DEFAULT_REQUEST_TIMEOUT_MS
 } = require('../packages/framework/dist/contracts/Configuration/Registration');
 const { ActorDestroyStore } = require('./actor-destroy-store');
-const { captureActorDestroyWire } = require('./actor-destroy-wire');
+const { observeDestroySubmissions } = require('./actor-destroy-wire');
 const { until } = require('./outage-control');
 
 const ACTOR_TYPE = 'cross-lang-actor-destroy-type';
@@ -23,6 +23,10 @@ const DESTROY_LABELS = ['remote', 'duplicate', 'stale', 'fail', 'retry', 'admiss
 
 function escapeField(value) {
   return String(value).replace(/[%|\r\n]/g, (char) => encodeURIComponent(char));
+}
+
+function nowUs() {
+  return Math.trunc((performance.timeOrigin + performance.now()) * 1000);
 }
 
 function failure(error) {
@@ -52,8 +56,7 @@ async function actorDestroyHost(owner, args, required, appendEvent, writeReady) 
   required('event-file');
   assert(['a', 'b', 'c', 'd', 'e', 'f', 'admissionCheck'].includes(scenario), 'invalid scenario');
 
-  const emit = (event, fields = {}) => {
-    const timeUs = Math.trunc(performance.timeOrigin * 1000 + performance.now() * 1000);
+  const emit = (event, fields = {}, timeUs = nowUs()) => {
     const suffix = Object.entries(fields)
       .map(([key, value]) => `|${key}=${escapeField(value)}`)
       .join('');
@@ -64,7 +67,8 @@ async function actorDestroyHost(owner, args, required, appendEvent, writeReady) 
     keyPrefix: `${required('redis-key-prefix')}:location`
   });
   const store = new ActorDestroyStore(delegate, args, owner, emit);
-  const wire = captureActorDestroyWire(peerRid, owner && scenario === 'admissionCheck', emit);
+  const restoreSubmissionObserver =
+    !owner && scenario === 'admissionCheck' ? observeDestroySubmissions(emit) : undefined;
 
   class Actor {
     constructor(context) {
@@ -117,6 +121,7 @@ async function actorDestroyHost(owner, args, required, appendEvent, writeReady) 
     .listen(required('bind-endpoint'))
     .routingId(nodeRid)
     .setPlacementWeight(owner ? 100 : 0);
+  if (args['advertise-host']) meshBuilder.setAdvertiseHost(args['advertise-host']);
   meshBuilder.channel(meshName).server();
   meshBuilder
     .objects()
@@ -129,8 +134,6 @@ async function actorDestroyHost(owner, args, required, appendEvent, writeReady) 
     providers: [Factory, EntrySpot, ProbeHandler]
   })(HostModule);
   let app;
-  let destroyDeadline;
-  let deadlineTimer;
   const operations = new Map();
   let oldRef;
   let casFailed = false;
@@ -152,11 +155,19 @@ async function actorDestroyHost(owner, args, required, appendEvent, writeReady) 
       assert(result.status !== 'rejected', 'GetOrCreate was rejected by the Entry Spot');
       return result;
     };
-    const localDescriptor = async () => {
+    const meshDescriptor = async (rid) => {
       const page = await store.observer.listMeshNodes(meshName);
-      return page.items.find((node) => String(node.rid) === nodeRid);
+      return page.items.find((node) => String(node.rid) === rid);
     };
-    await until(async () => (await localDescriptor())?.entrySpotId, `Entry Spot for ${nodeRid}`);
+    const waitForPlacement = (rid, weight) =>
+      until(
+        async () => (await meshDescriptor(rid))?.placementWeight === weight,
+        `placement descriptor for ${rid}`
+      );
+    await until(
+      async () => (await meshDescriptor(nodeRid))?.entrySpotId,
+      `Entry Spot for ${nodeRid}`
+    );
 
     function start(
       key,
@@ -220,10 +231,11 @@ async function actorDestroyHost(owner, args, required, appendEvent, writeReady) 
         assert.match(value ?? '', /^\d+$/);
         const weight = Number(value);
         options.placementWeight = weight;
-        await until(
-          async () => (await localDescriptor())?.placementWeight === weight,
-          `placement descriptor for ${nodeRid}`
-        );
+        await waitForPlacement(nodeRid, weight);
+      },
+      async 'peer-placement'(value) {
+        assert.match(value ?? '', /^\d+$/);
+        await waitForPlacement(peerRid, Number(value));
       },
       async peer() {
         await until(
@@ -260,25 +272,27 @@ async function actorDestroyHost(owner, args, required, appendEvent, writeReady) 
       destroy(label) {
         assert(DESTROY_LABELS.includes(label), `invalid destroy label ${label}`);
         assert(oldRef, 'the first ActorRef was not observed');
-        if (label === 'admission') {
-          assert(!destroyDeadline, 'admission destroy already started');
-          destroyDeadline = new Promise((resolve) => {
-            deadlineTimer = setTimeout(() => {
-              emit('destroyDeadline', { label });
-              resolve();
-            }, DEFAULT_REQUEST_TIMEOUT_MS);
-          });
-        }
+        const started = nowUs();
         start(
           label,
           () => store.observeOperation(label, () => actors.destroy(oldRef, abort.signal)),
           (value, error) => {
             const result = error ?? { kind: value };
+            if (
+              label === 'admission' &&
+              result.kind === 'Unavailable' &&
+              result.message.startsWith(`Actor '${actorId}' owner route is unavailable.`)
+            ) {
+              emit('submissionRejected');
+            }
             if (label === 'fail' && result.message?.includes('injectedClosingCasFailure'))
               result.kind = 'error';
             emit(DESTROY_EVENTS[label] ?? 'destroyReturned', { label, ...result });
           }
         );
+        if (label === 'admission') {
+          emit('destroyDeadline', {}, started + DEFAULT_REQUEST_TIMEOUT_MS * 1000);
+        }
       },
       'pending-destroy'(label) {
         assert(
@@ -338,17 +352,17 @@ async function actorDestroyHost(owner, args, required, appendEvent, writeReady) 
         emit('ownerLeaseExpired');
       },
       'end-lease': () => store.endLease(),
-      'allow-admission': () => wire.allow(),
+      'allow-admission'() {
+        assert(!owner && scenario === 'admissionCheck', 'allow-admission requires its caller');
+        fs.writeFileSync(`${required('actor-destroy-control-prefix')}.admission`, '');
+      },
       async finish() {
         abort.abort();
         store.cancelHolds();
-        wire.stopHolding();
         await Promise.all([...operations.values()].map((operation) => operation.done));
-        await destroyDeadline;
         store.stopping = true;
         await app.close();
         app = undefined;
-        await wire.finish(true);
       }
     };
 
@@ -401,13 +415,11 @@ async function actorDestroyHost(owner, args, required, appendEvent, writeReady) 
   } finally {
     abort.abort();
     store.cancelHolds();
-    wire.stopHolding();
-    clearTimeout(deadlineTimer);
     store.stopping = true;
     try {
       await app?.close();
     } finally {
-      await wire.finish();
+      restoreSubmissionObserver?.();
     }
   }
 }
