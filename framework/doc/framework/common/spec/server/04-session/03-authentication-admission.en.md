@@ -341,8 +341,8 @@ Instance Spot default mesh), or the name of a STREAM registration with stage 2 o
   is `None`, that's a configuration error at startup. If the mesh has no Server node at runtime, `enqueue` and `report` fail and the
   node rejects every ticket per §3.5.1.
 - The messages between the queue Spot and nodes are the four below and follow the existing typed JSON rules
-  ([Message model §5](../00-foundation/05-message-model.en.md)). Field names are camelCase, `dec` is a 64-bit integer as a
-  decimal string, and `b64` is unpadded base64url. Every field is required except those marked `?`. Unknown fields are ignored;
+  ([Message model §5](../00-foundation/05-message-model.en.md)). Field names are camelCase, `dec` is an unsigned 64-bit integer
+  (0..2^64−1) as a decimal string (no sign, no leading zeros), and `b64` is unpadded base64url. Every field is required except those marked `?`. Unknown fields are ignored;
   a missing required field or a malformed value is a protocol error.
 - Positions and tickets for waiting clients have no new delivery path. The Spot carries them as `deliveries` in that node's next
   `report` Response, and the node sends the §3.4 `$zlink.admission.position` and `$zlink.admission.ticket` Sends on its own

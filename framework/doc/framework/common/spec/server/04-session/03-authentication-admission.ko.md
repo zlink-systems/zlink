@@ -295,7 +295,7 @@ Connector는 다음과 같이 처리한다.
   intent). 그 mesh에 Location Store가 없거나 Object role이 `None`이면 시작할 때 설정 오류다. 실행 중 그 mesh에 Server node가 없으면
   `enqueue`·`report`가 실패하고 node는 §3.5.1대로 ticket을 모두 거절한다.
 - 대기열 Spot과 node 사이 메시지는 아래 네 가지이며 기존 typed JSON 규칙([Message model §5](../00-foundation/05-message-model.ko.md))을
-  따른다. 필드 이름은 camelCase, `dec`는 64-bit 정수의 10진 문자열, `b64`는 padding 없는 base64url이다. 모든 필드는 필수이고
+  따른다. 필드 이름은 camelCase, `dec`는 부호 없는 64-bit 정수(0..2^64−1)의 10진 문자열(부호·선행 0 없음), `b64`는 padding 없는 base64url이다. 모든 필드는 필수이고
   `?`가 붙은 것만 선택이다. 알 수 없는 필드는 무시하고, 빠진 필수 필드나 형식 오류는 protocol error다.
 - 대기자에게 가는 순번·ticket은 새 전달 경로를 두지 않는다. Spot은 그 node의 다음 `report` Response에 `deliveries`로 싣고, node가
   자기 연결로 §3.4의 `$zlink.admission.position`·`$zlink.admission.ticket` Send를 보낸다. `enqueue` Response의 `delivery`도 같다.
