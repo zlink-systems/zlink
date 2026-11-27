@@ -711,8 +711,10 @@ latency는 패턴 유형에 따라 측정 방식을 분리한다.
 
 1. ready → active phase(포화 송신) → bounded drain → paced latency phase → drain
 - throughput은 active phase에서만 산출한다.
-- latency는 paced latency phase에서만 산출한다. 목표 송신률은 active phase 수신률 × 0.8이며,
-  sender마다 active phase 송신 수락 비율로 나눈다. 각 sender는 `epoch + k / rate` 일정으로 보낸다.
+- latency는 paced latency phase에서만 산출한다. 목표 송신률은 active phase 수신률 × 0.8이다.
+  한 패턴의 sender들은 `epoch + k / rate` 일정 하나를 공유하고, 일정의 다음 송신은 지금 보낼 수 있는
+  sender가 맡는다. sender마다 일정을 나누지 않는다. 기준 구현은 C
+  `bindings/c/perf/multi/src/perf_multi_dealer_dealer_client.cpp`의 공유 `schedule_t`다.
 - PUBSUB 외 패턴은 송신 시각이 `[epoch + 0.5 s, epoch + 0.5 s + latency duration)`인 메시지를 표본으로 쓴다.
 - PUBSUB는 catch-up 판정 뒤 표본을 모은다. 규칙은
   [PERF_POLICY.md "PUBSUB multi latency"](PERF_POLICY.md#pubsub-multi-latency)를 따른다.
