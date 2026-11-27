@@ -1,5 +1,15 @@
 # MyGame development guide
 
+## Template reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+## Local execution
+
+Start the local deployment with `./run-server.sh` or `.\run-server.cmd`. From another terminal run `./run-e2e.sh` or `.\run-e2e.cmd`. The e2e runner attaches when the server is ready and otherwise starts an isolated Docker deployment. The `update` scenario replaces a play node and requires an isolated run. Use `--isolated` or `-Isolated` to force isolation. Stop the local server with Ctrl+C.
+
+Node stdout, stderr, message flow and scenario failure details are under `.logs/run-<id>/`. Follow the paths printed by both commands when diagnosing an attached run.
+
 ## Rules for AI
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
@@ -31,14 +41,16 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
+Run one scenario with `./run-e2e.sh --scenario field`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Default builds and e2e run nodes and the client in Docker without a host JDK. Run these commands from this directory.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario field,dungeon,reconnect,update
+.\run-e2e.cmd -CheckStructure
+.\run-e2e.cmd -CheckDomain
 ```
 
 Bash provides the same workflow:
@@ -72,6 +84,8 @@ An Actor is a game state object addressed by ID; `Player` in `server/shared/src/
 ### Dungeons
 
 `server/instance/src/main/kotlin/MyGame/instance/Program.kt` registers the Entry Spot, the `Dungeon` factory, and the `Player` factory. `Dungeon` is a dynamic User Spot whose `DungeonRun` stores its owner Party Spot ID, Run ID, members, phase, and stage. It admits only members with the prepared Run ID, reports arrivals and completion to the owning Party Spot, and pushes `DungeonView`. `Prepare` and `DungeonActions` handle preparation and player requests. Add encounters, rewards, and Dungeon lifecycle behavior in this module.
+
+`LeaveDungeonRequest` runs in the Dungeon Actor handler. The Dungeon reports `remainingPlayers` from its joined players after the public membership leave. Only when the count is zero does the Session ask the public Spot manager to close the same Spot generation from outside the Dungeon turn. The Session then replies with `DungeonLeft`. Disconnect preserves Dungeon membership for reconnect.
 
 ### Shared contracts and hosting
 
@@ -126,6 +140,10 @@ Requests in the example game follow this path. Reading the code along this path 
 
 ## Extending the template domain
 
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use a nullable Kotlin type such as `String?` in a DTO. A Java record used from Kotlin declares nullability with `@Nullable`. To allow omission in a Kotlin DTO, declare a primary-constructor default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
+
 Extend this template's domain to build a MORPG server. Run the README build and e2e commands before adding features.
 
 1. Extend movement decisions in `FieldPositionDomain.kt`, party transitions in `PartyRun.kt`, and Dungeon rules in `DungeonRun.kt`. Keep one owner for each state change.
@@ -176,7 +194,7 @@ options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
 ### Message flow investigation
 
-Framework logs, including message flow, go to stderr (`server/shared/src/main/resources/logback.xml` configures the appender), so inspect message flow in the `<node>-stderr.log` files; the template creates no separate flow file. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. Flow records contain `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
+The runner saves Framework message flow to each node’s `*-message-flow.log` and other diagnostics to `*-stderr.log`. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. Flow records contain `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
 
 Read the failure fields and preceding stage together without filtering categories out. Flow IDs differ between runs, so compare passing and failing runs by logical operation, Actor ID, and stage order to find the first missing or failed stage. If startup fails before message flow recording, preserve the startup exception and stack.
 

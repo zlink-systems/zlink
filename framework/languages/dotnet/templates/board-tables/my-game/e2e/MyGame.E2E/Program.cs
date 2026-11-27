@@ -85,7 +85,7 @@ async Task RunAsync()
             async ct =>
             {
                 await server.StartAsync(ct);
-                return new ServerEndpoints([server.Endpoint], null);
+                return server.Endpoints;
             },
             server.WaitForExitAsync,
             server.DisposeAsync,
@@ -111,14 +111,13 @@ async Task RunAsync()
     var ct = deadline.Token;
     if (attach)
     {
-        var endpoint = ServerHost.Read(root).Streams.Single();
-        await Scenarios.RunAsync(endpoint, null, outcome, selected, log, ct);
+        await Scenarios.RunAsync(root, ServerHost.Read(root), null, outcome, selected, log, ct);
     }
     else
     {
         await DomainChecks.RunAsync();
         await using var run = new TableRun(root, selected.Length, outcome, log.DirectoryPath);
         await run.StartAsync(ct);
-        await Scenarios.RunAsync(run.Endpoint, run, outcome, selected, log, ct);
+        await Scenarios.RunAsync(root, run.Endpoints, run, outcome, selected, log, ct);
     }
 }

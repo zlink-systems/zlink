@@ -36,12 +36,14 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
+        System.out.println("Player entered Room " + context.spotId());
         return actors.sendToActor(actor.context().actorId(), new MatchFound(context.spotId()))
                 .submit()
                 .thenCompose(ignored -> broadcast(view()));
     }
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
+        System.out.println("Player left " + context.spotId());
         return CompletableFuture.completedFuture(null);
     }
 
@@ -79,6 +81,8 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     private CompletionStage<Void> broadcast(Object message) {
+        if (message instanceof MatchEnded ended)
+            System.out.println("Match ended in " + context.spotId() + ", winner " + ended.winner());
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
         for (var player : state.players())
             sends =

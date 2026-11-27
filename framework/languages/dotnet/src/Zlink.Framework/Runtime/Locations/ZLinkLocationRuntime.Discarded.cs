@@ -134,7 +134,14 @@ internal sealed partial class ZLinkLocationRuntime
         }
     }
 
-    private async ValueTask DrainDiscardedLocalExecutionsAsync(CancellationToken cancellationToken)
+    internal static bool IsExpectedDiscardTransportShutdown(
+        ZLinkFrameworkException error,
+        CancellationToken generationShutdown
+    ) =>
+        error.Kind == ZLinkFrameworkErrorKind.ShuttingDown
+        && generationShutdown.IsCancellationRequested;
+
+    internal async ValueTask DrainDiscardedLocalExecutionsAsync(CancellationToken cancellationToken)
     {
         var completions = await _lane
             .RunAsync(() =>
@@ -144,14 +151,8 @@ internal sealed partial class ZLinkLocationRuntime
                     .ToArray()
             )
             .ConfigureAwait(false);
-        try
-        {
-            await Task.WhenAll(completions).WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            await _lane.RunAsync(_discardedExecutions.Clear).ConfigureAwait(false);
-        }
+        ZLinkStateLane.ObserveWork("discard-drain-snapshot");
+        await Task.WhenAll(completions).WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask CleanupDiscardedExecutionsAsync(CancellationToken cancellationToken)

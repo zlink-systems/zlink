@@ -1450,9 +1450,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         )
       )
         return 'reclaimed';
+      const actor =
+        snapshot.allocation.objectKind === 'actor'
+          ? decodeActorAuthorityPayload(
+              serviceRelocationAuthorityApplicationPayload(snapshot.payload)
+            )
+          : undefined;
+      const actorClosing = actor?.state === 'closing';
       if (
         snapshot.allocation.state === 'active'
-          ? request === undefined
+          ? request === undefined && !actorClosing
           : snapshot.pendingCreation === undefined
       )
         return 'notReclaimable';
@@ -1465,12 +1472,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         snapshot.allocation.objectKind === 'actor'
           ? undefined
           : decodeServiceReadySpotAuthority(snapshot.payload);
-      const readyActor =
-        snapshot.allocation.objectKind === 'actor'
-          ? decodeActorAuthorityPayload(
-              serviceRelocationAuthorityApplicationPayload(snapshot.payload)
-            )
-          : undefined;
       const releaseCandidate =
         snapshot.allocation.state === 'active' &&
         requiredOwner === undefined &&
@@ -1478,10 +1479,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         snapshot.relocation === undefined &&
         !hasRelocationAuthority(snapshot.payload) &&
         (discarded !== undefined ||
+          (request === undefined && actorClosing) ||
           (creation !== undefined &&
             creation.key.kind === snapshot.allocation.objectKind &&
             creation.intent.stableType === snapshot.allocation.stableType &&
-            (readySpot !== undefined || readyActor?.state === 'ready') &&
+            (readySpot !== undefined || actor?.state === 'ready' || actorClosing) &&
             (readySpot === undefined ||
               (readySpot.kind === creation.key.kind &&
                 readySpot.stableType === creation.intent.stableType &&
@@ -1499,7 +1501,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const leaseRead = this.provider.read(leaseKey, signal).then(async (read) => {
         const ownerLive = sameLiveOwner(read, snapshot);
         let targetCondition: ZLinkStoreCondition | undefined;
-        if (releaseCandidate && !ownerLive && creation !== undefined) {
+        if (releaseCandidate && !ownerLive && creation !== undefined && !actorClosing) {
           const targetKey = meshKey(creation.target.meshName, creation.target.nodeRid);
           const sameDescriptor = targetKey.value === descriptorKey.value;
           const targetRead = await (sameDescriptor
@@ -1518,7 +1520,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           if (!sameDescriptor) targetCondition = conditionFor(targetKey, targetRead);
         }
         const ownerReleaseAllowed =
-          releaseCandidate && !ownerLive && this.ownerLeaseReleaseDelay.allowsAuthority(owner);
+          releaseCandidate &&
+          !ownerLive &&
+          (actorClosing || this.ownerLeaseReleaseDelay.allowsAuthority(owner));
         return { read, ownerLive, ownerReleaseAllowed, targetCondition };
       });
       const memberObservations = leaseRead.then(async (leaseObservation) => {
@@ -1594,7 +1598,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (discarded !== undefined && members.length > 0) return 'notReclaimable';
       if (snapshot.allocation.state === 'active') {
         if (ownerLive) return 'notReclaimable';
-        if (!releaseCandidate && discarded !== undefined) return 'notReclaimable';
+        if (!releaseCandidate && creation === undefined) return 'notReclaimable';
         if (!releaseCandidate)
           throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,

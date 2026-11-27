@@ -332,6 +332,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private boolean deferServiceReadyPublication;
     volatile java.util.function.BooleanSupplier peerAdmissionSealed = () -> false;
     private volatile ZLinkInternalMeshNode.UserSpotOperationHandler userSpotOperationHandler;
+    private volatile Function<ZLinkServiceM6BWireCodec.ActorRouteFence, CompletionStage<Void>>
+            actorDestroyHandler;
     private volatile ZLinkInternalMeshNode.ActorCreateOperationHandler actorCreateOperationHandler;
     private volatile ZLinkInternalMeshNode.CanonicalActorJoinHandler canonicalActorJoinHandler;
     private volatile ZLinkInternalMeshNode.PeerAuthorityResolver peerAuthorityResolver;
@@ -1694,15 +1696,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private void signalStateChanged(RoutingId target) {
+        publishStateChanged(
+                observer -> observer.target() == null || observer.target().equals(target));
+    }
+
+    private void publishStateChanged(Predicate<StateObserver> matches) {
         if (stateListeners.isEmpty()) return;
         deliverStateSignal(
-                () ->
-                        stateListeners.forEach(
-                                observer -> {
-                                    if (observer.target() == null
-                                            || observer.target().equals(target))
-                                        notifyStateChanged(observer);
-                                }));
+                () -> stateListeners.stream().filter(matches).forEach(this::notifyStateChanged));
     }
 
     ZLinkStateLane descriptorStateLaneForTest() {
@@ -4101,6 +4102,31 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
+    public void setActorDestroyHandler(
+            Function<ZLinkServiceM6BWireCodec.ActorRouteFence, CompletionStage<Void>> handler) {
+        actorDestroyHandler = Objects.requireNonNull(handler, "handler");
+    }
+
+    @Override
+    public CompletionStage<Void> sendActorDestroy(ZLinkServiceM6BWireCodec.ActorRouteFence actor) {
+        return inSourceTurn(
+                () -> {
+                    var socket = requireStarted();
+                    var target = actor.actor().nodeRid();
+                    if (!observePeerRoute(target, actor.targetNodeGeneration()).ready()) {
+                        return CompletableFuture.failedFuture(
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "Actor destroy owner route is unavailable"));
+                    }
+                    return port.send(
+                            socket,
+                            target,
+                            List.of(statefulWire.encodeActorDestroy(allocateCorrelation(), actor)));
+                });
+    }
+
+    @Override
     public void setActorCreateOperationHandler(
             ZLinkInternalMeshNode.ActorCreateOperationHandler handler) {
         actorCreateOperationHandler = Objects.requireNonNull(handler, "handler");
@@ -6156,7 +6182,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             if (header != null) {
                 int command = header.command();
                 if (isApplicationWireCommand(command)) {
-                    if (currentSource != null && topology.isReady(sourceRid)) {
+                    if (currentSource != null) {
                         applicationSourceLifecycle =
                                 currentSource.descriptor().lifecycleGeneration();
                     } else {
@@ -6346,6 +6372,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             if (command == ServiceWireConstants.COMMAND_ACTOR_SEND
                     || command == ServiceWireConstants.COMMAND_ACTOR_REQUEST) {
                 handedOff = dispatchActor(inbound, flags, actorHeader, sourceLifecycle);
+                return;
+            }
+            if (command == ServiceWireConstants.COMMAND_ACTOR_DESTROY) {
+                dispatchActorDestroy(inbound);
                 return;
             }
             if (command == ServiceWireConstants.COMMAND_ACTOR_JOIN) {
@@ -6787,6 +6817,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             // Invalid or rejected maintenance records never enter an
             // application mailbox and have no request/reply terminal.
         }
+    }
+
+    private void dispatchActorDestroy(ZLinkJavaRawServicePort.Inbound inbound) {
+        var handler = actorDestroyHandler;
+        if (handler == null || inbound.requestSequence() != null || inbound.frames().size() != 1) {
+            return;
+        }
+        var actor = statefulWire.decodeActorDestroy(inbound.frames().getFirst());
+        if (!actor.actor().nodeRid().equals(routingId)
+                || actor.targetNodeGeneration() != status().lifecycleGeneration()) {
+            return;
+        }
+        handler.apply(actor)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                LOGGER.log(
+                                        Level.WARNING,
+                                        "Actor destroy command failed",
+                                        unwrap(failure));
+                            }
+                        });
     }
 
     private void dispatchActorLeft(ZLinkJavaRawServicePort.Inbound inbound) {
@@ -8840,23 +8892,19 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
      * starts the service handshake on that route (transport-liveness §5, §6).
      */
     void observeTransportState(int readiness) {
+        boolean connectionsChanged =
+                (readiness & ZLinkJavaSocketReceivePoller.CONNECTION_CHANGED) != 0;
         var changes =
                 port.inStateLane(
                         () -> {
-                            boolean connectionsChanged =
-                                    (readiness & ZLinkJavaSocketReceivePoller.CONNECTION_CHANGED)
-                                            != 0;
                             if (connectionsChanged)
                                 connectionAttempts =
                                         List.copyOf(requireStarted().connectionAttemptsSnapshot());
-                            var targets =
-                                    (readiness & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0
-                                            ? observeSelectedRoutesOnLane()
-                                            : List.<RoutingId>of();
-                            if (connectionsChanged)
-                                stateListeners.forEach(observer -> notifyStateChanged(observer));
-                            return targets;
+                            return (readiness & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0
+                                    ? observeSelectedRoutesOnLane()
+                                    : List.<RoutingId>of();
                         });
+        if (connectionsChanged) publishStateChanged(observer -> true);
         finishSelectedRouteObservation(changes);
     }
 

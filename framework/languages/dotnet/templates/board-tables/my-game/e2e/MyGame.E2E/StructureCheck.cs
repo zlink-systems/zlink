@@ -15,6 +15,11 @@ internal static class StructureCheck
         ("players", "session", "STREAM", null),
         ("session", "tableA", "relay", null),
         ("tableA", "location", "Location / lease", "location-authority"),
+        ("tableA", "matchmaker", "match requests", null),
+        ("matchmaker", "tableA", "room preparation", null),
+        ("tableA", "api", "loadPlayer / commitRound", null),
+        ("tableB", "api", "loadPlayer / commitRound", null),
+        ("api", "location", "Player records / round results", null),
     ];
 
     private static readonly string[] CommandShells = ["sh", "powershell"];
@@ -142,7 +147,7 @@ internal static class StructureCheck
             var loaded = NodeSettings.Load(new[] { "--config", config });
             Require(loaded.Id == id, "Configuration ID differs from structure ID.");
         }
-        Require(Array(document, "channels").Count == 0, "This server registers no channels.");
+        var channels = Array(document, "channels");
         var spotIds = new HashSet<string>(StringComparer.Ordinal);
         var logicalIds = new HashSet<string>(StringComparer.Ordinal);
 
@@ -151,12 +156,49 @@ internal static class StructureCheck
             .Where(node => Text(node, "role") == "table")
             .Select(node => Text(node, "id"))
             .ToHashSet(StringComparer.Ordinal);
+        var recordsOwners = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var channel in channels)
+        {
+            var owner = Text(channel, "owner");
+            Require(
+                ids.Contains(owner)
+                    && Text(channel, "kind") == "client-server"
+                    && Text(channel, "name") == PlayerRecords.Channel
+                    && Text(channel, "role") == (owner == "api" ? "server" : "client")
+                    && recordsOwners.Add(owner),
+                "Invalid player records channel."
+            );
+        }
+        Require(
+            recordsOwners.SetEquals(tableNodes.Append("api")),
+            "Missing player records channel role."
+        );
         foreach (var spot in spots)
         {
             Require(spotIds.Add(Text(spot, "id")), "Duplicate Spot ID.");
             var owner = Text(spot, "owner");
-            Require(tableNodes.Contains(owner), "Spot owner must host the Table runtime.");
             var kind = Text(spot, "kind");
+            if (kind == "instance")
+            {
+                var id = Text(spot, "logicalId");
+                var instanceType = Text(spot, "type");
+                Require(
+                    spot!["dynamic"] is null
+                        && logicalIds.Add(id)
+                        && (
+                            (instanceType, id) switch
+                            {
+                                (MatchNames.PoolType, MatchNames.PoolKey) => owner == "matchmaker",
+                                (MatchNames.RoomProvisionerType, MatchNames.RoomProvisionerKey) =>
+                                    tableNodes.Contains(owner),
+                                _ => false,
+                            }
+                        ),
+                    "Invalid matchmaking Instance Spot."
+                );
+                continue;
+            }
+            Require(tableNodes.Contains(owner), "Spot owner must host the Table runtime.");
             if (kind == "entry")
             {
                 Require(
@@ -198,6 +240,11 @@ internal static class StructureCheck
                 ) == 1,
                 $"play node (table) must declare exactly one application Entry Spot: {tableNode}."
             );
+        Require(
+            logicalIds.Contains(MatchNames.PoolKey)
+                && logicalIds.Contains(MatchNames.RoomProvisionerKey),
+            "Missing matchmaking Instance Spot."
+        );
         var edges = Array(document, "edges");
         foreach (var required in RequiredEdges)
             Require(

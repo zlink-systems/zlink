@@ -1,3 +1,4 @@
+import { startActorTeardown } from '../actors/actor-runtime-state';
 import type { RequestRuntime } from '../foundation/request-runtime';
 import type { ZLinkMeshDispatchAdmission } from '../admission';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
@@ -906,11 +907,16 @@ export class ZLinkSpotNodeRuntimeManager {
     this.entryActivations.get(actor.context.meshName)?.discardActor(actor.context.actorId, error);
   }
 
-  terminateActorActivation(actor: ZLinkActor, terminal: () => Promise<void>): Promise<void> {
+  terminateActorActivation(
+    actor: ZLinkActor,
+    publishClosing: () => Promise<void>,
+    terminal: () => Promise<void>
+  ) {
     const activation = this.entryActivations.get(actor.context.meshName);
-    return activation === undefined
-      ? terminal()
-      : activation.terminateActor(actor.context.actorId, terminal);
+    if (activation !== undefined) {
+      return activation.terminateActor(actor.context.actorId, publishClosing, terminal);
+    }
+    return startActorTeardown(publishClosing, terminal);
   }
 
   notifyPrimaryEntrySpotActorLeft(

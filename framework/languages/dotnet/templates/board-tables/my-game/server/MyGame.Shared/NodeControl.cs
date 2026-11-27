@@ -32,13 +32,20 @@ public static class NodeControl
         await host.StartAsync(lifetime.Token);
         var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
         await WaitForServingAsync(runtime, lifetime.Token);
-        var mesh = runtime.GetListenerStatus(ZLinkListenerKind.RouteMesh, GameNames.WorldMesh);
+        var mesh = settings.MeshEndpoint is null
+            ? null
+            : runtime.GetListenerStatus(ZLinkListenerKind.RouteMesh, GameNames.WorldMesh).Endpoint;
+        var api = settings.MeshEndpoint is null
+            ? runtime
+                .GetListenerStatus(ZLinkListenerKind.ClientServer, PlayerRecords.Channel)
+                .Endpoint
+            : null;
         var stream = settings.StreamEndpoint is null
             ? null
             : runtime.GetListenerStatus(ZLinkListenerKind.Stream, GameNames.SessionStream).Endpoint;
         Console.WriteLine(
             NodeProtocol.ReadyPrefix
-                + JsonSerializer.Serialize(new NodeReady(settings.Id, mesh.Endpoint, stream))
+                + JsonSerializer.Serialize(new NodeReady(settings.Id, mesh, stream, api))
         );
         while (await Console.In.ReadLineAsync(lifetime.Token) is { } command)
         {

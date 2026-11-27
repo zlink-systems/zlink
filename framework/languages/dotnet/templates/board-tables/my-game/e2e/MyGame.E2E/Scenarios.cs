@@ -3,9 +3,17 @@ using MyGame.Shared;
 
 namespace MyGame.E2E;
 
-internal static class Scenarios
+internal static partial class Scenarios
 {
-    private static readonly string[] Order = ["table", "reconnect", "update"];
+    private static readonly string[] Order =
+    [
+        "table",
+        "reconnect",
+        "match",
+        "match-cancel",
+        "persist",
+        "update",
+    ];
     internal static IReadOnlyList<string> All => Order;
     private const int FirstBet = 100;
     private const int SecondBet = 50;
@@ -19,7 +27,9 @@ internal static class Scenarios
             || selected.Distinct().Count() != selected.Length
             || selected.Any(id => !Order.Contains(id))
         )
-            throw new ArgumentException("Select distinct scenarios from table,reconnect,update.");
+            throw new ArgumentException(
+                $"Select distinct scenarios from {string.Join(",", Order)}."
+            );
         return Order.Where(selected.Contains).ToArray();
     }
 
@@ -33,7 +43,8 @@ internal static class Scenarios
         JsonSerializer.Serialize(left) == JsonSerializer.Serialize(right);
 
     public static async Task RunAsync(
-        string endpoint,
+        string root,
+        ServerEndpoints endpoints,
         TableRun? run,
         RunOutcome outcome,
         string[] selected,
@@ -41,15 +52,31 @@ internal static class Scenarios
         CancellationToken ct
     )
     {
+        var endpoint = endpoints.Streams.Single();
         foreach (var scenario in selected)
         {
             log.Start(scenario);
-            await PlayAsync(endpoint, scenario, run, outcome, ct);
+            if (scenario is "match" or "match-cancel")
+                await MatchAsync(endpoint, scenario == "match-cancel", outcome, ct);
+            else
+            {
+                var (tableId, balance) = await PlayAsync(endpoint, scenario, run, outcome, ct);
+                if (scenario == "persist")
+                    await VerifyPersistenceAsync(
+                        root,
+                        endpoints,
+                        tableId,
+                        balance,
+                        outcome,
+                        log,
+                        ct
+                    );
+            }
             log.Pass(scenario);
         }
     }
 
-    private static async Task PlayAsync(
+    private static async Task<(string TableId, SeatView Balance)> PlayAsync(
         string endpoint,
         string scenario,
         TableRun? run,
@@ -184,6 +211,7 @@ internal static class Scenarios
         PrivateCards(p1, hand1);
         PrivateCards(p2, hand2);
 
+        HandResult result;
         if (scenario == "reconnect")
         {
             await p2.DisposeAsync();
@@ -209,7 +237,7 @@ internal static class Scenarios
                     == GameNames.InitialChips,
                 "Reconnect changed waiting player's chips."
             );
-            await FinishAsync(p1, reconnected, hand1, hand2, amount1, ct);
+            result = await FinishAsync(p1, reconnected, hand1, hand2, amount1, ct);
         }
         else
         {
@@ -230,7 +258,7 @@ internal static class Scenarios
                     "Relocation changed cards."
                 );
             }
-            await FinishAsync(p1, p2, hand1, hand2, amount1, ct);
+            result = await FinishAsync(p1, p2, hand1, hand2, amount1, ct);
             if (scenario == "update")
             {
                 await run!.ReplaceAsync(before1.NodeId, ct);
@@ -279,6 +307,7 @@ internal static class Scenarios
                 ct
             );
         }
+        return (table, result.Seats.Single(seat => seat.PlayerId == p1.PlayerId));
     }
 
     private static void SameState(TableView before, TableView after) =>
@@ -302,7 +331,7 @@ internal static class Scenarios
         }
     }
 
-    private static async Task FinishAsync(
+    private static async Task<HandResult> FinishAsync(
         GameClient p1,
         GameClient p2,
         HandDealt hand1,
@@ -389,5 +418,6 @@ internal static class Scenarios
                 "Final public state differs from settlement."
             );
         }
+        return result;
     }
 }

@@ -1416,8 +1416,7 @@ apply_bound_session_bind_async (
                             const auto &ref = actor_instance->context ().actor_ref ();
                             const auto key = std::string (actor_ref_access_t::actor_type (ref))
                                              + ":" + std::string (ref.actor_id ().value ());
-                            return owner->retiring_actor_keys.contains (key)
-                                   || owner->destroying_actors.contains (key)
+                            return owner->destroying_actors.contains (key)
                                    || !owner->actor_instances.contains (key);
                         });
                     if (!cancelled || (!shutdown.stop_requested () && !actor_ending))
@@ -1929,10 +1928,18 @@ void app_t::_apply_zlink_framework ()
           })
           .get ();
     }
-    _state->has_manual_service_topology = [options, mesh_node_registrations,
+    _state->has_manual_service_topology = [options, mesh_node_registrations, channel_runtime,
                                            channel_runtime_manager] () mutable {
-        if (!options.client_endpoint_connections ().empty ()
-            || !options.subscriber_endpoint_connections ().empty ()) {
+        const auto has_manual_endpoints = [] (const auto &channel_connections) {
+            return detail::endpoint_connections_runtime_t::has_connections (
+              channel_connections.second);
+        };
+        if (std::ranges::any_of (options.client_endpoint_connections (), has_manual_endpoints)
+            || std::ranges::any_of (options.subscriber_endpoint_connections (),
+                                    has_manual_endpoints)
+            || std::ranges::any_of (channel_runtime.channel_snapshots (), [] (const auto &channel) {
+                   return channel.publisher.enabled && !channel.publisher.discovery;
+               })) {
             return true;
         }
         for (const auto &registration : mesh_node_registrations) {

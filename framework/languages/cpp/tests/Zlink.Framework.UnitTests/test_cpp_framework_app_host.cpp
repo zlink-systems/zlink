@@ -760,18 +760,34 @@ make_app_host_test_client (std::string base_url,
 
 bool wait_for_ready (const zlink::http_client::client_t &client, std::string *last_error = nullptr)
 {
+    const auto started = std::chrono::steady_clock::now ();
+    std::string first, last;
     for (int attempt = 0; attempt < 100; ++attempt) {
-        auto result = client.get ("/ready").submit<health_http_reply_t> ();
-        if (result.has_value () && result.value ().body.readiness == "healthy") {
-            return true;
-        }
-        if (last_error != nullptr) {
-            if (result.error ()) {
-                *last_error = result.error ()->what ();
-            } else if (result.has_value ()) {
-                *last_error =
-                  "readiness returned status " + std::to_string (result.value ().status);
+        auto result = client.get ("/ready").submit_raw ();
+        if (result.has_value ()) {
+            const auto &response = result.value ();
+            const auto body = nlohmann::json::parse (response.body, nullptr, false);
+            const auto readiness =
+              body.is_object () && body.contains ("readiness") && body["readiness"].is_string ()
+                ? body["readiness"].get<std::string> ()
+                : "invalid";
+            if (response.status == 200 && (readiness == "healthy" || readiness == "degraded")) {
+                return true;
             }
+            last = "HTTP status=" + std::to_string (response.status) + " readiness=" + readiness;
+        } else {
+            last = "transport kind=" + std::to_string (static_cast<int> (result.error_kind ()))
+                   + " message=" + (result.error () ? result.error ()->what () : "unknown");
+        }
+        if (attempt == 0)
+            first = last;
+        if (last_error != nullptr) {
+            *last_error = "elapsed_ms="
+                          + std::to_string (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                              std::chrono::steady_clock::now () - started)
+                                              .count ())
+                          + " attempts=" + std::to_string (attempt + 1) + " first=[" + first
+                          + "] last=[" + last + "]";
         }
         std::this_thread::sleep_for (std::chrono::milliseconds (10));
     }
@@ -2498,6 +2514,9 @@ int main (int test_argc, char **test_argv)
           .map_get<create_game_http_handler_t> ("/games/{id}")
           .map_post<create_game_http_handler_t> ("/games");
     });
+    secure_host.health ()
+      .add_channel_check ("test.readiness")
+      .set_status ("test.readiness", zlink::framework::health_status_t::unhealthy, "test");
     int secure_exit_code = -1;
     std::thread secure_thread ([&] { secure_exit_code = secure_host.run (3, argv); });
     trace.phase = "secure app HTTP listener status";
@@ -2512,8 +2531,44 @@ int main (int test_argc, char **test_argv)
                           port_from_endpoint (secure_status->bound_url));
     auto secure_client = make_app_host_test_client (https_client_base_url,
                                                     std::string (ZLINK_FRAMEWORK_HTTP_TEST_CERT));
+    trace.phase = "secure app readiness contract";
+    const bool unhealthy_available = wait_for_raw_status (secure_client, "/ready", 503);
+    const auto unhealthy_response = secure_client.get ("/ready").submit_raw ();
+    const auto unhealthy_json =
+      unhealthy_response.has_value ()
+        ? nlohmann::json::parse (unhealthy_response.value ().body, nullptr, false)
+        : nlohmann::json ();
+    const bool unhealthy_observed = unhealthy_available && unhealthy_response.has_value ()
+                                    && unhealthy_response.value ().status == 503
+                                    && unhealthy_json.is_object ()
+                                    && unhealthy_json.value ("readiness", "") == "unhealthy";
+    const bool unhealthy_rejected = !wait_for_ready (secure_client);
+    secure_host.health ().set_status ("test.readiness", zlink::framework::health_status_t::degraded,
+                                      "test");
+    const auto degraded_response = secure_client.get ("/ready").submit_raw ();
+    const auto degraded_json =
+      degraded_response.has_value ()
+        ? nlohmann::json::parse (degraded_response.value ().body, nullptr, false)
+        : nlohmann::json ();
+    const bool degraded_observed =
+      degraded_response.has_value () && degraded_response.value ().status == 200
+      && degraded_json.is_object () && degraded_json.value ("readiness", "") == "degraded";
+    const bool degraded_accepted = wait_for_ready (secure_client);
+    std::cout << "secure readiness contract unhealthy=" << unhealthy_observed
+              << " rejected=" << unhealthy_rejected << " degraded=" << degraded_observed
+              << " accepted=" << degraded_accepted << '\n';
+    if (!unhealthy_observed || !unhealthy_rejected || !degraded_observed || !degraded_accepted) {
+        secure_host.stop ();
+        secure_thread.join ();
+        return 77;
+    }
+    secure_host.health ().set_status ("test.readiness", zlink::framework::health_status_t::healthy,
+                                      "test");
     trace.phase = "secure app readiness";
-    if (!wait_for_ready (secure_client)) {
+    std::string secure_readiness_error;
+    if (!wait_for_ready (secure_client, &secure_readiness_error)) {
+        std::cerr << "secure HTTPS app did not become ready at " << https_client_base_url << ": "
+                  << secure_readiness_error << '\n';
         secure_host.stop ();
         secure_thread.join ();
         return 15;

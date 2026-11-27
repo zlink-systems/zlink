@@ -860,9 +860,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const record = await this.completionStore().read(authority);
     for (const entry of record.entries) {
       if (entry.delivery !== 'pending') continue;
-      const stored = decodeMaintenanceReplyRelay(
-        decodeMultipartParts(Buffer.from(entry.reply, 'base64'), (part) => part)
-      );
       const status = this.requireMeshNode(meshName).status();
       const owner = this.options.currentOwner();
       if (
@@ -877,29 +874,22 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         nodeRid: decodeRoutingId('', entry.source.nodeRid),
         nodeGeneration: BigInt(entry.source.nodeGeneration)
       };
-      const relay = {
-        ...stored,
-        coordinator: {
-          ownerId: owner.ownerId,
-          leaseGeneration: owner.leaseGeneration,
-          nodeRid: status.routingId,
-          nodeGeneration: status.lifecycleGeneration,
-          expectedAuthorityStoreVersion: authority.storeVersion.value
-        }
+      const coordinator: ServiceWireRelocationCoordinatorFence = {
+        ownerId: owner.ownerId,
+        leaseGeneration: owner.leaseGeneration,
+        nodeRid: status.routingId,
+        nodeGeneration: status.lifecycleGeneration,
+        expectedAuthorityStoreVersion: authority.storeVersion.value
       };
-      const delivery = await this.sendReplyRelay(
+      authority = await this.deliverStoredCompletion(
         meshName,
-        source.nodeRid,
-        relay,
-        source,
-        undefined,
-        this.completionRetention(key, authority)
-      );
-      authority = await this.updateCompletion(
         key,
         record.relocationId,
-        (store, current) => store.acknowledge(key, current, entry, delivery),
-        authority
+        entry,
+        source,
+        coordinator,
+        authority,
+        (acknowledge) => acknowledge()
       );
     }
     return authority;
@@ -2354,7 +2344,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         return {
           boundSessionState: Buffer.alloc(0),
           queuedMessages: [],
-          timers: spotCapture.timers.map(toServiceTimer)
+          timers: []
         };
       },
       // PerActor User Spots are stateless shells. Application state and the
@@ -3935,20 +3925,43 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         return this.discardTargetStage(stagingId, stage, signal);
       }
       authorityCommitted = true;
+      let beforeJoinCompletion: (() => Promise<void>) | undefined;
+      let normalization: Promise<void> | undefined;
+      // Both callers share one clear-failure rule: the authority is already
+      // committed to this target, so a failed publication clear is reported
+      // and does not fail the Join.
+      const normalizePublication = async () => {
+        authority = await this.targetProgress(stage, authority!, 'cleaning', signal);
+        authority = await this.targetProgress(stage, authority, 'completed', signal);
+        try {
+          authority = await this.clearTargetRelocationPublication(stage, authority, signal);
+        } catch (error) {
+          console.warn('[zlink.runtime.relocation.publication_clear_failed]', stagingId, error);
+          this.options.metrics?.count('zlink.relocation.publication_clear_failed', 1, {
+            mesh_name: meshName
+          });
+        }
+      };
       const awaitingDelivery = new Set<string>();
       for (const participant of authority.relocation === undefined
         ? []
         : stage.staging.envelope.participants) {
         const key = { value: participant.key } as ZLinkAuthorityKey;
         let current = await requireAuthority(this.requireLocationStore(), key, signal);
+        if ((current.relocation?.completion?.acceptedRequests ?? 0n) === 0n) {
+          if (
+            participant.objectKind === 'actor' &&
+            key.value === stage.staging.primaryAuthorityKey.value
+          ) {
+            beforeJoinCompletion = () => (normalization ??= normalizePublication());
+          }
+          continue;
+        }
         if ((current.relocation?.completion?.pendingDeliveries ?? 0n) > 0n) {
           current = await this.redeliverPendingCompletions(meshName, key, current);
           if (key.value === stage.staging.primaryAuthorityKey.value) authority = current;
         }
-        if (
-          (current.relocation?.completion?.acceptedRequests ?? 0n) > 0n &&
-          !isRelocationCompletionReady(current)
-        ) {
+        if (!isRelocationCompletionReady(current)) {
           awaitingDelivery.add(key.value);
         }
       }
@@ -3963,7 +3976,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             });
       let replayCompletion = Promise.resolve();
       let activation!: Promise<void>;
-      let finalized!: Promise<void>;
       activation = (async () => {
         stage.releaseActivation();
         resumeStartedAt = performance.now();
@@ -4006,7 +4018,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         replayCompletion = stage.owner.normalize(stage.staging, authority, signal);
         // Observe early rejection while activation still owns the replay start.
         void replayCompletion.catch(() => undefined);
-        await this.finalizeActorJoinProfiles(meshName, stage, signal);
+        await this.finalizeActorJoinProfiles(meshName, stage, signal, beforeJoinCompletion);
         await this.publishSessionRoutes(stage.staging);
         stage.phase = 'open';
         await stage.owner.openAdmission(stage.staging, signal);
@@ -4017,37 +4029,26 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           { mesh_name: meshName }
         );
       })().finally(() => stage.releaseJoinAdmission());
-      finalized = activation.then(async () => {
-        if (requestDelivery !== undefined) {
-          const drained = replayCompletion.then(async () => {
-            // A local Join can move unstarted requests to another FIFO prefix.
-            // Its predecessor draining says nothing about delivery of that suffix.
-            for (const value of awaitingDelivery) {
-              const current = await requireAuthority(
-                this.requireLocationStore(),
-                { value } as ZLinkAuthorityKey,
-                signal
-              );
-              if (!isRelocationCompletionReady(current)) return requestDelivery;
-            }
-          });
-          await Promise.race([requestDelivery, drained]);
-        }
-        authority = await this.targetProgress(stage, authority!, 'cleaning', signal);
-        authority = await this.targetProgress(stage, authority, 'completed', signal);
-        try {
-          authority = await this.clearTargetRelocationPublication(stage, authority, signal);
-        } catch (error) {
-          console.warn('[zlink.runtime.relocation.publication_clear_failed]', stagingId, error);
-          this.options.metrics?.count('zlink.relocation.publication_clear_failed', 1, {
-            mesh_name: meshName
-          });
-        }
-        this.terminalTargets.remember(stagingId, stage.offer.prepareFingerprint);
-        this.targetStages.delete(stagingId);
-        this.targetAssemblies.delete(stagingId);
-      });
-      await finalized;
+      await activation;
+      if (requestDelivery !== undefined) {
+        const drained = replayCompletion.then(async () => {
+          // A local Join can move unstarted requests to another FIFO prefix.
+          // Its predecessor draining says nothing about delivery of that suffix.
+          for (const value of awaitingDelivery) {
+            const current = await requireAuthority(
+              this.requireLocationStore(),
+              { value } as ZLinkAuthorityKey,
+              signal
+            );
+            if (!isRelocationCompletionReady(current)) return requestDelivery;
+          }
+        });
+        await Promise.race([requestDelivery, drained]);
+      }
+      await (normalization ?? normalizePublication());
+      this.terminalTargets.remember(stagingId, stage.offer.prepareFingerprint);
+      this.targetStages.delete(stagingId);
+      this.targetAssemblies.delete(stagingId);
       // The FIFO still owns the prefix. A late failure cannot cancel a successor's ingress.
       void replayCompletion.catch((error) =>
         console.error('[zlink.runtime.relocation.replay_failed]', stagingId, error)
@@ -4120,7 +4121,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   async finalizeActorJoinProfiles(
     meshName: string,
     stage: LocalStage,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    beforeJoinCompletion?: () => Promise<void>
   ): Promise<void> {
     const manager = this.options.spotManager();
     if (manager === undefined) return;
@@ -4146,7 +4148,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             stage.staging.envelope.aggregateId,
             hidden.actor!.context.actorId
           ),
-        signal
+        signal,
+        beforeJoinCompletion
       );
     }
   }
@@ -4484,7 +4487,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       result
     };
     const source = handoffSourceFence(packet.source);
-    let relay = maintenanceReplyRelay(
+    const relay = maintenanceReplyRelay(
       stage,
       coordinator,
       participantId,
@@ -4522,31 +4525,58 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       entry =
         record.entries.find((value) => sameCompletionIdentity(value, entry)) ??
         completionDataLost('Published completion is missing.');
-      relay = decodeMaintenanceReplyRelay(
-        decodeMultipartParts(Buffer.from(entry.reply, 'base64'), (part) => part)
-      );
       return published;
     });
     stage.lane = publish;
     const published = await publish;
+    return await this.deliverStoredCompletion(
+      meshName,
+      key,
+      stage.staging.envelope.aggregateId,
+      entry,
+      source,
+      coordinator,
+      published,
+      (acknowledge) => {
+        const scheduled = stage.lane.then(acknowledge);
+        stage.lane = scheduled;
+        return scheduled;
+      }
+    );
+  }
+
+  private async deliverStoredCompletion(
+    meshName: string,
+    key: ZLinkAuthorityKey,
+    relocationId: string,
+    entry: RelocationCompletionEntry,
+    source: ServiceWireRequestSourceFence,
+    coordinator: ServiceWireRelocationCoordinatorFence,
+    authority: ZLinkAuthoritySnapshot,
+    scheduleAcknowledgement: (
+      acknowledge: () => Promise<ZLinkAuthoritySnapshot>
+    ) => Promise<ZLinkAuthoritySnapshot>
+  ): Promise<ZLinkAuthoritySnapshot> {
+    const stored = decodeMaintenanceReplyRelay(
+      decodeMultipartParts(Buffer.from(entry.reply, 'base64'), (part) => part)
+    );
+    const relay = { ...stored, coordinator };
     const delivery = await this.sendReplyRelay(
       meshName,
       source.nodeRid,
       relay,
       source,
       undefined,
-      this.completionRetention(key, published)
+      this.completionRetention(key, authority)
     );
-    const acknowledge = stage.lane.then(() =>
+    const acknowledge = () =>
       this.updateCompletion(
         key,
-        stage.staging.envelope.aggregateId,
-        (store, authority) => store.acknowledge(key, authority, entry, delivery),
-        published
-      )
-    );
-    stage.lane = acknowledge;
-    return await acknowledge;
+        relocationId,
+        (store, current) => store.acknowledge(key, current, entry, delivery),
+        authority
+      );
+    return await scheduleAcknowledgement(acknowledge);
   }
 
   private completionRetention(key: ZLinkAuthorityKey, published: ZLinkAuthoritySnapshot) {

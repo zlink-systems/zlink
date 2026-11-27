@@ -1,3 +1,4 @@
+import { startActorTeardown } from '../actors/actor-runtime-state';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
 import { RequestRuntime } from '../foundation/request-runtime';
@@ -2352,11 +2353,28 @@ export class ZLinkFrameworkRuntimeHost
     | 'admission'
     | 'activationAdmission'
     | 'placementCreate'
+    | 'remoteDestroy'
   > {
     this.ensureLocationRuntime();
     return {
       ...this.actorRuntimeOptionsFactory().createActorManagerOptions(),
       activationAdmission: this.activationAdmission,
+      remoteDestroy: async (actor, signal) =>
+        (await this.actorPlacement?.destroy(
+          actor,
+          this.options.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+          async (meshName, fence) => {
+            const node = this.spotNodeRuntime?.meshNode(meshName);
+            if (node === undefined) {
+              throw createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+                `Actor '${actor.actorId}' owner route is unavailable.`
+              );
+            }
+            await node.sendActorDestroy(fence);
+          },
+          signal
+        )) ?? false,
       placementCreate: async (actorId, actorType, createOnly, call, signal) => {
         const placement = this.actorPlacement;
         if (placement === undefined) {
@@ -2739,6 +2757,15 @@ export class ZLinkFrameworkRuntimeHost
               ...(payload === undefined ? {} : { payload })
             };
           },
+          destroyActor: (fence) => {
+            const actors = this.actorManager;
+            const completions = runtime.meshCompletionTable(meshName);
+            if (actors !== undefined && completions !== undefined) {
+              this.detachedTaskRunner().runDetached('Remote Actor destroy', () =>
+                actors.destroyOwnedActor(fence, node, completions)
+              );
+            }
+          },
           createActor: async (record, signal) => {
             const actorPlacement = this.actorPlacement;
             const actors = this.actorManager;
@@ -2915,12 +2942,15 @@ export class ZLinkFrameworkRuntimeHost
         this.spotNodeRuntime?.discardActorActivation(actor, error);
         this.spotManager?.discardActorActivation(actor, error);
       },
-      terminateActorActivation: (actor, terminal) => {
+      terminateActorActivation: (actor, publishClosing, terminal) => {
         const cleanup = async () => {
           await this.serviceRelocation.drainTargetActorRelocation(actor);
           await terminal();
         };
-        return this.spotNodeRuntime?.terminateActorActivation(actor, cleanup) ?? cleanup();
+        if (this.spotNodeRuntime !== undefined) {
+          return this.spotNodeRuntime.terminateActorActivation(actor, publishClosing, cleanup);
+        }
+        return startActorTeardown(publishClosing, cleanup);
       },
       registration: this.options.registration,
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,

@@ -12,11 +12,21 @@ internal enum ZLinkStreamLivenessDecision
 
 internal sealed class ZLinkStreamSessionLiveness
 {
-    internal sealed class Reader(TimeProvider time)
+    internal sealed class Reader(TimeProvider time, Action wakePoller)
     {
-        // The socket reader is the only writer. Session timers read this shared
-        // clock because PACKET ingress identifies the peer only after receiving.
+        // PACKET ingress identifies the peer only after a permit and a complete read.
         private long _permitResumedAt = long.MinValue;
+        private int _wakeRequested;
+
+        internal bool WakeRequested => Volatile.Read(ref _wakeRequested) != 0;
+
+        internal void Wake()
+        {
+            if (Interlocked.Exchange(ref _wakeRequested, 1) == 0)
+                wakePoller();
+        }
+
+        internal bool TakeWake() => Interlocked.Exchange(ref _wakeRequested, 0) != 0;
 
         internal long PermitResumedAt => Volatile.Read(ref _permitResumedAt);
 
@@ -80,9 +90,13 @@ internal sealed class ZLinkStreamSessionLiveness
         }
     }
 
-    public (ZLinkStreamLivenessDecision Decision, TimeSpan Delay) Evaluate(long? connectedAt = null)
+    public (ZLinkStreamLivenessDecision Decision, TimeSpan Delay) Evaluate(
+        long? connectedAt = null,
+        long? timestamp = null,
+        bool confirmExpiry = true
+    )
     {
-        var now = _time.GetTimestamp();
+        var now = timestamp ?? _time.GetTimestamp();
         var established = connectedAt ?? _createdAt;
         var resumedAt = _reader?.PermitResumedAt ?? long.MinValue;
         var heartbeatTimeout = InboundRemaining(
@@ -121,7 +135,7 @@ internal sealed class ZLinkStreamSessionLiveness
 
         TimeSpan InboundRemaining(long lastActivity, TimeSpan timeout)
         {
-            if (timeout <= TimeSpan.Zero || resumedAt == WaitingForPermit)
+            if (!confirmExpiry || timeout <= TimeSpan.Zero || resumedAt == WaitingForPermit)
                 return TimeSpan.MaxValue;
 
             var baseline = Math.Min(now, Math.Max(lastActivity, resumedAt));

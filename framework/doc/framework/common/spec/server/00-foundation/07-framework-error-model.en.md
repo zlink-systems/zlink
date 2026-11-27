@@ -99,8 +99,9 @@ The normal `Send` completion boundary is defined by
 | The runtime has stopped new admission | `ShuttingDown` |
 
 Even if target activation, admission, or handler execution fails after `Send` completes, that
-failure does not change the result of the already-completed call. The Framework records it
-in metrics, logs, and the message-flow trace. The resubmission boundary is defined by
+failure does not change the result of the already-completed call. The Framework records it in the metrics that
+[runtime metrics](../06-observability/02-runtime-metrics.en.md) defines and as a `zlink.dispatch_error` that
+follows the level in [message flow tracing §4](../06-observability/03-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope--level-and-sampling). The resubmission boundary is defined by
 [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 ## 5. `Request` Completion and Failure

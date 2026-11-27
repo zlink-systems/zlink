@@ -1,16 +1,25 @@
 package MyGame.zone;
 
 import MyGame.*;
+
 import systems.zlink.framework.actors.*;
 
 import java.util.concurrent.*;
 
 public final class Player implements ZLinkActor {
-    public CompletionStage<Void> deliver(Object message) { return deliver(message, true); }
+    public CompletionStage<Void> deliver(Object message) {
+        return deliver(message, true);
+    }
 
     public CompletionStage<Void> deliver(Object message, boolean visible) {
-        String sourceSpotId = message instanceof PlayerAppeared value ? value.sourceSpotId() : message instanceof PlayerMoved value ? value.sourceSpotId() : message instanceof PlayerLeft value ? value.sourceSpotId() : null;
-        if (sourceSpotId != null && (!sourceSpotId.equals(context.spotId().orElse(null)) || !visible))
+        String sourceSpotId =
+                message instanceof PlayerAppeared value
+                        ? value.sourceSpotId()
+                        : message instanceof PlayerMoved value
+                                ? value.sourceSpotId()
+                                : message instanceof PlayerLeft value ? value.sourceSpotId() : null;
+        if (sourceSpotId != null
+                && (!sourceSpotId.equals(context.spotId().orElse(null)) || !visible))
             return CompletableFuture.completedFuture(null);
         return context.boundSession().send(message).submit();
     }
@@ -37,7 +46,9 @@ public final class Player implements ZLinkActor {
     public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
         if (completion instanceof ZLinkActorJoinCompletion.Accepted accepted) {
             if (accepted.reply().isEmpty()) return CompletableFuture.completedFuture(null);
-            return context.boundSession().send(accepted.reply().decode(MyGame.WorldState.class)).submit();
+            return context.boundSession()
+                    .send(accepted.reply().decode(MyGame.WorldState.class))
+                    .submit();
         }
         if (completion instanceof ZLinkActorJoinCompletion.Rejected rejected) {
             if (rejected.reply().isEmpty())

@@ -29,17 +29,20 @@ public final class EntryActions {
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationPartyView(Entry spot, Player actor, ZLinkMessageContext context, PartyView message) {
+    public CompletionStage<Void> notificationPartyView(
+            Entry spot, Player actor, ZLinkMessageContext context, PartyView message) {
         return actor.deliver(message);
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationDungeonView(Entry spot, Player actor, ZLinkMessageContext context, DungeonView message) {
+    public CompletionStage<Void> notificationDungeonView(
+            Entry spot, Player actor, ZLinkMessageContext context, DungeonView message) {
         return actor.deliver(message);
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationActionRejected(Entry spot, Player actor, ZLinkMessageContext context, ActionRejected message) {
+    public CompletionStage<Void> notificationActionRejected(
+            Entry spot, Player actor, ZLinkMessageContext context, ActionRejected message) {
         return actor.deliver(message);
     }
 }

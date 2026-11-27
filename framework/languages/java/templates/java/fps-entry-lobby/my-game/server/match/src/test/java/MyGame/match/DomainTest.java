@@ -24,7 +24,8 @@ final class DomainTest {
         assertEquals(Names.ROOM_PREFIX + 1, restored.allocateRoom());
         restored.remove(pair);
         restored =
-                Json.MAPPER.readValue(Json.MAPPER.writeValueAsBytes(restored), MatchmakingState.class);
+                Json.MAPPER.readValue(
+                        Json.MAPPER.writeValueAsBytes(restored), MatchmakingState.class);
         assertEquals(Names.ROOM_PREFIX + 2, restored.allocateRoom());
         restored.enqueue(new QueueRequest("p4", "squad"));
         assertEquals("p2", restored.pair().getFirst().playerId());

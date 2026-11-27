@@ -5,10 +5,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 local_mode=false
 no_build=false
 build_only=false
+isolated=false
 arguments=()
 for argument in "$@"; do
   case "$argument" in
     --local) local_mode=true ;;
+    --isolated) isolated=true ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
     *) arguments+=("$argument") ;;
@@ -16,19 +18,23 @@ for argument in "$@"; do
 done
 cd "$ROOT"
 mkdir -p "$ROOT/.logs"
+source "$ROOT/scripts/run-helpers.sh"
+if ! $build_only && ! $isolated &&
+  [[ " ${arguments[*]} " != *" --check-structure "* && " ${arguments[*]} " != *" --check-domain "* ]] &&
+  server_running; then
+  java=$(local_java)
+  exec "$java" "${java_flags[@]}" -cp "$e2e_classpath" MyGame.e2e.ProgramKt --attach "${arguments[@]}"
+fi
 if $local_mode; then
   if ! $no_build; then
-    if ! ./gradlew --no-daemon test installDist :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
-      tail -n 35 "$ROOT/.logs/build.log" >&2
-      exit 1
-    fi
+    build_local test installDist
   fi
   $build_only && exit 0
   for argument in "${arguments[@]}"; do
     [[ "$argument" == "--check-domain" ]] && exit 0
   done
-  java_home_path=$(cat .logs/java-home.txt)
-  exec "$java_home_path/bin/java" --enable-native-access=ALL-UNNAMED -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.ProgramKt "${arguments[@]}"
+  java=$(local_java)
+  exec "$java" "${java_flags[@]}" -cp "$e2e_classpath" MyGame.e2e.ProgramKt "${arguments[@]}"
 fi
 if $no_build; then
   echo '--no-build requires --local; Docker builds reuse the layer cache automatically.' >&2
@@ -71,7 +77,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 echo "Docker logs: $logs"
 ln -s "$ROOT" "$MY_GAME_BUILD_CONTEXT"
-if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
+# Build the node image first so the runner can reuse the same Gradle build layer.
+if ! { "${compose[@]}" build node-image && "${compose[@]}" build runner; } >"$logs/build.log" 2>&1; then
   tail -n 30 "$logs/build.log" >&2
   exit 1
 fi

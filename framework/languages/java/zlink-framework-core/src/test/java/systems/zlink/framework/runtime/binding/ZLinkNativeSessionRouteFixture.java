@@ -4,6 +4,8 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec.ApplicationPayload;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.BoundSessionSend;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -14,7 +16,7 @@ public final class ZLinkNativeSessionRouteFixture implements AutoCloseable {
     private final systems.zlink.contracts.core.Context context;
     private final ZLinkJavaRawMeshNode target;
     private final ZLinkJavaRawMeshNode sessionOwner;
-    private final CompletableFuture<Void> received = new CompletableFuture<>();
+    private final CompletableFuture<Push> received = new CompletableFuture<>();
     private final CompletableFuture<RoutingId> requested = new CompletableFuture<>();
 
     public ZLinkNativeSessionRouteFixture() {
@@ -27,7 +29,7 @@ public final class ZLinkNativeSessionRouteFixture implements AutoCloseable {
         sessionOwner.setBind("tcp://127.0.0.1:0");
         sessionOwner.setBoundSessionSendHandler(
                 (source, generation, header, payload) -> {
-                    received.complete(null);
+                    received.complete(new Push(source, generation, header, payload));
                     return CompletableFuture.completedFuture(true);
                 });
         target.start();
@@ -51,7 +53,13 @@ public final class ZLinkNativeSessionRouteFixture implements AutoCloseable {
         target.connectPeer(sessionOwner.status().localEndpoint(), sessionOwner.routingId());
     }
 
-    public void firstPush() throws Exception {
+    record Push(
+            RoutingId source,
+            long sourceGeneration,
+            BoundSessionSend header,
+            ApplicationPayload payload) {}
+
+    public Push firstPush() throws Exception {
         var binding =
                 new ZLinkJavaRawSpotNode.ActorSessionBinding(
                         sessionOwner.routingId(),
@@ -61,15 +69,15 @@ public final class ZLinkNativeSessionRouteFixture implements AutoCloseable {
                         RoutingId.from("session"),
                         new ZLinkBackendActorRef(target.routingId(), "actor", 1),
                         target.lifecycleGeneration(),
-                        1,
-                        1,
-                        1,
+                        23,
+                        17,
+                        11,
                         true);
         try (var message = Message.from("first-push")) {
             target.sendBoundSession(binding, List.of(message))
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            received.get(5, TimeUnit.SECONDS);
+            return received.get(5, TimeUnit.SECONDS);
         }
     }
 

@@ -471,7 +471,7 @@ or a separate work queue.
 
 Metadata is delivered to the handler as an immutable, framework-validated
 [snapshot](02-glossary.en.md#snapshot). Setting the same key multiple times uses the last
-value. The UTF-8 encoded size of all metadata can't exceed 1024 bytes. A reply doesn't
+value. The total metadata size can't exceed 1024 bytes, measured by the single calculation in [Wire protocol §4](../02-channel-transport/06-wire-protocol.en.md#decode-validation-and-size-limits) (the sum of each entry's `ChannelHeader` field 13 encoding). A reply doesn't
 auto-copy request metadata.
 
 ## 8. Logical Multicast Completion

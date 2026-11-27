@@ -13,7 +13,10 @@ GameHosting.Configure(
         options
             .AddRouteMesh(GameNames.WorldMesh)
             .SetRoutingIdPrefix(settings.Id)
-            .Listen(settings.MeshEndpoint)
+            .Listen(
+                settings.MeshEndpoint
+                    ?? throw new InvalidOperationException("MeshEndpoint is required.")
+            )
             .Objects()
             .Client();
         options

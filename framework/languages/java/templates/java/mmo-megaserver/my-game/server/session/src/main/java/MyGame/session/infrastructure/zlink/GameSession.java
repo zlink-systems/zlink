@@ -9,8 +9,13 @@ import systems.zlink.framework.streams.*;
 import java.util.concurrent.*;
 
 public final class GameSession implements ZLinkSession {
-    private static final java.util.Set<String> ALLOWED_PACKETS = java.util.Set.of(
-        "EnterRegionRequest", "MoveRequest", "ViewRequest", "OpenDungeonRequest", "SessionInfoRequest");
+    private static final java.util.Set<String> ALLOWED_PACKETS =
+            java.util.Set.of(
+                    "EnterRegionRequest",
+                    "MoveRequest",
+                    "ViewRequest",
+                    "OpenDungeonRequest",
+                    "SessionInfoRequest");
     private final ZLinkSessionContext context;
     private final ZLinkActorManager actors;
 

@@ -9,6 +9,8 @@ public final class Program {
     private Program() {}
 
     public static void main(String[] args) throws Exception {
+        boolean attach = args.length > 0 && args[0].equals("--attach");
+        if (attach) args = Arrays.copyOfRange(args, 1, args.length);
         var root = Path.of("").toAbsolutePath().normalize();
         if (Arrays.equals(args, new String[] {"--check-structure"})) {
             Structure.check(root);
@@ -27,47 +29,61 @@ public final class Program {
                 !requested.isEmpty() && new HashSet<>(requested).size() == requested.size(),
                 "Invalid scenarios");
         var selected = Arrays.stream(Scenario.values()).filter(requested::contains).toList();
+        var state = attach ? ServerHost.connection(root) : null;
+        Structure.require(
+                !attach || state != null, "The running server stopped before e2e could attach.");
+        var scenarios = new ArrayList<>(selected);
+        if (attach) {
+            for (var scenario : selected) {
+                String reason =
+                        switch (scenario) {
+                            case UPDATE -> "requires draining and replacing a play node";
+                            default -> null;
+                        };
+                if (reason != null) {
+                    scenarios.remove(scenario);
+                    System.out.printf(
+                            "Skipping %s: %s (isolated server required).%n", scenario.id(), reason);
+                }
+            }
+        }
+        var logs = RunLogs.create(root);
         int passed = 0;
-        boolean cleanupFailed = false;
-        var nodes = new Nodes(root);
-        try {
-            System.out.println("Logs: " + nodes.logs);
-            nodes.start();
-            try (var scenarios = new Scenarios(nodes, selected)) {
-                Exception dependencyFailure = null;
-                for (var id : selected) {
-                    if (id != Scenario.FIELD && dependencyFailure != null) {
-                        System.out.println(
-                                "✗ "
-                                        + id.id()
-                                        + " (blocked by party fixture: "
-                                        + dependencyFailure.getMessage()
-                                        + ")");
-                        continue;
-                    }
-                    try {
-                        scenarios.run(id);
-                        passed++;
-                        System.out.println("✓ " + id.id());
-                    } catch (Exception error) {
-                        if (id != Scenario.FIELD) dependencyFailure = error;
-                        System.out.println("✗ " + id.id());
-                        error.printStackTrace(System.err);
+        try (var nodes = new Nodes(root, logs)) {
+            if (!scenarios.isEmpty()) {
+                if (attach) nodes.attach(state);
+                else nodes.start();
+                try (var fixture = new Scenarios(nodes, scenarios)) {
+                    Exception dependencyFailure = null;
+                    for (int i = 0; i < scenarios.size(); i++) {
+                        var scenario = scenarios.get(i);
+                        RunLogs.heading(scenario.id(), i + 1, scenarios.size());
+                        try {
+                            if (scenario != Scenario.FIELD && dependencyFailure != null)
+                                throw new IllegalStateException(
+                                        "Blocked by party fixture", dependencyFailure);
+                            fixture.run(scenario);
+                            passed++;
+                            System.out.println("✓ " + scenario.id());
+                        } catch (Exception error) {
+                            if (scenario != Scenario.FIELD && dependencyFailure == null)
+                                dependencyFailure = error;
+                            RunLogs.failure(logs, scenario.id(), error);
+                        }
                     }
                 }
             }
         } catch (Exception error) {
-            cleanupFailed = true;
-            error.printStackTrace(System.err);
-        } finally {
-            try {
-                nodes.close();
-            } catch (Exception error) {
-                cleanupFailed = true;
-                error.printStackTrace(System.err);
-            }
+            RunLogs.failure(logs, "cluster", error);
+            printSummary(passed, scenarios.size());
+            System.exit(1);
+            return;
         }
-        System.out.println("Scenarios: " + passed + "/" + selected.size() + " passed");
-        System.exit(passed == selected.size() && !cleanupFailed ? 0 : 1);
+        printSummary(passed, scenarios.size());
+        if (passed != scenarios.size()) System.exit(1);
+    }
+
+    private static void printSummary(int passed, int total) {
+        System.out.println("Scenarios: " + passed + "/" + total + " passed");
     }
 }

@@ -1,6 +1,7 @@
 package MyGame.session
 
 import MyGame.*
+import java.util.UUID
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
 import systems.zlink.framework.actors.*
@@ -39,6 +40,8 @@ fun main(args: Array<String>) = runNode(Program::class.java, args)
 private val CLIENT_PACKETS =
     setOf(
         JoinTableRequest::class.java.simpleName,
+        FindMatch::class.java.simpleName,
+        CancelMatch::class.java.simpleName,
         TableViewRequest::class.java.simpleName,
         StartHandRequest::class.java.simpleName,
         BetRequest::class.java.simpleName,
@@ -54,11 +57,7 @@ class GameSession(private val session: ZLinkSessionContext, private val actors: 
         payload: ZLinkMessage,
     ) {
         if (dispatch.packetName() !in CLIENT_PACKETS) {
-            session
-                .client()
-                .kotlin()
-                .send(ActionRejected(Rules.PACKET_NOT_ALLOWED, 0))
-                .await()
+            session.client().kotlin().send(ActionRejected(Rules.PACKET_NOT_ALLOWED, 0)).await()
             return
         }
 
@@ -77,13 +76,23 @@ class GameSession(private val session: ZLinkSessionContext, private val actors: 
                     )
                     .await()
             }
-            JoinTableRequest::class.java.simpleName -> {
-                val request = payload.decode<JoinTableRequest>()
-                require(request.playerId.isNotBlank() && request.tableId.isNotBlank())
+            JoinTableRequest::class.java.simpleName,
+            FindMatch::class.java.simpleName -> {
+                val bound = session.actors().bound().singleOrNull()
+                if (dispatch.packetName() == FindMatch::class.java.simpleName && bound != null) {
+                    bound.kotlin().relay(dispatch, payload).await()
+                    return
+                }
+                val playerId =
+                    if (dispatch.packetName() == JoinTableRequest::class.java.simpleName) {
+                        val request = payload.decode<JoinTableRequest>()
+                        require(request.playerId.isNotBlank() && request.tableId.isNotBlank())
+                        request.playerId
+                    } else "player-${UUID.randomUUID()}"
                 val result =
                     actors
                         .kotlin()
-                        .getOrCreate(request.playerId, Names.PLAYER)
+                        .getOrCreate(playerId, Names.PLAYER)
                         .inMesh(Names.MESH)
                         .request(ZLinkMessage.empty())
                         .await()

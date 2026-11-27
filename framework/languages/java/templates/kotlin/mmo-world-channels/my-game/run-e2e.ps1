@@ -1,5 +1,6 @@
 param(
     [switch]$Local,
+    [switch]$Isolated,
     [switch]$CheckStructure,
     [switch]$NoBuild,
     [switch]$BuildOnly,
@@ -7,25 +8,29 @@ param(
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
 )
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 Set-StrictMode -Version Latest
-if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
+. (Join-Path $PSScriptRoot 'scripts/run-helpers.ps1')
+Initialize-Console
 $root = $PSScriptRoot
 Push-Location $root
 try {
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+if (-not $BuildOnly -and -not $Isolated -and
+    $RunnerArguments -notcontains '--check-structure' -and
+    $RunnerArguments -notcontains '--check-domain' -and (Test-RunningServer)) {
+    $java = Get-LocalJava
+    & $java @javaFlags -cp "$e2eClasspath" MyGame.e2e.ProgramKt --attach @RunnerArguments
+    exit $LASTEXITCODE
+}
 if ($Local) {
-    if (-not $NoBuild) {
-        & ./gradlew.bat --no-daemon installDist :e2e:javaHome *> (Join-Path $root '.logs/build.log')
-        if ($LASTEXITCODE -ne 0) {
-            Get-Content (Join-Path $root '.logs/build.log') -Tail 20 | Write-Host
-            exit 1
-        }
-    }
+    if (-not $NoBuild) { Build-Local installDist }
     if ($BuildOnly) { exit 0 }
-    $javaHomePath = (Get-Content .logs/java-home.txt -Raw).Trim()
-    & "$javaHomePath/bin/java.exe" --enable-native-access=ALL-UNNAMED '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.ProgramKt @RunnerArguments
+    $java = Get-LocalJava
+    if (-not $java) { throw 'Build locally before using -NoBuild.' }
+    & $java @javaFlags -cp "$e2eClasspath" MyGame.e2e.ProgramKt @RunnerArguments
     exit $LASTEXITCODE
 }
 if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer cache automatically.' }
@@ -42,7 +47,11 @@ $compose = @('compose', '-f', (Join-Path $root 'docker-compose.yml'), '-p', $pro
 $result = 1
 Write-Host "Docker logs: $logs"
 try {
-    & docker @compose build *> (Join-Path $logs 'build.log')
+    # Build the node image first so the runner can reuse the same Gradle build layer.
+    & docker @compose build node-image *> (Join-Path $logs 'build.log')
+    if ($LASTEXITCODE -eq 0) {
+        & docker @compose build runner *>> (Join-Path $logs 'build.log')
+    }
     if ($LASTEXITCODE -ne 0) {
         Get-Content (Join-Path $logs 'build.log') -Tail 30 | Write-Host
         throw 'Docker image build failed.'

@@ -579,10 +579,7 @@ struct stream_async_operation_state_t : std::enable_shared_from_this<stream_asyn
 
     asio::steady_timer timer;
     std::function<void ()> cancel;
-    std::mutex error_mutex;
-    result_t<boost::system::error_code> error = result_t<boost::system::error_code>::success ({});
-    std::atomic_bool completed{false};
-    std::atomic_bool cancel_requested{false};
+    std::optional<result_t<boost::system::error_code>> result;
 
     void arm_timer (const std::atomic_bool &stop, const std::atomic_bool *connection_stop)
     {
@@ -591,41 +588,29 @@ struct stream_async_operation_state_t : std::enable_shared_from_this<stream_asyn
         timer.async_wait (
           [weak_state, &stop, connection_stop] (const boost::system::error_code &timer_error) {
               const auto state = weak_state.lock ();
-              if (!state || timer_error || state->completed.load (std::memory_order_acquire)) {
+              if (!state || timer_error || state->result) {
                   return;
               }
               const auto stopped =
                 stop.load (std::memory_order_acquire)
                 || (connection_stop && connection_stop->load (std::memory_order_acquire));
               if (stopped) {
-                  if (!state->cancel_requested.exchange (true, std::memory_order_acq_rel)) {
-                      state->cancel ();
-                  }
+                  state->cancel ();
                   return;
               }
               state->arm_timer (stop, connection_stop);
           });
     }
 
-    void complete (result_t<boost::system::error_code> completion_error)
+    void complete (result_t<boost::system::error_code> completion)
     {
-        {
-            const std::lock_guard<std::mutex> lock (error_mutex);
-            error = std::move (completion_error);
-        }
-        completed.store (true, std::memory_order_release);
+        result.emplace (std::move (completion));
         // Boost >= 1.87 removed cancel(error_code&) from waitable timers.
         try {
             timer.cancel ();
         }
         catch (const boost::system::system_error &) {
         }
-    }
-
-    boost::system::error_code result ()
-    {
-        const std::lock_guard<std::mutex> lock (error_mutex);
-        return error.value ();
     }
 };
 
@@ -636,46 +621,32 @@ bool stream_stop_requested (const std::atomic_bool &stop,
            || (connection_stop && connection_stop->load (std::memory_order_acquire));
 }
 
-template <typename Start, typename Cancel>
-boost::system::error_code
-run_stream_async_operation (asio::io_context &io,
-                            asio::any_io_executor transport_executor,
-                            const std::atomic_bool &stop,
-                            Start &&start,
-                            Cancel &&cancel,
-                            const std::atomic_bool *connection_stop = nullptr)
+template <typename Start, typename Cancel, typename Progress>
+boost::system::error_code run_stream_async_operation (asio::io_context &io,
+                                                      const std::atomic_bool &stop,
+                                                      Start &&start,
+                                                      Cancel &&cancel,
+                                                      const std::atomic_bool *connection_stop,
+                                                      const Progress &progress)
 {
     if (stream_stop_requested (stop, connection_stop)) {
         return asio::error::operation_aborted;
     }
     auto state = std::make_shared<stream_async_operation_state_t> (io);
-    state->cancel = [transport_executor, cancel = std::forward<Cancel> (cancel)] {
-        asio::post (transport_executor, cancel);
-    };
+    state->cancel = std::forward<Cancel> (cancel);
     state->arm_timer (stop, connection_stop);
-    asio::post (transport_executor, [start = std::forward<Start> (start), state, &io] () mutable {
-        try {
-            start ([state, &io] (const boost::system::error_code &error, std::size_t) {
-                asio::post (io, [state, error] {
-                    state->complete (result_t<boost::system::error_code>::success (error));
-                });
-            });
-        }
-        catch (...) {
-            asio::post (
-              io,
-              [state, failure = detail::current_exception_result<boost::system::error_code> ()] {
-                  state->complete (failure);
-              });
-        }
-    });
-    io.restart ();
-    while (!state->completed.load (std::memory_order_acquire)) {
-        if (io.run_one () == 0) {
-            io.restart ();
-        }
+    try {
+        start ([state] (const boost::system::error_code &error, std::size_t) {
+            state->complete (result_t<boost::system::error_code>::success (error));
+        });
     }
-    return state->result ();
+    catch (...) {
+        state->complete (detail::current_exception_result<boost::system::error_code> ());
+    }
+    io.restart ();
+    while (!state->result)
+        progress ();
+    return state->result->value ();
 }
 
 void cancel_stream (tcp::socket &socket) noexcept
@@ -707,35 +678,37 @@ template <typename TStream> void close_stream (TStream &stream) noexcept
     close_stream (stream.next_layer ());
 }
 
-template <typename TStream>
+template <typename TStream, typename Progress>
 void read_exact (TStream &socket,
                  std::span<std::uint8_t> bytes,
                  asio::io_context &io,
                  const std::atomic_bool &stop,
-                 const std::atomic_bool *connection_stop)
+                 const std::atomic_bool *connection_stop,
+                 const Progress &progress)
 {
     if (bytes.empty ())
         return;
     const auto error = run_stream_async_operation (
-      io, socket.get_executor (), stop,
+      io, stop,
       [&] (auto completion) {
           asio::async_read (socket, asio::buffer (bytes.data (), bytes.size ()),
                             std::move (completion));
       },
-      [&socket] { cancel_stream (socket); }, connection_stop);
+      [&socket] { cancel_stream (socket); }, connection_stop, progress);
     if (error)
         throw boost::system::system_error (error);
 }
 
-template <typename TStream>
+template <typename TStream, typename Progress>
 std::vector<std::uint8_t> read_exact (TStream &socket,
                                       std::size_t size,
                                       asio::io_context &io,
                                       const std::atomic_bool &stop,
-                                      const std::atomic_bool *connection_stop)
+                                      const std::atomic_bool *connection_stop,
+                                      const Progress &progress)
 {
     std::vector<std::uint8_t> bytes (size);
-    read_exact (socket, std::span (bytes), io, stop, connection_stop);
+    read_exact (socket, std::span (bytes), io, stop, connection_stop, progress);
     return bytes;
 }
 
@@ -1133,9 +1106,9 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                    OnDue on_due)
     {
         const auto due = liveness.next_due (reader);
+        timer.expires_at (due);
         if (due == session_liveness_t::clock_t::time_point::max ())
             return;
-        timer.expires_at (due);
         timer.async_wait ([on_due = std::move (on_due)] (const boost::system::error_code &error) {
             if (!error)
                 on_due ();
@@ -1654,87 +1627,84 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             _core_wake_timer.attach (poller);
             _core_application_supply = std::make_unique<application_supply_slot_t> (
               _application_jobs, [this] { _core_wake_timer.signal (); });
-            try {
-                while (!_stop->load (std::memory_order_acquire)) {
-                    /* Deferred close intents recorded by completion
-                     * observers (request_core_peer_disconnect) are executed
-                     * here, on the Core loop with no session lock held. */
-                    drain_pending_core_work ();
-                    receive_batch_budget_t batch;
-
-                    zlink::poll_event_t event;
-                    /* The Core poller has no cross-thread close wake contract.
-                     * A Core-backed timer is registered in the same poller so
-                     * stop is delivered as an event instead of relying on a
-                     * platform-specific socket close side effect. */
-                    const size_t event_count =
-                      poller.wait (&event, 1, std::chrono::milliseconds{-1});
-                    if (_stop->load (std::memory_order_acquire))
-                        break;
-                    if (event_count == 0)
-                        continue;
+            const short pollin = static_cast<short> (zlink::poll_event_flag_t::pollin);
+            const short pollerr = static_cast<short> (zlink::poll_event_flag_t::pollerr);
+            const auto poll_stream = [&] (std::chrono::milliseconds timeout) {
+                std::array<zlink::poll_event_t, 3> events;
+                const auto count = poller.wait (events.data (), events.size (), timeout);
+                short stream_events = 0;
+                for (const auto &event : std::span (events).first (count)) {
                     if (_core_wake_timer.is_event (event)) {
                         _core_wake_timer.consume ();
-                        drain_pending_core_work ();
-                        continue;
+                    } else if (event.slot == 2) {
+                        drain_core_monitor_events ();
+                    } else if (event.slot == 1) {
+                        stream_events = static_cast<short> (event.revents);
                     }
+                }
+                return stream_events;
+            };
+            try {
+                while (!_stop->load (std::memory_order_acquire)) {
+                    auto revents = poll_stream (std::chrono::milliseconds{-1});
+                    if (_stop->load (std::memory_order_acquire))
+                        break;
+                    // A wake and socket readiness can arrive separately. Give the
+                    // existing poller one nonblocking observation before settling work.
+                    if ((revents & (pollin | pollerr)) == 0)
+                        revents = poll_stream (std::chrono::milliseconds::zero ());
 
-                    const short revents = static_cast<short> (event.revents);
-                    const short pollin = static_cast<short> (zlink::poll_event_flag_t::pollin);
-                    const short pollerr = static_cast<short> (zlink::poll_event_flag_t::pollerr);
+                    receive_batch_budget_t batch;
+                    while ((revents & pollin) != 0 && !_stop->load (std::memory_order_acquire)) {
+                        // Leave the packet in Core until Framework capacity is
+                        // reserved, preserving Core RCVHWM backpressure.
+                        _core_application_supply->ensure_waiter ();
+                        auto reserved = _core_application_supply->take ();
+                        _core_reader_liveness.observe_permit (reserved.has_value ());
+                        if (!reserved)
+                            break;
+
+                        zlink::stream_packet_t packet;
+                        try {
+                            if (!_core_socket->recv_packet (packet, zlink::recv_flags_t::dontwait))
+                                break;
+                        }
+                        catch (const zlink::recv_error_t &error) {
+                            if (_stop->load (std::memory_order_acquire)
+                                || error.result () == zlink::recv_result_t::terminated) {
+                                revents = pollerr;
+                                break;
+                            }
+                            if (error.internal_errno () == EMSGSIZE) {
+                                trace_stream_host ("core-recv-size-rejected", _stream, std::nullopt,
+                                                   "errno=EMSGSIZE limit="
+                                                     + std::to_string (_stream.max_message_size));
+                                break;
+                            }
+                            throw;
+                        }
+                        const auto received_at = session_liveness_t::clock_t::now ();
+                        drain_core_monitor_events ();
+                        const auto routing_id = packet.routing_id ();
+                        const auto header_bytes = packet.header ().size ();
+                        const auto payload_bytes = packet.body ().size ();
+                        batch.account (6u + header_bytes + payload_bytes);
+                        process_core_packet (packet, std::move (*reserved), received_at);
+                        if (routing_id) {
+                            trace_stream_host ("core-recv", _stream, std::nullopt,
+                                               "rid=" + routing_id->to_hex () + " header_bytes="
+                                                 + std::to_string (header_bytes) + " payload_bytes="
+                                                 + std::to_string (payload_bytes));
+                        }
+                        if (batch.exhausted ())
+                            break;
+                        revents = poll_stream (std::chrono::milliseconds::zero ());
+                    }
                     if ((revents & pollerr) != 0 && (revents & pollin) == 0)
                         break;
 
-                    if (event.slot == 2) {
-                        drain_core_monitor_events ();
-                        continue;
-                    }
-                    if (event.slot != 1 || (revents & pollin) == 0)
-                        continue;
-
-                    // Reserve Framework capacity before pulling exactly one
-                    // Core packet. Leaving the packet in Core while capacity
-                    // is unavailable preserves Core RCVHWM backpressure.
-                    _core_application_supply->ensure_waiter ();
-                    auto reserved = _core_application_supply->take ();
-                    _core_reader_liveness.observe_permit (reserved.has_value ());
-                    if (!reserved)
-                        continue;
-
-                    // POLLIN guarantees that a receive is worthwhile. DONTWAIT
-                    // also makes a stale readiness event harmless: it yields
-                    // ZLINK_RECV_NO_DATA and the loop re-arms the poller.
-                    zlink::stream_packet_t packet;
-                    try {
-                        if (!_core_socket->recv_packet (packet, zlink::recv_flags_t::dontwait)) {
-                            continue;
-                        }
-                    }
-                    catch (const zlink::recv_error_t &error) {
-                        if (_stop->load (std::memory_order_acquire)
-                            || error.result () == zlink::recv_result_t::terminated) {
-                            break;
-                        }
-                        if (error.internal_errno () == EMSGSIZE) {
-                            trace_stream_host ("core-recv-size-rejected", _stream, std::nullopt,
-                                               "errno=EMSGSIZE limit="
-                                                 + std::to_string (_stream.max_message_size));
-                            continue;
-                        }
-                        throw;
-                    }
-                    const auto received_at = session_liveness_t::clock_t::now ();
-                    drain_core_monitor_events ();
-                    const auto routing_id = packet.routing_id ();
-                    const auto header_bytes = packet.header ().size ();
-                    const auto payload_bytes = packet.body ().size ();
-                    process_core_packet (packet, std::move (*reserved), batch, received_at);
-                    if (routing_id) {
-                        trace_stream_host ("core-recv", _stream, std::nullopt,
-                                           "rid=" + routing_id->to_hex ()
-                                             + " header_bytes=" + std::to_string (header_bytes)
-                                             + " payload_bytes=" + std::to_string (payload_bytes));
-                    }
+                    // Only the reader settles liveness, after this receive round.
+                    drain_pending_core_work ();
                 }
             }
             catch (...) {
@@ -2352,6 +2322,10 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
         created->connected = true;
         schedule_core_liveness (created);
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+        if (_shutdown_test_hooks.registered)
+            _shutdown_test_hooks.registered (shared_from_this (), created);
+#endif
         return created;
     }
 
@@ -2777,7 +2751,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
 
     bool process_core_packet (zlink::stream_packet_t &packet,
                               application_job_queue_t::permit_t permit,
-                              receive_batch_budget_t &budget,
                               session_liveness_t::clock_t::time_point received_at)
     {
         if (!packet.routing_id ()) {
@@ -2791,12 +2764,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             return false;
         }
 
-        const auto frame_bytes = 6u + header_bytes.size () + packet.body ().size ();
-        auto payload = std::move (packet.body ());
-        const bool dispatched = dispatch_core_packet (
-          rid, std::move (payload), std::move (decoded.value ()), std::move (permit), received_at);
-        budget.account (frame_bytes);
-        return dispatched;
+        return dispatch_core_packet (rid, std::move (packet.body ()), std::move (decoded.value ()),
+                                     std::move (permit), received_at);
     }
 
     void close_core_sessions (const char *close_reason = "server_shutdown",
@@ -2862,8 +2831,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         session_liveness_t::reader_t reader_liveness;
         std::shared_ptr<stream_write_queue_t> write_queue;
 
-        explicit tcp_connection_t (asio::io_context &transport_io) :
-            socket (transport_io), write_queue (std::make_shared<stream_write_queue_t> ())
+        tcp_connection_t () : socket (io), write_queue (std::make_shared<stream_write_queue_t> ())
         {
         }
 
@@ -2874,30 +2842,12 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
 
         void request_close ()
         {
+            const std::lock_guard lock (write_queue->mutex);
             closing.store (true, std::memory_order_release);
             // Socket close completion이 없어도 permit 대기 reader를 깨웁니다.
             wake_reader ();
         }
     };
-
-    template <typename Close>
-    void schedule_tcp_liveness (asio::steady_timer &timer,
-                                const std::shared_ptr<tcp_connection_t> &owner,
-                                const stream_t &stream,
-                                const std::shared_ptr<session_liveness_t> &liveness,
-                                const Close &close)
-    {
-        schedule_liveness (
-          timer, *liveness, owner->reader_liveness,
-          [this, &timer, weak = std::weak_ptr<tcp_connection_t> (owner), stream, liveness, close] {
-              if (const auto owner = weak.lock ();
-                  owner && !owner->closing.load (std::memory_order_acquire)) {
-                  auto current = stream;
-                  evaluate_liveness (current, liveness, owner->reader_liveness, close);
-                  schedule_tcp_liveness (timer, owner, current, liveness, close);
-              }
-          });
-    }
 
     void finish_stream_write (const std::shared_ptr<tcp_connection_t> &owner,
                               const std::shared_ptr<stream_write_operation_t> &operation,
@@ -2968,26 +2918,21 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     std::shared_ptr<stream_write_operation_t>
     queue_stream_write_operation (const std::shared_ptr<tcp_connection_t> &owner, Start &&start)
     {
-        if (stream_stop_requested (*_stop, &owner->closing))
-            return {};
         auto operation = std::make_shared<stream_write_operation_t> ();
         operation->start = std::forward<Start> (start);
-        bool schedule = false;
         {
             const std::lock_guard<std::mutex> lock (owner->write_queue->mutex);
+            if (stream_stop_requested (*_stop, &owner->closing))
+                return {};
             owner->write_queue->pending.push_back (operation);
             if (!owner->write_queue->active) {
                 owner->write_queue->active = true;
-                schedule = true;
+                const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
+                asio::post (owner->io, [this, weak_owner] {
+                    if (const auto owner = weak_owner.lock ())
+                        start_next_stream_write (owner);
+                });
             }
-        }
-        if (schedule) {
-            const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
-            asio::post (_io, [this, weak_owner] {
-                if (const auto owner = weak_owner.lock ()) {
-                    start_next_stream_write (owner);
-                }
-            });
         }
         return operation;
     }
@@ -3044,13 +2989,13 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
 #endif
     }
 
-    template <typename T, typename... Args> std::shared_ptr<T> make_transport (Args &&...args)
+    template <typename T, typename Owner, typename... Args>
+    static std::shared_ptr<T> make_transport (std::shared_ptr<Owner> lifetime, Args &&...args)
     {
-        // Destroy the transport before the listener's execution context, including
-        // when Session cleanup retains it beyond the listener stop terminal.
-        using owner_t = std::pair<std::shared_ptr<listener_t>, T>;
+        // Destroy the socket before the connection io and TLS context.
+        using owner_t = std::pair<std::shared_ptr<Owner>, T>;
         auto owner = std::make_shared<owner_t> (
-          std::piecewise_construct, std::forward_as_tuple (shared_from_this ()),
+          std::piecewise_construct, std::forward_as_tuple (std::move (lifetime)),
           std::forward_as_tuple (std::forward<Args> (args)...));
         return {owner, &owner->second};
     }
@@ -3060,7 +3005,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         if (_stop->load (std::memory_order_acquire)) {
             return;
         }
-        auto connection = make_transport<tcp_connection_t> (_io);
+        auto connection = make_transport<tcp_connection_t> (shared_from_this ());
         _acceptor.async_accept (connection->socket,
                                 [this, connection] (const boost::system::error_code &error) {
                                     handle_boost_accept (connection, error);
@@ -3090,7 +3035,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         track_socket (connection);
         if (stream_uses_websocket (_stream)) {
             auto websocket_connection =
-              make_transport<websocket_stream_t> (std::move (connection->socket));
+              make_transport<websocket_stream_t> (connection, std::move (connection->socket));
             {
                 const std::lock_guard<std::mutex> lock (_sockets_mutex);
                 _sockets.erase (&connection->socket);
@@ -3098,15 +3043,14 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             track_stream (connection, websocket_connection);
             {
                 const std::lock_guard<std::mutex> lock (_workers_mutex);
-                _workers.emplace_back (
-                  [this, connection, websocket_connection, work = asio::make_work_guard (_io)] {
-                      handle_websocket_connection (connection, websocket_connection);
-                  });
+                _workers.emplace_back ([this, connection, websocket_connection] {
+                    handle_websocket_connection (connection, websocket_connection);
+                });
             }
         } else if (stream_uses_tls (_stream)) {
 #ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL
             auto tls_connection = make_transport<ssl::stream<tcp::socket>> (
-              std::move (connection->socket), *_tls_context);
+              connection, std::move (connection->socket), *_tls_context);
             {
                 const std::lock_guard<std::mutex> lock (_sockets_mutex);
                 _sockets.erase (&connection->socket);
@@ -3114,19 +3058,16 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             track_stream (connection, tls_connection);
             {
                 const std::lock_guard<std::mutex> lock (_workers_mutex);
-                _workers.emplace_back (
-                  [this, connection, tls_connection, work = asio::make_work_guard (_io)] {
-                      handle_tls_connection (connection, tls_connection);
-                  });
+                _workers.emplace_back ([this, connection, tls_connection] {
+                    handle_tls_connection (connection, tls_connection);
+                });
             }
 #else
             close_connection (connection->socket);
 #endif
         } else {
             const std::lock_guard<std::mutex> lock (_workers_mutex);
-            _workers.emplace_back ([this, connection, work = asio::make_work_guard (_io)] {
-                handle_connection (connection);
-            });
+            _workers.emplace_back ([this, connection] { handle_connection (connection); });
         }
         start_boost_accept ();
     }
@@ -3142,10 +3083,10 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     {
         const std::lock_guard<std::mutex> lock (_sockets_mutex);
         const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
-        _sockets[&owner->socket] = [this, weak_owner] {
+        _sockets[&owner->socket] = [weak_owner] {
             if (const auto owner = weak_owner.lock ()) {
                 owner->request_close ();
-                asio::post (_io, [weak_owner] {
+                asio::post (owner->io, [weak_owner] {
                     if (const auto owner = weak_owner.lock ())
                         close_stream (owner->socket);
                 });
@@ -3160,10 +3101,10 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         const std::lock_guard<std::mutex> lock (_sockets_mutex);
         const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
         const auto weak_stream = std::weak_ptr<TStream> (stream);
-        _sockets[&stream->next_layer ()] = [this, weak_owner, weak_stream] {
+        _sockets[&stream->next_layer ()] = [weak_owner, weak_stream] {
             if (const auto owner = weak_owner.lock ()) {
                 owner->request_close ();
-                asio::post (_io, [weak_stream] {
+                asio::post (owner->io, [weak_stream] {
                     if (const auto stream = weak_stream.lock ())
                         close_stream (*stream);
                 });
@@ -3177,18 +3118,23 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     {
         auto completion = std::make_shared<task_completion_source_t<void>> ();
         auto pending = completion->task ();
-        asio::post (_io, [owner, connection, completion] {
-            owner->request_close ();
-            boost::system::error_code error;
-            auto &socket = tcp_socket (*connection);
-            socket.cancel (error);
-            socket.close (error);
-            if (error)
-                completion->complete (
-                  result_t<void>::failure (framework_error_kind_t::unavailable, error.message ()));
-            else
-                completion->complete (result_t<void>::success ());
-        });
+        {
+            const std::lock_guard<std::mutex> lock (_sockets_mutex);
+            if (!_sockets.contains (&tcp_socket (*connection)))
+                co_return;
+            asio::post (owner->io, [owner, connection, completion] {
+                owner->request_close ();
+                boost::system::error_code error;
+                auto &socket = tcp_socket (*connection);
+                socket.cancel (error);
+                socket.close (error);
+                if (error)
+                    completion->complete (result_t<void>::failure (
+                      framework_error_kind_t::unavailable, error.message ()));
+                else
+                    completion->complete (result_t<void>::success ());
+            });
+        }
         co_await pending;
     }
 
@@ -3216,41 +3162,43 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
 
     void close_connection (tcp::socket &socket) noexcept { close_tcp_socket (socket); }
 
-    template <typename TStream, typename Reserve>
+    template <typename TStream, typename Reserve, typename Progress>
     std::optional<frame_t> read_frame (TStream &socket,
                                        const Reserve &reserve,
                                        asio::io_context &io,
-                                       const std::atomic_bool *connection_stop)
+                                       const std::atomic_bool *connection_stop,
+                                       const Progress &progress)
     {
         std::array<std::uint8_t, 6> prefix;
         std::span<std::uint8_t> unread (prefix);
         if constexpr (std::is_same_v<TStream, tcp::socket>) {
             // A peek distinguishes an idle peer's EOF from packet readiness.
             const auto ready = run_stream_async_operation (
-              io, socket.get_executor (), *_stop,
+              io, *_stop,
               [&] (auto completion) {
                   socket.async_receive (asio::buffer (prefix.data (), 1),
                                         asio::socket_base::message_peek, std::move (completion));
               },
-              [&socket] { cancel_stream (socket); }, connection_stop);
+              [&socket] { cancel_stream (socket); }, connection_stop, progress);
             if (ready)
                 throw boost::system::system_error (ready);
         } else {
             // TLS may already hold decrypted bytes after the last read.
-            read_exact (socket, unread.first (1), io, *_stop, connection_stop);
+            read_exact (socket, unread.first (1), io, *_stop, connection_stop, progress);
             unread = unread.subspan (1);
         }
         if (!reserve ())
             return std::nullopt;
-        read_exact (socket, unread, io, *_stop, connection_stop);
+        read_exact (socket, unread, io, *_stop, connection_stop, progress);
         const auto header_size = static_cast<std::size_t> ((prefix[0] << 8) | prefix[1]);
         const auto payload_size = (static_cast<std::size_t> (prefix[2]) << 24)
                                   | (static_cast<std::size_t> (prefix[3]) << 16)
                                   | (static_cast<std::size_t> (prefix[4]) << 8)
                                   | static_cast<std::size_t> (prefix[5]);
         validate_stream_frame_size (header_size, payload_size, _stream.max_message_size);
-        auto header_bytes = read_exact (socket, header_size, io, *_stop, connection_stop);
-        auto payload_bytes = read_exact (socket, payload_size, io, *_stop, connection_stop);
+        auto header_bytes = read_exact (socket, header_size, io, *_stop, connection_stop, progress);
+        auto payload_bytes =
+          read_exact (socket, payload_size, io, *_stop, connection_stop, progress);
         auto header = _runtime.decode_header (header_bytes);
         if (!header) {
             throw framework_exception_t (header.error_kind (), header.error ()
@@ -3263,28 +3211,29 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         return frame_t{decoded_header, message_from_bytes (payload_bytes)};
     }
 
-    template <typename Reserve>
+    template <typename Reserve, typename Progress>
     std::optional<frame_t> read_frame (websocket_stream_t &socket,
                                        const Reserve &reserve,
                                        asio::io_context &io,
-                                       const std::atomic_bool *connection_stop)
+                                       const std::atomic_bool *connection_stop,
+                                       const Progress &progress)
     {
         beast::flat_buffer buffer;
         // Beast can buffer another message in the previous read. Acquire a
         // permit after one framing byte is ready and before reading the packet.
         auto error = run_stream_async_operation (
-          io, socket.get_executor (), *_stop,
+          io, *_stop,
           [&] (auto completion) { socket.async_read_some (buffer, 1, std::move (completion)); },
-          [&socket] { cancel_stream (socket.next_layer ()); }, connection_stop);
+          [&socket] { cancel_stream (socket.next_layer ()); }, connection_stop, progress);
         if (error)
             throw boost::system::system_error (error);
         if (!reserve ())
             return std::nullopt;
         if (!socket.is_message_done ()) {
             error = run_stream_async_operation (
-              io, socket.get_executor (), *_stop,
+              io, *_stop,
               [&] (auto completion) { socket.async_read (buffer, std::move (completion)); },
-              [&socket] { cancel_stream (socket.next_layer ()); }, connection_stop);
+              [&socket] { cancel_stream (socket.next_layer ()); }, connection_stop, progress);
             if (error)
                 throw boost::system::system_error (error);
         }
@@ -3445,6 +3394,13 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
               const std::lock_guard<std::mutex> lock (_sockets_mutex);
               _sockets.erase (socket);
           });
+        const auto finish_transport = [&] {
+            owner->request_close ();
+            close_stream (*connection);
+            cleanup.reset ();
+            io.restart ();
+            io.run ();
+        };
         auto write = [this, owner, connection] (const stream_header_t &header,
                                                 const zlink::message_t &payload) {
             return submit_frame (owner, connection, header, payload);
@@ -3453,15 +3409,12 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                                  std::string_view diagnostic) {
             stream_t transport;
             _runtime.attach_transport_writer (transport, write);
-            auto deferred_cleanup = std::make_shared<decltype (cleanup)> (std::move (cleanup));
             _runtime.send_session_closing (
               transport, reason, diagnostic,
-              [this, owner, connection, deferred_cleanup, work = asio::make_work_guard (_io)] {
-                  asio::post (_io, [owner, connection, deferred_cleanup, work] {
-                      owner->request_close ();
-                      close_stream (*connection);
-                  });
-              });
+              [work = asio::make_work_guard (io)] () mutable { work.reset (); });
+            io.restart ();
+            io.run ();
+            finish_transport ();
         };
         const auto close_draining_connection = [&] {
             /* graceful-drain-handoff §5: brand-new connections on a draining
@@ -3571,15 +3524,24 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 if (!connected) {
                     close_draining_connection ();
                 } else {
-                    owner->request_close ();
-                    asio::post (_io, [connection] { close_stream (*connection); });
+                    finish_transport ();
                 }
                 retire_connection (connection_state);
                 return;
             }
             connected_session = true;
             record_connection_opened ();
-            schedule_tcp_liveness (liveness_timer, owner, stream, liveness, close);
+            const auto arm_liveness = [&] {
+                schedule_liveness (liveness_timer, *liveness, owner->reader_liveness, [] {});
+            };
+            const auto settle_liveness = [&] {
+                if (stream_stop_requested (*_stop, &owner->closing)
+                    || liveness_timer.expiry () > session_liveness_t::clock_t::now ())
+                    return;
+                evaluate_liveness (stream, liveness, owner->reader_liveness, close);
+                arm_liveness ();
+            };
+            arm_liveness ();
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
             if (_shutdown_test_hooks.registered)
                 _shutdown_test_hooks.registered (shared_from_this (), owner);
@@ -3590,6 +3552,22 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
               && (!connection_state->replacement
                   || !connection_state->replacement->closing.load (std::memory_order_acquire))) {
                 receive_batch_budget_t batch;
+                std::optional<session_liveness_t::clock_t::time_point> ready_read_started;
+                const auto progress = [&] {
+                    const auto now = session_liveness_t::clock_t::now ();
+                    if (liveness_timer.expiry () <= now) {
+                        if (!ready_read_started)
+                            ready_read_started = now;
+                        // A partial first frame need not reach batch.account().
+                        // Bound the ready I/O pass by the same receive-round time limit.
+                        if (!batch.exhausted () && now - *ready_read_started < batch.max_elapsed
+                            && io.poll_one () != 0)
+                            return;
+                        settle_liveness ();
+                        ready_read_started.reset ();
+                    }
+                    io.run_one ();
+                };
                 while (
                   !_stop->load (std::memory_order_acquire)
                   && (!connection_state->replacement
@@ -3626,10 +3604,10 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                 return false;
                             io.restart ();
                             const auto running = asio::make_work_guard (io);
-                            io.run_one ();
+                            progress ();
                         }
                     };
-                    auto frame = read_frame (*connection, reserve, io, &owner->closing);
+                    auto frame = read_frame (*connection, reserve, io, &owner->closing, progress);
                     if (!frame) {
                         break;
                     }
@@ -3695,6 +3673,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                         }
                     }
                 }
+                if (batch.exhausted ())
+                    settle_liveness ();
             }
         }
         catch (const boost::system::system_error &error) {
@@ -3739,12 +3719,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                           << " error=\"unknown\"" << std::endl;
             }
         }
-        owner->request_close ();
-        asio::post (_io, [connection] { close_stream (*connection); });
         liveness_timer.cancel ();
-        // Only the reader progresses connection io, including queued liveness work.
-        owner->io.restart ();
-        owner->io.run ();
+        finish_transport ();
         begin_connection_retirement (connection_state);
         if (connected_session) {
             // The registry lane barrier excludes further forced-close submissions.
@@ -3801,7 +3777,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     {
         try {
             const auto error = run_stream_async_operation (
-              owner->io, connection->get_executor (), *_stop,
+              owner->io, *_stop,
               [&] (auto completion) {
                   connection->async_handshake (
                     ssl::stream_base::server,
@@ -3810,7 +3786,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                         completion (handshake_error, 0);
                     });
               },
-              [connection] { cancel_stream (connection->next_layer ()); }, &owner->closing);
+              [connection] { cancel_stream (connection->next_layer ()); }, &owner->closing,
+              [&] { owner->io.run_one (); });
             if (error) {
                 throw boost::system::system_error (error);
             }
@@ -3829,7 +3806,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     {
         try {
             const auto error = run_stream_async_operation (
-              owner->io, connection->get_executor (), *_stop,
+              owner->io, *_stop,
               [&] (auto completion) {
                   connection->async_accept (
                     [completion = std::move (completion)] (
@@ -3837,7 +3814,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                         completion (accept_error, 0);
                     });
               },
-              [connection] { cancel_stream (connection->next_layer ()); }, &owner->closing);
+              [connection] { cancel_stream (connection->next_layer ()); }, &owner->closing,
+              [&] { owner->io.run_one (); });
             if (error) {
                 throw boost::system::system_error (error);
             }
@@ -3953,7 +3931,11 @@ stream_host_service_test_access_t::observe_shutdown (stream_host_service_t &serv
                                                      stream_host_shutdown_test_hooks_t hooks)
 {
     auto listener = service._listeners.at (0);
-    listener->_shutdown_test_hooks = std::move (hooks);
+    listener->_active_streams_lane
+      .run ([listener, hooks = std::move (hooks)] () mutable {
+          listener->_shutdown_test_hooks = std::move (hooks);
+      })
+      .get ();
     return [listener] {
         listener->force_close_sessions (stream_close_reason_t::server_drain, "shutdown race test");
     };

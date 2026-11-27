@@ -42,7 +42,8 @@ public final class ZLinkRooms implements RoomProvisioner {
                                                         || config.sessionEndpoint().isBlank())
                                                     throw new IllegalStateException(
                                                             "Session endpoint is required");
-                                                return new MatchResponse(roomId, config.sessionEndpoint());
+                                                return new MatchResponse(
+                                                        roomId, config.sessionEndpoint());
                                             });
                         });
     }

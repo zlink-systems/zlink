@@ -218,9 +218,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
             return;
         }
         ZLinkFlowContext.State inboundFlow =
-                captureFlow && packet.header() != null
-                        ? ZLinkSpotFlowFrame.fromEnvelopeHeader(packet.header())
-                        : null;
+                captureFlow ? ZLinkSpotFlowFrame.fromEnvelopeHeader(packet.header()) : null;
         var flowScope =
                 captureFlow
                         ? ZLinkFlowContext.enterOrCreate(inboundFlow, ZLinkFlowOrigin.INBOUND)
@@ -234,19 +232,6 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                     packet.packetName(),
                     received.requestSeq(),
                     backendSpot.spotId());
-            if (ZLinkActorSpotRoutePackets.BOUND_SESSION_SEND_PACKET_NAME.equals(
-                    packet.packetName())) {
-                if (received.requestSeq().isPresent()) {
-                    handleRoutedBoundSessionSendRequestParts(received.parts())
-                            .thenAccept(received::reply)
-                            .whenComplete((ignored, error) -> closeRouteReceived(received));
-                } else {
-                    handleRoutedBoundSessionSendParts(received.parts());
-                    closeRouteReceived(received);
-                }
-                if (admission != null) admission.complete(null);
-                return;
-            }
             if (ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(packet.packetName())) {
                 handleRoutedActorPacketParts(received.parts(), received.receivedAt())
                         .thenAccept(

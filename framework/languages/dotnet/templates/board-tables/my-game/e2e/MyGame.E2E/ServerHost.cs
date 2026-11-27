@@ -2,7 +2,12 @@ using System.Text.Json;
 
 namespace MyGame.E2E;
 
-internal sealed record ServerEndpoints(string[] Streams, string? Api);
+internal sealed record ServerEndpoints(
+    string[] Streams,
+    string? Api,
+    string Redis,
+    string PlayerRecordsKeyPrefix
+);
 
 internal static class ServerHost
 {

@@ -564,7 +564,7 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
                 kind, assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
     }
 
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final Context context = Zlink.createContext();
         final AtomicInteger received = new AtomicInteger();
         final AtomicInteger bindingRequests = new AtomicInteger();

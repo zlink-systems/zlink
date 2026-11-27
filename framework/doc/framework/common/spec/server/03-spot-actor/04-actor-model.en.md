@@ -569,6 +569,20 @@ The framework proceeds with destroy in the following order.
 The framework doesn't re-find the current `ActorRef` and terminate a new
 incarnation.
 
+**When an Actor calls destroy on itself from its own handler turn, the call returns once that
+incarnation's termination is accepted (the step 1 `Closing` CAS succeeded).** The owner runs steps 2
+through 4 after that turn ends. This keeps the turn from waiting on its own termination. The owner
+settles success or failure of steps 2 through 4 on that incarnation's destroy terminal, and later
+destroy calls for the same incarnation join that terminal and receive its result, as the table above
+states. If a remaining step fails, the authority stays `Closing` and takes no new work, and releasing
+the record follows [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas).
+
+**If the step 1 `Closing` CAS fails, that destroy ends with that failure and the incarnation returns
+to its state before the destroy.** The authority stays `Ready` and the Actor keeps taking new work. The
+admission and teardown marking this attempt closed are rolled back, and a later destroy call for the same
+incarnation doesn't join this failure; it starts a new attempt from step 1. Calls that joined before the
+attempt was rolled back receive the same failure.
+
 Only the Actor's owner node runs a destroy. When destroy is called on a node that isn't the owner,
 that node sends command 27 `actorDestroy`
 ([wire command table](../02-channel-transport/06-wire-protocol.en.md#3-command-space)) to the owner the

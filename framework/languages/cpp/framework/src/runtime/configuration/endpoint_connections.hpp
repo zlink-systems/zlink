@@ -5,7 +5,6 @@
 
 #include <functional>
 #include <string>
-#include <vector>
 
 namespace zlink::framework::detail
 {
@@ -21,7 +20,7 @@ class endpoint_connections_runtime_t
                         std::function<void (const std::string &)> disconnect);
     static void freeze (endpoint_connections_t &connections);
     static void thaw (endpoint_connections_t &connections);
-    static std::vector<std::string> snapshot (const endpoint_connections_t &connections);
+    static bool has_connections (const endpoint_connections_t &connections);
 };
 
 } // namespace zlink::framework::detail
