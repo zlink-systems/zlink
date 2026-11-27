@@ -3628,10 +3628,6 @@ class provider_location_repository_t final : public location_repository_t
         capacity.change (source.target, source.capacity_bundle, 0, -1);
         capacity.change (placement, source.capacity_bundle, -1, 1);
         capacity.append_to (commit);
-        if (!batch_fits (commit)) {
-            (void) co_await abort_aggregate (fence);
-            co_return relocation_reply_batch_rejected_t{};
-        }
         for (;;) {
             const auto qualified = co_await read_target_descriptor_async (placement, false);
             if (!qualified || cancellation.stop_requested ()) {
@@ -3641,6 +3637,10 @@ class provider_location_repository_t final : public location_repository_t
             auto attempt = commit;
             attempt.conditions.push_back (
               version_condition (qualified->key, qualified->provider_version));
+            if (!batch_fits (attempt)) {
+                (void) co_await abort_aggregate (fence);
+                co_return relocation_reply_batch_rejected_t{};
+            }
             const auto written = co_await await_result (
               write_async (std::move (attempt), nullptr, {}, "compare_exchange", deadline));
             if (const auto *applied =
