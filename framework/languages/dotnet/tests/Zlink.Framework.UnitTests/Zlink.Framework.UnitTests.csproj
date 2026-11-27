@@ -68,6 +68,7 @@
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Support/PerCallAllocation.cs"/>
         <Compile Include="Support/MessageFinalizerProbe.cs"/>
+        <Compile Include="Support/FailureTimeline.cs"/>
         <Compile Include="Runtime/MessageWrapperLifetimeTests.cs"/>
         <Compile Include="Support/PerCallAllocationTests.cs"/>
         <Compile Include="Runtime/PrestartCallTests.cs"/>

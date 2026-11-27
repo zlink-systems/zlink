@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -116,13 +115,13 @@ public sealed class MeshReceiveHandoffTests
             )
         )
             return;
-        await RunChannelMailboxAsync(false, Stopwatch.GetTimestamp());
+        await RunChannelMailboxAsync(false, new FailureTimeline(ChannelMailboxSteps));
     }
 
     [Fact]
     public async Task ChannelMailbox_WithNoIdleWorker_KeepsReceiverAndManagementIndependent()
     {
-        var testEntered = Stopwatch.GetTimestamp();
+        var timeline = new FailureTimeline(ChannelMailboxSteps);
         try
         {
             if (
@@ -136,19 +135,27 @@ public sealed class MeshReceiveHandoffTests
         catch (Xunit.Sdk.XunitException error)
         {
             throw new Xunit.Sdk.XunitException(
-                $"Child launch requested at Stopwatch tick {testEntered}.\n{error.Message}",
+                $"Child launch requested at Stopwatch tick {timeline.StartTimestamp}.\n{error.Message}",
                 error
             );
         }
-        await RunChannelMailboxAsync(true, testEntered);
+        await RunChannelMailboxAsync(true, timeline);
     }
+
+    private static readonly string[] ChannelMailboxSteps =
+    [
+        "workerReleaseStarted",
+        "handlerWaitStarted",
+        "handlerEntered",
+        "handlerWaitEnded",
+    ];
 
     private static async Task RunChannelMailboxAsync(
         bool exhaustApplicationResources,
-        long childTestEntered
+        FailureTimeline timeline
     )
     {
-        var capture = new ChannelTurnCapture();
+        var capture = new ChannelTurnCapture { Timeline = timeline };
         var builder = Host.CreateApplicationBuilder();
         builder.Logging.ClearProviders().AddConsole().SetMinimumLevel(LogLevel.Trace);
         builder.Services.AddSingleton(capture).AddTransient<ChannelTurnHandler>();
@@ -259,9 +266,6 @@ public sealed class MeshReceiveHandoffTests
             ZLinkProcessExecutionPool.ApplicationWorkerCount
         );
         Task? stopping = null;
-        long workersReleased = 0;
-        long handlerWaitStarted = 0;
-        long handlerWaitEnded = 0;
         try
         {
             await admitted.Task.WaitAsync(CompletionBound);
@@ -291,17 +295,17 @@ public sealed class MeshReceiveHandoffTests
                 Assert.False(capture.FirstEntered.Task.IsCompleted);
                 await CheckDeadline();
                 Assert.Equal(0, Volatile.Read(ref turns));
-                workersReleased = Stopwatch.GetTimestamp();
+                timeline.Mark("workerReleaseStarted");
                 releaseWorkers.Set();
             }
-            handlerWaitStarted = Stopwatch.GetTimestamp();
+            timeline.Mark("handlerWaitStarted");
             try
             {
                 await capture.FirstEntered.Task.WaitAsync(CompletionBound);
             }
             finally
             {
-                handlerWaitEnded = Stopwatch.GetTimestamp();
+                timeline.Mark("handlerWaitEnded");
             }
             var second = Submit("work", "second");
             await router.SecondReceived.Task.WaitAsync(CompletionBound);
@@ -344,17 +348,9 @@ public sealed class MeshReceiveHandoffTests
             Assert.Empty(failures);
             Assert.Empty(reporter.Failures);
         }
-        catch (Exception error) when (error is TimeoutException or Xunit.Sdk.XunitException)
+        catch (Exception error) when (FailureTimeline.IsTimingFailure(error))
         {
-            var message =
-                $"{error.Message}\nTimeline (ms since child test entered at Stopwatch tick {childTestEntered}) "
-                + $"workerReleaseStarted={Elapsed(workersReleased)}, "
-                + $"handlerWaitStarted={Elapsed(handlerWaitStarted)}, "
-                + $"handlerEntered={Elapsed(Volatile.Read(ref capture.FirstEnteredTimestamp))}, "
-                + $"handlerWaitEnded={Elapsed(handlerWaitEnded)}.";
-            if (error is TimeoutException)
-                throw new TimeoutException(message, error);
-            throw new Xunit.Sdk.XunitException(message, error);
+            throw timeline.Rethrow(error, ", child test entered");
         }
         finally
         {
@@ -370,13 +366,6 @@ public sealed class MeshReceiveHandoffTests
             await host.StopAsync();
             capture.ReleaseSync.Dispose();
         }
-
-        string Elapsed(long timestamp) =>
-            timestamp == 0
-                ? "unobserved"
-                : FormattableString.Invariant(
-                    $"{Stopwatch.GetElapsedTime(childTestEntered, timestamp).TotalMilliseconds:F3}"
-                );
 
         Task<string> Submit(string channel, string value)
         {
@@ -477,7 +466,7 @@ public sealed class MeshReceiveHandoffTests
         > Starts = new();
         internal readonly System.Collections.Concurrent.ConcurrentQueue<string> WorkOrder = new();
         internal readonly TaskCompletionSource FirstEntered = Signal();
-        internal long FirstEnteredTimestamp;
+        internal required FailureTimeline Timeline { get; init; }
         internal readonly TaskCompletionSource AsyncEntered = Signal();
         internal readonly ManualResetEventSlim ReleaseSync = new();
         internal readonly TaskCompletionSource ReleaseAsync = Signal();
@@ -497,7 +486,7 @@ public sealed class MeshReceiveHandoffTests
                 capture.WorkOrder.Enqueue(request.Value);
             if (request.Value == "first")
             {
-                Volatile.Write(ref capture.FirstEnteredTimestamp, Stopwatch.GetTimestamp());
+                capture.Timeline.Mark("handlerEntered");
                 capture.FirstEntered.TrySetResult();
                 Assert.True(capture.ReleaseSync.Wait(CompletionBound));
             }
