@@ -286,7 +286,6 @@ Instance Spot default mesh), or the name of a STREAM registration with stage 2 o
 - The estimated wait `estimatedWaitMs` is `ceil(position × 1000 / r)`, where r is the number of tickets issued in the last
   30 seconds divided by 30 (per second). When r is 0, it's `position × 1000`. The result is clamped to 2^31 − 1. `position` is the number of waiters ahead in the mesh-wide FIFO that **haven't received a
   ticket**, plus 1 (a waiter that has a ticket no longer waits and isn't counted). `estimatedWaitMs` uses this `position`.
-  `position` is the 1-based position across the mesh.
 - `$zlink.admission.enqueue` is idempotent per SessionRid. If the session is already waiting, the Response carries its
   current position; if it holds an unused, unexpired ticket, the Response carries that same ticket. No new waiting
   entry is created.
