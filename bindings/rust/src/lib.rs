@@ -42,8 +42,8 @@ pub use contracts::eventing::monitor::{
     SocketMonitorEventMask, SocketMonitorOpenOptions,
 };
 pub use contracts::eventing::poller::{
-    POLLCOMPLETION, POLLIN, POLLOUT, POLLROUTE, PollEvent, PollItem, PollSourceKind, Pollable,
-    Poller,
+    POLLCOMPLETION, POLLCONNECT, POLLIN, POLLOUT, POLLROUTE, PollEvent, PollItem, PollSourceKind,
+    Pollable, Poller,
 };
 pub use contracts::eventing::timer::Timer;
 pub use contracts::messaging::message::Message;
@@ -54,6 +54,10 @@ pub use contracts::messaging::operations::{
 pub use contracts::messaging::received::{Received, ReplyToken};
 pub use contracts::messaging::subscription_event::SubscriptionEvent;
 pub use contracts::messaging::topic_message::TopicMessage;
+pub use contracts::sockets::connection_attempt::{
+    ConnectionAttempt, ConnectionAttemptState, ConnectionFailure, ConnectionFailureKind,
+    ConnectionFailureStage,
+};
 pub use contracts::sockets::dealer_socket::DealerSocket;
 pub use contracts::sockets::pair_socket::PairSocket;
 pub use contracts::sockets::pubsub_sockets::{PubSocket, SubSocket, XPubSocket, XSubSocket};
