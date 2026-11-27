@@ -29,6 +29,8 @@ public final class UserSpotJoinContracts {
         boolean accepted, String actorId, String spotId, String nodeRid, String marker) {
     }
 
+    public record UserSpotLateSend(String marker) {}
+
     public record UserSpotProbeReq(String marker) {
     }
 

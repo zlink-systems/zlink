@@ -815,7 +815,9 @@ Fanout publisher의 endpoint, identity와 실행 세대를 Store에 게시한 �
 않는다. Callback exception은 `ForceStopped/TeardownFailed`, deadline 만료는
 `ForceStopped/DeadlineExceeded`다. Stop deadline에 authority가 아직 정해지지 않은 relocation unit은 owner
 lease 만료로 다루지 않는다. 그 unit은 relocation 실패로 기록하고, expired-owner 정리(대기 backlog 즉시 실패 등)를 하지
-않으며 Store authority도 바꾸지 않는다. 그 unit의 다음 owner 조회가 Store authority로 결과를 판정한다.
+않으며 Store authority도 바꾸지 않는다. 그 unit의 다음 owner 조회가 Store authority로 결과를 판정한다. 그 unit을 기다리던 Join caller는
+`Unavailable`을 받는다(정지하는 node라 caller가 다시 시도할 일이다). Stop deadline 뒤에는 그 unit을 위해 Store를 다시
+호출하거나 재시도하지 않는다.
 `Draining` 중인 source는 수락한 relocation의 `Preserve`를 늦어도 stop deadline에서 management 요청 한 번의 시간을
 뺀 시점에 시작한다(Restore deadline이 더 이르면 그때). 그보다 일찍 시작해도 된다(예: 종료 요청을 받은 즉시). Hardware failure와 `SIGKILL`에서는 callback을 보장하지
 않는다. 종료 중이던 relocation이나 cleanup을 다른 runtime이 자동으로 이어받는 동작을
