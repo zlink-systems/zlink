@@ -106,20 +106,20 @@ func (r *Received) IsSinglePart() bool {
 
 func (r *Received) FirstPart() (*Message, error) {
 	if r == nil {
-		return nil, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return nil, newRecvError(RecvInvalidHandle, int(C.EFAULT))
 	}
 	if len(r.parts) == 0 {
-		return nil, &RecvError{Result: RecvNotSupported, nativeErrno: int(C.EINVAL)}
+		return nil, newRecvError(RecvNotSupported, int(C.EINVAL))
 	}
 	return r.parts[0], nil
 }
 
 func (r *Received) SinglePartOrError() (*Message, error) {
 	if r == nil {
-		return nil, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return nil, newRecvError(RecvInvalidHandle, int(C.EFAULT))
 	}
 	if len(r.parts) != 1 {
-		return nil, &RecvError{Result: RecvNotSupported, nativeErrno: int(C.EINVAL)}
+		return nil, newRecvError(RecvNotSupported, int(C.EINVAL))
 	}
 	return r.parts[0], nil
 }
@@ -128,14 +128,14 @@ func (r *Received) SinglePartOrError() (*Message, error) {
 func (r *Received) Reply() ReplyOp {
 	if r == nil {
 		return newReplyBuilder(func([]*Message) error {
-			return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+			return newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 		})
 	}
 	reply := r.reply
 	token := r.token
 	return newReplyBuilder(func(parts []*Message) error {
 		if reply == nil || token.owner == nil || token.value == 0 {
-			return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.EBUSY)}
+			return newSubmitError(SubmitInvalidState, int(C.EBUSY))
 		}
 		return reply(parts)
 	})
@@ -146,13 +146,13 @@ func (r *Received) Reply() ReplyOp {
 func (r *Received) Send() SendOp {
 	if r == nil {
 		return newSendBuilder(func(context.Context, []sendBuilderPart) (SendSubmission, error) {
-			return nil, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+			return nil, newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 		})
 	}
 	send := r.send
 	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) (SendSubmission, error) {
 		if send == nil {
-			return nil, &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
+			return nil, newSubmitError(SubmitInvalidArgument, int(C.EINVAL))
 		}
 		return send(ctx, parts)
 	})

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -117,7 +119,11 @@ internal sealed class ChannelClientStartupRequestHostedService(
 /// today. A whole-node RelocateAsync() drain then moves it to the peer node,
 /// and a post-relocation probe confirms it answers on the new owner.
 /// </summary>
-internal sealed class RelocationActor(string actorId, IZLinkActorContext context) : IZLinkActor
+internal sealed class RelocationActor(
+    string actorId,
+    IZLinkActorContext context,
+    SealedJoinObservation? sealedJoin
+) : IZLinkActor
 {
     public string InstanceId { get; } = Guid.NewGuid().ToString("N");
     public int CreationCount { get; } = OutageActorObservations.Created(actorId);
@@ -125,16 +131,27 @@ internal sealed class RelocationActor(string actorId, IZLinkActorContext context
     public IZLinkActorContext Context { get; } = context;
     public byte[] ApplicationState { get; set; } = [];
     public int StateVersion { get; set; }
+
+    public ValueTask OnJoinCompletedAsync(
+        ZLinkActorJoinCompletion completion,
+        CancellationToken cancellationToken
+    )
+    {
+        if (completion is ZLinkActorJoinCompletion.Accepted accepted)
+            sealedJoin?.FailCompletion(ActorId, accepted.Actor.NodeRid.ToString());
+        return ValueTask.CompletedTask;
+    }
 }
 
-internal sealed class RelocationActorFactory : IZLinkActorFactory<RelocationActor>
+internal sealed class RelocationActorFactory(SealedJoinObservation? sealedJoin = null)
+    : IZLinkActorFactory<RelocationActor>
 {
     public ValueTask<RelocationActor> CreateAsync(
         IZLinkActorContext context,
         CancellationToken cancellationToken = default
     )
     {
-        return ValueTask.FromResult(new RelocationActor(context.ActorId, context));
+        return ValueTask.FromResult(new RelocationActor(context.ActorId, context, sealedJoin));
     }
 }
 
@@ -293,6 +310,8 @@ internal sealed record UserSpotJoinRes(
 
 internal sealed record UserSpotProbeReq(string Marker);
 
+internal sealed record UserSpotLateSend(string Marker);
+
 internal sealed record UserSpotProbeRes(
     string ActorId,
     string SpotId,
@@ -363,6 +382,7 @@ internal sealed class RelocationUserSpot(
     public void Configure()
     {
         Context.Handlers.AddHandler<UserSpotProbeHandler>();
+        Context.Handlers.AddHandler<UserSpotLateSendHandler>();
     }
 
     public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
@@ -443,6 +463,22 @@ internal sealed class UserSpotProbeHandler(TestHostEventSink sink)
     }
 }
 
+internal sealed class UserSpotLateSendHandler(TestHostEventSink sink)
+    : IZLinkSpotActorSendHandler<RelocationUserSpot, RelocationActor, UserSpotLateSend>
+{
+    public ValueTask HandleAsync(
+        RelocationUserSpot spot,
+        RelocationActor actor,
+        IZLinkMessageContext context,
+        UserSpotLateSend message,
+        CancellationToken cancellationToken
+    )
+    {
+        sink.Append($"late-actor-send-executed|actor={actor.ActorId}|marker={message.Marker}");
+        return ValueTask.CompletedTask;
+    }
+}
+
 internal sealed class UserSpotTargetHostedService(
     IZLinkFrameworkRuntime runtime,
     IZLinkSpotManager spots,
@@ -456,11 +492,16 @@ internal sealed class UserSpotTargetHostedService(
     string actorId,
     string meshName,
     string sourceNodeRid,
-    int placementWeight
+    int placementWeight,
+    SealedJoinObservation? sealedJoin,
+    TestHostMessageFlowListener? flow
 ) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // The flow listener is a lazily built singleton; taking it here makes
+        // it start listening before the first Join, and keeps it alive.
+        GC.KeepAlive(flow);
         var serving = false;
         await foreach (var observed in runtime.ObserveAsync(cancellationToken))
         {
@@ -505,7 +546,8 @@ internal sealed class UserSpotTargetHostedService(
             $"user-spot-created|spot={created.Spot.SpotId}|nodeRid={targetNodeRid}|state={created.State}"
         );
         _ = ObserveSourcePeerAsync(routes, routeMesh, cancellationToken);
-        _ = ProbeAsync(targetNodeRid, observer, cancellationToken);
+        if (sealedJoin is null)
+            _ = ProbeAsync(targetNodeRid, observer, cancellationToken);
     }
 
     private async Task ObserveSourcePeerAsync(
@@ -628,13 +670,14 @@ internal sealed class UserSpotSourceHostedService(
         }
 
         if (startFilePath is not null)
+            await WaitForFileAsync(startFilePath, cancellationToken);
+
+        if (
+            Environment.GetEnvironmentVariable("ZLINK_CROSS_LATE_REQUEST_TIMEOUT_MS") is { } timeout
+        )
         {
-            using var startDeadline = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken
-            );
-            startDeadline.CancelAfter(TimeSpan.FromSeconds(60));
-            while (!File.Exists(startFilePath))
-                await Task.Delay(10, startDeadline.Token);
+            await ProbeSealedActorAsync(timeout, startFilePath + ".request", cancellationToken);
+            return;
         }
 
         var created = await actors
@@ -677,6 +720,54 @@ internal sealed class UserSpotSourceHostedService(
                 throw new InvalidOperationException("Outage relocation Join was rejected.");
             outage.JoinCompleted.TrySetResult();
         }
+    }
+
+    private static async Task WaitForFileAsync(string file, CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(60));
+        while (!File.Exists(file))
+            await Task.Delay(10, deadline.Token);
+    }
+
+    private async Task ProbeSealedActorAsync(
+        string timeoutMs,
+        string requestFile,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await actorClient.SendToActor(actorId, new UserSpotLateSend("late-send")).Async();
+            sink.Append("late-actor-send|submitted=true");
+        }
+        catch (ZLinkFrameworkException failure)
+        {
+            sink.Append(
+                $"late-actor-send|submitted=false|kind={failure.Kind}|message={failure.Message}"
+            );
+        }
+
+        await WaitForFileAsync(requestFile, cancellationToken);
+        var timeout = TimeSpan.FromMilliseconds(int.Parse(timeoutMs, CultureInfo.InvariantCulture));
+        var elapsed = Stopwatch.StartNew();
+        var kind = "success";
+        var message = "";
+        try
+        {
+            await actorClient
+                .RequestToActor(actorId, new UserSpotProbeReq("late-request"))
+                .Timeout(timeout)
+                .Async<UserSpotProbeRes>(cancellationToken);
+        }
+        catch (ZLinkFrameworkException failure)
+        {
+            kind = failure.Kind.ToString().ToLowerInvariant();
+            message = failure.Message;
+        }
+        sink.Append(
+            $"late-actor-request|kind={kind}|elapsedMs={elapsed.ElapsedMilliseconds}|message={message}"
+        );
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

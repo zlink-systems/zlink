@@ -5,6 +5,8 @@ const path = require('node:path');
 const { Injectable, Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const { logs } = require('@opentelemetry/api-logs');
+const { metrics } = require('@opentelemetry/api');
+const { MeterProvider, MetricReader } = require('@opentelemetry/sdk-metrics');
 const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 
 const framework = require('../packages/framework/dist');
@@ -25,6 +27,9 @@ const ACTOR_JOIN_WIRE_COMMAND = 28;
 const RELOCATION_ACTOR_TYPE = 'cross-lang-relocation-actor-type';
 const mode = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
+const failJoinCompletion = process.env.ZLINK_CROSS_FAIL_JOIN_COMPLETION === '1';
+const lateRequestTimeout = process.env.ZLINK_CROSS_LATE_REQUEST_TIMEOUT_MS;
+const joinSetup = process.env.ZLINK_CROSS_JOIN_SETUP === '1';
 let userSpotTargetJoined;
 let resolveUserSpotTargetJoined;
 let outageStore;
@@ -215,7 +220,7 @@ function installCanonicalWireProbe(app, meshName) {
   };
 }
 
-function installCanonicalReceiverProbe(app) {
+function installCanonicalReceiverProbe(app, meshName) {
   const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
   const receiver = runtime.boundSessionRelay?.actorJoins;
   if (receiver === undefined || typeof receiver.prepareCanonicalActorJoin !== 'function') {
@@ -244,6 +249,24 @@ function installCanonicalReceiverProbe(app) {
       throw error;
     }
   };
+
+  const senderRid = process.env.ZLINK_CROSS_LATE_SENDER_RID;
+  if (senderRid) {
+    const stateful = runtime.spotNodeRuntime.meshNode(meshName).stateful;
+    const originalIngress = stateful.handleIngress;
+    stateful.handleIngress = function observeLateActorIngress(ingress, record, ...rest) {
+      if (
+        ingress.sourceRoutingId === senderRid &&
+        (record.kind === 'actorSend' || record.kind === 'actorRequest') &&
+        record.target.actor.actorId === require_('actor-id')
+      ) {
+        appendEvent(
+          `late-actor-owner-ingress|kind=${record.kind}|source=${senderRid}|actor=${record.target.actor.actorId}`
+        );
+      }
+      return originalIngress.call(this, ingress, record, ...rest);
+    };
+  }
 }
 
 class UserSpotActorCreateReq {
@@ -269,6 +292,12 @@ class UserSpotProbeReq {
   constructor(marker) { this.marker = marker; }
 }
 
+class UserSpotLateSend {
+  constructor(marker) {
+    this.marker = marker;
+  }
+}
+
 class UserSpotDiscoveryProbeHandler {
   async handle(request) {
     return { marker: request.marker, nodeRid: require_('node-rid') };
@@ -290,6 +319,12 @@ class RelocationActor {
     if (completion.status === 'failed') {
       appendEvent(`user-spot-join-failed|kind=${errorKindName(completion.kind)}`);
       return;
+    }
+    if (failJoinCompletion && completion.status === 'accepted') {
+      appendEvent(
+        `late-actor-completion-throw|actor=${this.actorId}|nodeRid=${require_('node-rid')}`
+      );
+      throw new Error('cross-language Join completion failure');
     }
     appendEvent(`user-spot-join-completed|status=${completion.status}`);
   }
@@ -427,6 +462,57 @@ nestjs.zlinkSpotActorRequestHandler({
   packetName: 'UserSpotProbeReq'
 })(TargetProbeHandler);
 
+class TargetLateSendHandler {
+  async handle(_spot, actor, _context, request) {
+    appendEvent(`late-actor-send-executed|actor=${actor.actorId}|marker=${request.marker}`);
+  }
+}
+nestjs.zlinkSpotActorSendHandler({
+  actor: () => RelocationActor,
+  spot: () => RelocationUserSpot,
+  packetName: 'UserSpotLateSend'
+})(TargetLateSendHandler);
+
+async function probeSealedActor(actorClient, actorId, requestFile) {
+  try {
+    await actorClient.sendToActor(actorId, new UserSpotLateSend('late-send')).submit();
+    appendEvent('late-actor-send|submitted=true');
+  } catch (error) {
+    appendEvent(`late-actor-send|submitted=false|message=${error.message}`);
+  }
+  await until(() => fs.existsSync(requestFile), 'late Actor request gate', 30_000);
+  const started = performance.now();
+  let kind = 'success';
+  let message = '';
+  try {
+    await actorClient
+      .requestToActor(actorId, new UserSpotProbeReq('late-request'))
+      .timeout(Number(lateRequestTimeout))
+      .submit();
+  } catch (error) {
+    kind =
+      error instanceof framework.ZLinkFrameworkException
+        ? errorKindName(error.kind).toLowerCase()
+        : error.constructor.name;
+    message = error.message;
+  }
+  appendEvent(
+    `late-actor-request|kind=${kind}|elapsedMs=${Math.floor(performance.now() - started)}|message=${message}`
+  );
+}
+
+async function prepareJoinDiagnostics() {
+  if (process.env.ZLINK_CROSS_JOIN_FLOW_FILE) {
+    // The worker starts lazily. Wait for its exporter before admitting the Join.
+    const {
+      messageFlowDelivery
+    } = require('../packages/framework/dist/runtime/diagnostics/message-flow-delivery');
+    const delivery = messageFlowDelivery();
+    await delivery.ready;
+    assert.ok(delivery.enabled(), 'User Spot Join diagnostics worker has no log provider');
+  }
+}
+
 async function userSpotJoinSource() {
   const meshName = require_('mesh-name');
   const actorId = require_('actor-id');
@@ -449,11 +535,15 @@ async function userSpotJoinSource() {
           .listen(require_('bind-endpoint'))
           .routingId(require_('node-rid'))
           .setPlacementWeight(100);
+        mesh.channel(meshName).server();
+        if (lateRequestTimeout) {
+          mesh.objects().client();
+          return builder.build();
+        }
         mesh.addRequestHandler(
           'UserSpotDiscoveryProbeReq',
           UserSpotDiscoveryProbeHandler
         );
-        mesh.channel(meshName).server();
         const objects = mesh.objects().server();
         objects.addEntrySpot(RelocationEntrySpot, RELOCATION_ACTOR_TYPE);
         objects.addActorFactory(
@@ -464,21 +554,24 @@ async function userSpotJoinSource() {
         return builder.build();
       }
     })],
-    providers: [
-      RelocationActorFactory,
-      RelocationActorAdapter,
-      RelocationEntrySpot,
-      BeginUserSpotJoinHandler,
-      SourceProbeHandler,
-      UserSpotDiscoveryProbeHandler
-    ]
+    providers: lateRequestTimeout
+      ? []
+      : [
+          RelocationActorFactory,
+          RelocationActorAdapter,
+          RelocationEntrySpot,
+          BeginUserSpotJoinHandler,
+          SourceProbeHandler,
+          UserSpotDiscoveryProbeHandler
+        ]
   })(UserSpotJoinSourceModule);
 
   const app = await NestFactory.createApplicationContext(
     UserSpotJoinSourceModule,
     { logger: false, abortOnError: false }
   );
-  installCanonicalWireProbe(app, meshName);
+  await prepareJoinDiagnostics();
+  if (!lateRequestTimeout) installCanonicalWireProbe(app, meshName);
   writeReady();
 
   const routeMesh = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
@@ -492,6 +585,7 @@ async function userSpotJoinSource() {
   const endpoint = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
     .getListenerStatus('routeMesh', meshName).endpoint;
   appendEvent(`user-spot-source-peer-ready|ready=true|endpoint=${endpoint}`);
+  const actorClient = app.get(nestjs.ZLINK_ACTOR_CLIENT, { strict: false });
   const startFile = require_('start-file');
   const startDeadline = Date.now() + 60_000;
   while (!fs.existsSync(startFile)) {
@@ -501,6 +595,27 @@ async function userSpotJoinSource() {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
 
+  if (lateRequestTimeout) {
+    await probeSealedActor(actorClient, actorId, `${startFile}.request`);
+    return;
+  }
+
+  if (joinSetup) {
+    const query = app.get(nestjs.ZLINK_LOCATION_RUNTIME_QUERY, { strict: false });
+    await until(async () => {
+      const { items } = await query.listMeshNodeDescriptors(meshName);
+      return items.some(
+        (descriptor) =>
+          String(descriptor.rid) === require_('node-rid') &&
+          descriptor.state === framework.ZLinkFrameworkRuntimeState.Serving &&
+          descriptor.entrySpotId !== undefined &&
+          descriptor.objectCapabilities.some(
+            (capability) =>
+              capability.stableType === RELOCATION_ACTOR_TYPE && capability.entryAccepted
+          )
+      );
+    }, 'setup Actor placement descriptor');
+  }
   const actorManager = app.get(nestjs.ZLINK_ACTOR_MANAGER, { strict: false });
   const created = await actorManager
     .getOrCreate(actorId, RELOCATION_ACTOR_TYPE)
@@ -510,7 +625,6 @@ async function userSpotJoinSource() {
     .submit();
   appendEvent(`user-spot-source-actor-created|status=${created.status}|node=${created.actor?.nodeRid}`);
 
-  const actorClient = app.get(nestjs.ZLINK_ACTOR_CLIENT, { strict: false });
   if (outageStore) {
     await runOutageSource(app, actorManager, actorClient, actorId, targetSpotId);
     await new Promise(() => {});
@@ -588,11 +702,29 @@ async function userSpotJoinSource() {
   await flowProvider?.shutdown();
 }
 
+class TargetResumeReader extends MetricReader {
+  async onForceFlush() {}
+  async onShutdown() {}
+
+  async published(meshName) {
+    const { resourceMetrics } = await this.collect();
+    return resourceMetrics.scopeMetrics
+      .flatMap((scope) => scope.metrics)
+      .some(
+        (metric) =>
+          metric.descriptor.name === 'zlink.relocation.target_resume' &&
+          metric.dataPoints.some((point) => point.attributes.mesh_name === meshName)
+      );
+  }
+}
+
 async function userSpotJoinTarget() {
   const meshName = require_('mesh-name');
   const spotId = require_('spot-id');
   const keyPrefix = args['redis-key-prefix'] ?? 'zlink-cross-user-spot-join';
   const flowProvider = installMessageFlowCapture();
+  const resumeReader = failJoinCompletion ? new TargetResumeReader() : undefined;
+  if (resumeReader) metrics.setGlobalMeterProvider(new MeterProvider({ readers: [resumeReader] }));
   userSpotTargetJoined = new Promise(resolve => {
     resolveUserSpotTargetJoined = resolve;
   });
@@ -634,7 +766,8 @@ async function userSpotJoinTarget() {
       RelocationEntrySpot,
       RelocationUserSpot,
       BeginUserSpotJoinHandler,
-      TargetProbeHandler
+      TargetProbeHandler,
+      ...(failJoinCompletion ? [TargetLateSendHandler] : [])
     ]
   })(UserSpotJoinTargetModule);
 
@@ -642,9 +775,17 @@ async function userSpotJoinTarget() {
     UserSpotJoinTargetModule,
     { logger: false, abortOnError: false }
   );
-  installCanonicalReceiverProbe(app);
+  await prepareJoinDiagnostics();
+  installCanonicalReceiverProbe(app, meshName);
   const spots = app.get(nestjs.ZLINK_SPOT_MANAGER, { strict: false });
   const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
+  if (failJoinCompletion) {
+    runtime.errorSink.onRuntimeTaskException(({ taskName, error }) => {
+      appendEvent(
+        `owner-runtime-task-error|task=${taskName}|type=${error.name}|message=${error.message}`
+      );
+    });
+  }
   let serving = false;
   for await (const observed of runtime.observe()) {
     if (observed.status.state === framework.ZLinkFrameworkRuntimeState.Serving) {
@@ -672,8 +813,18 @@ async function userSpotJoinTarget() {
   // User-Spot join transfers ownership. A cell that wants the create itself to
   // travel here passes --placement-weight 100 and gives the source 0 instead.
   const runtimeOptions = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false });
-  runtimeOptions.mesh(meshName).placementWeight =
-    Number.parseInt(args['placement-weight'] ?? '0', 10);
+  const weight = Number.parseInt(args['placement-weight'] ?? '0', 10);
+  runtimeOptions.mesh(meshName).placementWeight = weight;
+  if (failJoinCompletion) {
+    const query = app.get(nestjs.ZLINK_LOCATION_RUNTIME_QUERY, { strict: false });
+    await until(async () => {
+      const { items } = await query.listMeshNodeDescriptors(meshName);
+      return items.some(
+        (descriptor) =>
+          String(descriptor.rid) === require_('node-rid') && descriptor.placementWeight === weight
+      );
+    }, 'owner placement weight publication');
+  }
   writeReady();
 
   const actorClient = app.get(nestjs.ZLINK_ACTOR_CLIENT, { strict: false });
@@ -681,7 +832,12 @@ async function userSpotJoinTarget() {
     await runOutageTarget(app, actorClient, created.spot.nodeRid);
     await new Promise(() => {});
   }
-  void probeUserSpotTarget(actorClient, created.spot.nodeRid);
+  if (resumeReader) {
+    await until(() => resumeReader.published(meshName), 'Join target resume');
+    appendEvent(`late-actor-owner-resumed|nodeRid=${created.spot.nodeRid}`);
+  } else {
+    void probeUserSpotTarget(actorClient, created.spot.nodeRid);
+  }
 
   await new Promise(() => {});
   await app.close();

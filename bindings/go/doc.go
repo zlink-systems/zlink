@@ -2,7 +2,7 @@
 
 // Package zlink provides idiomatic Go bindings for the zlink messaging library.
 //
-// The public surface follows the Core 0.17.0 raw-socket contract:
+// The public surface follows the Core raw-socket contract of the binding version:
 //   - multipart-only public send/receive APIs
 //   - send and request builders make one DONTWAIT attempt, retain the logical
 //     packet only after back-pressure, and retry it after the exact WRITABLE

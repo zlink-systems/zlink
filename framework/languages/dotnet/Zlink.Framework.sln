@@ -179,6 +179,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zlink.Framework.Locations.E
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zlink.Framework.LocationStore.ProviderAdapter", "tests\Zlink.Framework.LocationStore.ProviderAdapter\Zlink.Framework.LocationStore.ProviderAdapter.csproj", "{640D9709-C976-48B7-AC51-C1842CB67703}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zlink.Framework.SchedulingRegressionTests", "tests\Zlink.Framework.SchedulingRegressionTests\Zlink.Framework.SchedulingRegressionTests.csproj", "{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1077,6 +1079,18 @@ Global
 		{640D9709-C976-48B7-AC51-C1842CB67703}.Release|x64.Build.0 = Release|Any CPU
 		{640D9709-C976-48B7-AC51-C1842CB67703}.Release|x86.ActiveCfg = Release|Any CPU
 		{640D9709-C976-48B7-AC51-C1842CB67703}.Release|x86.Build.0 = Release|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Debug|x64.Build.0 = Debug|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Debug|x86.Build.0 = Debug|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Release|x64.ActiveCfg = Release|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Release|x64.Build.0 = Release|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Release|x86.ActiveCfg = Release|Any CPU
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1165,5 +1179,6 @@ Global
 		{D1E0F823-77A9-4CD2-B660-7F6568C4261E} = {25834A3B-01B0-47D5-B891-58DD52896532}
 		{0C95BB37-CC2E-48DE-8D69-2B49A0E70762} = {F3E5F8A1-DEF5-4540-A4B0-73ABB7129801}
 		{640D9709-C976-48B7-AC51-C1842CB67703} = {F3E5F8A1-DEF5-4540-A4B0-73ABB7129801}
+		{E9916BC0-9FDA-4C01-80E1-2C384EEA5C97} = {F3E5F8A1-DEF5-4540-A4B0-73ABB7129801}
 	EndGlobalSection
 EndGlobal

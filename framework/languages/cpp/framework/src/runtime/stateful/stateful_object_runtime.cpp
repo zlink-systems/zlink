@@ -1101,6 +1101,9 @@ stateful_object_runtime_t::place_application_on_lane (object_record_t &object,
                                                       bool restored)
 {
     enqueue_outcome_t outcome;
+    if (owner.kind == object_kind_t::actor
+        && record.actor_admitted_at == std::chrono::steady_clock::time_point::min ())
+        record.actor_admitted_at = std::chrono::steady_clock::now ();
     // Relocation flow §4.2: ingress admitted after the cut S takes the existing ingress hold;
     // ingress admitted before it stays in the source FIFO that the capture saves.
     if (after_cut) {

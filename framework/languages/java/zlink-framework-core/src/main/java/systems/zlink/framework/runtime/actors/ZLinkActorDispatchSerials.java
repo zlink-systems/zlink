@@ -208,9 +208,12 @@ final class ZLinkActorDispatchSerials {
         if (turn.incarnation() instanceof ZLinkActorRuntime.DefaultActorContext context) {
             ZLinkSpotCloseCallAccess.executionPolicy(
                     turn.activation().relocationLane(),
-                    turn.target() == legacyTarget
-                            ? context.execution
-                            : new IncarnationExecution(turn, context));
+                    new IncarnationExecution(
+                            turn.target() != legacyTarget
+                                            && turn.target() instanceof ZLinkSpotSerialExecutor spot
+                                    ? spot
+                                    : null,
+                            context));
         }
         CompletionStage<Void> barrier = lifecycleBarriers.get(turn.actorId());
         if (barrier == null
@@ -235,13 +238,13 @@ final class ZLinkActorDispatchSerials {
     }
 
     private record IncarnationExecution(
-            QueuedTurn turn, ZLinkActorRuntime.DefaultActorContext context)
+            ZLinkSpotSerialExecutor spot, ZLinkActorRuntime.DefaultActorContext context)
             implements ZLinkSpotCloseCallAccess.ExecutionPolicy,
                     systems.zlink.framework.runtime.internal.execution.ZLinkExecutionAvailability {
         public void check(boolean application) {
-            if (turn.target() instanceof ZLinkSpotSerialExecutor spot)
-                spot.requireExecution(application);
+            if (spot != null) spot.requireExecution(application);
             if (context.execution != null) context.execution.check(application);
+            if (application) context.requireApplicationExecution();
         }
 
         public boolean paused() {

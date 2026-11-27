@@ -149,33 +149,97 @@ func TestSamplesAndPerfUseOnlyPublicBindingContract(t *testing.T) {
 	}
 }
 
+// Contract values are owned by contracts; native resource aliases are owned by
+// the root projection. The two packages intentionally export different sets.
 func TestRootProjectionCoversContractExports(t *testing.T) {
-	contractNames := exportedTopLevelNames(t, "contracts")
-	rootNames := exportedTopLevelNames(t, ".")
+	contractNames := make(map[string]struct{})
+	entries, err := os.ReadDir("contracts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join("contracts", entry.Name()), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, imported := range file.Imports {
+			path := strings.Trim(imported.Path.Value, `"`)
+			if strings.HasPrefix(path, "zlink.systems/zlink/internal/") {
+				t.Errorf("contracts/%s imports internal package %s", entry.Name(), path)
+			}
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || (gen.Tok != token.TYPE && gen.Tok != token.CONST) {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				switch spec := spec.(type) {
+				case *ast.TypeSpec:
+					if spec.Name.IsExported() {
+						contractNames[spec.Name.Name] = struct{}{}
+					}
+				case *ast.ValueSpec:
+					for _, name := range spec.Names {
+						if name.IsExported() {
+							contractNames[name.Name] = struct{}{}
+						}
+					}
+				}
+			}
+		}
+	}
+	root, err := parser.ParseFile(token.NewFileSet(), "root_projection.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := make(map[string]string)
+	for _, decl := range root.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || (gen.Tok != token.TYPE && gen.Tok != token.CONST) {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			switch spec := spec.(type) {
+			case *ast.TypeSpec:
+				if selector, ok := spec.Type.(*ast.SelectorExpr); ok {
+					if pkg, ok := selector.X.(*ast.Ident); ok {
+						projected[spec.Name.Name] = pkg.Name + "." + selector.Sel.Name
+					}
+				}
+			case *ast.ValueSpec:
+				for i, name := range spec.Names {
+					if i >= len(spec.Values) {
+						continue
+					}
+					if selector, ok := spec.Values[i].(*ast.SelectorExpr); ok {
+						if pkg, ok := selector.X.(*ast.Ident); ok {
+							projected[name.Name] = pkg.Name + "." + selector.Sel.Name
+						}
+					}
+				}
+			}
+		}
+	}
 	var missing []string
-	var extra []string
-
 	for name := range contractNames {
-		if _, ok := rootNames[name]; !ok {
+		if projected[name] != "contracts."+name {
 			missing = append(missing, name)
 		}
 	}
-	for name := range rootNames {
-		if _, ok := contractNames[name]; !ok {
-			extra = append(extra, name)
+	sort.Strings(missing)
+	if len(missing) != 0 {
+		t.Fatalf("root must re-export each contract value from contracts: %v", missing)
+	}
+	for name, target := range projected {
+		if _, isValue := contractNames[name]; !isValue && target != "native."+name {
+			t.Errorf("root handle %s projects %s, want native.%s", name, target, name)
 		}
 	}
-	sort.Strings(missing)
-	sort.Strings(extra)
-
-	if len(missing) != 0 {
-		t.Fatalf("root package must project every public contract symbol: %v", missing)
-	}
-	if len(extra) != 0 {
-		t.Fatalf("root package must not define symbols outside the public contract: %v", extra)
-	}
 }
-
 func exportedTopLevelNames(t *testing.T, dir string) map[string]struct{} {
 	t.Helper()
 	names := make(map[string]struct{})
