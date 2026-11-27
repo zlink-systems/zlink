@@ -193,9 +193,10 @@ Connector는 다음과 같이 처리한다.
 
 - Ticket 바이트는 `version(1 byte, 0x01) || expiresAtUnixMs(8 byte big-endian) || epoch(8 byte big-endian) || mac(32 byte)`
   49 byte이고, wire에는 이것을 padding 없는 base64url로 보낸다(66자). 길이나 version이 다르면 서명을 검사하지 않고 거절한다.
-- `mac = HMAC-SHA256(key, "zlink-admission-ticket-v1" || 0x00 || len(SessionRid)(1 byte) || SessionRid 바이트 || expiresAtUnixMs || epoch)`.
-  SessionRid는 ticket에 넣지 않는다. 검증 node는 인증 request를 받은 session의 SessionRid로 다시 계산하므로, 다른
-  session에서 받은 ticket은 서명이 맞지 않는다.
+- `mac = HMAC-SHA256(key, "zlink-admission-ticket-v1" || 0x00 || len(NodeRid)(1 byte) || NodeRid 바이트 || nodeLifecycleGeneration(8 byte big-endian) || len(StreamName)(1 byte) || StreamName UTF-8 || len(SessionRid)(1 byte) || SessionRid 바이트 || expiresAtUnixMs || epoch)`.
+  SessionRid는 Core STREAM socket 안에서만 고유하므로(node·listener가 다르면 같은 값이 나올 수 있다) 연결 식별은
+  (node RID, node lifecycle generation, STREAM 등록 이름, SessionRid)로 한다. 이 값들은 ticket에 넣지 않는다. 검증 node는
+  인증 request를 받은 연결의 자기 값으로 다시 계산하므로, 다른 연결에서 받은 ticket은 서명이 맞지 않는다.
 - 만료 시각은 UTC Unix 밀리초 wall clock이다. 발급 Spot은 `발급 시각 + 30초`로 정한다. 검증 node는
   `현재 wall clock ≤ expiresAtUnixMs + 2000ms`일 때만 받는다(2초는 node 간 시계 차 허용값). `expiresInMs`는
   `expiresAtUnixMs − 발급 시각`이다.
@@ -210,7 +211,8 @@ Connector는 다음과 같이 처리한다.
   처리 중 수, 직전 보고 뒤 사용된 ticket의 SessionRid 목록, 직전 보고 뒤 끝난 대기 session의 SessionRid 목록, 전역 상한이 있을 때 쥐고 있는 permit ID 목록과 끝난 요청의 연속 최대 순번(아래)이다.
   Spot은 그 Response로 현재 epoch를 돌려준다. 이 보고는 Framework 내부 Spot 메시지이고 client wire가 아니다.
 - Spot은 3초 안에 받은 보고만 유효로 본다. 유효 보고가 없는 node의 session에는 ticket을 내지 않는다.
-- 대기자는 SessionRid와 그 session의 node RID로 기록한다. Ticket은 그 session의 node에서만 쓸 수 있으므로 발급
+- 대기자는 연결 식별(node RID, node lifecycle generation, STREAM 등록 이름, SessionRid)로 기록하고, node 보고의 사용·종료
+  목록도 같은 연결 식별을 쓴다. Ticket은 그 session의 node에서만 쓸 수 있으므로 발급
   예산도 node마다 센다: `예산(N) = max(0, 한도 − 처리 중 수 − 그 보고 뒤 N의 대기자에게 낸 ticket 수)`. Spot은 보고를
   받을 때와 대기자가 들어올 때 각 node의 예산만큼 그 node 대기자에게 enqueue 순서대로 ticket을 낸다. 그래서 순서는
   node 안에서 FIFO이고 mesh 전체로는 근사 FIFO다.

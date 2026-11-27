@@ -219,9 +219,11 @@ Instance Spot default mesh), that's a configuration error at startup. Every node
 - The ticket is 49 bytes: `version (1 byte, 0x01) || expiresAtUnixMs (8 bytes big-endian) || epoch (8 bytes big-endian) || mac (32 bytes)`,
   sent on the wire as base64url without padding (66 characters). A ticket with any other length or version is rejected
   without checking the signature.
-- `mac = HMAC-SHA256(key, "zlink-admission-ticket-v1" || 0x00 || len(SessionRid) (1 byte) || SessionRid bytes || expiresAtUnixMs || epoch)`.
-  The SessionRid isn't in the ticket. The validating node recomputes the MAC with the SessionRid of the session that
-  received the authentication request, so a ticket issued to a different session doesn't verify.
+- `mac = HMAC-SHA256(key, "zlink-admission-ticket-v1" || 0x00 || len(NodeRid) (1 byte) || NodeRid bytes || nodeLifecycleGeneration (8-byte big-endian) || len(StreamName) (1 byte) || StreamName UTF-8 || len(SessionRid) (1 byte) || SessionRid bytes || expiresAtUnixMs || epoch)`.
+  A SessionRid is unique only within one Core STREAM socket (different nodes or listeners can assign the same value), so the
+  connection is identified by (node RID, node lifecycle generation, STREAM registration name, SessionRid). None of these are
+  in the ticket. The validating node recomputes the MAC with its own values for the connection that received the
+  authentication request, so a ticket issued on a different connection doesn't verify.
 - The expiry is wall-clock UTC Unix milliseconds. The issuing Spot sets it to `issue time + 30 seconds`. A validating node
   accepts the ticket only when `current wall clock ≤ expiresAtUnixMs + 2000 ms` (2 seconds of allowed clock difference
   between nodes). `expiresInMs` is `expiresAtUnixMs − issue time`.
@@ -239,7 +241,8 @@ Instance Spot default mesh), that's a configuration error at startup. Every node
   the Response. These reports are Framework-internal Spot messages, not client wire.
 - The Spot treats only reports received within the last 3 seconds as valid. It issues no tickets to sessions on a node
   without a valid report.
-- Each waiting client is recorded by SessionRid and its session's node RID. A ticket can only be used on that session's
+- Each waiting client is recorded by its connection identity (node RID, node lifecycle generation, STREAM registration name,
+  SessionRid), and the used and ended lists in node reports use the same identity. A ticket can only be used on that session's
   node, so the issue budget is counted per node:
   `budget(N) = max(0, limit − in-flight − tickets issued to N's waiting clients since that report)`. When a report arrives
   and when a client enters the queue, the Spot issues tickets to each node's waiting clients in enqueue order, up to that
