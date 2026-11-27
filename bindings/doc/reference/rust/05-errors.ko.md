@@ -4,10 +4,8 @@
 
 # 05. Errors
 
-이 category는 core의 result-enum-family 표에 대응하는 이 레퍼런스의 대응
-문서다 — 공유 error enum과, 모든 submit/request/recv/handler/close/
-bind/connect/config 실패 API가 `Result::Err`로 반환하는 7개 typed error
-struct를 문서화한다. 정확한 signature는
+공유 오류 enum과 `Result::Err`로 반환하는 typed error 구조체를 설명한다.
+대상은 submit, request, recv, handler, close, bind, connect, config API다. 정확한 시그니처는
 [`contracts/errors/`](../../../../bindings/rust/src/contracts/errors/)가
 소유한다.
 
@@ -15,14 +13,15 @@ struct를 문서화한다. 정확한 signature는
 
 ## Typed error family
 
-각 API family는 모든 필드에 대해 단일 공유 error 타입이 아니라 typed
-result enum을 담은 자신만의 typed error struct를 갖는다 — caller는
-구체적 struct의 `.code` 필드를 match하거나, 공유 `ZlinkError` enum으로
-변환(또는 match)한다. 8개 전부 하나의 내부 macro(`define_error_type!`)로
-생성되며, 각각 동일한 형태를 가진다: `code: TResult` 필드,
-`native_errno: i32` 필드, `new(code, native_errno)`,
-`code()`/`native_errno()` accessor, `Display`, `std::error::Error`,
-`From<Self> for ZlinkError`.
+각 API는 해당 결과 enum을 담은 typed error 구조체를 사용한다. 호출자는 구조체의
+`.code` 필드 또는 공유 `ZlinkError` enum을 match할 수 있다.
+`define_error_type!` 매크로는 각 구조체에 `pub code: TResult` 필드,
+`code()` 접근자, `pub const fn internal_errno(&self) -> i32` 접근자를 정의한다.
+각 구조체는 `Display`, `std::error::Error`, `From<Self> for ZlinkError`를 구현한다.
+
+구조체는 다음 호환성이 깨지는 릴리스까지 `pub native_errno: i32` 필드를 유지한다. 생성자는 `pub const fn new(code: TResult, native_errno: i32) -> Self`이다. `TResult`는 각 구조체의 결과 enum 타입이다.
+
+각 구조체와 `ZlinkError`의 `native_errno()`는 `#[deprecated]` 별칭으로, `internal_errno()`에 위임해 같은 값을 반환한다. 다음 호환성이 깨지는 릴리스에서 삭제한다.
 
 | Error struct | Result enum | 반환하는 곳 | 값 |
 |---|---|---|---|
@@ -76,7 +75,7 @@ match dealer.send().message(part).submit_sync() {
 | --- | --- |
 | `Submit(SubmitError)` / `Request(RequestError)` / `Recv(RecvError)` / `Handler(HandlerError)` / `Close(CloseError)` / `Bind(BindError)` / `Connect(ConnectError)` / `Config(ConfigError)` | typed error struct마다 variant 하나씩 |
 | `code(&self) -> i32` | variant를 match해서 내부 `code` 필드를 `i32`로 캐스팅해 반환 |
-| `native_errno(&self) -> i32` | variant를 match해서 내부 `native_errno` 필드를 반환 |
+| `pub fn internal_errno(&self) -> i32` | variant가 담고 있는 오류 구조체의 errno 값을 반환한다. 해당 값이 없으면 `0`을 반환한다. |
 
 **Completion result.** 해당 없음 — `Display`와 `std::error::Error`를
 구현하는 순수 sum-type wrapper.

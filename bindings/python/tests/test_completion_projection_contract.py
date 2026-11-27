@@ -177,7 +177,7 @@ def test_request_tokenless_backpressure_preserves_core_error(
                         operation.submit()
 
                 assert raised.value.result == zlink.SubmitResult.BACKPRESSURED
-                assert raised.value.native_errno == errno.EAGAIN
+                assert raised.value.internal_errno == errno.EAGAIN
                 assert len(submissions) == (2 if stage == "retry" else 1)
                 assert len(receives) == (2 if stage == "retry" else 0)
                 assert len({id(entry) for entry in submissions}) == 1
