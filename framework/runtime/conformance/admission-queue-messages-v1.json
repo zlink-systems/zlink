@@ -142,6 +142,26 @@
       }
     },
     {
+      "name": "admit-permit-id-above-2-63",
+      "packetName": "$zlink.admission-queue.admit-permit",
+      "kind": "request",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:306",
+      "request": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "ownerId": "owner-a",
+        "leaseGeneration": "9223372036854775808",
+        "streamName": "login",
+        "sessionRid": "c2Vzc2lvbi1h",
+        "epoch": "42",
+        "requestSeq": "12"
+      },
+      "response": {
+        "granted": true,
+        "permitId": "18446744073709551614"
+      }
+    },
+    {
       "name": "admit-permit-rejected",
       "packetName": "$zlink.admission-queue.admit-permit",
       "kind": "request",
@@ -248,6 +268,26 @@
       "packetName": "$zlink.admission-queue.admit-permit",
       "responsePayload": {
         "granted": true
+      },
+      "expect": "protocolError"
+    },
+    {
+      "name": "dec-above-2-64",
+      "packetName": "$zlink.admission-queue.release-permit",
+      "payload": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "permitId": "18446744073709551616"
+      },
+      "expect": "protocolError"
+    },
+    {
+      "name": "dec-negative",
+      "packetName": "$zlink.admission-queue.release-permit",
+      "payload": {
+        "nodeRid": "bm9kZS1h",
+        "nodeLifecycleGeneration": "7",
+        "permitId": "-1"
       },
       "expect": "protocolError"
     }
