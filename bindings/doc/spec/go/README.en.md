@@ -256,7 +256,7 @@ selects all events, and multiple masks are ORed. `MonitorHwmBytes(0)` selects
 the Core default; a positive value is passed unchanged as the exact byte HWM.
 If the option is supplied more than once, the last value in call order wins.
 A `MonitorStatus` exposes `SndPendingBytes` and `RcvPendingBytes` separately
-from pending-message counts. `CoreHwmBudgetSnapshot` projects ABI version/size,
+from pending-message counts. `State()` and `Detail()` return `StateFlags` and `DetailFlags` (`uint32`) as typed `MonitorStateFlags` and `MonitorStatusDetailFlags` values; check bits with `Has(flag)`. The socket-level raw-int `SetRidDuplicatePolicy` and `RidDuplicatePolicy` are Deprecated in favour of the typed `CommonOptions()` methods. `CoreHwmBudgetSnapshot` projects ABI version/size,
 configured/resolved memory limits, configured/effective budgets,
 planned/applied/manual-reserved HWM, Core-queue/application/current/peak/
 provisional accounted bytes, completion current/peak/pending and total-

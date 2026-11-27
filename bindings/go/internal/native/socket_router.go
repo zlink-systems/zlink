@@ -121,8 +121,8 @@ func (s *RouterSocket) SetHandover(value bool) error {
 }
 
 func (s *RouterSocket) Handover() (bool, error) {
-	value, err := s.RidDuplicatePolicy()
-	return value == int(RidDuplicateHandover), err
+	value, err := s.CommonOptions().RidDuplicatePolicy()
+	return value == RidDuplicateHandover, err
 }
 
 func (s *RouterSocket) SetConnectRoutingID(id RoutingID) error {

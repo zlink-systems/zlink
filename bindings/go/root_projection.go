@@ -20,15 +20,17 @@ type (
 	PublishOp         = native.PublishOp
 	PublishSubmitOp   = native.PublishSubmitOp
 
-	MonitorEventMask     = contracts.MonitorEventMask
-	MonitorSourceKind    = contracts.MonitorSourceKind
-	MonitorEventType     = contracts.MonitorEventType
-	MonitorEventFlag     = contracts.MonitorEventFlag
-	MonitorTransportLane = contracts.MonitorTransportLane
-	MonitorOpenOption    = contracts.MonitorOpenOption
-	MonitorEvent         = contracts.MonitorEvent
-	MonitorStatus        = contracts.MonitorStatus
-	SocketMonitor        = native.SocketMonitor
+	MonitorEventMask         = contracts.MonitorEventMask
+	MonitorSourceKind        = contracts.MonitorSourceKind
+	MonitorEventType         = contracts.MonitorEventType
+	MonitorEventFlag         = contracts.MonitorEventFlag
+	MonitorTransportLane     = contracts.MonitorTransportLane
+	MonitorOpenOption        = contracts.MonitorOpenOption
+	MonitorEvent             = contracts.MonitorEvent
+	MonitorStatus            = contracts.MonitorStatus
+	MonitorStateFlags        = contracts.MonitorStateFlags
+	MonitorStatusDetailFlags = contracts.MonitorStatusDetailFlags
+	SocketMonitor            = native.SocketMonitor
 
 	RoutingID         = contracts.RoutingID
 	CompletionKind    = contracts.CompletionKind
@@ -153,6 +155,16 @@ const (
 	MonitorEventTypeFlowStateStale          = contracts.MonitorEventTypeFlowStateStale
 	MonitorEventTypeAll                     = contracts.MonitorEventTypeAll
 	MonitorSourceSocket                     = contracts.MonitorSourceSocket
+
+	MonitorStateReady      = contracts.MonitorStateReady
+	MonitorStateBoundReady = contracts.MonitorStateBoundReady
+	MonitorStateClosed     = contracts.MonitorStateClosed
+
+	MonitorDetailSndPendingMsgs = contracts.MonitorDetailSndPendingMsgs
+	MonitorDetailRcvPendingMsgs = contracts.MonitorDetailRcvPendingMsgs
+	MonitorDetailAutoHwmBudget  = contracts.MonitorDetailAutoHwmBudget
+	MonitorDetailAutoHwmBuffers = contracts.MonitorDetailAutoHwmBuffers
+	MonitorDetailFlowState      = contracts.MonitorDetailFlowState
 
 	MonitorEventFlagConnectionReadyEdge = contracts.MonitorEventFlagConnectionReadyEdge
 	MonitorEventFlagSendFlowWritable    = contracts.MonitorEventFlagSendFlowWritable

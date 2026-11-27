@@ -238,7 +238,7 @@ event를 선택하고 여러 mask는 OR로 합친다. `MonitorHwmBytes(0)`은 Co
 지정하면 호출 순서상 마지막 값이 적용된다.
 
 `MonitorStatus`는 pending message count와 별도로 `SndPendingBytes`와 `RcvPendingBytes`를
-노출한다. `CoreHwmBudgetSnapshot`은 ABI version/size, configured/resolved memory
+노출한다. `StateFlags`·`DetailFlags`(`uint32`)는 `State()`·`Detail()`이 typed 값(`MonitorStateFlags`, `MonitorStatusDetailFlags`)으로 돌려주고 `Has(flag)`로 비트를 확인한다. 소켓의 raw int `SetRidDuplicatePolicy`·`RidDuplicatePolicy`는 Deprecated이며 typed `CommonOptions()` 메서드를 쓴다. `CoreHwmBudgetSnapshot`은 ABI version/size, configured/resolved memory
 limit, configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/
 current/peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
 monitor/instance aggregate, application/completion queue count,

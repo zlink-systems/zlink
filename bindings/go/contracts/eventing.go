@@ -246,8 +246,52 @@ type MonitorStatus struct {
 	FlowPauseDurationMs    uint64
 }
 
+// MonitorStateFlags is the typed view of MonitorStatus.StateFlags. Bit values
+// mirror zlink_monitor_state_flag_e in core/include/zlink_enum.h.
+type MonitorStateFlags uint32
+
+const (
+	MonitorStateReady      MonitorStateFlags = 1 << 0
+	MonitorStateBoundReady MonitorStateFlags = 1 << 1
+	MonitorStateClosed     MonitorStateFlags = 1 << 3
+)
+
+// Has reports whether every bit of flag is set.
+func (f MonitorStateFlags) Has(flag MonitorStateFlags) bool { return f&flag == flag }
+
+// MonitorStatusDetailFlags is the typed view of MonitorStatus.DetailFlags. Bit
+// values mirror zlink_monitor_status_detail_flag_e in core/include/zlink_enum.h.
+type MonitorStatusDetailFlags uint32
+
+const (
+	MonitorDetailSndPendingMsgs MonitorStatusDetailFlags = 1 << 1
+	MonitorDetailRcvPendingMsgs MonitorStatusDetailFlags = 1 << 2
+	MonitorDetailAutoHwmBudget  MonitorStatusDetailFlags = 1 << 3
+	MonitorDetailAutoHwmBuffers MonitorStatusDetailFlags = 1 << 4
+	MonitorDetailFlowState      MonitorStatusDetailFlags = 1 << 5
+)
+
+// Has reports whether every bit of flag is set.
+func (f MonitorStatusDetailFlags) Has(flag MonitorStatusDetailFlags) bool { return f&flag == flag }
+
+// State returns StateFlags as typed flags.
+func (s *MonitorStatus) State() MonitorStateFlags {
+	if s == nil {
+		return 0
+	}
+	return MonitorStateFlags(s.StateFlags)
+}
+
+// Detail returns DetailFlags as typed flags.
+func (s *MonitorStatus) Detail() MonitorStatusDetailFlags {
+	if s == nil {
+		return 0
+	}
+	return MonitorStatusDetailFlags(s.DetailFlags)
+}
+
 func (s *MonitorStatus) IsReady() bool {
-	return s != nil && s.StateFlags&(1<<0) != 0
+	return s.State().Has(MonitorStateReady)
 }
 
 // IsFlowStateDetailPopulated reports whether FlowPausedConnections and the
@@ -255,5 +299,5 @@ func (s *MonitorStatus) IsReady() bool {
 // only). Mirrors ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE in
 // core/include/zlink_enum.h.
 func (s *MonitorStatus) IsFlowStateDetailPopulated() bool {
-	return s != nil && s.DetailFlags&(1<<5) != 0
+	return s.Detail().Has(MonitorDetailFlowState)
 }
