@@ -16,23 +16,17 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.PairSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
-import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
-import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
-import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
-import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAdapter;
-import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
-import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric;
-import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.streams.ManualScheduledExecutor;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamRuntimeTestAccess;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -54,12 +48,17 @@ import java.security.cert.CertificateFactory;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongSupplier;
 import java.util.stream.Stream;
 
 import javax.net.ssl.SSLContext;
@@ -117,7 +116,6 @@ final class StreamPermitLivenessTest {
 
     private void verify(String transport, Scenario scenario, Path tempDir) throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
-        options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.configureInboundDispatch().setMaxQueuedApplicationJobs(1);
         String bind =
                 switch (transport) {
@@ -139,16 +137,36 @@ final class StreamPermitLivenessTest {
             node.idleTimeout(IDLE);
         }
 
-        var queue = options.registration().applicationJobQueue();
-        var inproc = transport.equals("inproc") ? new InprocBackend() : null;
-        var backend = inproc == null ? new ZLinkJavaBackendAdapterFactory() : inproc;
+        var registration = options.registration();
+        var backend = new ZLinkJavaBackendAdapterFactory();
         try (var metrics = ZLinkRuntimeMetricProbe.install();
-                var runtime = ZLinkFrameworkRuntimeTestAccess.startHost(options, backend)) {
-            var endpoint =
-                    URI.create(
-                            runtime.listenerStatus(ZLinkListenerKind.STREAM, "gateway").endpoint());
-            try (var peer = new Peer(endpoint, inproc)) {
-                exercise(transport, scenario, idle, queue, metrics, peer, endpoint, inproc);
+                var context = new ZLinkJavaContext(Zlink.createContext());
+                var handlerExecutor = Executors.newVirtualThreadPerTaskExecutor();
+                var serialExecutor = registration.serialExecutor();
+                var clock = new LivenessClock()) {
+            options.useHandlerExecutor(handlerExecutor);
+            var runtime =
+                    ZLinkStreamRuntimeTestAccess.create(
+                            backend, registration, context, clock::now, clock.scheduler);
+            try (AutoCloseable stop = () -> runtime.closeAsync().toCompletableFuture().join()) {
+                runtime.start();
+                var endpoint =
+                        URI.create(
+                                runtime.boundListenerEndpoint(
+                                        registration.streamNodes().getFirst()));
+                var inproc = transport.equals("inproc") ? context.nativeContext() : null;
+                try (var peer = new Peer(endpoint, inproc, clock::now)) {
+                    exercise(
+                            transport,
+                            scenario,
+                            idle,
+                            registration.applicationJobQueue(),
+                            metrics,
+                            peer,
+                            endpoint,
+                            inproc,
+                            clock);
+                }
             }
         }
     }
@@ -161,45 +179,53 @@ final class StreamPermitLivenessTest {
             ZLinkRuntimeMetricProbe metrics,
             Peer peer,
             URI endpoint,
-            InprocBackend inproc)
+            Context inproc,
+            LivenessClock clock)
             throws Exception {
-        peer.ping();
-        peer.awaitPong();
+        peer.openSession();
+        await(() -> clock.scheduler.hasTimerDueAt(INTERVAL.toNanos()), Duration.ofSeconds(2));
         if (scenario == Scenario.UNSATURATED) {
-            long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(scenario.holdMillis);
+            long step = Duration.ofMillis(40).toNanos();
+            long until = TimeUnit.MILLISECONDS.toNanos(scenario.holdMillis);
             int pongs = 0;
-            while (System.nanoTime() < until) {
+            for (long tick = 0; tick < until; tick += step) {
+                clock.advanceTo(tick);
                 peer.ping();
                 peer.awaitPong();
                 pongs++;
-                Thread.sleep(40);
             }
             assertTrue(pongs > 1);
             assertFalse(peer.sessionClosing.isDone(), "peer closed while receiving pings");
             return;
         }
 
+        // Give the connection its first heartbeat phase before starting the permit scenario.
+        clock.advanceThroughPings(INTERVAL.toNanos(), peer);
         // Separate the original receive deadline from the exact-timeout hold.
-        Thread.sleep(100);
+        clock.advanceTo(clock.now() + Duration.ofMillis(100).toNanos());
         boolean silent = scenario == Scenario.SILENT_AFTER_RELEASE;
         // PACKET ingress shares a reader. A second peer wakes it without refreshing the
         // observed session's heartbeat after release.
-        try (var other = silent ? new Peer(endpoint, inproc) : null) {
+        try (var other = silent ? new Peer(endpoint, inproc, clock::now) : null) {
+            if (other != null) {
+                other.openSession();
+                await(
+                        () -> clock.scheduler.hasTimerDueAt(clock.now() + INTERVAL.toNanos()),
+                        Duration.ofSeconds(2));
+            }
             long released;
-            int serverPings;
+            var probe = silent ? other : peer;
             var held =
                     queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
             try {
-                var probe = silent ? other : peer;
                 probe.ping();
                 await(() -> queue.snapshot().capacityWaiters() == 1, Duration.ofSeconds(2));
                 peer.clearFrames();
-                long started = System.nanoTime();
-                serverPings =
-                        peer.countPingsUntil(
-                                started + TimeUnit.MILLISECONDS.toNanos(scenario.holdMillis));
+                long until = clock.now() + TimeUnit.MILLISECONDS.toNanos(scenario.holdMillis);
+                int serverPings = clock.advanceThroughPings(until, peer);
+                peer.assertNoPong();
                 var reasons = closeReasons(metrics);
                 System.out.printf(
                         "HOLD %s %s pings=%d closes=%s%n",
@@ -208,39 +234,35 @@ final class StreamPermitLivenessTest {
                 assertTrue(
                         serverPings >= Math.max(1, scenario.holdMillis / INTERVAL.toMillis() - 1));
             } finally {
-                released = System.nanoTime();
+                released = clock.now();
                 held.close();
             }
 
-            if (silent) {
-                other.awaitPong();
-            } else {
-                peer.awaitPong();
-            }
+            probe.awaitPong();
             if (scenario.reason == null) {
                 assertTrue(closeReasons(metrics).isEmpty());
                 return;
             }
 
             Duration timeout = idle ? IDLE : HEARTBEAT;
-            long deadline = released + timeout.plus(INTERVAL).plusMillis(500).toNanos();
+            long deadline = released + timeout.toNanos();
             if (silent) {
-                while (closeReasons(metrics).isEmpty() && System.nanoTime() < deadline) {
-                    Thread.sleep(80);
-                    other.ping();
-                    other.awaitPong();
-                }
+                clock.advanceThroughPings(released + timeout.toNanos() / 2, peer);
+                other.ping();
+                other.awaitPong();
             } else {
-                // Control traffic still updates receive liveness while application idle
-                // expires.
-                Thread.sleep(150);
+                // Heartbeat frames refresh receive liveness without refreshing application idle.
+                clock.advanceThroughPings(released + Duration.ofMillis(150).toNanos(), peer);
                 peer.ping();
                 peer.awaitPong();
-                await(
-                        () -> !closeReasons(metrics).isEmpty(),
-                        Duration.ofNanos(Math.max(0, deadline - System.nanoTime())));
             }
+            clock.advanceThroughPings(deadline - 1, peer);
+            assertTrue(closeReasons(metrics).isEmpty(), "closed before one full timeout elapsed");
+            assertTrue(
+                    clock.scheduler.hasTimerDueAt(deadline), "reader did not rearm the deadline");
+            clock.advanceTo(deadline);
             var closing = peer.awaitSessionClosing();
+            await(() -> closeReasons(metrics).contains(scenario.reason), Duration.ofSeconds(2));
             long elapsed = closing.receivedNanos() - released;
             System.out.printf(
                     "RELEASE %s %s close_ms=%d reason=%s%n",
@@ -251,6 +273,39 @@ final class StreamPermitLivenessTest {
             assertTrue(elapsed >= timeout.toNanos(), "closed before one full timeout elapsed");
             assertEquals(idle ? 2 : 3, closing.reason());
             assertTrue(closeReasons(metrics).contains(scenario.reason));
+        }
+    }
+
+    private static final class LivenessClock implements AutoCloseable {
+        private final AtomicLong clock = new AtomicLong();
+        private final ManualScheduledExecutor scheduler = new ManualScheduledExecutor(clock::get);
+
+        long now() {
+            return clock.get();
+        }
+
+        void advanceTo(long nanos) {
+            clock.set(nanos);
+            scheduler.runDueCommands();
+        }
+
+        // A real frame acknowledges each phase before the test advances the clock again.
+        int advanceThroughPings(long until, Peer peer) throws InterruptedException {
+            long interval = INTERVAL.toNanos();
+            long nextPhase = (now() / interval + 1) * interval;
+            int pings = 0;
+            for (long phase = nextPhase; phase <= until; phase += interval) {
+                advanceTo(phase);
+                peer.awaitPing();
+                pings++;
+            }
+            advanceTo(until);
+            return pings;
+        }
+
+        @Override
+        public void close() {
+            scheduler.shutdownNow();
         }
     }
 
@@ -270,46 +325,10 @@ final class StreamPermitLivenessTest {
         assertTrue(condition.getAsBoolean(), "condition did not complete within " + timeout);
     }
 
-    // inproc requires the same Core context at both ends of the connection.
-    private static final class InprocBackend implements ZLinkBackendAdapterProvider {
-        private final ZLinkJavaBackendAdapterFactory delegate =
-                new ZLinkJavaBackendAdapterFactory();
-        private Context context;
-
-        @Override
-        public ZLinkStreamBackendAdapter createStreamAdapter(ZLinkBackendAdapterOptions options) {
-            var adapter = delegate.createStreamAdapter(options);
-            return (backendContext, mesh) -> {
-                context = ((ZLinkJavaContext) backendContext).nativeContext();
-                return adapter.createStreamSocket(backendContext, mesh);
-            };
-        }
-
-        @Override
-        public ZLinkChannelBackendAdapter createChannelAdapter(ZLinkBackendAdapterOptions options) {
-            return delegate.createChannelAdapter(options);
-        }
-
-        @Override
-        public ZLinkSpotBackendAdapter createSpotAdapter(ZLinkBackendAdapterOptions options) {
-            return delegate.createSpotAdapter(options);
-        }
-
-        @Override
-        public ZLinkMeshBackendAdapter createMeshAdapter(ZLinkBackendAdapterOptions options) {
-            return delegate.createMeshAdapter(options);
-        }
-
-        @Override
-        public ZLinkMonitoringBackendAdapter createMonitoringAdapter(
-                ZLinkBackendAdapterOptions options) {
-            return delegate.createMonitoringAdapter(options);
-        }
-    }
-
     private static final class Peer implements AutoCloseable {
         private static final String TRANSPORT_CLOSED = "transport closed";
 
+        private final LongSupplier clock;
         private final BlockingQueue<String> frames = new LinkedBlockingQueue<>();
 
         private record Closing(int reason, long receivedNanos) {}
@@ -322,9 +341,10 @@ final class StreamPermitLivenessTest {
         private final HttpClient http;
         private final WebSocket webSocket;
 
-        Peer(URI endpoint, InprocBackend inproc) throws Exception {
+        Peer(URI endpoint, Context inproc, LongSupplier clock) throws Exception {
+            this.clock = clock;
             String scheme = endpoint.getScheme();
-            pair = inproc == null ? null : inproc.context.createPairSocket();
+            pair = inproc == null ? null : inproc.createPairSocket();
             if (pair != null) {
                 socket = null;
                 ipc = null;
@@ -455,14 +475,32 @@ final class StreamPermitLivenessTest {
                 assertEquals(1, payload.get());
                 int reason = Byte.toUnsignedInt(payload.get());
                 assertEquals(body.length - 4, Short.toUnsignedInt(payload.getShort()));
-                sessionClosing.complete(new Closing(reason, System.nanoTime()));
+                sessionClosing.complete(new Closing(reason, clock.getAsLong()));
             }
             frames.add(name);
         }
 
+        void openSession() throws Exception {
+            // A control pong can precede session creation. Ordinary ingress publishes the
+            // session for this peer before the subsequent ping is received.
+            send(
+                    new ZLinkStreamHeader(
+                            ZLinkStreamMessageKind.SEND,
+                            ZLinkStreamCodec.RAW,
+                            null,
+                            Optional.empty(),
+                            "fixture-ready",
+                            Map.of()));
+            ping();
+            awaitPong();
+        }
+
         void ping() throws Exception {
-            byte[] frame =
-                    ZLinkStreamFrameCodec.encode(ZLinkStreamHeader.HEARTBEAT_PING, new byte[0]);
+            send(ZLinkStreamHeader.HEARTBEAT_PING);
+        }
+
+        private void send(ZLinkStreamHeader header) throws Exception {
+            byte[] frame = ZLinkStreamFrameCodec.encode(header, new byte[0]);
             if (pair != null) {
                 try (var message = Message.from(frame)) {
                     pair.send().message(message).submit();
@@ -480,7 +518,7 @@ final class StreamPermitLivenessTest {
         }
 
         void clearFrames() {
-            assertFalse(frames.contains(PONG), "read a new ping while the permit was held");
+            assertNoPong();
             frames.clear();
         }
 
@@ -501,17 +539,12 @@ final class StreamPermitLivenessTest {
             return sessionClosing.get(3, TimeUnit.SECONDS);
         }
 
-        int countPingsUntil(long until) throws InterruptedException {
-            int pings = 0;
-            while (System.nanoTime() < until) {
-                String frame =
-                        frames.poll(Math.max(0, until - System.nanoTime()), TimeUnit.NANOSECONDS);
-                assertFalse(PONG.equals(frame), "read a ping while the permit was held");
-                if (PING.equals(frame)) {
-                    pings++;
-                }
-            }
-            return pings;
+        void assertNoPong() {
+            assertFalse(frames.contains(PONG), "read a ping while the permit was held");
+        }
+
+        void awaitPing() throws InterruptedException {
+            assertEquals(PING, frames.poll(3, TimeUnit.SECONDS), "expected server heartbeat ping");
         }
 
         @Override
