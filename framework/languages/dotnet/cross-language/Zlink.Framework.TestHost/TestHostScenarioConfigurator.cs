@@ -533,6 +533,14 @@ internal static class TestHostScenarioConfigurator
             if (options.NodeRid is not null)
                 mesh.SetRoutingId(RoutingId.From(options.NodeRid));
             mesh.Channel(meshName).Server();
+            if (
+                Environment.GetEnvironmentVariable("ZLINK_CROSS_LATE_REQUEST_TIMEOUT_MS")
+                is not null
+            )
+            {
+                mesh.Objects().Client();
+                return;
+            }
             var objects = mesh.Objects().Server();
             objects.AddEntrySpot<RelocationEntrySpot>();
             objects.AddActorFactory<RelocationActor, RelocationActorFactory>(
