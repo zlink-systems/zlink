@@ -22,8 +22,7 @@ location_write_intent_t mesh_node_host_service_detail::mesh_new_claim_intent (
     return std::any_of (registrations.begin (), registrations.end (),
                         [&descriptor] (const auto &registration) {
                             return registration->mesh_name == descriptor.mesh_name
-                                   && registration->routing_id == descriptor.rid
-                                   && !registration->automatic_routing_id_prefix;
+                                   && registration->routing_id == descriptor.rid;
                         })
              ? location_write_intent_t::fixed_rid_new_claim
              : location_write_intent_t::new_claim;

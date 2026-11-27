@@ -3439,7 +3439,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           })
         )
           return 'lost';
-        const publication = this.codec.read(observed.current.payload);
+        const { payload } = observed.current;
+        const publication = this.codec.read(payload);
         this.options.shutdownDeadline?.()?.throwIfAborted();
         const preserved = await store
           .compareExchangeAuthority(
@@ -3450,8 +3451,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
               generationTransition: 'preserve',
               payload:
                 publication === undefined
-                  ? observed.current.payload
-                  : this.codec.clear(observed.current.payload, publication.reference)
+                  ? payload
+                  : this.codec.clear(payload, publication.reference)
             }
           )
           .catch((error: unknown) => {
@@ -3562,7 +3563,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     phase?: 'aborted'
   ): Promise<ZLinkAuthoritySnapshot> {
     const key = { value: participant.key } as ZLinkAuthorityKey;
-    if (phase !== undefined && current.relocation !== undefined) {
+    if (
+      phase !== undefined &&
+      current.relocation !== undefined &&
+      current.relocation.phase !== phase
+    ) {
       const progress = await this.requireLocationStore().compareExchangeAuthority(
         key,
         current.storeVersion,

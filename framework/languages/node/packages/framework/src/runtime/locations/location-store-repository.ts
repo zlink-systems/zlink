@@ -411,13 +411,18 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         current.value.storeNow,
         signal
       );
-      if (record.aggregate !== undefined) {
-        return { kind: 'conflict', current: snapshot };
-      }
       if (
         record.snapshot.allocation.state !== 'active' ||
-        current.value.version.value !== expectedStoreVersion.value
+        snapshot.storeVersion.value !== expectedStoreVersion.value
       ) {
+        return { kind: 'conflict', current: snapshot };
+      }
+      const aggregateAbort =
+        record.aggregate === undefined
+          ? undefined
+          : await this.preparedSourceAbortWrite(record, record.aggregate, mutation, signal);
+      if (aggregateAbort === 'changed') continue;
+      if (record.aggregate !== undefined && aggregateAbort === undefined) {
         return { kind: 'conflict', current: snapshot };
       }
       if (mutation.kind === 'rebindOwnerLease') {
@@ -519,6 +524,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           ? undefined
           : {
               ...record,
+              aggregate: undefined,
               visibleStoreVersion: undefined,
               snapshot: {
                 ...record.snapshot,
@@ -529,9 +535,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                       authorityOwnerGeneration: counterNextValue(generations[1])
                     }),
                 payload: Buffer.from(mutation.payload),
-                ...(mutation.relocation === undefined
-                  ? {}
-                  : { relocation: mutation.relocation ?? undefined })
+                ...(aggregateAbort !== undefined && record.snapshot.relocation !== undefined
+                  ? // The Preserve aborts the prepared relocation in the same write.
+                    { relocation: { ...record.snapshot.relocation, phase: 'aborted' as const } }
+                  : mutation.relocation === undefined
+                    ? {}
+                    : { relocation: mutation.relocation ?? undefined })
               }
             };
       const actor =
@@ -612,6 +621,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           conditions: [
             { kind: 'version', key: rowKey, expected: current.value.version },
             ...membershipConditions,
+            ...(aggregateAbort?.conditions ?? []),
             ...(mutation.kind === 'restore'
               ? []
               : [
@@ -640,6 +650,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                 ]
               : [
                   { kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(nextRecord!) },
+                  ...(aggregateAbort?.mutations ?? []),
                   ...(generations === undefined
                     ? []
                     : [
@@ -1325,47 +1336,98 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         return { kind: 'alreadyAborted' };
       }
       if (aggregate.state === 'committed') return { kind: 'stale' };
-      const conditions: ZLinkStoreCondition[] = [
-        {
-          kind: 'version',
-          key: rowKey,
-          expected: current.value.version
-        }
-      ];
-      const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [
-        {
-          kind: 'put',
-          key: rowKey,
-          bytes: encodeJson({ ...aggregate, state: 'aborted' } satisfies AggregateRecord)
-        }
-      ];
-      if (aggregate.state === 'prepared') {
-        const targetCapacityKey = capacityKey(
-          aggregate.targetDescriptor.meshName,
-          String(aggregate.targetDescriptor.rid)
-        );
-        const targetCapacityRead = await this.provider.read(targetCapacityKey, signal);
-        if (targetCapacityRead.kind === 'missing') return { kind: 'stale' };
-        const capacity = decodeJson<CapacityRecord>(targetCapacityRead.value.bytes);
-        conditions.push({
-          kind: 'version',
-          key: targetCapacityKey,
-          expected: targetCapacityRead.value.version
-        });
-        mutations.push({
-          kind: 'put',
-          key: targetCapacityKey,
-          bytes: encodeJson({
-            active: capacity.active,
-            pending: subtractCapacity(capacity.pending, aggregate.capacity)
-          } satisfies CapacityRecord)
-        });
-      }
-      const result = await this.provider.write({ conditions, mutations }, signal);
+      const abort = await this.aggregateAbortWrite(
+        rowKey,
+        current.value.version,
+        aggregate,
+        signal
+      );
+      if (abort === 'changed') continue;
+      if (abort === undefined) return { kind: 'stale' };
+      const result = await this.provider.write(abort, signal);
       if (result.kind === 'conflict') continue;
       await this.clearAggregateMarkersByScan(fence, signal);
       return { kind: 'aborted' };
     }
+  }
+
+  private async preparedSourceAbortWrite(
+    record: AuthorityRecord,
+    marker: AggregateParticipantFenceRecord,
+    mutation: ZLinkAuthorityMutation,
+    signal?: AbortSignal
+  ): Promise<ZLinkStoreWriteRequest | 'changed' | undefined> {
+    // Only a source Preserve that keeps the payload and leaves the relocation record to this
+    // repository competes with the target NewOwner; every other write to a held row conflicts.
+    if (
+      mutation.kind !== 'put' ||
+      mutation.generationTransition !== 'preserve' ||
+      mutation.relocation !== undefined ||
+      Buffer.compare(record.snapshot.payload, mutation.payload) !== 0 ||
+      !isPreparedAuthorityRelocation(record.snapshot.relocation, marker.aggregateId)
+    ) {
+      return undefined;
+    }
+    const key = aggregateKey(
+      aggregateFence(aggregateId(marker.aggregateId), marker.aggregateGeneration)
+    );
+    const current = await this.provider.read(key, signal);
+    if (current.kind === 'missing') return undefined;
+    const aggregate = decodeJson<AggregateRecord>(current.value.bytes);
+    if (aggregate.state !== 'prepared') return undefined;
+    // Preserve and NewOwner compete on the participant and aggregate versions.
+    return this.aggregateAbortWrite(key, current.value.version, aggregate, signal);
+  }
+
+  private async aggregateAbortWrite(
+    key: ZLinkStoreKey,
+    version: ZLinkStoreVersion,
+    aggregate: AggregateRecord,
+    signal?: AbortSignal
+  ): Promise<ZLinkStoreWriteRequest | 'changed' | undefined> {
+    const conditions: ZLinkStoreCondition[] = [{ kind: 'version', key, expected: version }];
+    const mutations: ZLinkStoreMutation[] = [
+      {
+        kind: 'put',
+        key,
+        bytes: encodeJson({ ...aggregate, state: 'aborted' } satisfies AggregateRecord)
+      }
+    ];
+    if (aggregate.state === 'prepared') {
+      const targetCapacityKey = capacityKey(
+        aggregate.targetDescriptor.meshName,
+        String(aggregate.targetDescriptor.rid)
+      );
+      const targetCapacity = await this.provider.read(targetCapacityKey, signal);
+      if (targetCapacity.kind === 'missing') return undefined;
+      const capacity = decodeJson<CapacityRecord>(targetCapacity.value.bytes);
+      let pending: CapacityUsage;
+      try {
+        pending = subtractCapacity(capacity.pending, aggregate.capacity);
+      } catch (error) {
+        if (
+          !(error instanceof ZLinkFrameworkException) ||
+          error.kind !== ZLinkFrameworkErrorKind.DataLost
+        )
+          throw error;
+        // A terminal write can release the reservation between the marker and capacity reads.
+        const observed = await this.provider.read(key, signal);
+        if (observed.kind === 'missing' || observed.value.version.value !== version.value) {
+          return 'changed';
+        }
+        throw error;
+      }
+      conditions.push(versionCondition(targetCapacityKey, targetCapacity));
+      mutations.push({
+        kind: 'put',
+        key: targetCapacityKey,
+        bytes: encodeJson({
+          active: capacity.active,
+          pending
+        } satisfies CapacityRecord)
+      });
+    }
+    return { conditions, mutations };
   }
 
   override async cleanupDiscardedAuthority(

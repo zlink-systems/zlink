@@ -702,7 +702,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             parts,
             record.SourceNodeRid,
             record.SourceSpotId,
-            record.OperationId == default ? null : record.OperationId.Low,
+            record.ReplyRouteId != 0 ? record.ReplyRouteId
+                : record.OperationId == default ? null
+                : record.OperationId.Low,
             reply,
             metadata: metadata,
             operationId: record.OperationId,
@@ -714,7 +716,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             requestSource: requestSource,
             deadlineUnixMs: ZLinkMeshRecordAdapters.NormalizeDeadline(record.DeadlineUnixMs),
             payloadOwner: payloadOwner,
-            instanceIntent: record.InstanceIntent
+            instanceIntent: record.InstanceIntent,
+            readyInstanceRoute: record.ReadyInstanceRoute
         );
         state.Routes.Enqueue(route);
         routeDispatch = state;

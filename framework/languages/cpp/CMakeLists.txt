@@ -241,6 +241,9 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
 
 set(ZLINK_FRAMEWORK_CPP_M6B_RUNTIME_SOURCES
   framework/src/runtime/stateful/public_host_runtime.cpp
+  framework/src/runtime/stateful/public_host_runtime_authority.cpp
+  framework/src/runtime/stateful/public_host_runtime_messaging.cpp
+  framework/src/runtime/stateful/public_host_runtime_relocation.cpp
   framework/src/runtime/stateful/raw_stateful_dispatch.cpp
   framework/src/runtime/stateful/stateful_object_runtime.cpp
   framework/src/runtime/stateful/stream_session_registry.cpp)
@@ -395,7 +398,10 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/spots/spot_route_packets.cpp
   framework/src/runtime/streams/stream_compression.cpp
   framework/src/runtime/streams/stream_runtime.cpp
+  framework/src/runtime/streams/stream_host_core.cpp
   framework/src/runtime/streams/stream_host_service.cpp
+  framework/src/runtime/streams/stream_host_session.cpp
+  framework/src/runtime/streams/stream_host_transport.cpp
   framework/src/runtime/timers/timer_runtime.cpp
   framework/src/runtime/utils/uuid.cpp
   framework/src/runtime/transport/endpoint.cpp)
@@ -3093,6 +3099,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_authority_turns.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_return_join.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_join_failure.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_late_ingress.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_entry_placement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relocation_settlement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_deferred_join_reservation.cpp

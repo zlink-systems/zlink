@@ -109,6 +109,7 @@ void verify_mesh_start_and_rollback_from_completion_turn ()
 
 void verify_automatic_identity_and_port_builder ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto mesh = builder.add_route_mesh ("automatic-builder-mesh");
     mesh.set_bind_host ("127.0.0.1")
@@ -125,14 +126,24 @@ void verify_automatic_identity_and_port_builder ()
               .actor_route_transport_name ()
             == "automatic-builder-mesh");
     assert (state->listen_endpoint == "tcp://127.0.0.1:0");
-    assert (state->routing_id);
+    state->core_context = std::make_shared<zlink::context_t> ();
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::service_collection_t services;
+    auto provider = services.build_provider ();
+    const auto failures = state->spot_state->runtime_failures ();
+    zlink::framework::runtime::mesh_node_host_service_t service (failures, registrations,
+                                                                 serializers);
+    service.start (provider).result ().value ();
+    const auto rid = service.nodes ().front ()->routing_id ();
+    assert (rid);
     assert (std::regex_match (
-      state->routing_id->to_string (),
+      rid->to_string (),
       std::regex (
         R"(play\.node-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})")));
     assert (state->spot_state->snapshot.routing_id
-            && state->spot_state->snapshot.routing_id->to_string ()
-                 == state->routing_id->to_string ());
+            && state->spot_state->snapshot.routing_id->to_string () == rid->to_string ());
+    service.stop ();
+    failures->rethrow_if_failed ();
 
     bool rejected_fixed_id = false;
     try {

@@ -217,7 +217,11 @@ public class ZLinkServiceRequestProgress {
             return Math.max(1, System.nanoTime() - started);
         }
 
-        void report(long terminal) {
+        void report(
+                long terminal,
+                long scheduledDeadlineNanos,
+                long ownerVisitNanos,
+                long dispatcherStartNanos) {
             long selected = beforeTerminal(routeSelected, terminal);
             long peer = beforeTerminal(peerAdmitted, terminal);
             long submitted = beforeTerminal(bindingSubmitted, terminal);
@@ -245,7 +249,11 @@ public class ZLinkServiceRequestProgress {
                       bindingSubmittedMs: %s,
                       bindingAdmittedMs: %s,
                       replyReceivedMs: %s,
-                      localDispatchMs: %s
+                      localDispatchMs: %s,
+                      scheduledDeadlineNanos: %s,
+                      ownerVisitNanos: %s,
+                      terminalNanos: %s,
+                      dispatcherStartNanos: %s
                     }\
                     """
                             .formatted(
@@ -260,7 +268,13 @@ public class ZLinkServiceRequestProgress {
                                     millis(submitted),
                                     millis(admitted),
                                     millis(reply),
-                                    millis(dispatched)));
+                                    millis(dispatched),
+                                    scheduledDeadlineNanos == 0
+                                            ? "undefined"
+                                            : scheduledDeadlineNanos,
+                                    ownerVisitNanos == 0 ? "undefined" : ownerVisitNanos,
+                                    started + terminal,
+                                    dispatcherStartNanos));
         }
 
         private static long beforeTerminal(long time, long terminal) {
