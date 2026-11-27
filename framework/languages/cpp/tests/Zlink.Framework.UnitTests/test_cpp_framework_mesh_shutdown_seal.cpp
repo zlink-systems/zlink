@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 
+#include "stream_capture.hpp"
+
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -299,17 +301,16 @@ void verify_crossed_admission_diagnostics ()
         target_readiness.push_back (peer->ready);
         assert (target_changes == (peer->ready ? 2 : 1));
     });
-    std::ostringstream trace;
-    auto *previous = std::cerr.rdbuf (trace.rdbuf ());
+    zlink::framework::test::stream_capture_t trace (std::cerr);
     connect (source, target);
-    std::cerr.rdbuf (previous);
+    trace.close ();
     source.topology ().set_change_handler ({});
     target.topology ().set_change_handler ({});
     assert (source_changes == 2);
     assert (target_changes == 2);
     assert ((source_readiness == std::vector<bool>{false, true}));
     assert ((target_readiness == std::vector<bool>{false, true}));
-    const auto log = trace.str ();
+    const auto log = trace.text ();
     for (const auto *rid : {"65", "66"}) {
         const auto phase =
           log.find ("handshake phase=bilateral-ready",

@@ -3,12 +3,13 @@
 import ctypes
 from typing import Optional
 
+from ...contracts.core.routing_id import RoutingId
 from ...contracts.errors.codes import CloseResult, ConfigResult
 from ...contracts.sockets.codes import RecvResult, SubmitResult
 from ...contracts.errors.errors import CloseError, ConfigError, RecvError, SubmitError
 from ..._native.ffi import ZlinkMsg, lib
 from ..._runtime.handles.native_support import (
-    _native_errno,
+    _internal_errno,
     _init_msg_from_buffer,
     _clone_native_msg,
     _msg_refcnt,
@@ -70,9 +71,9 @@ class ReceivedMessage:
             return None
 
         native = ZlinkMsg()
-        rc, native_errno = copy_native_to(self._index, ctypes.addressof(native))
+        rc, internal_errno = copy_native_to(self._index, ctypes.addressof(native))
         if rc != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, native_errno)
+            _raise_result_error(ConfigError, ConfigResult, rc, internal_errno)
         return native
 
     def __len__(self):
@@ -107,7 +108,7 @@ class ReceivedMessage:
             return
         rc = lib().zlink_msg_close(ctypes.byref(self._msg))
         if rc != 0:
-            _raise_result_error(CloseError, CloseResult, rc, _native_errno())
+            _raise_result_error(CloseError, CloseResult, rc, _internal_errno())
         self._closed = True
 
     def __enter__(self):
@@ -382,7 +383,11 @@ class Received(ReceivedMultipart):
 
 
 class SubscriptionEvent:
+    routing_id: Optional[RoutingId]
+
     def __init__(self, topic="", subscribed=False, routing_id=None):
+        if routing_id is not None and not isinstance(routing_id, RoutingId):
+            routing_id = RoutingId(routing_id)
         self.routing_id = routing_id
         self.topic = topic
         self.subscribed = subscribed
@@ -410,7 +415,7 @@ class Message:
                 raise ValueError("size must be >= 0")
             rc = lib().zlink_msg_init_size(ctypes.byref(self._msg), size)
         if rc != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, _native_errno())
+            _raise_result_error(ConfigError, ConfigResult, rc, _internal_errno())
         self._valid = True
 
     @classmethod
@@ -426,7 +431,7 @@ class Message:
         msg = cls.__new__(cls)
         msg._msg = ZlinkMsg()
         msg._valid = False
-        msg._keepalive = _init_msg_from_buffer(msg._msg, data, borrow=False)
+        msg._keepalive = _init_msg_from_buffer(msg._msg, data)
         msg._valid = True
         return msg
 
@@ -501,9 +506,9 @@ class Message:
     def close(self):
         if not self._valid:
             return
-        rc, native_errno = _native_extension.msg_close(self._msg)
+        rc, internal_errno = _native_extension.msg_close(self._msg)
         if rc != 0:
-            _raise_result_error(CloseError, CloseResult, rc, native_errno)
+            _raise_result_error(CloseError, CloseResult, rc, internal_errno)
         self._valid = False
         self._keepalive = None
         self._data_view_cache = None
@@ -538,15 +543,6 @@ def message_from(data):
 
 def message_allocate(size):
     return Message.allocate(size)
-
-
-def wrap_message_buffer(data):
-    msg = Message.__new__(Message)
-    msg._msg = ZlinkMsg()
-    msg._valid = False
-    msg._keepalive = _init_msg_from_buffer(msg._msg, data, borrow=True)
-    msg._valid = True
-    return msg
 
 
 def create_received_message(*args, **kwargs):

@@ -21,7 +21,7 @@ class RouterRoute(NamedTuple):
 
 
 @runtime_checkable
-class RouterSocket(_socket_contract._DisconnectRidContract, _socket_contract._RoutingIdContract, Protocol):
+class RouterSocket(_socket_contract._ConnectSocketContract, _socket_contract._RoutingIdContract, Protocol):
     """ROUTER socket: routes messages to peers addressed by routing id, the
     server side of asynchronous request/reply."""
 

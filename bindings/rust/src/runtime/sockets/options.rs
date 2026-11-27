@@ -1,10 +1,11 @@
 use std::time::Duration;
 
-use crate::error::ConfigError;
-use crate::ffi;
+use crate::contracts::errors::errors::ConfigError;
+use crate::contracts::messaging::message::{Message, RoutingId};
+use crate::contracts::sockets::dealer_socket::DealerSocket;
 use crate::internal::SocketStorage;
-use crate::message::{Message, RoutingId};
-use crate::socket_contracts::DealerSocket;
+use crate::runtime::handles::ctx::duration_to_millis;
+use crate::runtime::native::ffi;
 
 impl SocketStorage {
     pub(crate) fn set_mandatory(&self, enabled: bool) -> Result<(), ConfigError> {
@@ -34,7 +35,7 @@ impl SocketStorage {
         Ok(Duration::from_millis(ms as u64))
     }
     pub(crate) fn set_request_timeout(&self, value: Duration) -> Result<(), ConfigError> {
-        let millis = value.as_millis().min(i32::MAX as u128) as i32;
+        let millis = duration_to_millis(value)?;
         self.set_router_i32_opt(
             ffi::zlink_router_option_t::ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS,
             millis,
@@ -44,20 +45,20 @@ impl SocketStorage {
 
 impl DealerSocket {
     pub(crate) fn set_probe(&self, enabled: bool) -> Result<(), ConfigError> {
-        crate::socket::dealer_inner(self)
+        crate::runtime::sockets::socket::dealer_inner(self)
             .set_dealer_bool_opt(ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_PROBE, enabled)
     }
     pub(crate) fn weight(&self) -> Result<u32, ConfigError> {
-        crate::socket::dealer_inner(self)
+        crate::runtime::sockets::socket::dealer_inner(self)
             .get_dealer_u32_opt(ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_WEIGHT)
     }
     pub(crate) fn set_weight(&self, value: u32) -> Result<(), ConfigError> {
-        crate::socket::dealer_inner(self)
+        crate::runtime::sockets::socket::dealer_inner(self)
             .set_dealer_u32_opt(ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_WEIGHT, value)
     }
     pub(crate) fn set_request_timeout(&self, value: Duration) -> Result<(), ConfigError> {
-        let millis = value.as_millis().min(i32::MAX as u128) as i32;
-        crate::socket::dealer_inner(self).set_dealer_i32_opt(
+        let millis = duration_to_millis(value)?;
+        crate::runtime::sockets::socket::dealer_inner(self).set_dealer_i32_opt(
             ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS,
             millis,
         )

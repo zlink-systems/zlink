@@ -781,6 +781,7 @@ Transport, target과 Session owner가 수행하는 검증과 그 경계는
 
 - Target은 terminal completion과 delivery state를 새 immutable relocation root에 사용한 뒤 authority CAS로 `TerminalCompletionCount`와 `PendingRelayCount`를 함께 갱신한다.
 - `replyRelay`는 원래 reply route와 그 요청을 가리키는 source lease fence를 사용한다.
+- Request source fence의 node generation은 받은 request 기록이 실어 온 송신 node의 generation(ingress source node generation)이다. 그 값이 없는 기록(이 node에서 만든 local request)만 이 node의 lifecycle generation을 쓴다.
 - Source는 terminal result를 수락하거나 이미 terminal임을 확인한 뒤 authenticated `replyRelayAck`을 보낸다.
 - Physical connection close는 terminal delivery의 증거가 아니다.
 

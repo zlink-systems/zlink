@@ -263,6 +263,24 @@ jobs:
         working-directory: framework/languages/node
         run: npm run verify:m6c-runtime
 
+      # Contract sets that ran in no CI step before #5865.
+      - name: Run Node M6A runtime gate
+        if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
+        working-directory: framework/languages/node
+        run: npm run verify:m6a-runtime
+
+      - name: Run Node M5 foundation gate
+        if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
+        working-directory: framework/languages/node
+        run: npm run verify:m5-foundation
+
+      - name: Run the tutorial StreamClient receiving check
+        if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
+        working-directory: framework/languages/node/tutorial/StreamClient
+        run: |
+          npm ci
+          npm run receiving:check
+
       # Packs every published workspace package and installs the tarballs into
       # empty consumer projects (no workspace, no NODE_PATH, no checkout proto).
       - name: Verify packed Node packages in clean consumers
