@@ -845,6 +845,10 @@ final class ZLinkInMemoryAuthorityStore {
         }
     }
 
+    private static boolean isEmptyMembership(byte[] membership) {
+        return membership.length == 0 || Arrays.equals(membership, new byte[] {'[', ']'});
+    }
+
     public CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
             ZLinkAggregatePrepareRequest request, ZLinkStoreCancellation cancellation) {
         return inStateLane(
@@ -886,7 +890,8 @@ final class ZLinkInMemoryAuthorityStore {
                             && request.participants().stream()
                                     .anyMatch(
                                             participant ->
-                                                    participant.membershipMutation().length != 0)) {
+                                                    !isEmptyMembership(
+                                                            participant.membershipMutation()))) {
                         return completed(new ZLinkAggregateConflict());
                     }
                     if (!hasCounterRoom(authorityOwnerGeneration, ownerGenerationCount)
@@ -898,7 +903,7 @@ final class ZLinkInMemoryAuthorityStore {
                         if (row == null
                                 || participantIsPrepared(participant.authorityKey())
                                 || row.allocation.state() != ZLinkPlacementAllocationState.ACTIVE
-                                || !row.storeVersion.equals(participant.expectedStoreVersion())
+                                || !row.storeVersion.equals(participant.casStoreVersion())
                                 || (participant.ownerTransition()
                                                 == ZLinkAuthorityGenerationTransition.NEW_OWNER
                                         && !targetSupportsAllocation(request, row.allocation))) {
@@ -1558,8 +1563,7 @@ final class ZLinkInMemoryAuthorityStore {
         }
         for (ZLinkAggregateParticipant participant : request.participants()) {
             Row current = rows.get(participant.authorityKey());
-            if (current == null
-                    || !current.storeVersion.equals(participant.expectedStoreVersion())) {
+            if (current == null || !current.storeVersion.equals(participant.casStoreVersion())) {
                 return false;
             }
             if (participant.ownerTransition() != ZLinkAuthorityGenerationTransition.NEW_OWNER) {

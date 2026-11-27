@@ -1,3 +1,4 @@
+const { relocationAuthorityStore } = require('./fixtures/relocation-authority-store');
 const { sessionBindingControlPorts } = require('./fixtures/session-binding-control');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -3325,6 +3326,7 @@ for (const terminal of ['normal', 'hook-failure', 'cancel', 'deadline', 'shutdow
           descriptorLifecycleGeneration: 6n
         }
       };
+      const authorityStore = relocationAuthorityStore(() => sourceAuthority)();
       const runtime = new ZLinkHostServiceRelocationRuntime({
         requests,
         meshNode: () => backend,
@@ -3342,18 +3344,19 @@ for (const terminal of ['normal', 'hook-failure', 'cancel', 'deadline', 'shutdow
         },
         liveDescriptors: async () => [target],
         locationStore: () => ({
-          readAuthority: async () => (targetCommitted ? targetAuthority : sourceAuthority),
+          ...authorityStore,
+          readAuthority: async (key) =>
+            targetCommitted ? targetAuthority : authorityStore.readAuthority(key),
           readOwnerLease: async () => ({
             kind: 'found',
             token: { ownerId: 'source-owner', leaseGeneration: 3n },
             leaseExpiresAt: new Date(Date.now() + 60_000),
             storeNow: new Date()
           }),
-          compareExchangeAuthority: async (_key, expected, mutation) => {
-            assert.equal(expected, sourceAuthority.storeVersion);
+          compareExchangeAuthority: async (key, expected, mutation) => {
             assert.equal(mutation.generationTransition, 'preserve');
             if (mutation.relocation === undefined) preserves++;
-            return { ...sourceAuthority, kind: 'stored' };
+            return authorityStore.compareExchangeAuthority(key, expected, mutation);
           }
         }),
         actorTransfer: {

@@ -48,10 +48,7 @@ internal sealed class ZLinkRelocationCompletionBudget
     internal void EnsureFitsBeforeCommit()
     {
         if (_fallbacks.Count != 0 && _initialSize > _maximumBytes)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InternalFailure,
-                "Relocation completion cannot reserve the failed replies for all accepted requests."
-            );
+            throw new ZLinkRelocationCompletionReservationException();
     }
 
     internal ZLinkRelocationCompletionEntry SelectReply(
@@ -87,4 +84,13 @@ internal sealed class ZLinkRelocationCompletionBudget
             : throw new ZLinkRelocationDataLostException(
                 "The relocation completion has no size reservation for its accepted request."
             );
+}
+
+internal sealed class ZLinkRelocationCompletionReservationException()
+    : InvalidOperationException(
+        "Relocation completion cannot reserve the failed replies for all accepted requests."
+    )
+{
+    internal ZLinkFrameworkException ToFrameworkException() =>
+        new(ZLinkFrameworkErrorKind.InternalFailure, Message, innerException: this);
 }

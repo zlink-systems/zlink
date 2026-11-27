@@ -1241,9 +1241,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return ZLinkSerialExecutionQueue.yieldCurrent(
                         coordinator.readTargetOwnerGenerations(
                                 expectedParticipants(request),
-                                new ZLinkAggregateFence(
-                                        request.fence().aggregateId(),
-                                        request.fence().aggregateGeneration()),
+                                ZLinkAggregateFence.markerlessRelocation(
+                                        request.fence().aggregateId()),
                                 new ZLinkLocationOwnerToken(
                                         request.targetOwnerId(),
                                         request.targetOwnerLeaseGeneration()),

@@ -299,7 +299,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                                         "mesh",
                                                         sourceRid,
                                                         11),
-                                        new byte[0])),
+                                        new byte[] {'[', ']'})),
                         root,
                         new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
                         targetNodeGeneration,
@@ -755,7 +755,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         "actor-version-1",
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         sourceAuthority(actorId, sourceRid),
-                                        new byte[0]),
+                                        new byte[] {'[', ']'}),
                                 new ZLinkAggregateRelocationCoordinator.Participant(
                                         authorityKey,
                                         ZLinkPlacementObjectKind.USER_SPOT,
@@ -764,7 +764,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         "version-1",
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         sourceAuthority(spotId, sourceRid),
-                                        new byte[0])),
+                                        new byte[] {'[', ']'})),
                         ZLinkCanonicalUserSpotRelocationEnvelope.encode(
                                 envelope, aggregateId, 5, participants),
                         new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
@@ -1162,7 +1162,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                 "actor-version-1",
                                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                 sourceAuthority(actorId, sourceRid),
-                                new byte[0]),
+                                new byte[] {'[', ']'}),
                         new ZLinkAggregateRelocationCoordinator.Participant(
                                 authorityKey,
                                 ZLinkPlacementObjectKind.USER_SPOT,
@@ -1171,7 +1171,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                 "version-1",
                                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                 sourceAuthority(spotId, sourceRid),
-                                new byte[0]));
+                                new byte[] {'[', ']'}));
         var storeRequest =
                 new ZLinkAggregateRelocationCoordinator.Request(
                         aggregateId,

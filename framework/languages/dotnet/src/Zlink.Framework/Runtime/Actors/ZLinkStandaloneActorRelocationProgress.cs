@@ -145,6 +145,20 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             var payload = current.Canonical is { } canonical
                 ? canonical.SteadyAuthorityPayload
                 : LegacySteadyPayload(current.Authority.Payload, current.Phase);
+            var key = identity.Participants.Single().AuthorityKey;
+            var authority = current.Authority;
+            var relocation = authority.Relocation;
+            if (relocation is { Completion: not null })
+            {
+                var completion = new ZLinkRelocationCompletionStore(
+                    authorityStore,
+                    relocationStore
+                );
+                await completion.ReadAsync(relocation, cancellationToken).ConfigureAwait(false);
+                authority = await completion
+                    .MarkCompletedAsync(key, authority, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             // Direct transfer (spec 52 §3.1.7) carries the immutable root on
             // command 52 rather than through the Relocation Store.  Its
             // canonical authority has no tree pointer to load or delete.
@@ -156,24 +170,64 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                 )
             )
             {
-                var direct = await authorityStore
-                    .CompareExchangeAuthorityAsync(
-                        identity.Participants.Single().AuthorityKey,
-                        current.Authority.StoreVersion,
-                        new ZLinkAuthorityMutation.Put(
-                            payload,
-                            ZLinkAuthorityGenerationTransition.Preserve,
-                            null,
-                            null
+                ZLinkAuthorityCompareExchangeResult direct;
+                try
+                {
+                    direct = await authorityStore
+                        .CompareExchangeAuthorityAsync(
+                            key,
+                            authority.StoreVersion,
+                            new ZLinkAuthorityMutation.Put(
+                                payload,
+                                ZLinkAuthorityGenerationTransition.Preserve,
+                                null,
+                                null
+                            )
+                            {
+                                ClearRelocation = true,
+                            },
+                            cancellationToken
                         )
-                        {
-                            ClearRelocation = true,
-                        },
-                        cancellationToken
+                        .ConfigureAwait(false);
+                }
+                catch (Exception error)
+                    when (ZLinkLocationStoreFailure.IsIndeterminate(error, cancellationToken))
+                {
+                    var read = await authorityStore
+                        .ReadAuthorityAsync(key, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (
+                        read is not ZLinkAuthorityReadResult.Found observed
+                        || observed.Snapshot.ObjectGeneration != authority.ObjectGeneration
+                        || observed.Snapshot.AuthorityOwnerGeneration
+                            != authority.AuthorityOwnerGeneration
+                        || observed.Snapshot.OwnerId != authority.OwnerId
+                        || observed.Snapshot.OwnerLeaseGeneration != authority.OwnerLeaseGeneration
                     )
-                    .ConfigureAwait(false);
+                        throw;
+
+                    if (
+                        observed.Snapshot.Relocation is null
+                        && observed.Snapshot.Payload.Span.SequenceEqual(payload.Span)
+                    )
+                    {
+                        await ReleaseUnreferencedRootAsync(relocation?.Completion?.Reference)
+                            .ConfigureAwait(false);
+                        return observed.Snapshot;
+                    }
+                    if (
+                        observed.Snapshot.Relocation?.RelocationId == relocation?.RelocationId
+                        && observed.Snapshot.Relocation?.Target == relocation?.Target
+                    )
+                        continue;
+                    throw;
+                }
                 if (direct is ZLinkAuthorityCompareExchangeResult.Stored directStored)
+                {
+                    await ReleaseUnreferencedRootAsync(relocation?.Completion?.Reference)
+                        .ConfigureAwait(false);
                     return directStored.Snapshot;
+                }
                 if (direct is ZLinkAuthorityCompareExchangeResult.Conflict)
                     continue;
                 throw new InvalidOperationException(
@@ -193,34 +247,25 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                 current.Canonical?.RelocationReference ?? publication.Reference;
             var exchanged = await authorityStore
                 .CompareExchangeAuthorityAsync(
-                    identity.Participants.Single().AuthorityKey,
-                    current.Authority.StoreVersion,
+                    key,
+                    authority.StoreVersion,
                     new ZLinkAuthorityMutation.Put(
                         payload,
                         ZLinkAuthorityGenerationTransition.Preserve,
                         null,
                         null
-                    ),
+                    )
+                    {
+                        ClearRelocation = true,
+                    },
                     cancellationToken
                 )
                 .ConfigureAwait(false);
             if (exchanged is ZLinkAuthorityCompareExchangeResult.Stored stored)
             {
-                try
-                {
-                    await ZLinkRelocationTreeStore
-                        .DeleteTreeAsync(
-                            relocationStore,
-                            relocationReference,
-                            CancellationToken.None
-                        )
-                        .ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Authority no longer references the immutable root. Its
-                    // retention policy can finish cleanup after a store error.
-                }
+                await ReleaseUnreferencedRootAsync(relocationReference).ConfigureAwait(false);
+                await ReleaseUnreferencedRootAsync(relocation?.Completion?.Reference)
+                    .ConfigureAwait(false);
                 return stored.Snapshot;
             }
             if (exchanged is not ZLinkAuthorityCompareExchangeResult.Conflict)
@@ -229,6 +274,26 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                 );
         }
         throw Moving("steady normalization conflicted after the bounded retry limit");
+    }
+
+    private async ValueTask ReleaseUnreferencedRootAsync(string? reference)
+    {
+        if (reference is null)
+            return;
+        try
+        {
+            await ZLinkRelocationTreeStore
+                .DeleteTreeAsync(relocationStore, reference, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception error)
+            when (ZLinkLocationStoreFailure.IsIndeterminate(error, CancellationToken.None))
+        {
+            // The Store retention policy can remove the unreferenced root.
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"actor_relocation_root_cleanup_failed reference={reference} error={error.GetType().Name}: {error.Message}"
+            );
+        }
     }
 
     private async ValueTask<ZLinkStandaloneActorRelocationProgress> ReadCurrentAsync(

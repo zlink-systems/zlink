@@ -22,6 +22,7 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.spots.ZLinkUserSpotAggregateStagingOwner.PreparedSpot;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -320,7 +321,7 @@ final class ZLinkTargetEarlyAdmissionTest {
                                                                     .NEW_OWNER,
                                                             sourceAuthority(
                                                                     participant.objectId(), SOURCE),
-                                                            new byte[0]))
+                                                            "[]".getBytes(StandardCharsets.UTF_8)))
                                     .toList(),
                             root,
                             new ZLinkMeshNodeDescriptorKey("mesh", TARGET),
