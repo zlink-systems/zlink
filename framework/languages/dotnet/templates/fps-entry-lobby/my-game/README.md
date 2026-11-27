@@ -236,6 +236,6 @@ Run the standalone scenario with
 `./run-e2e.sh --local --scenario network-sync` or
 `pwsh -NoProfile -File ./run-e2e.ps1 -Local -Scenario network-sync`.
 A checkout build finds the server plugin source automatically. To enable the
-profile in a copy of the template, make `Zlink.NetworkSync.Server` 0.35.0
-available to NuGet and set `EnableNetworkSync=true` in the environment when
+profile in a copy of the template, make `Zlink.NetworkSync.Server` at the pinned
+Framework version available to NuGet (first published with the 0.35 release) and set `EnableNetworkSync=true` in the environment when
 running the scripts.

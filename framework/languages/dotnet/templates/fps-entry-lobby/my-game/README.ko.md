@@ -191,5 +191,5 @@ drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판�
 격리 시나리오는 `./run-e2e.sh --local --scenario network-sync` 또는
 `pwsh -NoProfile -File ./run-e2e.ps1 -Local -Scenario network-sync`로 실행합니다.
 Checkout에서는 서버 플러그인 소스를 사용합니다. 템플릿을 복사한 경우 NuGet에서
-`Zlink.NetworkSync.Server` 0.35.0을 사용할 수 있게 설정하고 스크립트 실행 환경에
+고정된 Framework 버전의 `Zlink.NetworkSync.Server`(0.35 릴리스부터 배포)를 사용할 수 있게 설정하고 스크립트 실행 환경에
 `EnableNetworkSync=true`를 지정합니다.
