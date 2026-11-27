@@ -211,7 +211,7 @@ capacity private.
 Core currently selects. `RouterRoute` exposes `RoutingID`, `RouteGeneration`. The route generation is a
 nonzero opaque token. Compare it only for equality. `PollRoute` signals a change in a selected route.
 
-A connection-attempt snapshot returns one row per outbound connect registration. The target surface is
+A connection-attempt snapshot returns one row per outbound connect registration. The target surface (**not implemented yet**, #5749) is
 `ConnectionAttemptsSnapshot() ([]ConnectionAttempt, error)` on raw sockets other than STREAM, with Poller
 readiness `PollConnect`. `ConnectionAttempt` contains `Endpoint`, `IntentID`, `Revision`, `LastFailureID`,
 `State`, `LastFailure`. `ConnectionFailure` contains `Kind`, `Stage`, `NormalizedErrno`,

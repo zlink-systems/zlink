@@ -199,7 +199,7 @@ PUB·XPUB의 `PubSocketOptions`를 반환한다. ROUTER의
 반환한다. `RouterRoute`는 `RoutingID`, `RouteGeneration`을 제공한다. Route generation은 0이 아닌 opaque
 token이며 동등성만 비교한다. `PollRoute`는 선택 route 변경을 알린다.
 
-연결 시도 snapshot은 outbound 연결 등록마다 한 행을 반환한다. 목표 표면은 STREAM을 제외한 raw 소켓의
+연결 시도 snapshot은 outbound 연결 등록마다 한 행을 반환한다. 목표 표면(**미구현**, #5749)은 STREAM을 제외한 raw 소켓의
 `ConnectionAttemptsSnapshot() ([]ConnectionAttempt, error)`과 Poller의 `PollConnect`다.
 `ConnectionAttempt`는 `Endpoint`, `IntentID`, `Revision`, `LastFailureID`, `State`, `LastFailure`를 담는다.
 `ConnectionFailure`의 필드는 `Kind`, `Stage`, `NormalizedErrno`, `DisconnectReason`다. 상태, 실패 원인,

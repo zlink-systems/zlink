@@ -454,7 +454,7 @@ ID for the routes Core currently selects. `RouterRoute` exposes `routing_id`, `r
 generation is a nonzero opaque token. Compare it only for equality. `POLLROUTE` signals a change in a
 selected route.
 
-A connection-attempt snapshot returns one row per outbound connect registration. The target surface is
+A connection-attempt snapshot returns one row per outbound connect registration. The target surface (**not implemented yet**, #5746) is
 `connection_attempts_snapshot(&self) -> Result<Vec<ConnectionAttempt>, ConfigError>` on raw sockets other
 than STREAM, with Poller readiness `POLLCONNECT`. `ConnectionAttempt` contains `endpoint`, `intent_id`,
 `revision`, `last_failure_id`, `state`, `last_failure`. `ConnectionFailure` contains `kind`, `stage`,

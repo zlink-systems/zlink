@@ -487,7 +487,7 @@ Endpoint 인자는 `&str`이며 `disconnect_rid`는 `&RoutingId`를 받는다. S
 routing ID마다 한 행으로 반환한다. `RouterRoute`는 `routing_id`, `route_generation`을 제공한다. Route
 generation은 0이 아닌 opaque token이며 동등성만 비교한다. `POLLROUTE`는 선택 route 변경을 알린다.
 
-연결 시도 snapshot은 outbound 연결 등록마다 한 행을 반환한다. 목표 표면은 STREAM을 제외한 raw 소켓의
+연결 시도 snapshot은 outbound 연결 등록마다 한 행을 반환한다. 목표 표면(**미구현**, #5746)은 STREAM을 제외한 raw 소켓의
 `connection_attempts_snapshot(&self) -> Result<Vec<ConnectionAttempt>, ConfigError>`과 Poller의
 `POLLCONNECT`다. `ConnectionAttempt`는 `endpoint`, `intent_id`, `revision`, `last_failure_id`, `state`,
 `last_failure`를 담는다. `ConnectionFailure`의 필드는 `kind`, `stage`, `normalized_errno`,
