@@ -3060,6 +3060,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance_callback_cause.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance_join_route.cpp
     tests/support/spot_close_scenario_fixture.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_destroy_contract.cpp
     # Keep the original GoogleTest registration order across translation units.
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_user_spot_creation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relay_admission.cpp

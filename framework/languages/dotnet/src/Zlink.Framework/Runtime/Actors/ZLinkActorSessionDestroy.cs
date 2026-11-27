@@ -53,7 +53,13 @@ internal sealed partial class ZLinkActorSessionManager
                             $"Actor '{actor.Context.ActorId}' is not owned by this Entry Spot."
                         );
 
-                    return (actorRef, state.BeginOrJoinTeardownAttemptOnLane(actorRef));
+                    return (
+                        actorRef,
+                        state.BeginOrJoinTeardownAttemptOnLane(
+                            actorRef,
+                            publishClosing && LocationLifecycle is not null
+                        )
+                    );
                 },
                 cancellationToken
             )

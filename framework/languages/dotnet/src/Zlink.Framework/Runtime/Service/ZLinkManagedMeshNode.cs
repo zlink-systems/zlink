@@ -2675,73 +2675,30 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
     }
 
-    public SubmitResult DestroyActorRemote(
+    public async ValueTask SendActorDestroyAsync(
         ActorRef actor,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration,
-        out MeshOperationId operationId,
-        TimeSpan timeout = default
+        CancellationToken cancellationToken
     )
     {
-        if (actor.NodeRid == _routingId)
-            throw new ArgumentException(
-                "Command 27 is reserved for a remote Actor owner.",
-                nameof(actor)
-            );
-        return SubmitInfrastructureOperation(
+        var peer = RequireDirectPeer(actor.NodeRid, targetNodeGeneration);
+        var operation = new ActorDestroyOperation(
+            NextStandaloneOperationId().Low,
+            actor,
             actor.NodeRid,
             targetNodeGeneration,
-            MeshOperationKind.ActorDestroy,
-            (correlation, _) =>
-                ZLinkServiceWireCodec.EncodeActorDestroy(
-                    new ActorDestroyOperation(
-                        correlation,
-                        actor,
-                        actor.NodeRid,
-                        targetNodeGeneration,
-                        authorityOwnerGeneration,
-                        ownerLeaseGeneration
-                    )
-                ),
-            out operationId,
-            timeout
+            authorityOwnerGeneration,
+            ownerLeaseGeneration
         );
-    }
-
-    internal SubmitResult DestroyActorRemote(
-        ActorRef actor,
-        ulong targetNodeGeneration,
-        ulong authorityOwnerGeneration,
-        ulong ownerLeaseGeneration,
-        MeshOperationId correlationId,
-        TimeSpan timeout = default
-    )
-    {
-        if (actor.NodeRid == _routingId)
-            throw new ArgumentException(
-                "Command 27 is reserved for a remote Actor owner.",
-                nameof(actor)
-            );
-        return SubmitInfrastructureOperation(
-            actor.NodeRid,
-            targetNodeGeneration,
-            MeshOperationKind.ActorDestroy,
-            (correlation, _) =>
-                ZLinkServiceWireCodec.EncodeActorDestroy(
-                    new ActorDestroyOperation(
-                        correlation,
-                        actor,
-                        actor.NodeRid,
-                        targetNodeGeneration,
-                        authorityOwnerGeneration,
-                        ownerLeaseGeneration
-                    )
-                ),
-            out _,
-            timeout,
-            correlationId
-        );
+        await SendDirectWireAsync(
+                peer.PhysicalRoutingId,
+                [ZLinkServiceWireCodec.EncodeActorDestroy(operation)],
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: actor.NodeRid);
     }
 
     internal SubmitResult ResubmitUserSpotOperation(
@@ -7679,11 +7636,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                 )
                     break;
-                ProcessActorDestroyOperation(
-                    sourceRid,
-                    actorDestroyOperation,
-                    received.Parts.Count
-                );
+                ProcessActorDestroyOperation(sourceRid, actorDestroyOperation, received);
                 return false;
             }
             case ServiceWireConstants.Command.LogicalMulticast:
@@ -10058,116 +10011,38 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void ProcessActorDestroyOperation(
         RoutingId sourceRid,
         ZLinkServiceWireCodec.ActorDestroyOperationRecord record,
-        int partCount
+        Received received
     )
     {
-        var current = RunState(() =>
+        if (received.Parts.Count != 1 || received.MessageType == ReceivedMessageType.Request)
         {
-            _peersByRid.TryGetValue(sourceRid, out var peer);
-            var target = _actorDestroyOperationTarget;
-            return (Peer: peer, Target: target);
-        });
-        var peer = current.Peer;
-        var target = current.Target;
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+            return;
+        }
+
         var operation = record.Operation;
-        if (partCount != 1)
-        {
-            SendActorDestroyFailure(
-                sourceRid,
-                operation.Correlation,
-                RequestResult.ProtocolError,
-                ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
-            );
-            return;
-        }
         if (
-            peer is null
-            || operation.TargetNodeRid != _routingId
+            operation.TargetNodeRid != _routingId
             || operation.TargetNodeGeneration != _lifecycleGeneration
+            || RunState(() => _actorDestroyOperationTarget) is not { } target
         )
-        {
-            SendActorDestroyFailure(
-                sourceRid,
-                operation.Correlation,
-                RequestResult.Conflict,
-                ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-            );
             return;
-        }
-        if (target is null)
-        {
-            SendActorDestroyFailure(
-                sourceRid,
-                operation.Correlation,
-                RequestResult.InvalidState,
-                ServiceWireConstants.FrameworkErrorCode.None
-            );
-            return;
-        }
-        RunInboundOperation(() =>
-            ReplyActorDestroyOperationAsync(sourceRid, operation.Correlation, target, operation)
-        );
-    }
 
-    private async Task ReplyActorDestroyOperationAsync(
-        RoutingId sourceRid,
-        ulong correlation,
-        IActorDestroyOperationTarget target,
-        ActorDestroyOperation operation
-    )
-    {
-        ActorDestroyOperationTerminal terminal;
-        try
-        {
-            terminal = await target
-                .DestroyAsync(operation, _stop?.Token ?? CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        catch (ZLinkFrameworkException exception)
-        {
-            var failure = ZLinkRequestFailureMapper.TargetFailureReply(exception);
-            terminal = new ActorDestroyOperationTerminal(failure.Result, failure.FailureCode);
-        }
-        catch (OperationCanceledException)
-        {
-            terminal = new ActorDestroyOperationTerminal(
-                RequestResult.Terminated,
-                ServiceWireConstants.FrameworkErrorCode.None
-            );
-        }
-        catch
-        {
-            terminal = new ActorDestroyOperationTerminal(
-                RequestResult.InternalError,
-                ServiceWireConstants.FrameworkErrorCode.RequestFailed
-            );
-        }
-        var head = ZLinkServiceWireCodec.EncodeActorDestroyReply(
-            correlation,
-            terminal.Result,
-            terminal.FailureCode,
-            terminal.Completion
-        );
-        await SendServiceTerminalAsync(sourceRid, [head]).ConfigureAwait(false);
-    }
-
-    private void SendActorDestroyFailure(
-        RoutingId sourceRid,
-        ulong correlation,
-        RequestResult result,
-        ServiceWireConstants.FrameworkErrorCode failure
-    )
-    {
-        var head = ZLinkServiceWireCodec.EncodeActorDestroyReply(
-            correlation,
-            result,
-            failure,
-            null
-        );
         RunInboundOperation(async () =>
         {
-            if (!await SendServiceTerminalAsync(sourceRid, [head]).ConfigureAwait(false))
-                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+            var stop = _stop?.Token ?? CancellationToken.None;
+            try
+            {
+                await target.DestroyAsync(operation, stop).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested)
+            {
+                // Node shutdown canceled the inbound operation.
+            }
+            catch (Exception failure) when (_logicalMulticastDispatchErrors is { } reporter)
+            {
+                reporter.ReportRuntimeTaskException(nameof(ProcessActorDestroyOperation), failure);
+            }
         });
     }
 
@@ -12764,7 +12639,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 MeshOperationKind.UserSpotCreate
                 or MeshOperationKind.UserSpotClose
                 or MeshOperationKind.ActorCreate
-                or MeshOperationKind.ActorDestroy
             )
         )
             throw new ArgumentOutOfRangeException(nameof(kind));
@@ -13007,15 +12881,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 out _
             );
             completion = actorCreateCompletion;
-        }
-        else if (pending.Kind == MeshOperationKind.ActorDestroy)
-        {
-            decoded = ZLinkServiceWireCodec.TryDecodeActorDestroyReply(
-                reply,
-                out var actorDestroyCompletion,
-                out _
-            );
-            completion = actorDestroyCompletion;
         }
         else if (pending.Kind == MeshOperationKind.ActorJoin)
         {
