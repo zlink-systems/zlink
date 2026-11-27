@@ -11,8 +11,8 @@ title: "Go 바인딩 공개 계약"
 > **이 장이 정의하는 것** — Go binding이 Core raw C API 위에
 > 제공하는 공개 type·ownership·오류 계약.
 
-이 문서는 공통 스펙의 소켓별 능력을 Go의 공개 타입과 메서드로 정의한다. 정확한 이름과 signature는
-`bindings/go/contracts/`와 module root의 공개 선언을 따른다.
+이 문서는 공통 스펙의 소켓별 능력을 Go의 공개 타입과 메서드로 정의한다. 공개 API의 정확한 이름과
+signature는 module root의 선언을 따른다.
 
 | 절 | 다루는 내용 |
 |---|---|
@@ -31,12 +31,13 @@ title: "Go 바인딩 공개 계약"
 ## Module과 공개 package
 
 Go module의 import path는 `zlink.systems/zlink`이다. 일반적인 consumer는 module
-root의 `zlink` package를 import한다. `zlink.systems/zlink/contracts`는 같은
-계약을 분류해 선언하는 public projection이며 root package가 이를 다시 export한다.
+root의 `zlink` package를 import한다. `zlink.systems/zlink/contracts`는 열거형·상수·결과·오류와
+런타임 자원을 참조하지 않는 값 구조체를 정의하며, root package가 이를 다시 export한다. 구체 핸들과
+native 상태를 포함하는 공개 타입은 `internal/native`가 구현하고 root package가 노출한다.
+Context·소켓·Poller·Timer·SocketMonitor 구체 핸들의 별도 계약 인터페이스 선언 여부는 후속 결정으로 남긴다.
 
-Runtime handle, cgo declaration, native struct, completion drain state와 buffer
-marshalling은 `internal/native`의 구현 세부사항이다. 이 타입과 package는 consumer
-계약이 아니다.
+root가 노출하는 구체 핸들 타입의 내부 필드, cgo 선언, native 구조체, completion drain 상태와 buffer
+marshalling은 `internal/native`의 구현 세부사항이다. 이 내부 상태와 package는 consumer 계약이 아니다.
 
 - Package 계약은 Core raw C API를 투영한다.
 - Context, Message, raw socket, monitor, poller, timer와 utility는 포함하지만 Spot, Actor, MeshNode와 service operation은 포함하지 않는다.

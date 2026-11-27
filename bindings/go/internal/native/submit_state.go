@@ -20,11 +20,11 @@ func (s *submitOnce) markSubmitted() error {
 }
 
 func configInvalidStateError() error {
-	return &ConfigError{Result: ConfigInvalidState, nativeErrno: int(syscall.EINVAL)}
+	return newConfigError(ConfigInvalidState, int(syscall.EINVAL))
 }
 
 func configInvalidArgumentError() error {
-	return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(syscall.EINVAL)}
+	return newConfigError(ConfigInvalidArgument, int(syscall.EINVAL))
 }
 
 func submitBackpressureAsNotSubmitted(err error) (bool, error) {
