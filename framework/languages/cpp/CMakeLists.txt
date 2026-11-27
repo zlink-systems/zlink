@@ -2871,6 +2871,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_shared_serial_turn PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_preparation_terminal_order
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_preparation_terminal_order.cpp
+    "framework-unit;framework-contract;framework-regression;execution" contract)
+  target_use_zlink_gtest_main(test_cpp_framework_preparation_terminal_order)
+  target_include_directories(test_cpp_framework_preparation_terminal_order PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_yield_terminal
     tests/Zlink.Framework.UnitTests/test_cpp_framework_yield_terminal.cpp
     "framework-unit;framework-contract;framework-regression;execution" contract)
