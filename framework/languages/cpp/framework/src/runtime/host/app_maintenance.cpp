@@ -831,7 +831,8 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     authority_split =
                       committed_units != 0
                       || moved.reason
-                           == runtime::stateful::relocation_reason_t::owner_lease_expired;
+                           == runtime::stateful::relocation_reason_t::owner_lease_expired
+                      || moved.reason == runtime::stateful::relocation_reason_t::authority_missing;
                     terminal.reason = relocation_reason_t::relocation_failed;
                     complete (terminal);
                     co_return;
@@ -904,7 +905,8 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     authority_split =
                       committed_units != 0
                       || moved.reason
-                           == runtime::stateful::relocation_reason_t::owner_lease_expired;
+                           == runtime::stateful::relocation_reason_t::owner_lease_expired
+                      || moved.reason == runtime::stateful::relocation_reason_t::authority_missing;
                     terminal.reason = relocation_reason_t::relocation_failed;
                     complete (terminal);
                     co_return;

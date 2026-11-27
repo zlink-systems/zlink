@@ -2,7 +2,7 @@
 
 > Scope: the server Framework for STREAM sessions and the Stream Connector
 > Issue: #4546
-> Shared fixture: `framework/runtime/conformance/login-admission-v1.json`
+> Shared fixtures: `framework/runtime/conformance/login-admission-v1.json` (stage 1), `login-admission-queue-v1.json` and `admission-queue-messages-v1.json` (stage 2)
 
 When many logins arrive at once, the authentication handler and the DB lookups and Actor creation behind it
 spike together. This document defines admission control that protects the authentication handler and the
@@ -174,17 +174,38 @@ The connector handles it as follows.
 - The wait ends as in §5.8: at the earlier of the original request deadline and `first rejection time +
   MaxAdmissionWait`. After that it ends with `RequestTimeout` and sends nothing more.
 - If the `$zlink.admission.queueRequired` value isn't `"1"`, or a Response or Send payload doesn't match the shapes
-  above, only that request ends with `FrameDecodeFailed`; the connection stays open.
+  above, only that request ends with `FrameDecodeFailed`; the connection stays open. A malformed Send follows §3.5.5.
 
 ### 3.5 Queue Details
 
 These were fixed by the PM decision (11-25, #4546 stage 2). Changing one changes this section,
 [Stream Connector §5.8](../../stream-connector/32-stream-connector.en.md#58-admission-wait-and-automatic-retry), and the shared fixture together.
 
+#### 3.5.0 Stage 2 Settings
+
+Stage 2 settings sit in the same STREAM session registration options as stage 1 (§1.1). Each language's exact interface
+document sets the language-specific names. If STREAM registrations on one node give different values, that's a
+configuration error at startup.
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `AdmissionQueueEnabled` | Turns stage 2 (the login queue) on. bool | `false` |
+| `AdmissionQueueKey` | Current ticket signing key (§3.5.2). Required when stage 2 is on | none |
+| `AdmissionQueuePreviousKey` | Previous ticket verification key (§3.5.2). Optional | none |
+| `AdmissionQueueMeshName` | RouteMesh that holds the queue Spot (§3.5.1). Omit it when the process has one MeshNode, which is then used. Required when there are several | none |
+| `AdmissionGlobalLimit` | Mesh-wide concurrent authentication limit (§3.5.3). Integer in `1..2147483647`, optional | none (per-node budgets only) |
+
+If `AdmissionQueueEnabled` is `true` and `AuthenticationPacketName` or `AdmissionQueueKey` is missing, there's no MeshNode, or
+there are several MeshNodes and `AdmissionQueueMeshName` is missing (`Mesh selection is required`, the same check as the
+Instance Spot default mesh), or the name of a STREAM registration with stage 2 on isn't 1–255 bytes of UTF-8 (the ticket MAC's
+`len(StreamName)` is one byte), that's a configuration error at startup. Every node carries the same value. When it's `false`, the other stage 2 settings aren't read.
+
 #### 3.5.1 Queue Spot and Epoch
 
-- The queue Spot is one Instance Spot per RouteMesh that holds the authentication STREAM registration, with Spot ID
-  `$zlink.admission-queue`. The Framework prepares it by sending the first `$zlink.admission.enqueue` or the first node
+- The queue Spot is one Instance Spot in the queue RouteMesh of §3.5.0 (the only MeshNode's mesh, or `AdmissionQueueMeshName`
+  when there are several), with Spot ID
+  `$zlink.admission-queue/<RouteMeshName>`. Spot IDs are global names in the Location Store, not scoped by mesh, so the
+  RouteMesh name keeps RouteMeshes that share a Store from colliding (within the Spot ID length limit). The Framework prepares it by sending the first `$zlink.admission.enqueue` or the first node
   report (§3.5.3) with an `InstanceSpot(...)` intent. Placement follows the existing Instance Spot placement rules; there's
   no separate placement authority.
 - The epoch is a nonzero unsigned 64-bit integer that the queue Spot incarnation generates from a CSPRNG when it
@@ -199,9 +220,11 @@ These were fixed by the PM decision (11-25, #4546 stage 2). Changing one changes
 - The ticket is 49 bytes: `version (1 byte, 0x01) || expiresAtUnixMs (8 bytes big-endian) || epoch (8 bytes big-endian) || mac (32 bytes)`,
   sent on the wire as base64url without padding (66 characters). A ticket with any other length or version is rejected
   without checking the signature.
-- `mac = HMAC-SHA256(key, "zlink-admission-ticket-v1" || 0x00 || len(SessionRid) (1 byte) || SessionRid bytes || expiresAtUnixMs || epoch)`.
-  The SessionRid isn't in the ticket. The validating node recomputes the MAC with the SessionRid of the session that
-  received the authentication request, so a ticket issued to a different session doesn't verify.
+- `mac = HMAC-SHA256(key, "zlink-admission-ticket-v1" || 0x00 || len(NodeRid) (1 byte) || NodeRid bytes || nodeLifecycleGeneration (8-byte big-endian) || len(StreamName) (1 byte) || StreamName UTF-8 || len(SessionRid) (1 byte) || SessionRid bytes || expiresAtUnixMs || epoch)`.
+  A SessionRid is unique only within one Core STREAM socket (different nodes or listeners can assign the same value), so the
+  connection is identified by (node RID, node lifecycle generation, STREAM registration name, SessionRid). None of these are
+  in the ticket. The validating node recomputes the MAC with its own values for the connection that received the
+  authentication request, so a ticket issued on a different connection doesn't verify.
 - The expiry is wall-clock UTC Unix milliseconds. The issuing Spot sets it to `issue time + 30 seconds`. A validating node
   accepts the ticket only when `current wall clock ≤ expiresAtUnixMs + 2000 ms` (2 seconds of allowed clock difference
   between nodes). `expiresInMs` is `expiresAtUnixMs − issue time`.
@@ -214,19 +237,57 @@ These were fixed by the PM decision (11-25, #4546 stage 2). Changing one changes
 #### 3.5.3 Node Reports and Ticket Issue
 
 - Every node with stage 2 on sends the queue Spot a `NodeReport` Spot request once per second. It carries the node RID,
-  the stage 1 limit, the current in-flight count, the SessionRids whose tickets were used since the previous report,
-  and the SessionRids of waiting sessions that ended since the previous report. The Spot returns the current epoch in
+  the stage 1 limit, the current in-flight count, the connection identities (STREAM registration name and SessionRid) whose tickets were used since the previous
+  report, the connection identities of waiting sessions that ended since the previous report, and, with a global limit, the permit IDs it holds and the highest contiguous finished request sequence (below). The Spot returns the current epoch in
   the Response. These reports are Framework-internal Spot messages, not client wire.
 - The Spot treats only reports received within the last 3 seconds as valid. It issues no tickets to sessions on a node
   without a valid report.
-- Each waiting client is recorded by SessionRid and its session's node RID. A ticket can only be used on that session's
+- Each waiting client is recorded by its connection identity (node RID, node lifecycle generation, STREAM registration name,
+  SessionRid), and the used and ended lists in node reports use the same identity. A ticket can only be used on that session's
   node, so the issue budget is counted per node:
   `budget(N) = max(0, limit − in-flight − tickets issued to N's waiting clients since that report)`. When a report arrives
   and when a client enters the queue, the Spot issues tickets to each node's waiting clients in enqueue order, up to that
   node's budget. Order is therefore FIFO within a node and approximately FIFO across the mesh.
+- With a global limit (below), the issue budget includes it too: `budget(N) = min(node budget(N), max(0, AdmissionGlobalLimit − executing permits − unexpired issued tickets not yet used))`.
+  Tickets are therefore issued only as permits free up. When `AdmitPermit` answers a connection with `granted=false`, that
+  connection's ticket becomes invalid on the spot and the Spot puts that waiting client back at the head of its node's FIFO. If the
+  connection enqueues again, it gets its current position, not the same ticket. The Spot considers `granted` only while the
+  connection has a currently valid ticket (issued, not expired, not invalidated); otherwise it answers `granted=false`. An
+  authentication that comes back with the old ticket after invalidation and before a new ticket is issued is therefore rejected,
+  and once a new ticket is issued, the same connection in the same epoch is treated the same regardless of the ticket bytes.
+- **Global limit.** When the setting `AdmissionGlobalLimit` (a positive integer, optional) is present, it caps concurrent
+  authentication executions across the whole mesh. A ticket is only an admission right; the queue Spot grants the
+  execution permit separately.
+  - Before a node passes an authentication with a valid ticket to the handler, it sends the queue Spot one `AdmitPermit` Spot
+    request carrying the node RID, the node owner lease (`ownerId`, `leaseGeneration`), the SessionRid, the ticket's epoch,
+    and `requestSeq`, a request sequence that increases monotonically within the node incarnation; the Spot records it on the permit.
+    While `executing permits < AdmissionGlobalLimit` and the epoch is current, the Spot answers with a permit ID (a nonzero
+    64-bit value) with `granted`=true; otherwise it answers `granted`=false (§3.5.8). On a rejection the node sends the client
+    `unavailable` + queueRequired, as in the first row of §3.4, and that connection waits again per §3.5.5.
+  - When the handler ends (success, failure, or cancellation), the node returns the permit with a `ReleasePermit` Spot send. The
+    Spot treats repeated returns of the same permit as idempotent.
+  - The Spot records the node owner lease of each permit. It checks the leases of the owners holding permits in the Location
+    Store, and reclaims every permit of a lease that ended, only in two cases: when an `AdmitPermit` hits the limit, and when,
+    while counting the issue budget for a node `report`, a waiter couldn't get a ticket because of the global limit (so permits
+    are reclaimed even when the node holding them vanished without releasing them and no `AdmitPermit` arrives). Otherwise it
+    doesn't read the Store. A node report (§3.5.3)
+    carries the permit IDs the node holds and the highest contiguous `requestSeq` such that every `AdmitPermit` at or below it
+    has finished (answered, or abandoned at the default timeout). The Spot reclaims only permits whose `requestSeq` is at or
+    below that value and that are missing from the list. A permit whose answer was lost is therefore reclaimed after that
+    request's timeout, and reordered answers never reclaim the permit of a request still in flight.
+  - `AdmitPermit` waits for the Framework Spot request's default timeout (no new setting or timer). If it fails or no answer
+    arrives in that time, the handler doesn't run and the request ends with `unavailable`. With a global limit, nothing is let past the limit when the Spot is absent.
+  - Ticket reuse, delayed use reports, report expiry, and epoch changes don't affect the permit count. The cost, with stage 2 and
+    the global limit on, is one Spot round trip and one return send per authentication.
+  - Every node is set to the same value. The Spot uses the value of the node its incarnation runs on. A new incarnation starts at
+    zero permits; nodes holding an earlier incarnation's permits treat them as returned after the report Response with the new
+    epoch and don't count them again, so right after an incarnation change the limit can be exceeded briefly, by at most the
+    number of permits that were executing or whose answer was in flight at the change (including a grant from the earlier
+    incarnation that arrives late). A handler still running on a node whose owner lease ended and whose permits were reclaimed
+    counts as the same kind of temporary overshoot.
 - The estimated wait `estimatedWaitMs` is `ceil(position × 1000 / r)`, where r is the number of tickets issued in the last
-  30 seconds divided by 30 (per second). When r is 0, it's `position × 1000`. The result is clamped to 2^31 − 1.
-  `position` is the 1-based position across the mesh.
+  30 seconds divided by 30 (per second). When r is 0, it's `position × 1000`. The result is clamped to 2^31 − 1. `position` is the number of waiters ahead in the mesh-wide FIFO that **haven't received a
+  ticket**, plus 1 (a waiter that has a ticket no longer waits and isn't counted). `estimatedWaitMs` uses this `position`.
 - `$zlink.admission.enqueue` is idempotent per SessionRid. If the session is already waiting, the Response carries its
   current position; if it holds an unused, unexpired ticket, the Response carries that same ticket. No new waiting
   entry is created.
@@ -250,6 +311,9 @@ These were fixed by the PM decision (11-25, #4546 stage 2). Changing one changes
 - A ticket Send that arrives before the enqueue Response is accepted. Positions that arrive after the ticket (in a
   Response or a Send) are ignored and don't call `OnAdmissionPosition`. Position and ticket Sends that arrive while no
   request is waiting are discarded.
+- When a request is waiting and a position or ticket Send arrives whose payload doesn't match the §3.4 shapes, the Send
+  carries no operation identifier and can't be attributed to one request. Every authentication request waiting on that
+  connection ends with `FrameDecodeFailed`, and the connection closes.
 
 #### 3.5.6 Reserved Names and Metadata Conflicts
 
@@ -271,9 +335,46 @@ These were fixed by the PM decision (11-25, #4546 stage 2). Changing one changes
 - On one connection the order is `OnAdmissionQueued` → `OnAdmissionPosition`* → (`OnAdmissionWaiting`*) → request
   completion. Each language's exact interface fixes the exact signatures together with the implementation PR.
 
+#### 3.5.8 Queue Spot Registration and Node Messages
+
+- The queue Spot's Spot type is the Framework Instance Spot type `$zlink.AdmissionQueue`. Among nodes with stage 2 on, only those whose
+  Object role in the queue RouteMesh (§3.5.0) is Server register this type (as placement candidates). An Object Client node doesn't
+  register it and only sends the messages (the existing Instance Spot intent). If that mesh has no Location Store or its Object role
+  is `None`, that's a configuration error at startup. If the mesh has no Server node at runtime, `enqueue` and `report` fail and the
+  node rejects every ticket per §3.5.1.
+- The messages between the queue Spot and nodes are the four below and follow the existing typed JSON rules
+  ([Message model §5](../00-foundation/05-message-model.en.md)). Field names are camelCase, `dec` is an unsigned 64-bit integer
+  (0..2^64−1) as a decimal string (no sign, no leading zeros), and `b64` is unpadded base64url. Every field is required except those marked `?`. Unknown fields are ignored;
+  a missing required field or a malformed value is a protocol error.
+- Positions and tickets for waiting clients have no new delivery path. The Spot carries them as `deliveries` in that node's next
+  `report` Response, and the node sends the §3.4 `$zlink.admission.position` and `$zlink.admission.ticket` Sends on its own
+  connection. The `delivery` in the `enqueue` Response works the same way.
+
+Common shapes
+
+| Name | Fields |
+|---|---|
+| `Connection` | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `streamName` string · `sessionRid` b64 |
+| `Delivery` | `streamName` string · `sessionRid` b64 · `kind` `"position"`\|`"ticket"` · `position?` int32 (1-based) · `estimatedWaitMs?` int32 · `ticket?` b64 (66 chars) · `expiresInMs?` int32. With `kind` `position`, `position` and `estimatedWaitMs` are required; with `ticket`, `ticket` and `expiresInMs` are |
+
+A response travels in the same application payload envelope as its request, and its packet name is the request name
+followed by `.reply` (`$zlink.admission-queue.enqueue.reply`, `.report.reply`, `.admit-permit.reply`). `release-permit` is a
+send and has no response.
+
+| Message | Kind | Request | Response |
+|---|---|---|---|
+| `$zlink.admission-queue.enqueue` | request | `connection` Connection | `epoch` dec · `delivery` Delivery |
+| `$zlink.admission-queue.report` | request (every second, §3.5.3) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `limit` int32 · `inFlight` int32 · `usedTickets` [{`streamName`, `sessionRid`}] · `endedSessions` [{`streamName`, `sessionRid`}] · `heldPermits` [dec] · `resolvedRequestSeq` dec (`"0"` without a global limit) | `epoch` dec · `deliveries` [Delivery] (this node's waiting clients whose position or estimate changed, whose 5 seconds passed, and new tickets) |
+| `$zlink.admission-queue.admit-permit` | request (§3.5.3 global limit) | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `ownerId` string · `leaseGeneration` dec · `streamName` string · `sessionRid` b64 · `epoch` dec · `requestSeq` dec | `granted` bool · `permitId?` dec (required and nonzero when `granted`). A rejection is also a Response (`granted`=false); the node then sends the client the first row of §3.4 (`unavailable` + queueRequired) |
+| `$zlink.admission-queue.release-permit` | send | `nodeRid` b64 · `nodeLifecycleGeneration` dec · `permitId` dec | — |
+
 ## 4. Tests
 
 - All four languages run the shared fixture `login-admission-v1.json`: 12 server scenarios and 11 connector scenarios.
+- All four languages run the two stage 2 shared fixtures. `login-admission-queue-v1.json`: 12 ticket vectors
+  (§3.5.2), 22 queue Spot scenarios, 10 node scenarios, 7 startup scenarios (§3.5.0), and 11 connector scenarios.
+  `admission-queue-messages-v1.json`: 8 valid and 9 invalid node-to-node messages (§3.5.8). Each language test checks
+  the exact counts.
 - A cross-language contract test of four language servers × four language connectors: no handler run over the limit,
   the rejection code and `$zlink.admission.retryAfterMs`, success after the connector's automatic retry, and no Actor,
   Location Store, or permit use by a rejected request.
