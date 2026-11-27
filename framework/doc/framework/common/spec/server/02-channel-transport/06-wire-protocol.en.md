@@ -865,25 +865,16 @@ governs validation by the transport, target, and Session owner and defines their
 
 ### Terminal Completion Tracking
 
-- The target writes terminal completion and delivery state to a new immutable relocation root, then updates `TerminalCompletionCount` and `PendingRelayCount` together via an authority CAS.
-- `replyRelay` uses the original reply route and the source lease fence that identifies that request.
-- The source sends an authenticated `replyRelayAck` after accepting the terminal result, or after confirming it is already terminal.
+- The target sends `replyRelay` only after it records the terminal result in that request's row of [Location runtime §9.3](../05-location-relocation/01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed) by a CAS (`accepted` → `pending`).
+- `replyRelay` uses the original reply route and the source lease fence that identifies that request. Its destination is the relocation source node that first accepted the request and holds the reply capability, not the original requester node. The source node forwards the result on the original reply route to the original requester, and the requester authenticates the relay with the existing peer authority fence (it doesn't read the Store again).
+- The source sends an authenticated `replyRelayAck` only after the original requester accepts the terminal result or it confirms the result is already terminal. A submit success on an intermediate node isn't evidence. The target moves the row to a terminal state on this ACK.
 - A closed physical connection is not evidence of terminal delivery.
 
 ### The `Completed` Condition
 
-`Completed` is allowed only when the accepted request count equals the
-terminal completion count and pending relay is 0. When the deadline passes
-before the ACK is confirmed while the source lease is still valid,
+`Completed` is recorded when target dispatch opens and doesn't wait for row states. For a row whose ACK wasn't confirmed,
 [Location runtime §9.3](../05-location-relocation/01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed)
 defines the outcome and the retention period.
-
-### Root Replacement
-
-- Root replacement verifies a new immutable root's reference/checksum/inventory digest, then links it via an authority CAS.
-- A conflict loser root is cleaned up as an orphan.
-- Cleanup releases the reference from Location authority, then performs the Relocation Store delete.
-- A published reference's permanent missing state, a checksum mismatch, or an inventory digest mismatch is a non-retriable `RelocationDataLost`, and does not roll back a committed owner/membership back to the source.
 
 ### `SendReady` Record and Binding Completion
 
@@ -919,7 +910,7 @@ checked-in codec tables alone confirm the following.
 - Relocation adapter bytes are never interpreted as JSON or as a typed state contract.
 
 **Terminal Completion**
-- For the retained pending-request terminal record path (§11 Root Replacement), a crash before the `Captured` CAS is not treated as durable replay; writing and verifying the top-level record happens before the authority CAS, and the authority releasing that reference happens before the record is deleted.
+- A pending-request result row (§11 Terminal Completion Tracking) doesn't treat a crash before the `Captured` CAS as durable replay. Rows are created only in the target commit batch, and the result CAS comes before `replyRelay`.
 - Pending relay is never completed by a physical disconnect alone, without a `replyRelayAck`.
 
 ---
