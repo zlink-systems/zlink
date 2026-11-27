@@ -645,6 +645,65 @@
       ]
     },
     {
+      "name": "retry-with-invalidated-ticket-before-reissue-denied",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:222",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [],
+        "invalidatedTickets": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ],
+        "waiting": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "requestSeq": 2,
+          "note": "the node still accepts the old unexpired ticket by HMAC; the Spot has no valid ticket for this connection",
+          "expect": {
+            "granted": false,
+            "runningPermits": 0
+          }
+        },
+        {
+          "action": "issue",
+          "expect": {
+            "ticketSessions": [
+              "s2"
+            ]
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "requestSeq": 3,
+          "note": "after reissue, old or new ticket bytes are the same connection and epoch",
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          }
+        }
+      ]
+    },
+    {
       "name": "permit-wrong-epoch-denied",
       "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:217",
       "given": {
@@ -1429,6 +1488,39 @@
       "expect": {
         "started": true,
         "queueMesh": null
+      }
+    },
+    {
+      "name": "stream-name-over-255-bytes",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:179",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [
+          "game"
+        ],
+        "queueMeshName": null,
+        "streamNameUtf8Bytes": 256
+      },
+      "expect": {
+        "started": false,
+        "configurationError": true
+      }
+    },
+    {
+      "name": "stream-name-255-bytes",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:179",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [
+          "game"
+        ],
+        "queueMeshName": null,
+        "streamNameUtf8Bytes": 255
+      },
+      "expect": {
+        "started": true,
+        "queueMesh": "game",
+        "queueSpotId": "$zlink.admission-queue/game"
       }
     }
   ],
