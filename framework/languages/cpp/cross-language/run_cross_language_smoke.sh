@@ -2183,7 +2183,14 @@ run_java_cross_stages() {
   stage_dotnet_spot_route_client_java_host
 }
 
+# shellcheck source=framework/languages/cpp/cross-language/actor_destroy_stage.sh
+source "${SCRIPT_DIR}/actor_destroy_stage.sh"
+
 case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
+  actor-destroy)
+    stage_actor_destroy
+    exit
+    ;;
   login-admission)
     source "${SCRIPT_DIR}/login_admission.sh"
     stage_login_admission
