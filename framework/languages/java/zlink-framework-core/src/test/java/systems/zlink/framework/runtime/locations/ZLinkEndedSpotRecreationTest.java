@@ -144,8 +144,10 @@ final class ZLinkEndedSpotRecreationTest {
                                                                                             current
                                                                                                     .payload(),
                                                                                             new byte
-                                                                                                    [0])),
-                                                                            new byte[32],
+                                                                                                    [] {
+                                                                                                '[',
+                                                                                                ']'
+                                                                                            })),
                                                                             new ZLinkMeshNodeDescriptorKey(
                                                                                     "mesh",
                                                                                     fixture
@@ -236,8 +238,10 @@ final class ZLinkEndedSpotRecreationTest {
                                                                                                     target
                                                                                                             .payload(),
                                                                                                     new byte
-                                                                                                            [0])),
-                                                                                    new byte[32],
+                                                                                                            [] {
+                                                                                                        '[',
+                                                                                                        ']'
+                                                                                                    })),
                                                                                     new ZLinkMeshNodeDescriptorKey(
                                                                                             "mesh",
                                                                                             fixture
@@ -1534,8 +1538,7 @@ final class ZLinkEndedSpotRecreationTest {
                                                                 ZLinkAuthorityGenerationTransition
                                                                         .PRESERVE,
                                                                 before.payload(),
-                                                                new byte[0])),
-                                                new byte[32],
+                                                                new byte[] {'[', ']'})),
                                                 new ZLinkMeshNodeDescriptorKey(
                                                         "mesh", fixture.newDescriptor.rid()),
                                                 1,
@@ -1819,8 +1822,7 @@ final class ZLinkEndedSpotRecreationTest {
                                         snapshot.storeVersion(),
                                         ZLinkAuthorityGenerationTransition.PRESERVE,
                                         memberPayload(fixture, "relocation", true),
-                                        new byte[0])),
-                        new byte[32],
+                                        new byte[] {'[', ']'})),
                         new ZLinkMeshNodeDescriptorKey("mesh", fixture.newDescriptor.rid()),
                         1,
                         ZLinkPlacementCapacityBundle.actor(0),
@@ -1866,8 +1868,7 @@ final class ZLinkEndedSpotRecreationTest {
                                         before.storeVersion(),
                                         ZLinkAuthorityGenerationTransition.PRESERVE,
                                         before.payload(),
-                                        new byte[0])),
-                        new byte[32],
+                                        new byte[] {'[', ']'})),
                         new ZLinkMeshNodeDescriptorKey("mesh", fixture.newDescriptor.rid()),
                         1,
                         ZLinkPlacementCapacityBundle.actor(0),
@@ -1925,8 +1926,7 @@ final class ZLinkEndedSpotRecreationTest {
                                         before.storeVersion(),
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         payload,
-                                        new byte[0])),
-                        new byte[32],
+                                        new byte[] {'[', ']'})),
                         new ZLinkMeshNodeDescriptorKey("mesh", fixture.newDescriptor.rid()),
                         1,
                         ZLinkPlacementCapacityBundle.spot(kind, "room", 1),

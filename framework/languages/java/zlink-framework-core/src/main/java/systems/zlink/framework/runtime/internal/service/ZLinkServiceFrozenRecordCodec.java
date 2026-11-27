@@ -17,6 +17,8 @@ import java.util.Optional;
 
 /** Canonical service-wire-v1 frozen Spot and Actor operation encoder. */
 public final class ZLinkServiceFrozenRecordCodec {
+    public static final int ACCEPTED_RECORD_OVERHEAD_BYTES = 512;
+    private static final int MAX_UTF8_BYTES_PER_UTF16_CODE_UNIT = 3;
 
     private ZLinkServiceFrozenRecordCodec() {}
 
@@ -25,48 +27,95 @@ public final class ZLinkServiceFrozenRecordCodec {
                 && encoded.length != 0
                 && (encoded[0] == (int) ServiceWireCodec.MeshRecordKind.SPOT_SEND.wire
                         || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.SPOT_REQUEST.wire
-                        || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_SEND.wire
-                        || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire);
+                        || encoded[0]
+                                == (int)
+                                        ServiceWireCodec.MeshRecordKind.INSTANCE_SPOT_ACTIVATION
+                                                .wire
+                        || isActorKind(encoded[0]));
     }
 
-    public static boolean isActor(byte[] encoded) {
-        return encoded.length != 0
-                && (encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_SEND.wire
-                        || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire);
+    public static boolean isActorRecord(byte[] encoded) {
+        return encoded != null && encoded.length != 0 && isActorKind(encoded[0]);
     }
 
-    public static boolean isRequest(byte[] encoded) {
+    private static boolean isActorKind(int kind) {
+        return kind == ServiceWireCodec.MeshRecordKind.ACTOR_SEND.wire
+                || kind == ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire;
+    }
+
+    public static boolean mayHaveReplyRoute(byte[] encoded) {
         return encoded.length != 0
                 && (encoded[0] == (int) ServiceWireCodec.MeshRecordKind.SPOT_REQUEST.wire
-                        || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire);
+                        || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire
+                        || encoded[0]
+                                == (int)
+                                        ServiceWireCodec.MeshRecordKind.INSTANCE_SPOT_ACTIVATION
+                                                .wire);
     }
 
     public static DecodedSpot decodeSpot(byte[] encoded) {
         Reader reader = new Reader(encoded);
         int kind = reader.u8();
-        if (kind != (int) ServiceWireCodec.MeshRecordKind.SPOT_SEND.wire
+        boolean instance = kind == ServiceWireCodec.MeshRecordKind.INSTANCE_SPOT_ACTIVATION.wire;
+        if (!instance
+                && kind != (int) ServiceWireCodec.MeshRecordKind.SPOT_SEND.wire
                 && kind != (int) ServiceWireCodec.MeshRecordKind.SPOT_REQUEST.wire) {
             throw new IllegalArgumentException("frozen record is not a Spot operation");
         }
         Source source = reader.source();
         Metadata metadata = reader.metadata();
-        OperationId operation = reader.operationId();
+        OperationId operation =
+                instance ? new OperationId(reader.u64(), reader.u64()) : reader.operationId();
         int operationKind = reader.u32();
         Optional<Long> replyRoute = reader.replyRoute();
-        if ((kind == (int) ServiceWireCodec.MeshRecordKind.SPOT_REQUEST.wire)
-                != (operationKind == (int) ServiceWireCodec.MeshOperationKind.SPOT_REQUEST.wire
-                        && replyRoute.isPresent())) {
-            throw new IllegalArgumentException(
-                    "frozen Spot operation kind does not match record kind");
+        String targetSpotId;
+        long objectGeneration;
+        ApplicationPayload payload;
+        if (instance) {
+            ServiceWireCodec.FrozenRecordBodyInstanceSpotActivation body;
+            try {
+                body =
+                        (ServiceWireCodec.FrozenRecordBodyInstanceSpotActivation)
+                                ServiceWireCodec.decodeFrozenRecordBody(
+                                        reader.take(reader.bytes.length - reader.offset),
+                                        ZLinkServiceM6BWireCodec.generatedContext(),
+                                        ServiceWireCodec.MeshRecordKind.INSTANCE_SPOT_ACTIVATION);
+            } catch (IOException failure) {
+                throw new IllegalArgumentException("invalid frozen Instance Spot body", failure);
+            }
+            validateInstanceOperation(
+                    body.operationKind(),
+                    operationKind,
+                    operation.high(),
+                    operation.low(),
+                    replyRoute.isPresent());
+            if (!(body.route() instanceof ServiceWireCodec.InstanceRouteV1Ready route)) {
+                throw new IllegalArgumentException(
+                        "accepted Instance Spot record has no Ready fence");
+            }
+            targetSpotId = route.targetSpotId().value();
+            objectGeneration = route.authority().objectGeneration().value();
+            payload =
+                    new ApplicationPayload(
+                            body.payload().packetName().value(),
+                            body.payload().contentType().value(),
+                            body.payload().payload().value());
+        } else {
+            if ((kind == (int) ServiceWireCodec.MeshRecordKind.SPOT_REQUEST.wire)
+                    != (operationKind == (int) ServiceWireCodec.MeshOperationKind.SPOT_REQUEST.wire
+                            && replyRoute.isPresent())) {
+                throw new IllegalArgumentException(
+                        "frozen Spot operation kind does not match record kind");
+            }
+            targetSpotId = reader.text8();
+            objectGeneration = reader.nonzeroU64();
+            reader.rid();
+            reader.nonzeroU64();
+            reader.nonzeroU64();
+            reader.nonzeroU64();
+            payload = reader.applicationPayload();
+            reader.end();
         }
-        String targetSpotId = reader.text8();
-        long objectGeneration = reader.nonzeroU64();
-        reader.rid();
-        reader.nonzeroU64();
-        reader.nonzeroU64();
-        reader.nonzeroU64();
-        ApplicationPayload payload = reader.applicationPayload();
-        reader.end();
         return new DecodedSpot(
                 source.nodeRid(),
                 source.nodeGeneration(),
@@ -87,8 +136,7 @@ public final class ZLinkServiceFrozenRecordCodec {
     public static DecodedActor decodeActor(byte[] encoded) {
         Reader reader = new Reader(encoded);
         int kind = reader.u8();
-        if (kind != (int) ServiceWireCodec.MeshRecordKind.ACTOR_SEND.wire
-                && kind != (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire) {
+        if (!isActorKind(kind)) {
             throw new IllegalArgumentException("frozen record is not an Actor operation");
         }
         Source source = reader.source();
@@ -158,6 +206,95 @@ public final class ZLinkServiceFrozenRecordCodec {
                 });
     }
 
+    public static int instanceAcceptedRecordOverhead(
+            ZLinkServiceM6BWireCodec.InstanceRouteFence target) {
+        // These Ready authority fields add UTF-8 text to the ordinary Spot record overhead.
+        return ACCEPTED_RECORD_OVERHEAD_BYTES
+                + MAX_UTF8_BYTES_PER_UTF16_CODE_UNIT
+                        * (target.ownerId().length() + target.storeVersion().length());
+    }
+
+    public static byte[] encodeInstanceSpot(
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            ZLinkServiceM6BWireCodec.InstanceSpotMessage operation,
+            ZLinkServiceM6BWireCodec.InstanceRouteFence target,
+            byte[] metadataFrame,
+            byte[] applicationPayloadEnvelope) {
+        var kind = ServiceWireCodec.MeshRecordKind.INSTANCE_SPOT_ACTIVATION;
+        var instanceOperation =
+                operation.request()
+                        ? ServiceWireCodec.InstanceOperationKind.REQUEST
+                        : ServiceWireCodec.InstanceOperationKind.SEND;
+        var operationKind = instanceMeshOperation(instanceOperation);
+        validateInstanceOperation(
+                instanceOperation,
+                operationKind.wire,
+                operation.operationHigh(),
+                operation.operationLow(),
+                operation.replyRouteId() != null);
+        byte[] body;
+        try {
+            var context = ZLinkServiceM6BWireCodec.generatedContext();
+            body =
+                    ServiceWireCodec.encodeFrozenRecordBody(
+                            new ServiceWireCodec.FrozenRecordBodyInstanceSpotActivation(
+                                    ZLinkServiceM6BWireCodec.generatedReadyInstanceRoute(
+                                            target, operation.instanceIntent()),
+                                    new ServiceWireCodec.NonzeroU64(
+                                            operation.sourceNodeGeneration()),
+                                    instanceOperation,
+                                    ServiceWireCodec.decodeApplicationPayloadEnvelopeV1(
+                                            applicationPayloadEnvelope, context)),
+                            context,
+                            kind);
+        } catch (IOException failure) {
+            throw new IllegalArgumentException("invalid accepted Instance Spot body", failure);
+        }
+        return encode(
+                (int) kind.wire,
+                sourceIdentity(source, operation.sourceSpotId(), null, null),
+                metadataFrame,
+                operation.operationHigh(),
+                operation.operationLow(),
+                (int) operationKind.wire,
+                operation.replyRouteId(),
+                output -> output.write(body));
+    }
+
+    static void validateInstanceOperation(ServiceWireCodec.FrozenRecord record) {
+        if (record.body() instanceof ServiceWireCodec.FrozenRecordBodyInstanceSpotActivation body) {
+            validateInstanceOperation(
+                    body.operationKind(),
+                    record.operationKind().wire,
+                    record.operationId().high().value(),
+                    record.operationId().low().value(),
+                    record.replyRoute()
+                            instanceof ServiceWireCodec.FrozenReplyRouteInstanceSpotRequest);
+        }
+    }
+
+    private static void validateInstanceOperation(
+            ServiceWireCodec.InstanceOperationKind instanceOperation,
+            long operationKind,
+            long operationHigh,
+            long operationLow,
+            boolean hasReply) {
+        boolean request = instanceOperation == ServiceWireCodec.InstanceOperationKind.REQUEST;
+        if (operationKind != instanceMeshOperation(instanceOperation).wire
+                || request != (operationHigh != 0 || operationLow != 0)
+                || request != hasReply) {
+            throw new IllegalArgumentException(
+                    "invalid frozen Instance Spot operation identity or reply route");
+        }
+    }
+
+    private static ServiceWireCodec.MeshOperationKind instanceMeshOperation(
+            ServiceWireCodec.InstanceOperationKind operation) {
+        return operation == ServiceWireCodec.InstanceOperationKind.REQUEST
+                ? ServiceWireCodec.MeshOperationKind.INSTANCE_SPOT_REQUEST
+                : ServiceWireCodec.MeshOperationKind.NONE;
+    }
+
     public static byte[] encodeActor(
             ZLinkInternalMeshNode.PeerAuthorityFence source,
             ZLinkInternalMeshNode.PeerAuthorityFence targetOwner,
@@ -206,7 +343,9 @@ public final class ZLinkServiceFrozenRecordCodec {
             int operationKind,
             Long replyRouteId,
             Writer body) {
-        if (operationHigh == 0 && operationLow == 0) {
+        if (recordKind != ServiceWireCodec.MeshRecordKind.INSTANCE_SPOT_ACTIVATION.wire
+                && operationHigh == 0
+                && operationLow == 0) {
             throw new IllegalArgumentException("accepted operationId must not be zero");
         }
         byte[] metadata = metadataFrame == null ? new byte[0] : metadataFrame.clone();

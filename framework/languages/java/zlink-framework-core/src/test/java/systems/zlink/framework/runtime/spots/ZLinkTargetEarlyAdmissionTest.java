@@ -20,7 +20,9 @@ import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.*;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotAggregateStagingOwner.PreparedSpot;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -337,7 +339,7 @@ final class ZLinkTargetEarlyAdmissionTest {
                                                                     .NEW_OWNER,
                                                             sourceAuthority(
                                                                     participant.objectId(), SOURCE),
-                                                            new byte[0]))
+                                                            "[]".getBytes(StandardCharsets.UTF_8)))
                                     .toList(),
                             root,
                             new ZLinkMeshNodeDescriptorKey("mesh", TARGET),
@@ -359,13 +361,13 @@ final class ZLinkTargetEarlyAdmissionTest {
                     new FakeStagingBackend(ZLinkExecutionLanePolicy.spot()) {
                         @Override
                         public java.util.concurrent.CompletionStage<Void> completeRelocationReady(
-                                Object spot) {
+                                PreparedSpot spot) {
                             return ready;
                         }
 
                         @Override
                         public java.util.concurrent.CompletionStage<Optional<byte[]>> replayActor(
-                                Object spot,
+                                PreparedSpot spot,
                                 Object actor,
                                 ZLinkActorAcceptedJournal.Record record) {
                             byte[] payload = record.payload();
@@ -375,7 +377,7 @@ final class ZLinkTargetEarlyAdmissionTest {
 
                         @Override
                         public java.util.concurrent.CompletionStage<List<byte[]>> replaySpot(
-                                Object spot, ZLinkSpotAcceptedJournal.Record record) {
+                                PreparedSpot spot, ZLinkSpotAcceptedJournal.Record record) {
                             byte[] payload = record.parts().getLast();
                             executed.add("spot-" + payload[0]);
                             return CompletableFuture.completedFuture(List.of(payload));

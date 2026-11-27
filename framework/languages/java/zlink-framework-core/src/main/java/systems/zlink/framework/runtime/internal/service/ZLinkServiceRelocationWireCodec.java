@@ -17,7 +17,7 @@ public final class ZLinkServiceRelocationWireCodec {
         return encodeReplyRelayFrames(value, null).getFirst();
     }
 
-    private List<byte[]> encodeReplyRelayFrames(
+    public List<byte[]> encodeReplyRelayFrames(
             ReplyRelay value, ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1 payload) {
         Objects.requireNonNull(value, "value");
         value.validate();
@@ -44,7 +44,7 @@ public final class ZLinkServiceRelocationWireCodec {
         return decodeReplyRelayFrames(List.of(encoded)).relay();
     }
 
-    private StoredReply decodeReplyRelayFrames(List<byte[]> frames) {
+    public StoredReply decodeReplyRelayFrames(List<byte[]> frames) {
         try {
             var generated = ServiceWirePilotCodec.decodeReplyRelay33(frames);
             if (!(generated.context()

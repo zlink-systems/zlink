@@ -38,6 +38,7 @@ import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
@@ -297,7 +298,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         participant.ownerTransition(),
                                         participant.authorityPayload(),
                                         participant.membershipMutation())),
-                        fixture.request().inventoryDigest(),
                         fixture.request().targetDescriptor(),
                         fixture.request().targetDescriptorLifecycleGeneration(),
                         fixture.request().capacityBundle(),
@@ -349,6 +349,80 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .toCompletableFuture()
                                 .join();
         assertFalse(json.readTree(raw.value().bytes()).has("aggregate"));
+    }
+
+    @Test
+    void abortedAggregateStopsProjectingThePrePrepareVersion() throws Exception {
+        var fixture = preparedFixture(1, new UUID(0, 13), 1);
+        var request = fixture.request();
+        var participant = request.participants().getFirst();
+        assertInstanceOf(
+                ZLinkAggregatePrepared.class,
+                fixture.repository()
+                        .prepareAggregate(request, () -> false)
+                        .toCompletableFuture()
+                        .join());
+        var marked =
+                assertInstanceOf(
+                                ZLinkStoreReadFound.class,
+                                fixture.store()
+                                        .read(authorityKey(participant.authorityKey()), () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .value();
+        var prepared =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        fixture.repository()
+                                .read(participant.authorityKey(), () -> false)
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(participant.expectedStoreVersion(), prepared.storeVersion());
+        assertEquals(1, prepared.aggregateGeneration());
+
+        var aggregateKey = aggregateKey(request);
+        var aggregate =
+                assertInstanceOf(
+                                ZLinkStoreReadFound.class,
+                                fixture.store()
+                                        .read(aggregateKey, () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .value();
+        var abortedRow =
+                (com.fasterxml.jackson.databind.node.ObjectNode)
+                        new com.fasterxml.jackson.databind.ObjectMapper()
+                                .readTree(aggregate.bytes());
+        abortedRow.put("state", "aborted");
+        // C++ publishes the terminal aggregate state before clearing participant markers.
+        assertInstanceOf(
+                ZLinkStoreWriteApplied.class,
+                fixture.store()
+                        .write(
+                                new ZLinkStoreWriteRequest(
+                                        List.of(),
+                                        List.of(
+                                                new ZLinkStorePut(
+                                                        aggregateKey,
+                                                        ZLinkAggregateInventoryStore.canonical(
+                                                                abortedRow),
+                                                        null))),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join());
+
+        var aborted =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        fixture.repository()
+                                .read(participant.authorityKey(), () -> false)
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(marked.version().value(), aborted.storeVersion());
+        assertEquals(0, aborted.aggregateGeneration());
+        assertEquals(prepared.ownerId(), aborted.ownerId());
+        assertEquals(prepared.authorityOwnerGeneration(), aborted.authorityOwnerGeneration());
+        assertArrayEquals(prepared.payload(), aborted.payload());
     }
 
     @Test
@@ -406,7 +480,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         participant.ownerTransition(),
                                         participant.authorityPayload(),
                                         participant.membershipMutation())),
-                        fixture.request().inventoryDigest(),
                         fixture.request().targetDescriptor(),
                         fixture.request().targetDescriptorLifecycleGeneration(),
                         fixture.request().capacityBundle(),
@@ -556,9 +629,20 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 fixture.key(),
                                 before.objectGeneration(),
                                 before.authorityOwnerGeneration()));
+        var fence = new ZLinkAggregateFence(id, 1);
+        coordinator
+                .prepareSource(
+                        participants,
+                        fixture.key(),
+                        fence,
+                        42,
+                        ZLinkAuthoritySnapshot::payload,
+                        () -> false)
+                .toCompletableFuture()
+                .join();
         var captured =
                 coordinator
-                        .captureSource(participants, fixture.key(), id, 42, () -> false)
+                        .captureSource(participants, fixture.key(), fence, 42, () -> false)
                         .toCompletableFuture()
                         .join();
         assertEquals(List.of("preparing", "captured"), phases);
@@ -601,7 +685,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(captured.relocation(), current.relocation());
         coordinator
                 .abortSource(
-                        participants,
+                        participants.getFirst(),
                         new ZLinkAggregateFence(id, 1),
                         before.ownerId(),
                         before.ownerLeaseGeneration(),
@@ -615,8 +699,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertTrue(current.relocation().target().isNull());
         coordinator
                 .clearSourceProgress(
-                        participants,
-                        id,
+                        participants.getFirst(),
+                        fence,
                         before.ownerId(),
                         before.ownerLeaseGeneration(),
                         () -> false)
@@ -2300,8 +2384,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         current.storeVersion(),
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         new byte[] {2},
-                                        new byte[0])),
-                        new byte[32],
+                                        new byte[] {'[', ']'})),
                         new ZLinkMeshNodeDescriptorKey(target.meshName(), target.rid()),
                         target.lifecycleGeneration(),
                         current.allocation().capacityBundle(),
@@ -2439,7 +2522,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                             current.storeVersion(),
                                             transition,
                                             payload,
-                                            new byte[0])),
+                                            new byte[] {'[', ']'})),
                             root,
                             reservation.targetDescriptor(),
                             descriptor.lifecycleGeneration(),
@@ -2481,7 +2564,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                             HexFormat.of()
                                                     .formatHex(
                                                             ZLinkAggregateInventoryStore.sha256(
-                                                                    new byte[0]))));
+                                                                    new byte[] {'[', ']'}))));
             var relocation =
                     mapper.readTree(
                             """
@@ -3739,7 +3822,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                             original.aggregateId(),
                             original.aggregateGeneration(),
                             original.participants().subList(0, 2049),
-                            original.inventoryDigest(),
                             original.targetDescriptor(),
                             original.targetDescriptorLifecycleGeneration(),
                             original.capacityBundle(),
@@ -3906,7 +3988,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         new UUID(0, 11),
                         1,
                         List.of(participantA, participantB),
-                        new byte[32],
                         new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
                         1,
                         ZLinkPlacementCapacityBundle.actor(1),
@@ -3992,7 +4073,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         new UUID(0, 12),
                         1,
                         List.of(participant),
-                        new byte[32],
                         new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
                         1,
                         ZLinkPlacementCapacityBundle.actor(1),
@@ -4218,13 +4298,12 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         version,
                         ZLinkAuthorityGenerationTransition.PRESERVE,
                         canonicalPayload,
-                        new byte[0]);
+                        new byte[] {'[', ']'});
         var request =
                 new ZLinkAggregatePrepareRequest(
                         relocationRequest.aggregateId(),
                         relocationRequest.aggregateGeneration(),
                         List.of(participant),
-                        new byte[32],
                         relocationRequest.targetDescriptor(),
                         relocationRequest.targetDescriptorLifecycleGeneration(),
                         relocationRequest.capacityBundle(),
@@ -4345,7 +4424,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         current.storeVersion(),
                                         ZLinkAuthorityGenerationTransition.PRESERVE,
                                         payload,
-                                        new byte[0])),
+                                        new byte[] {'[', ']'})),
                         goldenRoot(),
                         reservation.targetDescriptor(),
                         descriptor.lifecycleGeneration(),
@@ -4756,7 +4835,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         id,
                         generation,
                         participants,
-                        new byte[32],
                         target,
                         1,
                         ZLinkPlacementCapacityBundle.actor(count),
@@ -4964,7 +5042,13 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                                                     .value()
                                                                     .startsWith(
                                                                             "zlink:v11:aggregate:")
-                                                            && put.bytes()[0] == 2);
+                                                            && new String(
+                                                                            put.bytes(),
+                                                                            java.nio.charset
+                                                                                    .StandardCharsets
+                                                                                    .UTF_8)
+                                                                    .contains(
+                                                                            "\"state\":\"committed\""));
             if (writesFailingParticipant || writesCommittedAggregate) {
                 if (writesFailingParticipant) {
                     failingWrites++;

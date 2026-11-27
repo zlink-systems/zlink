@@ -31,6 +31,7 @@ import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapte
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotAggregateStagingOwner.PreparedSpot;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -298,7 +299,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                             TARGET_NODE_GENERATION,
                             coordinator,
                             unusedSpotStaging(),
-                            ignored -> null,
+                            (kind, stableType) -> null,
                             (lane, queued) ->
                                     CompletableFuture.failedFuture(
                                             new AssertionError(
@@ -401,7 +402,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                                             "seed-1",
                                             ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                             authority.rows.get(actorAuthorityKey).payload(),
-                                            new byte[0])),
+                                            new byte[] {'[', ']'})),
                             request.relocationPayload(),
                             new ZLinkMeshNodeDescriptorKey(MESH, TARGET_RID),
                             TARGET_NODE_GENERATION,
@@ -513,7 +514,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
 
                     @Override
                     public CompletionStage<Void> enqueueIngress(
-                            Object spot,
+                            PreparedSpot spot,
                             List<QueuedTurn> dispatches,
                             String lane,
                             byte[] record,
@@ -532,14 +533,14 @@ final class ZLinkActorJoinPrewarmIngressTest {
                     }
 
                     @Override
-                    public CompletionStage<Object> prepareSpot(
+                    public CompletionStage<PreparedSpot> prepareSpot(
                             ZLinkUserSpotAggregateStagingOwner.Request request) {
                         return unused();
                     }
 
                     @Override
                     public CompletionStage<Void> restoreSpot(
-                            Object spot,
+                            PreparedSpot spot,
                             ZLinkUserSpotAggregateStagingOwner.Request request,
                             systems.zlink.framework.actors.ZLinkRelocationCancellation
                                     cancellation) {
@@ -555,13 +556,13 @@ final class ZLinkActorJoinPrewarmIngressTest {
                     }
 
                     @Override
-                    public CompletionStage<Void> publishSpot(Object spot) {
+                    public CompletionStage<Void> publishSpot(PreparedSpot spot) {
                         throw new AssertionError("unused");
                     }
 
                     @Override
                     public void publishActor(
-                            Object preparedSpot,
+                            PreparedSpot preparedSpot,
                             Object actor,
                             String targetSpotId,
                             Long targetOwnerGeneration) {
@@ -574,7 +575,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                     }
 
                     @Override
-                    public void publishTimers(Object spot) {
+                    public void publishTimers(PreparedSpot spot) {
                         throw new AssertionError("unused");
                     }
 
@@ -584,7 +585,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                     }
 
                     @Override
-                    public CompletionStage<Void> discardSpot(Object spot) {
+                    public CompletionStage<Void> discardSpot(PreparedSpot spot) {
                         throw new AssertionError("unused");
                     }
                 });

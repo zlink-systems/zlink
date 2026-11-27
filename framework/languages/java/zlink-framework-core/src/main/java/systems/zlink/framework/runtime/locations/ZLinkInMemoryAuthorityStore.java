@@ -276,6 +276,15 @@ final class ZLinkInMemoryAuthorityStore {
 
     private ZLinkFrameworkErrorKind spotMembershipFailure(
             byte[] previousPayload, byte[] payload, AggregateState owningAggregate) {
+        return spotMembershipFailure(previousPayload, payload, owningAggregate, null, null);
+    }
+
+    private ZLinkFrameworkErrorKind spotMembershipFailure(
+            byte[] previousPayload,
+            byte[] payload,
+            AggregateState owningAggregate,
+            Set<String> authorities,
+            Set<String> owners) {
         var actor = new ZLinkActorAuthorityPayloadCodec().decode(payload);
         if (actor.isEmpty()) return null;
         var membership = actor.get();
@@ -291,12 +300,17 @@ final class ZLinkInMemoryAuthorityStore {
             return ZLinkFrameworkErrorKind.UNAVAILABLE;
         if (membership.currentSpotKind()
                 != systems.zlink.framework.spots.ZLinkSpotKind.USER.value()) return null;
-        Row target = rows.get(ZLinkAuthorityKeyCodec.spot(membership.currentSpotId()));
+        String targetKey = ZLinkAuthorityKeyCodec.spot(membership.currentSpotId());
+        Row target = rows.get(targetKey);
         if (target == null) return ZLinkFrameworkErrorKind.NOT_FOUND;
         if (target.objectGeneration != membership.currentSpotGeneration()
                 || !ownerLeaseIsLive.test(target.owner)
                 || participantIsPrepared(ZLinkAuthorityKeyCodec.spot(membership.currentSpotId())))
             return ZLinkFrameworkErrorKind.UNAVAILABLE;
+        if (authorities != null) {
+            authorities.add(targetKey);
+            owners.add(target.owner.ownerId());
+        }
         return new ZLinkServiceAuthorityPayloadCodec()
                         .decode(target.payload)
                         .filter(
@@ -847,6 +861,10 @@ final class ZLinkInMemoryAuthorityStore {
         }
     }
 
+    private static boolean isEmptyMembership(byte[] membership) {
+        return membership.length == 0 || Arrays.equals(membership, new byte[] {'[', ']'});
+    }
+
     public CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
             ZLinkAggregatePrepareRequest request, ZLinkStoreCancellation cancellation) {
         return inStateLane(
@@ -888,7 +906,8 @@ final class ZLinkInMemoryAuthorityStore {
                             && request.participants().stream()
                                     .anyMatch(
                                             participant ->
-                                                    participant.membershipMutation().length != 0)) {
+                                                    !isEmptyMembership(
+                                                            participant.membershipMutation()))) {
                         return completed(new ZLinkAggregateConflict());
                     }
                     if (!hasCounterRoom(authorityOwnerGeneration, ownerGenerationCount)
@@ -900,7 +919,7 @@ final class ZLinkInMemoryAuthorityStore {
                         if (row == null
                                 || participantIsPrepared(participant.authorityKey())
                                 || row.allocation.state() != ZLinkPlacementAllocationState.ACTIVE
-                                || !row.storeVersion.equals(participant.expectedStoreVersion())
+                                || !row.storeVersion.equals(participant.casStoreVersion())
                                 || (participant.ownerTransition()
                                                 == ZLinkAuthorityGenerationTransition.NEW_OWNER
                                         && !targetSupportsAllocation(request, row.allocation))) {
@@ -959,6 +978,9 @@ final class ZLinkInMemoryAuthorityStore {
                     if (!aggregateStateIsCurrent(state.request, fence)) {
                         return completed(ZLinkAggregateCommitResult.STALE);
                     }
+                    var membershipKeys = new HashSet<String>();
+                    var ownerKeys = new HashSet<String>();
+                    ownerKeys.add(state.request.targetOwner().ownerId());
                     for (var participant : state.request.participants()) {
                         var actor =
                                 new ZLinkActorAuthorityPayloadCodec()
@@ -995,7 +1017,9 @@ final class ZLinkInMemoryAuthorityStore {
                         if (spotMembershipFailure(
                                         rows.get(participant.authorityKey()).payload,
                                         participant.authorityPayload(),
-                                        state)
+                                        state,
+                                        membershipKeys,
+                                        ownerKeys)
                                 != null) return completed(ZLinkAggregateCommitResult.STALE);
                     }
                     int ownerGenerationCount =
@@ -1033,7 +1057,22 @@ final class ZLinkInMemoryAuthorityStore {
                                                     + " fence."));
                         }
                     }
-                    if (requestKeys.size() + participantKeys.size()
+                    int capacityKeys =
+                            ZLinkCapacityCounters.aggregateCommit(
+                                            state.request,
+                                            index ->
+                                                    rows.get(
+                                                                    state.request
+                                                                            .participants()
+                                                                            .get(index)
+                                                                            .authorityKey())
+                                                            .allocation)
+                                    .size();
+                    if (1L
+                                    + ownerKeys.size()
+                                    + membershipKeys.size()
+                                    + capacityKeys
+                                    + requestKeys.size()
                             > ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS) {
                         return CompletableFuture.failedFuture(
                                 new ZLinkFrameworkException(
@@ -1657,8 +1696,7 @@ final class ZLinkInMemoryAuthorityStore {
         }
         for (ZLinkAggregateParticipant participant : request.participants()) {
             Row current = rows.get(participant.authorityKey());
-            if (current == null
-                    || !current.storeVersion.equals(participant.expectedStoreVersion())) {
+            if (current == null || !current.storeVersion.equals(participant.casStoreVersion())) {
                 return false;
             }
             if (participant.ownerTransition() != ZLinkAuthorityGenerationTransition.NEW_OWNER) {

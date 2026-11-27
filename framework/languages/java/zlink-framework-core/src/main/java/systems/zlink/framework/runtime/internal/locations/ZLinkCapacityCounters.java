@@ -6,9 +6,10 @@ import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.IntFunction;
 
 /** Builds the atomic counter changes belonging to an authority write. */
-final class ZLinkCapacityCounters {
+public final class ZLinkCapacityCounters {
     private final Map<ZLinkStoreKey, Long> deltas = new LinkedHashMap<>();
 
     static ZLinkStoreKey key(
@@ -75,6 +76,24 @@ final class ZLinkCapacityCounters {
                 (key, delta) -> {
                     if (delta != 0) mutations.add(new ZLinkStoreAdd(key, delta));
                 });
+    }
+
+    public static List<ZLinkStoreMutation> aggregateCommit(
+            ZLinkAggregatePrepareRequest request,
+            IntFunction<ZLinkPlacementAllocation> allocationAt) {
+        var deltas = new ZLinkCapacityCounters();
+        var target = request.targetDescriptor();
+        deltas.change(target, request.capacityBundle(), -1, 0);
+        for (int index = 0; index < request.participants().size(); index++) {
+            if (request.participants().get(index).ownerTransition()
+                    != ZLinkAuthorityGenerationTransition.NEW_OWNER) continue;
+            var allocation = allocationAt.apply(index);
+            deltas.change(allocation.descriptor(), allocation.capacityBundle(), 0, -1);
+            deltas.change(target, allocation.capacityBundle(), 0, 1);
+        }
+        List<ZLinkStoreMutation> mutations = new java.util.ArrayList<>();
+        deltas.appendTo(mutations);
+        return mutations;
     }
 
     static boolean reserve(

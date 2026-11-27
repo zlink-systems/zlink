@@ -102,7 +102,7 @@ final class ZLinkTargetRelocationRepliesTest {
                                 "actor-version-1",
                                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                 sourceAuthority(actorId, sourceRid),
-                                new byte[0]),
+                                new byte[] {'[', ']'}),
                         new ZLinkAggregateRelocationCoordinator.Participant(
                                 authorityKey,
                                 ZLinkPlacementObjectKind.USER_SPOT,
@@ -111,7 +111,7 @@ final class ZLinkTargetRelocationRepliesTest {
                                 "version-1",
                                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                 sourceAuthority(spotId, sourceRid),
-                                new byte[0]));
+                                new byte[] {'[', ']'}));
         var storeRequest =
                 new ZLinkAggregateRelocationCoordinator.Request(
                         aggregateId,

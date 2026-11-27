@@ -32,7 +32,9 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitRe
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateParticipant;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
@@ -875,19 +877,15 @@ final class ZLinkRelocationObservationPublicTest {
     void activeRecreateInstanceSpotDoesNotBlockUserSpotRelocation() throws Exception {
         var locations = new ZLinkInMemoryLocationStore();
         var relocations = new InMemoryRelocationStore();
-        var sourceOptions =
-                options(
-                        "instance-source",
-                        locations,
-                        relocations,
-                        null,
-                        objects -> {
-                            addWideRoom(objects);
-                            objects.addInstanceSpotFactory(
-                                    "instance",
-                                    ActiveInstance.class,
-                                    factory -> factory.recreateOnRelocation());
-                        });
+        Consumer<ZLinkMeshObjectServerBuilder> factories =
+                objects -> {
+                    addWideRoom(objects);
+                    objects.addInstanceSpotFactory(
+                            "instance",
+                            ActiveInstance.class,
+                            factory -> factory.recreateOnRelocation());
+                };
+        var sourceOptions = options("instance-source", locations, relocations, null, factories);
         try (var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions)) {
             awaitReady(source);
             await(source.spotManager().getOrCreate("wide-room", "room").submit());
@@ -904,7 +902,12 @@ final class ZLinkRelocationObservationPublicTest {
             var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             try (var target =
                             ZLinkFrameworkRuntimeTestAccess.start(
-                                    options("instance-target", locations, relocations, endpoint));
+                                    options(
+                                            "instance-target",
+                                            locations,
+                                            relocations,
+                                            endpoint,
+                                            factories));
                     var ready =
                             observe(
                                     source.routeMeshRuntime().observe(MESH, 8),
@@ -918,6 +921,15 @@ final class ZLinkRelocationObservationPublicTest {
                         result.toString());
                 var room = await(target.spotManager().getOrCreate("wide-room", "room").submit());
                 assertEquals(RoutingId.from("instance-target"), room.spot().nodeRid());
+                var instance =
+                        new ZLinkProviderLocationRepository(locations)
+                                .read(ZLinkAuthorityKeyCodec.spot("active-instance"), () -> false);
+                assertEquals(
+                        RoutingId.from("instance-target"),
+                        assertInstanceOf(ZLinkAuthoritySnapshot.class, await(instance))
+                                .allocation()
+                                .descriptor()
+                                .rid());
             }
         }
     }

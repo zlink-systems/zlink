@@ -42,6 +42,7 @@ import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotAggregateStagingOwner.PreparedSpot;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.testutil.PerCallAllocation;
@@ -303,7 +304,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                                         "mesh",
                                                         sourceRid,
                                                         11),
-                                        new byte[0])),
+                                        new byte[] {'[', ']'})),
                         root,
                         new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
                         targetNodeGeneration,
@@ -325,7 +326,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         targetNodeGeneration,
                         coordinator,
                         new ZLinkUserSpotAggregateStagingOwner(new FakeStagingBackend()),
-                        ignored -> TestSpot.class,
+                        (kind, stableType) -> TestSpot.class,
                         (lane, queued) ->
                                 CompletableFuture.failedFuture(
                                         new AssertionError("standalone Actor root has no backlog")),
@@ -761,7 +762,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         "actor-version-1",
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         sourceAuthority(actorId, sourceRid),
-                                        new byte[0]),
+                                        new byte[] {'[', ']'}),
                                 new ZLinkAggregateRelocationCoordinator.Participant(
                                         authorityKey,
                                         ZLinkPlacementObjectKind.USER_SPOT,
@@ -770,7 +771,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         "version-1",
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         sourceAuthority(spotId, sourceRid),
-                                        new byte[0])),
+                                        new byte[] {'[', ']'})),
                         ZLinkCanonicalUserSpotRelocationEnvelope.encode(
                                 envelope, aggregateId, 5, participants),
                         new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
@@ -905,7 +906,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         targetNodeGeneration,
                         coordinator,
                         recoveredStaging,
-                        ignored -> TestSpot.class,
+                        (kind, stableType) -> TestSpot.class,
                         (lane, record) ->
                                 CompletableFuture.failedFuture(
                                         new AssertionError(
@@ -1124,6 +1125,181 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 recoveredBackend.rawSession.close();
             }
         }
+    }
+
+    @Test
+    void crossNodeReplyRelayIsAddressedToTheRelocationSourceNode() {
+        //  The frozen record's request-source fence names "journal-node"
+        //  while the relocation source (the node that owns the landed reply
+        //  capability) is "source-node". Command 33 must be addressed to the
+        //  relocation source, not to the request-source fence.
+        RoutingId sourceRid = RoutingId.from("source-node");
+        RoutingId journalRid = RoutingId.from("journal-node");
+        RoutingId targetRid = RoutingId.from("target-node");
+        long targetNodeGeneration = 17;
+        long targetAttemptGeneration = 41;
+        String spotId = "room-a";
+        String actorId = "actor-a";
+        String authorityKey = ZLinkAuthorityKeyCodec.spot(spotId);
+        String actorAuthorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
+        AuthorityState authority = new AuthorityState();
+        ZLinkLocationRepository authorityStore = authority.proxy();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(authorityStore);
+        UUID aggregateId = UUID.randomUUID();
+        var participants =
+                List.of(
+                        new ZLinkSpotRetireControl.ParticipantFence(
+                                actorAuthorityKey, 1, actorId, "player", false, 4, 7),
+                        new ZLinkSpotRetireControl.ParticipantFence(
+                                authorityKey, 2, spotId, "room", true, 3, 5));
+        var finalEnvelope =
+                new ZLinkUserSpotAggregateStagingOwner.Request(
+                        TestSpot.class,
+                        "room",
+                        spotId,
+                        3,
+                        new byte[] {1},
+                        true,
+                        new byte[0],
+                        List.of(
+                                new ZLinkUserSpotAggregateStagingOwner.ActorParticipant(
+                                        actorId,
+                                        "player",
+                                        new byte[0],
+                                        false,
+                                        new ZLinkBackendActorRef(targetRid, actorId, 4))),
+                        Map.of(
+                                "spot",
+                                List.of(
+                                        new ZLinkSerialExecutionQueue.QueuedRecord(
+                                                1, acceptedSpotRequest(spotId, 2)))));
+        var storeParticipants =
+                List.of(
+                        new ZLinkAggregateRelocationCoordinator.Participant(
+                                actorAuthorityKey,
+                                ZLinkPlacementObjectKind.ACTOR,
+                                4,
+                                7,
+                                "actor-version-1",
+                                ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                                sourceAuthority(actorId, sourceRid),
+                                new byte[] {'[', ']'}),
+                        new ZLinkAggregateRelocationCoordinator.Participant(
+                                authorityKey,
+                                ZLinkPlacementObjectKind.USER_SPOT,
+                                3,
+                                5,
+                                "version-1",
+                                ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                                sourceAuthority(spotId, sourceRid),
+                                new byte[] {'[', ']'}));
+        var storeRequest =
+                new ZLinkAggregateRelocationCoordinator.Request(
+                        aggregateId,
+                        targetAttemptGeneration,
+                        targetAttemptGeneration,
+                        storeParticipants,
+                        ZLinkCanonicalUserSpotRelocationEnvelope.encode(
+                                finalEnvelope, aggregateId, 5, participants),
+                        new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
+                        targetNodeGeneration,
+                        new ZLinkPlacementCapacityBundle(
+                                1,
+                                1,
+                                Optional.of(
+                                        new ZLinkSpotTypeCapacityDelta(
+                                                ZLinkPlacementObjectKind.USER_SPOT, "room", 1))),
+                        new ZLinkLocationOwnerToken("target-owner", 23),
+                        "version-1");
+        authority.seed(storeRequest);
+        var finalPrepared = coordinator.prepare(storeRequest, OPEN).toCompletableFuture().join();
+
+        AtomicInteger relays = new AtomicInteger();
+        List<RoutingId> relayDestinations = new CopyOnWriteArrayList<>();
+        List<
+                        systems.zlink.framework.runtime.internal.service
+                                .ZLinkServiceRelocationWireCodec.RequestSourceFence>
+                relayExpectedSources = new CopyOnWriteArrayList<>();
+        List<Long> relayAttempts = new CopyOnWriteArrayList<>();
+        FakeStagingBackend backend = new FakeStagingBackend();
+        var staging = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var wire = new ZLinkServiceM6BWireCodec();
+        ZLinkInternalMeshNode peer =
+                recoveryNode(
+                        wire,
+                        backend.operations,
+                        relays,
+                        relayDestinations,
+                        relayExpectedSources,
+                        relayAttempts);
+        var endpoint =
+                new ZLinkUserSpotRetireTargetEndpoint(
+                        targetRid,
+                        targetNodeGeneration,
+                        coordinator,
+                        staging,
+                        ignored -> TestSpot.class,
+                        (lane, record) ->
+                                CompletableFuture.failedFuture(
+                                        new AssertionError(
+                                                "canonical recovery must use the production"
+                                                        + " replayer")),
+                        new ZLinkSessionRelocationPeerClient(peer),
+                        Duration.ofSeconds(1),
+                        ignored -> CompletableFuture.completedFuture(null),
+                        null,
+                        ZLinkSpotRetireControl.client(peer),
+                        authorityStore,
+                        null);
+        var request =
+                new ZLinkSpotRetireControl.StageRequest(
+                        new ZLinkSpotRetireControl.Fence(aggregateId, targetAttemptGeneration),
+                        sourceRid,
+                        11,
+                        "source-owner",
+                        12,
+                        targetRid,
+                        targetNodeGeneration,
+                        "target-owner",
+                        23,
+                        "mesh",
+                        spotId,
+                        "room",
+                        false,
+                        true,
+                        storeRequest.root(),
+                        participants);
+
+        endpoint.stage(request).toCompletableFuture().join();
+        var replies = endpoint.prepareCompletions(request, List.of(), Runnable::run);
+        coordinator
+                .commit(finalPrepared, replies.acceptedRows(), OPEN)
+                .toCompletableFuture()
+                .join();
+        var publication = endpoint.publish(request, replies).toCompletableFuture();
+        backend.executor.drainUntil(publication);
+        backend.executor.drainUntil(
+                CompletableFuture.allOf(backend.queuedTerminals.toArray(CompletableFuture[]::new)));
+
+        assertEquals(
+                1,
+                relays.get(),
+                "the preserved request reply must relay once without an ACK journal retry");
+        assertEquals(
+                List.of(sourceRid),
+                relayDestinations,
+                "command 33 must be addressed to the relocation source node");
+        assertEquals(1, relayExpectedSources.size());
+        relayExpectedSources.forEach(
+                expected ->
+                        assertEquals(
+                                journalRid,
+                                expected.nodeRid(),
+                                "the expected source keeps the request-source lease fence"));
+        assertEquals(
+                List.of(targetAttemptGeneration),
+                relayAttempts,
+                "command 33 must echo the PREPARE targetAttemptGeneration");
     }
 
     private static byte[] acceptedSpotRecord(String spotId, int value) {
@@ -1676,7 +1852,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
 
         @Override
         public CompletionStage<Optional<byte[]>> replayActor(
-                Object spot, Object prepared, ZLinkActorAcceptedJournal.Record record) {
+                PreparedSpot spot, Object prepared, ZLinkActorAcceptedJournal.Record record) {
             assertTrue(lifecycleOpen);
             var actor = ((ZLinkActorRuntime.PreparedTransferredActor) prepared).actor();
             operations.add("actor-push");
@@ -1691,15 +1867,15 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         private int maxActiveSpotTurns;
 
         @Override
-        public CompletionStage<Object> prepareSpot(
+        public CompletionStage<PreparedSpot> prepareSpot(
                 ZLinkUserSpotAggregateStagingOwner.Request request) {
             operations.add("prepare");
-            return CompletableFuture.completedFuture("spot");
+            return CompletableFuture.completedFuture(new TestPreparedSpot("spot"));
         }
 
         @Override
         public CompletionStage<Void> restoreSpot(
-                Object prepared,
+                PreparedSpot prepared,
                 ZLinkUserSpotAggregateStagingOwner.Request request,
                 ZLinkRelocationCancellation cancellation) {
             operations.add("restore");
@@ -1721,7 +1897,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
 
         @Override
         public CompletionStage<Void> enqueueIngress(
-                Object preparedSpot,
+                PreparedSpot preparedSpot,
                 List<QueuedTurn> dispatches,
                 String laneId,
                 byte[] record,
@@ -1786,7 +1962,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public CompletionStage<Void> resumeIngress(Object preparedSpot, Object hold) {
+        public CompletionStage<Void> resumeIngress(
+                PreparedSpot preparedSpot, Supplier<CompletionStage<Void>> hold) {
             moving.complete(null);
             drainIngress();
             return CompletableFuture.completedFuture(null);
@@ -1816,16 +1993,16 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public CompletionStage<Void> publishSpot(Object prepared) {
+        public CompletionStage<Void> publishSpot(PreparedSpot prepared) {
             operations.add("publish");
-            live.add((String) prepared);
+            live.add((String) prepared.surface());
 
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public void publishActor(
-                Object preparedSpot,
+                PreparedSpot preparedSpot,
                 Object prepared,
                 String targetSpotId,
                 Long targetOwnerGeneration) {
@@ -1848,14 +2025,14 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public void publishTimers(Object prepared) {
+        public void publishTimers(PreparedSpot prepared) {
             operations.add("timers");
             lifecycleOpen = true;
         }
 
         @Override
         public CompletionStage<List<byte[]>> replaySpot(
-                Object prepared, ZLinkSpotAcceptedJournal.Record record) {
+                PreparedSpot prepared, ZLinkSpotAcceptedJournal.Record record) {
             assertTrue(lifecycleOpen, "durable backlog handler ran before target lifecycle open");
             assertEquals(
                     List.of("actor-a", "spot"),
@@ -1878,7 +2055,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public CompletionStage<Void> discardSpot(Object prepared) {
+        public CompletionStage<Void> discardSpot(PreparedSpot prepared) {
             return CompletableFuture.completedFuture(null);
         }
     }

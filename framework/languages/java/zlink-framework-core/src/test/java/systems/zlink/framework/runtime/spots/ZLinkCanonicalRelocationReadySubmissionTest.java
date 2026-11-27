@@ -186,6 +186,8 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 });
         var coordinator = new ZLinkAggregateRelocationCoordinator(observedLocations);
         UUID relocationId = UUID.randomUUID();
+        ZLinkSealedActorInventoryFixture.seal(
+                coordinator, relocationId, authorityKey, sourceSnapshot, targetAuthority, OPEN);
         byte[] root =
                 ZLinkCanonicalActorRelocationEnvelope.encode(
                         relocationId,

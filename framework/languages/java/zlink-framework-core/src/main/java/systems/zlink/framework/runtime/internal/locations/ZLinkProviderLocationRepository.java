@@ -433,6 +433,27 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     }
 
     @Override
+    public CompletionStage<byte[]> sealAggregateInventory(
+            ZLinkAggregateFence fence,
+            List<ZLinkAggregateParticipant> participants,
+            ZLinkStoreCancellation cancellation) {
+        return authority.sealAggregateInventory(fence, participants, cancellation);
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkAggregateInventoryStore.StoredParticipant>>
+            readAggregateInventory(
+                    ZLinkAggregateFence fence, byte[] digest, ZLinkStoreCancellation cancellation) {
+        return authority.readAggregateInventory(fence, digest, cancellation);
+    }
+
+    @Override
+    public CompletionStage<Void> deleteAggregateInventory(
+            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+        return authority.deleteAggregateInventory(fence, cancellation);
+    }
+
+    @Override
     public CompletionStage<Optional<ZLinkAggregateProgressSnapshot>> readAggregateProgress(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
         return observeStore(

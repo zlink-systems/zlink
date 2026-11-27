@@ -32,11 +32,16 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMutation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseMissing;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
@@ -160,15 +165,7 @@ final class ZLinkActorDestroyContractTest {
             var previous = create(owner);
             var endpoint = owner.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             try (var remote = start(locations, "destroy-caller", endpoint)) {
-                assertTimeoutPreemptively(
-                        Duration.ofSeconds(10),
-                        () -> {
-                            while (owner.routeMeshRuntime().snapshot(MESH).readyPeerCount() == 0
-                                    || remote.routeMeshRuntime().snapshot(MESH).readyPeerCount()
-                                            == 0) {
-                                Thread.sleep(10);
-                            }
-                        });
+                awaitAdmittedPeers(owner, remote);
                 var manager = remote.actorManager();
                 assertTrue(await(manager.destroy(previous)));
                 var current = create(owner);
@@ -180,6 +177,92 @@ final class ZLinkActorDestroyContractTest {
                         ZLinkFrameworkErrorKind.INVALID_OPERATION,
                         assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
                 assertEquals(current, await(owner.actorManager().find(ACTOR_ID)).orElseThrow());
+            }
+        }
+    }
+
+    @Test
+    void remoteDestroyReleasesClosingAfterOwnerLeaseEnds() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var repository = new ZLinkProviderLocationRepository(locations);
+        String key = ZLinkAuthorityKeyCodec.actor(ACTOR_ID);
+        var deleteReached = new CompletableFuture<Void>();
+        var deleteProceed = new CompletableFuture<Void>();
+        var deleteFailure = new IllegalStateException("injected Actor destroy Delete failure");
+        var ownerRepository =
+                rejectActorMutation(
+                        repository,
+                        mutation -> mutation instanceof ZLinkAuthorityDelete,
+                        deleteFailure,
+                        deleteReached,
+                        deleteProceed);
+        var ownerConstruction =
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .locationStores(ZLinkRegisteredLocationStores.fromUnified(ownerRepository));
+        var owner = start(locations, "destroy-owner", null, ownerConstruction);
+        try {
+            var actor = create(owner);
+            var observed = new CompletableFuture<ZLinkAuthoritySnapshot>();
+            var callerRepository =
+                    intercept(
+                            repository,
+                            "read",
+                            args -> {
+                                if (!key.equals(args[0])) return null;
+                                return repository
+                                        .read(key, (ZLinkStoreCancellation) args[1])
+                                        .thenApply(
+                                                read -> {
+                                                    if (read
+                                                                    instanceof
+                                                                    ZLinkAuthoritySnapshot snapshot
+                                                            && snapshot.objectGeneration()
+                                                                    == actor.objectGeneration()
+                                                            && ZLinkAuthoritySnapshot.actorClosing(
+                                                                    snapshot.payload(),
+                                                                    snapshot.allocation())) {
+                                                        observed.complete(snapshot);
+                                                    }
+                                                    return read;
+                                                });
+                            });
+            var callerConstruction =
+                    new ZLinkFrameworkRuntimeTestAccess.Construction()
+                            .locationStores(
+                                    ZLinkRegisteredLocationStores.fromUnified(callerRepository));
+            var endpoint = owner.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            try (var caller = start(locations, "destroy-caller", endpoint, callerConstruction)) {
+                awaitAdmittedPeers(owner, caller);
+                var destroy = caller.actorManager().destroy(actor).toCompletableFuture();
+                await(deleteReached);
+                var closing = await(observed);
+                assertEquals(
+                        closing.storeVersion(),
+                        assertInstanceOf(
+                                        ZLinkAuthoritySnapshot.class,
+                                        await(repository.read(key, () -> false)))
+                                .storeVersion());
+                assertFalse(destroy.isDone());
+                var ownerToken =
+                        new ZLinkLocationOwnerToken(
+                                closing.ownerId(), closing.ownerLeaseGeneration());
+                assertEquals(
+                        ZLinkOwnerLeaseReleaseResult.RELEASED,
+                        await(repository.releaseOwnerLease(ownerToken)));
+                assertInstanceOf(
+                        ZLinkOwnerLeaseMissing.class,
+                        await(repository.readOwnerLease(closing.ownerId())));
+                assertTrue(await(destroy));
+                assertInstanceOf(
+                        ZLinkAuthorityMissing.class, await(repository.read(key, () -> false)));
+            }
+        } finally {
+            deleteProceed.complete(null);
+            if (deleteReached.isDone()) {
+                var shutdown = assertThrows(RuntimeException.class, owner::close);
+                assertSame(deleteFailure, shutdown.getCause());
+            } else {
+                owner.close();
             }
         }
     }
@@ -636,6 +719,18 @@ final class ZLinkActorDestroyContractTest {
             runtime.close();
             throw failure;
         }
+    }
+
+    private static void awaitAdmittedPeers(
+            ZLinkFrameworkRuntime owner, ZLinkFrameworkRuntime caller) {
+        assertTimeoutPreemptively(
+                Duration.ofSeconds(10),
+                () -> {
+                    while (owner.routeMeshRuntime().snapshot(MESH).readyPeerCount() == 0
+                            || caller.routeMeshRuntime().snapshot(MESH).readyPeerCount() == 0) {
+                        Thread.sleep(10);
+                    }
+                });
     }
 
     private static <T> T await(CompletionStage<T> stage) throws Exception {

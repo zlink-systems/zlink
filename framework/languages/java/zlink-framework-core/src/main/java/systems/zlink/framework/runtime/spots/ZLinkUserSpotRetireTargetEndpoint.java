@@ -23,13 +23,15 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow;
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow.Source;
-import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
@@ -71,7 +73,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private final long localNodeGeneration;
     final ZLinkAggregateRelocationCoordinator coordinator;
     private final ZLinkUserSpotAggregateStagingOwner staging;
-    private final Function<String, Class<? extends ZLinkSpot<?>>> spotTypes;
+    private final BiFunction<ZLinkPlacementObjectKind, String, Class<?>> spotTypes;
     private final ZLinkUserSpotAggregateStagingOwner.JournalReplayer fallbackReplayer;
     private final ZLinkSessionRelocationPeerClient sessionRoutes;
     private final Duration routeTimeout;
@@ -107,7 +109,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 localNodeGeneration,
                 coordinator,
                 staging,
-                spotTypes,
+                (kind, stableType) -> spotTypes.apply(stableType),
                 replayer,
                 sessionRoutes,
                 routeTimeout,
@@ -139,7 +141,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 localNodeGeneration,
                 coordinator,
                 staging,
-                spotTypes,
+                (kind, stableType) -> spotTypes.apply(stableType),
                 replayer,
                 sessionRoutes,
                 routeTimeout,
@@ -157,7 +159,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             long localNodeGeneration,
             ZLinkAggregateRelocationCoordinator coordinator,
             ZLinkUserSpotAggregateStagingOwner staging,
-            Function<String, Class<? extends ZLinkSpot<?>>> spotTypes,
+            BiFunction<ZLinkPlacementObjectKind, String, Class<?>> spotTypes,
             ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer,
             ZLinkSessionRelocationPeerClient sessionRoutes,
             Duration routeTimeout,
@@ -313,8 +315,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
             ZLinkSpotRetireControl.StageRequest request,
             byte[] frozen,
             List<ZLinkRelocationReplyRow> accepted) {
-        if (!ZLinkServiceFrozenRecordCodec.isRequest(frozen)) return;
-        if (ZLinkServiceFrozenRecordCodec.isActor(frozen)) {
+        if (!ZLinkServiceFrozenRecordCodec.mayHaveReplyRoute(frozen)) return;
+        if (ZLinkServiceFrozenRecordCodec.isActorRecord(frozen)) {
             var record = ZLinkActorAcceptedJournal.decode(frozen);
             record.replyRouteId()
                     .ifPresent(
@@ -412,6 +414,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                 "published relocation payload does not match the"
                                                         + " target Spot"));
                             }
+                            staging.setCommittedSpotAuthority(
+                                    target.staged(),
+                                    snapshots.get(ZLinkAuthorityKeyCodec.spot(request.spotId())));
                             Map<String, Long> actorOwnerGenerations = new HashMap<>();
                             for (var participant : request.participants()) {
                                 if (participant.objectKind()
@@ -438,8 +443,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                                             request
                                                                                     .participants()) {
                                                                         if (participant.objectKind()
-                                                                                == ZLinkPlacementObjectKind
-                                                                                        .USER_SPOT
+                                                                                != ZLinkPlacementObjectKind
+                                                                                        .ACTOR
                                                                                         .value()) {
                                                                             sourceReplies
                                                                                     .rememberRecoveredSpot(
@@ -488,15 +493,11 @@ final class ZLinkUserSpotRetireTargetEndpoint
             ActorTargetStage target = requireActorStage(request);
             return actorStaging.stageRelayedRecord(target.staged(), frozenRecord);
         }
-        ZLinkActorAcceptedJournal.Record actorRecord =
-                ZLinkServiceFrozenRecordCodec.isActor(frozenRecord)
-                        ? ZLinkActorAcceptedJournal.decode(frozenRecord)
-                        : null;
+        boolean actor = ZLinkServiceFrozenRecordCodec.isActorRecord(frozenRecord);
+        String objectId =
+                actor ? ZLinkActorAcceptedJournal.decode(frozenRecord).actorId() : request.spotId();
         return staging.stageRelayedRecord(
-                requireStage(request).staged(),
-                actorRecord == null ? request.spotId() : actorRecord.actorId(),
-                actorRecord != null,
-                frozenRecord);
+                requireStage(request).staged(), objectId, actor, frozenRecord);
     }
 
     @Override
@@ -780,7 +781,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     || stage.targetNodeGeneration() != nodeGeneration
                     || stage.targetOwnerLeaseGeneration() != ownerLeaseGeneration) return null;
             for (var member : stage.participants()) {
-                if (member.objectKind() == kind.value()
+                if ((member.objectKind() == ZLinkPlacementObjectKind.ACTOR.value())
+                                == (kind == ZLinkPlacementObjectKind.ACTOR)
                         && member.objectId().equals(objectId)
                         && member.objectGeneration() == objectGeneration
                         && (acceptDirect
@@ -874,16 +876,32 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                 record.requestSequence().orElse(0L));
                 CanonicalReplyPayload payload = null;
                 if (failure == null && record.requestSequence().isPresent()) {
-                    if (reply.size() != 1 || record.parts().isEmpty()) {
+                    if (reply.isEmpty() || record.parts().isEmpty()) {
                         return CompletableFuture.failedFuture(
                                 new IllegalStateException(
-                                        "canonical Spot request must produce one reply"));
+                                        "canonical Spot request must produce a reply"));
                     }
-                    payload =
-                            new CanonicalReplyPayload(
-                                    new String(record.parts().getFirst(), StandardCharsets.UTF_8),
-                                    "application/zlink-framework-json-v1",
-                                    reply.getFirst());
+                    if (reply.size() == 1) {
+                        payload =
+                                new CanonicalReplyPayload(
+                                        new String(
+                                                record.parts().getFirst(), StandardCharsets.UTF_8),
+                                        "application/zlink-framework-json-v1",
+                                        reply.getFirst());
+                    } else {
+                        var parts = reply.stream().map(Message::from).toList();
+                        try {
+                            var multipart =
+                                    ZLinkServiceM6AWireCodec.encodeFrameworkMultipart(parts);
+                            payload =
+                                    new CanonicalReplyPayload(
+                                            multipart.packetName(),
+                                            multipart.contentType(),
+                                            multipart.payload());
+                        } finally {
+                            parts.forEach(Message::close);
+                        }
+                    }
                 }
                 return completeCanonicalReplay(
                         request,
@@ -1143,31 +1161,26 @@ final class ZLinkUserSpotRetireTargetEndpoint
             ZLinkSpotRetireControl.StageRequest request, ZLinkRelocationReplyRow entry) {
         var stored = relocationWire.decodeStoredReply(entry.reply());
         var source = entry.source();
-        return sendReply(
-                request,
-                stored.relay(),
+        var frames = relocationWire.encodeReplyRelayFrames(stored.relay(), stored.payload());
+        var expectedSource =
                 new ZLinkServiceRelocationWireCodec.RequestSourceFence(
-                        source.ownerId(), Long.parseUnsignedLong(source.leaseGeneration()),
+                        source.ownerId(),
+                        Long.parseUnsignedLong(source.leaseGeneration()),
                         RoutingId.fromHex(source.nodeRid()),
-                                Long.parseUnsignedLong(source.nodeGeneration())),
-                stored.payload() == null ? List.of() : List.of(stored.payload().payload()));
-    }
-
-    private CompletionStage<String> sendReply(
-            ZLinkSpotRetireControl.StageRequest request,
-            ZLinkServiceRelocationWireCodec.ReplyRelay relay,
-            ZLinkServiceRelocationWireCodec.RequestSourceFence expectedSource,
-            List<byte[]> payload) {
-        byte[] command = relocationWire.encodeReplyRelay(relay);
+                        Long.parseUnsignedLong(source.nodeGeneration()));
         // The relocation source owns the original reply capability. Its ACK
         // closes the request-source fence, which can identify another node.
         return relocationClient
                 .relayCanonicalReply(
-                        request.sourceNodeRid(), expectedSource, command, payload, routeTimeout)
+                        request.sourceNodeRid(),
+                        expectedSource,
+                        frames.getFirst(),
+                        frames.subList(1, frames.size()),
+                        routeTimeout)
                 .thenApply(
                         encoded -> {
                             var ack = relocationWire.decodeReplyRelayAck(encoded);
-                            validateCanonicalAck(relay, expectedSource, ack);
+                            validateCanonicalAck(stored.relay(), expectedSource, ack);
                             return ack.status() == 1
                                     ? ZLinkRelocationReplyRow.TERMINAL_RECEIVED
                                     : ZLinkRelocationReplyRow.ALREADY_TERMINAL;
@@ -1176,8 +1189,11 @@ final class ZLinkUserSpotRetireTargetEndpoint
 
     CompletionStage<byte[]> relayCanonicalReply(
             RoutingId transportSource, byte[] command33, List<byte[]> payload) {
-        ZLinkServiceRelocationWireCodec.ReplyRelay relay =
-                relocationWire.decodeReplyRelay(command33);
+        var frames = new ArrayList<byte[]>(1 + payload.size());
+        frames.add(command33);
+        frames.addAll(payload);
+        var received = relocationWire.decodeReplyRelayFrames(frames);
+        var relay = received.relay();
         if (sourceReplies == null) {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("relocation reply runtime is unavailable"));
@@ -1189,7 +1205,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
         }
         return sourceReplies
                 .deliverCanonicalRelocationReply(
-                        route, payload, relay.terminalResult(), relay.failureCode())
+                        route,
+                        decodeReplyParts(received.payload()),
+                        relay.terminalResult(),
+                        relay.failureCode())
                 .thenApply(
                         ack -> {
                             if (ack == ZLinkSpotRelocationReplyRoutes.Ack.NOT_ACKNOWLEDGED) {
@@ -1213,6 +1232,25 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                     route.sourceNodeGeneration()),
                                             status));
                         });
+    }
+
+    private static List<byte[]> decodeReplyParts(
+            ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1 payload) {
+        if (payload == null) return List.of();
+        if (!ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME.equals(payload.packetName())
+                || !ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE.equals(
+                        payload.contentType())) {
+            return List.of(payload.payload());
+        }
+        var parts =
+                ZLinkServiceM6AWireCodec.decodeFrameworkMultipart(
+                        new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                                payload.packetName(), payload.contentType(), payload.payload()));
+        try {
+            return parts.stream().map(Message::toByteArray).toList();
+        } finally {
+            parts.forEach(Message::close);
+        }
     }
 
     static void validateCanonicalAck(
@@ -1433,9 +1471,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return ZLinkSerialExecutionQueue.yieldCurrent(
                         coordinator.readTargetOwnerGenerations(
                                 expectedParticipants(request),
-                                new ZLinkAggregateFence(
-                                        request.fence().aggregateId(),
-                                        request.fence().aggregateGeneration()),
+                                ZLinkAggregateFence.markerlessRelocation(
+                                        request.fence().aggregateId()),
                                 new ZLinkLocationOwnerToken(
                                         request.targetOwnerId(),
                                         request.targetOwnerLeaseGeneration()),

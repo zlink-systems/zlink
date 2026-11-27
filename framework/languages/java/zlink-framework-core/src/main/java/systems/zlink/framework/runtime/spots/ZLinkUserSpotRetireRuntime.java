@@ -1,7 +1,11 @@
 package systems.zlink.framework.runtime.spots;
 
+import static systems.zlink.framework.runtime.spots.SpotActivationBase.unwrapCompletion;
+
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode;
@@ -25,6 +29,7 @@ import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,6 +38,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -199,7 +205,17 @@ public final class ZLinkUserSpotRetireRuntime {
                             .collect(
                                     Collectors.toUnmodifiableMap(
                                             Map.Entry::getKey, Map.Entry::getValue));
-            if (node == null || relocatableSpots.isEmpty() && relocatableActors.isEmpty()) {
+            var instanceFactories =
+                    registration.relocatableInstanceSpotFactories().entrySet().stream()
+                            .filter(
+                                    entry ->
+                                            !(entry.getValue().relocationPolicy()
+                                                    instanceof RelocationPolicy.Disabled))
+                            .collect(
+                                    Collectors.toUnmodifiableMap(
+                                            Map.Entry::getKey, Map.Entry::getValue));
+            boolean relocatesSpots = !relocatableSpots.isEmpty() || !instanceFactories.isEmpty();
+            if (node == null || !relocatesSpots && relocatableActors.isEmpty()) {
                 continue;
             }
             var staging =
@@ -243,10 +259,14 @@ public final class ZLinkUserSpotRetireRuntime {
                             node.status().lifecycleGeneration(),
                             coordinator,
                             staging,
-                            stableType ->
-                                    relocatableSpots.containsKey(stableType)
-                                            ? relocatableSpots.get(stableType).spotType()
-                                            : null,
+                            (kind, stableType) ->
+                                    kind == ZLinkPlacementObjectKind.INSTANCE_SPOT
+                                            ? Optional.ofNullable(instanceFactories.get(stableType))
+                                                    .map(factory -> factory.spotType())
+                                                    .orElse(null)
+                                            : relocatableSpots.containsKey(stableType)
+                                                    ? relocatableSpots.get(stableType).spotType()
+                                                    : null,
                             null,
                             peerClient,
                             CONTROL_TIMEOUT,
@@ -279,7 +299,7 @@ public final class ZLinkUserSpotRetireRuntime {
             new ZLinkCanonicalRelocationTransitionOwner(relocationClient).install(node);
             node.setRelocationReplyRelayHandler(target::relayCanonicalReply);
             node.spotNode().setRelocationStagingIngressHandler(target);
-            if (!relocatableSpots.isEmpty()) {
+            if (relocatesSpots) {
                 configured.put(
                         registration.meshName(),
                         new Lane(
@@ -430,7 +450,7 @@ public final class ZLinkUserSpotRetireRuntime {
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
-        RelocationPlan plan = inventory.plan();
+        RelocationPlan<ZLinkSpotRelocationUnit> plan = inventory.plan();
         return inventory
                 .preflightTargets(targetPopulationPreflight)
                 .thenCompose(
@@ -441,7 +461,7 @@ public final class ZLinkUserSpotRetireRuntime {
                                         actorId ->
                                                 preflightActor(actorId, cancellation, targetPolicy),
                                         () -> {
-                                            if (!inventory.equals(
+                                            if (!inventory.matches(
                                                     snapshotInventory(
                                                             spots, actors, registrations))) {
                                                 throw new RelocationBlockedException(
@@ -462,10 +482,11 @@ public final class ZLinkUserSpotRetireRuntime {
                                                         cancellationSignal),
                                         actorId ->
                                                 relocateActor(
-                                                        actorId,
-                                                        deadline,
-                                                        cancellation,
-                                                        targetPolicy),
+                                                                actorId,
+                                                                deadline,
+                                                                cancellation,
+                                                                targetPolicy)
+                                                        .thenApply(ignored -> true),
                                         () -> closeSourceShells(plan.shellSpotIds(), deadline)));
     }
 
@@ -491,76 +512,95 @@ public final class ZLinkUserSpotRetireRuntime {
             ZLinkSpotRuntime spots,
             ZLinkActorRuntime actors,
             List<MeshNodeRegistration> registrations) {
-        var shellSpotIds = new ArrayList<String>();
-        var aggregateSpotIds = new ArrayList<String>();
+        var shellSpotIds = new ArrayList<ZLinkSpotRelocationUnit>();
+        var aggregateSpotIds = new ArrayList<ZLinkSpotRelocationUnit>();
         var aggregateActors = new HashSet<String>();
-        List<SpotActivation> userSpots =
-                spots == null ? List.of() : spots.spotLifecycle().userSpotActivations();
-        // A committed Instance Spot Close owns settlement (Host relocation §12).
-        List<ZLinkInstanceSpotActivation> instanceSpots =
-                spots == null
-                        ? List.of()
-                        : spots.instanceSpotActivations.values().stream()
-                                .filter(activation -> !activation.hasCommittedClose())
-                                .toList();
-        List<String> activeActors = actors == null ? List.of() : actors.activeActorIds();
-        for (SpotActivation activation : userSpots) {
-            String spotId = activation.context.spotId();
-            if (activation.context.executionMode() == ZLinkUserSpotExecutionMode.PER_ACTOR) {
-                shellSpotIds.add(spotId);
-            } else {
-                aggregateSpotIds.add(spotId);
-                aggregateActors.addAll(spots.actorSessions().actorIdsInSpot(spotId));
+        if (spots != null) {
+            for (SpotActivation activation : spots.spotLifecycle().userSpotActivations()) {
+                String spotId = activation.context.spotId();
+                var factory =
+                        registrations.stream()
+                                .filter(
+                                        registration ->
+                                                registration
+                                                        .meshName()
+                                                        .equals(activation.meshName()))
+                                .flatMap(
+                                        registration ->
+                                                registration
+                                                        .relocatableSpotFactories()
+                                                        .values()
+                                                        .stream())
+                                .filter(
+                                        value ->
+                                                value.spotType()
+                                                        .equals(activation.spot().getClass()))
+                                .findFirst();
+                requireRelocationPolicy(
+                        spotId,
+                        factory.map(RelocatableSpotFactory::relocationPolicy),
+                        registrations);
+                var registration = factory.orElseThrow();
+                var unit =
+                        new ZLinkSpotRelocationUnit(
+                                spotId,
+                                activation.meshName(),
+                                ZLinkPlacementObjectKind.USER_SPOT,
+                                registration.stableType(),
+                                registration.spotType(),
+                                registration.relocationPolicy(),
+                                activation);
+                if (activation.context.executionMode() == ZLinkUserSpotExecutionMode.PER_ACTOR) {
+                    shellSpotIds.add(unit);
+                } else {
+                    aggregateSpotIds.add(unit);
+                    aggregateActors.addAll(spots.actorSessions().actorIdsInSpot(spotId));
+                }
+            }
+            // Close owns settlement once it commits (Host relocation §12).
+            for (var activation : spots.instanceSpotActivations.values()) {
+                if (activation.hasCommittedClose() || !activation.hasExpectedNodeGeneration())
+                    continue;
+                var context = activation.context;
+                var factory =
+                        registrations.stream()
+                                .filter(
+                                        registration ->
+                                                registration.meshName().equals(context.meshName()))
+                                .flatMap(
+                                        registration ->
+                                                registration
+                                                        .relocatableInstanceSpotFactories()
+                                                        .values()
+                                                        .stream())
+                                .filter(
+                                        value ->
+                                                value.spotType()
+                                                        .equals(activation.spotSurface.getClass()))
+                                .findFirst();
+                requireRelocationPolicy(
+                        context.spotId(),
+                        factory.map(value -> value.relocationPolicy()),
+                        registrations);
+                var registration = factory.orElseThrow();
+                aggregateSpotIds.add(
+                        new ZLinkSpotRelocationUnit(
+                                context.spotId(),
+                                context.meshName(),
+                                ZLinkPlacementObjectKind.INSTANCE_SPOT,
+                                registration.stableType(),
+                                registration.spotType(),
+                                registration.relocationPolicy(),
+                                activation));
             }
         }
-        shellSpotIds.sort(String::compareTo);
-        aggregateSpotIds.sort(String::compareTo);
+        shellSpotIds.sort(Comparator.comparing(ZLinkSpotRelocationUnit::id));
+        aggregateSpotIds.sort(Comparator.comparing(ZLinkSpotRelocationUnit::id));
+        List<String> activeActors = actors == null ? List.of() : actors.activeActorIds();
         List<String> actorIds =
                 activeActors.stream()
                         .filter(actorId -> !aggregateActors.contains(actorId))
                         .toList();
-        for (SpotActivation activation : userSpots) {
-            var policy =
-                    registrations.stream()
-                            .filter(
-                                    registration ->
-                                            registration.meshName().equals(activation.meshName()))
-                            .flatMap(
-                                    registration ->
-                                            registration
-                                                    .relocatableSpotFactories()
-                                                    .values()
-                                                    .stream())
-                            .filter(
-                                    factory ->
-                                            factory.spotType().equals(activation.spot().getClass()))
-                            .map(RelocatableSpotFactory::relocationPolicy)
-                            .findFirst();
-            requireRelocationPolicy(activation.context.spotId(), policy, registrations);
-        }
-        for (ZLinkInstanceSpotActivation activation : instanceSpots) {
-            var policy =
-                    registrations.stream()
-                            .filter(
-                                    registration ->
-                                            registration
-                                                    .meshName()
-                                                    .equals(activation.context.meshName()))
-                            .flatMap(
-                                    registration ->
-                                            registration
-                                                    .relocatableInstanceSpotFactories()
-                                                    .values()
-                                                    .stream())
-                            .filter(
-                                    factory ->
-                                            factory.spotType()
-                                                    .equals(activation.spotSurface.getClass()))
-                            .map(factory -> factory.relocationPolicy())
-                            .findFirst();
-            policy.ifPresent(
-                    configured -> checkDisabledRelocation(activation.context.spotId(), configured));
-        }
         for (String actorId : activeActors) {
             String actorType = spots.actorSessions().actorType(actorId);
             String mesh = spots.actorSessions().actorMeshName(actorId);
@@ -575,9 +615,8 @@ public final class ZLinkUserSpotRetireRuntime {
                             .findFirst();
             requireRelocationPolicy(actorId, policy, registrations);
         }
-        var plan = new RelocationPlan(shellSpotIds, actorIds, aggregateSpotIds);
-        // Host relocation §5.1 counts all active objects when deciding whether to find a target.
-        return new RelocationInventory(plan, !plan.isEmpty() || !instanceSpots.isEmpty());
+        return new RelocationInventory(
+                new RelocationPlan<>(shellSpotIds, actorIds, aggregateSpotIds));
     }
 
     private static void requireRelocationPolicy(
@@ -604,7 +643,8 @@ public final class ZLinkUserSpotRetireRuntime {
         }
     }
 
-    private CompletionStage<Void> closeSourceShells(List<String> shellSpotIds, Instant deadline) {
+    private CompletionStage<Void> closeSourceShells(
+            List<ZLinkSpotRelocationUnit> shellSpotIds, Instant deadline) {
         return ZLinkRelocationHandOff.completeSourceCleanup(
                 shellSpotIds.stream()
                         .<Supplier<? extends CompletionStage<Void>>>map(
@@ -612,18 +652,18 @@ public final class ZLinkUserSpotRetireRuntime {
                                         () ->
                                                 spots.spotLifecycle()
                                                         .completeRelocatedShellSource(
-                                                                spotId, deadline))
+                                                                spotId.id(), deadline))
                         .toList());
     }
 
-    static CompletionStage<Void> executePlan(
-            RelocationPlan plan,
-            UnitOperation spotPreflight,
-            UnitOperation actorPreflight,
+    static <S> CompletionStage<Void> executePlan(
+            RelocationPlan<S> plan,
+            UnitOperation<S> spotPreflight,
+            UnitOperation<String> actorPreflight,
             Runnable onPreflightPassed,
             BooleanSupplier stopBeforeNextUnit,
-            UnitOperation spotRelocation,
-            UnitOperation actorRelocation) {
+            UnitOperation<S> spotRelocation,
+            UnitOperation<String> actorRelocation) {
         Objects.requireNonNull(onPreflightPassed, "onPreflightPassed");
         return executePlan(
                 plan,
@@ -638,33 +678,33 @@ public final class ZLinkUserSpotRetireRuntime {
                 actorRelocation);
     }
 
-    static CompletionStage<Void> executePlan(
-            RelocationPlan plan,
-            UnitOperation spotPreflight,
-            UnitOperation actorPreflight,
+    static <S> CompletionStage<Void> executePlan(
+            RelocationPlan<S> plan,
+            UnitOperation<S> spotPreflight,
+            UnitOperation<String> actorPreflight,
             Supplier<CompletionStage<Void>> onPreflightPassed,
             BooleanSupplier stopBeforeNextUnit,
-            UnitOperation spotRelocation,
-            UnitOperation actorRelocation) {
+            UnitOperation<S> spotRelocation,
+            UnitOperation<String> actorRelocation) {
         return executePlan(
                 plan,
                 spotPreflight,
                 actorPreflight,
                 onPreflightPassed,
                 stopBeforeNextUnit,
-                spotRelocation,
-                actorRelocation,
+                id -> spotRelocation.execute(id).thenApply(ignored -> true),
+                id -> actorRelocation.execute(id).thenApply(ignored -> true),
                 () -> CompletableFuture.completedFuture(null));
     }
 
-    private static CompletionStage<Void> executePlan(
-            RelocationPlan plan,
-            UnitOperation spotPreflight,
-            UnitOperation actorPreflight,
+    private static <S> CompletionStage<Void> executePlan(
+            RelocationPlan<S> plan,
+            UnitOperation<S> spotPreflight,
+            UnitOperation<String> actorPreflight,
             Supplier<CompletionStage<Void>> onPreflightPassed,
             BooleanSupplier stopBeforeNextUnit,
-            UnitOperation spotRelocation,
-            UnitOperation actorRelocation,
+            RelocationOperation<S> spotRelocation,
+            RelocationOperation<String> actorRelocation,
             Supplier<CompletionStage<Void>> onActorBatchComplete) {
         Objects.requireNonNull(plan, "plan");
         Objects.requireNonNull(spotPreflight, "spotPreflight");
@@ -674,10 +714,10 @@ public final class ZLinkUserSpotRetireRuntime {
         Objects.requireNonNull(spotRelocation, "spotRelocation");
         Objects.requireNonNull(actorRelocation, "actorRelocation");
         CompletionStage<Void> preflight = CompletableFuture.completedFuture(null);
-        for (String spotId : plan.shellSpotIds()) {
+        for (S spotId : plan.shellSpotIds()) {
             preflight = preflight.thenCompose(ignored -> spotPreflight.execute(spotId));
         }
-        for (String spotId : plan.aggregateSpotIds()) {
+        for (S spotId : plan.aggregateSpotIds()) {
             preflight = preflight.thenCompose(ignored -> spotPreflight.execute(spotId));
         }
         for (String actorId : plan.actorIds()) {
@@ -692,30 +732,19 @@ public final class ZLinkUserSpotRetireRuntime {
         // Host relocation §7 orders the shell, Actor and aggregate batches.
         for (var batch :
                 List.of(
-                        new RelocationBatch(plan.shellSpotIds(), spotRelocation),
-                        new RelocationBatch(plan.actorIds(), actorRelocation, onActorBatchComplete),
-                        new RelocationBatch(plan.aggregateSpotIds(), spotRelocation))) {
+                        new RelocationBatch<>(plan.shellSpotIds(), spotRelocation),
+                        new RelocationBatch<>(
+                                plan.actorIds(), actorRelocation, onActorBatchComplete),
+                        new RelocationBatch<>(plan.aggregateSpotIds(), spotRelocation))) {
             completion =
-                    completion.thenCompose(
-                            ignored -> {
-                                var started =
-                                        new ArrayList<CompletionStage<Void>>(batch.ids().size());
-                                for (String id : batch.ids()) {
-                                    started.add(
-                                            startUnit(
-                                                    stopBeforeNextUnit,
-                                                    () -> batch.operation().execute(id)));
-                                }
-                                return awaitAllUnits(started, committed)
-                                        .thenCompose(done -> batch.onComplete().get());
-                            });
+                    completion.thenCompose(ignored -> batch.execute(stopBeforeNextUnit, committed));
         }
         return completion;
     }
 
     //  Shutdown is re-checked as the unit starts, not when the plan was built.
-    private static CompletionStage<Void> startUnit(
-            BooleanSupplier stopBeforeNextUnit, Supplier<CompletionStage<Void>> relocation) {
+    private static CompletionStage<Boolean> startUnit(
+            BooleanSupplier stopBeforeNextUnit, Supplier<CompletionStage<Boolean>> relocation) {
         if (stopBeforeNextUnit.getAsBoolean()) {
             return shutdownRequested();
         }
@@ -730,7 +759,7 @@ public final class ZLinkUserSpotRetireRuntime {
     // attached to it. A successful unit confirms target authority, so commits
     // from every batch count when classifying split authority (Host relocation §13).
     private static CompletionStage<Void> awaitAllUnits(
-            List<CompletionStage<Void>> units, AtomicInteger committed) {
+            List<CompletionStage<Boolean>> units, AtomicInteger committed) {
         if (units.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
@@ -741,8 +770,8 @@ public final class ZLinkUserSpotRetireRuntime {
                                 unit ->
                                         unit.toCompletableFuture()
                                                 .handle(
-                                                        (ignored, failure) -> {
-                                                            if (failure == null) {
+                                                        (moved, failure) -> {
+                                                            if (Boolean.TRUE.equals(moved)) {
                                                                 committed.incrementAndGet();
                                                             }
                                                             if (failure != null
@@ -764,11 +793,7 @@ public final class ZLinkUserSpotRetireRuntime {
                             if (failure == null) {
                                 return CompletableFuture.completedFuture(null);
                             }
-                            Throwable cause = failure;
-                            while (cause instanceof java.util.concurrent.CompletionException
-                                    && cause.getCause() != null) {
-                                cause = cause.getCause();
-                            }
+                            Throwable cause = unwrapCompletion(failure);
                             if (committed.get() == 0
                                     || cause instanceof RelocationAuthorityErrorException) {
                                 return CompletableFuture.<Void>failedFuture(failure);
@@ -782,7 +807,7 @@ public final class ZLinkUserSpotRetireRuntime {
                         });
     }
 
-    private static CompletionStage<Void> shutdownRequested() {
+    private static <T> CompletionStage<T> shutdownRequested() {
         return CompletableFuture.failedFuture(
                 new RelocationBlockedException(
                         ZLinkFrameworkRelocationReason.SHUTDOWN_REQUESTED,
@@ -790,10 +815,10 @@ public final class ZLinkUserSpotRetireRuntime {
     }
 
     private CompletionStage<Void> preflightSpot(
-            String spotId,
+            ZLinkSpotRelocationUnit spot,
             ZLinkStoreCancellation cancellation,
             ZLinkRelocationTargetPolicy targetPolicy) {
-        String meshName = spots.userSpotMeshName(spotId);
+        String meshName = spot.mesh();
         Lane lane = lanes.get(meshName);
         if (lane == null) {
             return CompletableFuture.failedFuture(
@@ -801,7 +826,7 @@ public final class ZLinkUserSpotRetireRuntime {
                             ZLinkFrameworkRelocationReason.STATE_INCOMPATIBLE,
                             "User Spot Retire lane is unavailable: " + meshName));
         }
-        return lane.source().preflight(spotId, targetPolicy, cancellation);
+        return lane.source().preflight(spot, targetPolicy, cancellation);
     }
 
     private CompletionStage<Void> preflightActor(
@@ -819,13 +844,13 @@ public final class ZLinkUserSpotRetireRuntime {
         return lane.source().preflight(actorId, targetPolicy, cancellation);
     }
 
-    private CompletionStage<Void> relocateOne(
-            String spotId,
+    private CompletionStage<Boolean> relocateOne(
+            ZLinkSpotRelocationUnit spot,
             Instant deadline,
             ZLinkStoreCancellation cancellation,
             ZLinkRelocationTargetPolicy targetPolicy,
             CompletionStage<?> cancellationSignal) {
-        String meshName = spots.userSpotMeshName(spotId);
+        String meshName = spot.mesh();
         Lane lane = lanes.get(meshName);
         if (lane == null) {
             return CompletableFuture.failedFuture(
@@ -834,19 +859,23 @@ public final class ZLinkUserSpotRetireRuntime {
         Duration timeout = Duration.between(Instant.now(), deadline);
         if (timeout.isZero() || timeout.isNegative()) {
             return CompletableFuture.failedFuture(
-                    new java.util.concurrent.TimeoutException("User Spot Retire deadline elapsed"));
+                    new TimeoutException("User Spot Retire deadline elapsed"));
         }
         return lane.awaitUnitAdmission()
                 .thenCompose(
                         admitted ->
                                 lane.source()
                                         .prepare(
-                                                spotId,
+                                                spot,
                                                 targetPolicy,
                                                 cancellation,
                                                 cancellationSignal))
                 .thenCompose(
-                        source -> {
+                        prepared -> {
+                            if (prepared.isEmpty()) {
+                                return CompletableFuture.completedFuture(false);
+                            }
+                            var source = prepared.orElseThrow();
                             requireExactCoreReady(
                                     lane.node(),
                                     source.stageRequest().targetNodeRid(),
@@ -861,9 +890,9 @@ public final class ZLinkUserSpotRetireRuntime {
                                                             : CONTROL_TIMEOUT,
                                                     deadline,
                                                     () -> source.cleanupLocal(deadline)),
-                                            cancellation);
-                        })
-                .thenApply(ignored -> null);
+                                            cancellation)
+                                    .thenApply(ignored -> true);
+                        });
     }
 
     private CompletionStage<Void> relocateActor(
@@ -881,7 +910,7 @@ public final class ZLinkUserSpotRetireRuntime {
         Duration timeout = Duration.between(Instant.now(), deadline);
         if (timeout.isZero() || timeout.isNegative()) {
             return CompletableFuture.failedFuture(
-                    new java.util.concurrent.TimeoutException("Actor relocation deadline elapsed"));
+                    new TimeoutException("Actor relocation deadline elapsed"));
         }
         return lane.awaitUnitAdmission()
                 .thenCompose(admitted -> lane.source().prepare(actorId, targetPolicy, cancellation))
@@ -928,9 +957,7 @@ public final class ZLinkUserSpotRetireRuntime {
     }
 
     private static void requireExactCoreReady(
-            ZLinkInternalMeshNode node,
-            systems.zlink.contracts.core.RoutingId targetRid,
-            long targetGeneration) {
+            ZLinkInternalMeshNode node, RoutingId targetRid, long targetGeneration) {
         boolean ready = node.isCanonicalRelocationTargetAdmitted(targetRid, targetGeneration);
         if (!ready) {
             throw new RelocationBlockedException(
@@ -939,8 +966,8 @@ public final class ZLinkUserSpotRetireRuntime {
         }
     }
 
-    record RelocationPlan(
-            List<String> shellSpotIds, List<String> actorIds, List<String> aggregateSpotIds) {
+    record RelocationPlan<S>(
+            List<S> shellSpotIds, List<String> actorIds, List<S> aggregateSpotIds) {
         RelocationPlan {
             shellSpotIds = List.copyOf(shellSpotIds);
             actorIds = List.copyOf(actorIds);
@@ -952,23 +979,50 @@ public final class ZLinkUserSpotRetireRuntime {
         }
     }
 
-    private record RelocationInventory(RelocationPlan plan, boolean needsTarget) {
+    private record RelocationInventory(RelocationPlan<ZLinkSpotRelocationUnit> plan) {
+        boolean matches(RelocationInventory current) {
+            var next = current.plan;
+            var remaining = new HashSet<>(next.aggregateSpotIds());
+            // Planned Instance Spot departures are settled by the source Store fence.
+            return plan.shellSpotIds().equals(next.shellSpotIds())
+                    && plan.actorIds().equals(next.actorIds())
+                    && new HashSet<>(plan.aggregateSpotIds()).containsAll(remaining)
+                    && plan.aggregateSpotIds().stream()
+                            .filter(spot -> spot.kind() == ZLinkPlacementObjectKind.USER_SPOT)
+                            .allMatch(remaining::contains);
+        }
+
         CompletionStage<Void> preflightTargets(Supplier<CompletionStage<Void>> targetPreflight) {
-            return needsTarget
-                    ? Objects.requireNonNull(targetPreflight.get(), "target preflight result")
-                    : CompletableFuture.completedFuture(null);
+            return plan.isEmpty()
+                    ? CompletableFuture.completedFuture(null)
+                    : Objects.requireNonNull(targetPreflight.get(), "target preflight result");
         }
     }
 
-    private record RelocationBatch(
-            List<String> ids, UnitOperation operation, Supplier<CompletionStage<Void>> onComplete) {
-        private RelocationBatch(List<String> ids, UnitOperation operation) {
+    private record RelocationBatch<T>(
+            List<T> ids,
+            RelocationOperation<T> operation,
+            Supplier<CompletionStage<Void>> onComplete) {
+        private RelocationBatch(List<T> ids, RelocationOperation<T> operation) {
             this(ids, operation, () -> CompletableFuture.completedFuture(null));
+        }
+
+        CompletionStage<Void> execute(BooleanSupplier stopBeforeNextUnit, AtomicInteger committed) {
+            var started = new ArrayList<CompletionStage<Boolean>>(ids.size());
+            for (T id : ids) {
+                started.add(startUnit(stopBeforeNextUnit, () -> operation.execute(id)));
+            }
+            return awaitAllUnits(started, committed).thenCompose(done -> onComplete.get());
         }
     }
 
     @FunctionalInterface
-    interface UnitOperation {
-        CompletionStage<Void> execute(String objectId);
+    private interface RelocationOperation<T> {
+        CompletionStage<Boolean> execute(T objectId);
+    }
+
+    @FunctionalInterface
+    interface UnitOperation<T> {
+        CompletionStage<Void> execute(T objectId);
     }
 }
