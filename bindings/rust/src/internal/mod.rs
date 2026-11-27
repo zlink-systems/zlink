@@ -3,12 +3,16 @@
 //! Crate-private storage and lifecycle policies shared by public contracts and
 //! runtime implementations.
 
+mod completion_state;
 mod handle_storage;
 mod message_parts;
 mod message_storage;
 mod routed_handle;
 
-pub(crate) use crate::runtime::messaging::completion_owner::{CompletionEntry, CompletionOwner};
+pub(crate) use completion_state::{
+    CompletionEntry, CompletionEntryKind, CompletionOutcome, CompletionOwner, EntryState,
+    OwnerState,
+};
 pub(crate) use handle_storage::{
     ContextStorage, MonitorStorage, PollerSocketRegistration, PollerStorage, SocketStorage,
     TimerStorage,

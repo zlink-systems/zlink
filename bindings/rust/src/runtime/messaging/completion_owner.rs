@@ -20,48 +20,16 @@ use crate::contracts::errors::errors::{
     ZlinkError,
 };
 use crate::contracts::messaging::message::Message;
+use crate::internal::{
+    CompletionEntry, CompletionEntryKind, CompletionOutcome, CompletionOwner, EntryState,
+    OwnerState,
+};
+use crate::native::ffi;
 use crate::runtime::errors::native_errors::{check_recv_rc, request_error_from_result};
-use crate::runtime::native::ffi;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CompletionEntryKind {
-    SendRetry,
-    Request,
-}
-
-enum CompletionOutcome {
-    Writable {
-        completion_id: u64,
-        result: Result<(), SubmitError>,
-    },
-    Request(Result<Vec<Message>, RequestError>),
-}
 
 struct CaptureResult {
     detached: bool,
     wakers: [Option<Waker>; 2],
-}
-
-struct EntryState {
-    completion_id: u64,
-    published: bool,
-    captured: bool,
-    settled: bool,
-    detached: bool,
-    owner_shutdown: bool,
-    awaiting_writable: bool,
-    admission_failure: Option<SubmitError>,
-    reply_detached: bool,
-    outcome: Option<CompletionOutcome>,
-    writable_waker: Option<Waker>,
-    request_waker: Option<Waker>,
-}
-
-/// One provisional send or request operation.
-pub(crate) struct CompletionEntry {
-    kind: CompletionEntryKind,
-    state: Mutex<EntryState>,
-    changed: Condvar,
 }
 
 impl CompletionEntry {
@@ -351,28 +319,6 @@ impl CompletionEntry {
         }
     }
 }
-
-struct OwnerState {
-    entries: HashMap<usize, Arc<CompletionEntry>>,
-    public_owner: Option<usize>,
-}
-
-/// The single drain owner and provisional registry for one native socket.
-pub(crate) struct CompletionOwner {
-    socket: usize,
-    state: Mutex<OwnerState>,
-    /// Serializes completion pulls (public drain and inline blocking request)
-    /// with owner changes. Submits never take it: an entry is registered before
-    /// the native call and a completion that arrives first joins the submit
-    /// result inside the entry.
-    completion_gate: Mutex<()>,
-    /// Set once Core accepted the close. Registration checks it under `state`.
-    closed: AtomicBool,
-    next_context: AtomicUsize,
-}
-
-unsafe impl Send for CompletionOwner {}
-unsafe impl Sync for CompletionOwner {}
 
 impl CompletionOwner {
     pub(crate) fn new(socket: *mut c_void) -> Arc<Self> {

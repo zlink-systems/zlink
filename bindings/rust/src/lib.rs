@@ -18,6 +18,7 @@
 
 mod contracts;
 mod internal;
+mod native;
 mod runtime;
 
 // -- Public re-exports -------------------------------------------------------
