@@ -293,7 +293,8 @@
             "granted": true,
             "permitIdNonzero": true,
             "runningPermits": 1
-          }
+          },
+          "requestSeq": 1
         },
         {
           "action": "admitPermit",
@@ -305,7 +306,8 @@
           "expect": {
             "granted": true,
             "runningPermits": 2
-          }
+          },
+          "requestSeq": 1
         }
       ]
     },
@@ -338,7 +340,8 @@
               "$zlink.admission.queueRequired": "1"
             },
             "runningPermits": 1
-          }
+          },
+          "requestSeq": 1
         }
       ]
     },
@@ -365,7 +368,8 @@
               "$zlink.admission.queueRequired": "1"
             },
             "runningPermits": 0
-          }
+          },
+          "requestSeq": 1
         }
       ]
     },
@@ -388,7 +392,8 @@
           "expect": {
             "granted": true,
             "runningPermits": 1
-          }
+          },
+          "requestSeq": 1
         },
         {
           "action": "releasePermit",
@@ -414,7 +419,8 @@
           "expect": {
             "granted": true,
             "runningPermits": 1
-          }
+          },
+          "requestSeq": 1
         }
       ]
     },
@@ -451,13 +457,14 @@
           "expect": {
             "granted": true,
             "runningPermits": 1
-          }
+          },
+          "requestSeq": 1
         }
       ]
     },
     {
       "name": "permit-reclaimed-when-missing-from-report",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:208",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:226",
       "given": {
         "globalLimit": 2,
         "epoch": 42,
@@ -467,14 +474,14 @@
             "ownerId": "o1",
             "leaseGeneration": 3,
             "permit": "p1",
-            "permitId": 1
+            "requestSeq": 1
           },
           {
             "node": "n1",
             "ownerId": "o1",
             "leaseGeneration": 3,
             "permit": "p2",
-            "permitId": 2
+            "requestSeq": 2
           }
         ]
       },
@@ -485,7 +492,7 @@
           "heldPermits": [
             "p2"
           ],
-          "highestReceivedPermitId": 2,
+          "resolvedRequestSeq": 2,
           "expect": {
             "runningPermits": 1
           }
@@ -494,7 +501,7 @@
     },
     {
       "name": "late-grant-survives-earlier-report",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:208",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:226",
       "given": {
         "globalLimit": 1,
         "epoch": 42,
@@ -510,19 +517,19 @@
           "epoch": 42,
           "expect": {
             "granted": true,
-            "permitId": 1,
             "runningPermits": 1
-          }
+          },
+          "requestSeq": 1
         },
         {
           "action": "nodeReport",
           "node": "n1",
           "heldPermits": [],
-          "highestReceivedPermitId": 0,
           "note": "sent before the grant reached n1",
           "expect": {
             "runningPermits": 1
-          }
+          },
+          "resolvedRequestSeq": 0
         },
         {
           "action": "admitPermit",
@@ -534,16 +541,150 @@
           "expect": {
             "granted": false,
             "runningPermits": 1
+          },
+          "requestSeq": 1
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [],
+          "note": "handler done and permit not released (lost send)",
+          "expect": {
+            "runningPermits": 0
+          },
+          "resolvedRequestSeq": 1
+        }
+      ]
+    },
+    {
+      "name": "lost-grant-reclaimed-after-request-timeout",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:226",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": []
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "requestSeq": 1,
+          "responseLost": true,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
           }
         },
         {
           "action": "nodeReport",
           "node": "n1",
           "heldPermits": [],
-          "highestReceivedPermitId": 1,
-          "note": "handler done and permit not released (lost send)",
+          "resolvedRequestSeq": 0,
+          "note": "request 1 still waiting",
+          "expect": {
+            "runningPermits": 1
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [],
+          "resolvedRequestSeq": 1,
+          "note": "request 1 abandoned at the Spot request timeout",
           "expect": {
             "runningPermits": 0
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "requestSeq": 1,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "out-of-order-grants-keep-unresolved-request",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:226",
+      "given": {
+        "globalLimit": 3,
+        "epoch": 42,
+        "runningPermits": []
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "requestSeq": 1,
+          "permit": "p1",
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "requestSeq": 2,
+          "permit": "p2",
+          "expect": {
+            "granted": true,
+            "runningPermits": 2
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [
+            "p2"
+          ],
+          "resolvedRequestSeq": 0,
+          "note": "response 2 arrived, response 1 not yet; contiguous resolved prefix is 0",
+          "expect": {
+            "runningPermits": 2
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [
+            "p1",
+            "p2"
+          ],
+          "resolvedRequestSeq": 2,
+          "expect": {
+            "runningPermits": 2
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [
+            "p2"
+          ],
+          "resolvedRequestSeq": 2,
+          "note": "p1 handler done, release lost",
+          "expect": {
+            "runningPermits": 1
           }
         }
       ]
@@ -567,7 +708,8 @@
           "expect": {
             "granted": true,
             "runningPermits": 1
-          }
+          },
+          "requestSeq": 1
         },
         {
           "action": "admitPermit",
@@ -580,7 +722,8 @@
             "granted": false,
             "errorCode": "unavailable",
             "runningPermits": 1
-          }
+          },
+          "requestSeq": 2
         }
       ]
     },
@@ -817,7 +960,7 @@
     },
     {
       "name": "global-limit-admit-permit-before-handler",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:217",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:218",
       "given": {
         "queueEnabled": true,
         "globalLimit": 1,
@@ -830,7 +973,8 @@
           "action": "authenticate",
           "expect": {
             "admitPermitRequests": 1,
-            "handlerCalls": 1
+            "handlerCalls": 1,
+            "admitPermitRequestSeq": 1
           }
         },
         {
@@ -868,7 +1012,7 @@
     },
     {
       "name": "global-limit-spot-no-response",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:226",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:228",
       "given": {
         "queueEnabled": true,
         "globalLimit": 1,
@@ -881,7 +1025,15 @@
           "action": "authenticate",
           "expect": {
             "errorCode": "unavailable",
-            "handlerCalls": 0
+            "handlerCalls": 0,
+            "admitPermitRequests": 1
+          }
+        },
+        {
+          "action": "nodeReport",
+          "expect": {
+            "resolvedRequestSeq": 1,
+            "heldPermits": []
           }
         }
       ]
