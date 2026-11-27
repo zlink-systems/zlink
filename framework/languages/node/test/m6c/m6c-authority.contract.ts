@@ -33,6 +33,7 @@ import { ZLinkInternalMeshNodeWriteIntent } from '../../packages/framework/src/r
 import { ZLinkInMemoryAuthorityStore } from '../../packages/framework/src/runtime/locations/in-memory-authority-store';
 import { ZLinkInMemoryLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-location-store';
 import {
+  PROVIDER_STORAGE_NAMESPACE_PREFIX,
   ZLinkInMemoryProviderLocationStore,
   storeKey
 } from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
@@ -4303,6 +4304,71 @@ function creationLeaseTracker(store: object): Pick<ZLinkOwnerLeaseTracker, 'isOw
     return new ZLinkOwnerLeaseTracker({ store: store as ZLinkOwnerLeaseStore });
   return (store as ReturnType<typeof authority>).leaseTracker;
 }
+
+test('provider aggregate publishes the preparing state before prepared', async (t) => {
+  const provider = new ZLinkInMemoryProviderLocationStore(() => new Date(100));
+  const store = new ZLinkLocationStoreRepository(provider, () => new Date(100));
+  const source = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
+  const destination = await writeTargetDescriptor(store, 'owner-b', 'node-b', 60_000);
+  const key = authorityKey('aggregate-state');
+  const active = await createActive(store, 'aggregate-state', {
+    meshName: 'mesh',
+    nodeRid: source.rid,
+    nodeLifecycleGeneration: source.lifecycleGeneration,
+    owner: owner(source.ownerId, source.leaseGeneration)
+  });
+  const aggregateId = { value: '55555555-5555-4555-8555-555555555555' } as ZLinkAggregateId;
+  const aggregateRow = `${PROVIDER_STORAGE_NAMESPACE_PREFIX}aggregate:${aggregateId.value}:1`;
+  const write = provider.write.bind(provider);
+  const states = new Set<unknown>();
+  t.mock.method(provider, 'write', async (...args: Parameters<typeof write>) => {
+    const result = await write(...args);
+    if (result.kind === 'applied') {
+      for (const mutation of args[0].mutations) {
+        if (mutation.kind === 'put' && mutation.key.value === aggregateRow) {
+          states.add(JSON.parse(Buffer.from(mutation.bytes).toString('utf8')).state);
+        }
+      }
+    }
+    return result;
+  });
+
+  const prepared = await store.prepareAggregate({
+    aggregateId,
+    aggregateGeneration: 1n,
+    participants: [
+      {
+        authorityKey: key,
+        expectedStoreVersion: active.storeVersion,
+        ownerTransition: 'newOwner',
+        authorityPayload: Buffer.from('aggregate-ready'),
+        membershipMutation: Buffer.from('aggregate-membership')
+      }
+    ],
+    targetDescriptor: { meshName: 'mesh', rid: destination.rid },
+    targetDescriptorLifecycleGeneration: destination.lifecycleGeneration,
+    capacity: userSpotCapacity('room'),
+    targetOwner: owner(destination.ownerId, destination.leaseGeneration)
+  });
+
+  assert.equal(prepared.kind, 'prepared');
+  assert.deepEqual([...states], ['preparing', 'prepared']);
+  const visible = await store.readAuthority(key);
+  assert.equal(visible.kind, 'snapshot');
+  assert.deepEqual(visible.storeVersion, active.storeVersion);
+
+  const authorityRow = storeKey(opaqueRecordPreimage('authority', 'spot', 'aggregate-state'));
+  const stored = await provider.read(authorityRow);
+  assert.equal(stored.kind, 'found');
+  const record = JSON.parse(Buffer.from(stored.value.bytes).toString('utf8'));
+  delete record.visibleStoreVersion;
+  const corrupted = await write({
+    conditions: [{ kind: 'version', key: authorityRow, expected: stored.value.version }],
+    mutations: [{ kind: 'put', key: authorityRow, bytes: Buffer.from(JSON.stringify(record)) }]
+  });
+  assert.equal(corrupted.kind, 'applied');
+  await assert.rejects(store.readAuthority(key), /missing visibleStoreVersion/);
+});
 
 for (const boundary of ['attempts', 'elapsed time', 'cancellation', 'target lease loss'] as const) {
   const description =
