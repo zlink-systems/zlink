@@ -1226,8 +1226,9 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
     internal ValueTask DiscardLocationExecutionAsync(
         ZLinkSpotActivation activation,
-        Func<ValueTask> discardMembers
-    ) => _spots.DiscardLocationExecutionAsync(activation, discardMembers);
+        Func<ValueTask> discardMembers,
+        CancellationToken generationShutdown
+    ) => _spots.DiscardLocationExecutionAsync(activation, discardMembers, generationShutdown);
 
     public ValueTask<ZLinkSpotInfo?> GetAsync(string spotId, CancellationToken cancellationToken)
     {
