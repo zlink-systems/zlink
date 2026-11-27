@@ -820,13 +820,16 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         });
         auto discard_gates =
           std::make_shared<std::vector<std::weak_ptr<serial_execution_queue_t>>> ();
+        auto discard_requests = std::make_shared<std::array<task_completion_source_t<void>, 3>> ();
         runtime
           .on_execution_discard (
-            [discard_gates] (auto admission) {
-                for (const auto &weak : *discard_gates)
-                    if (const auto queue = weak.lock ())
-                        if (admission (*queue) == status_t::ownership_lost)
+            [discard_gates, discard_requests] (auto admission) {
+                for (std::size_t i = 0; i < discard_gates->size (); ++i)
+                    if (const auto queue = (*discard_gates)[i].lock ())
+                        if (admission (*queue) == status_t::ownership_lost) {
                             queue->cancel_pending (status_t::ownership_lost);
+                            (*discard_requests)[i].complete (result_t<void>::success ());
+                        }
             },
             {},
             [&] (location_runtime_t::execution_recovery_t recover, monotonic_time observed_at) {
@@ -840,6 +843,26 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         auto gate = executor->actor_executor ("player:early")->queue ();
         auto late = executor->actor_executor ("player:late")->queue ();
         auto spot = executor->spot_queue ();
+        const std::array queues{gate, late, spot};
+        const std::array names{"early Actor", "late Actor", "Spot"};
+        if (loss == -43 && !shared) {
+            const std::array logical_keys{actor_authority_key ("early"),
+                                          actor_authority_key ("late"),
+                                          spot_authority_key ("registered-spot")};
+            auto &expected =
+              GetParam () ? provider.expected_authorities : memory.expected_authorities;
+            expected.emplace ();
+            for (std::size_t i = 0; i < logical_keys.size (); ++i) {
+                if (GetParam ()) {
+                    // The repository's first read generates its Store key; do not duplicate its codec.
+                    provider.capture_read_key.emplace ();
+                    repository.read_authority_core (logical_keys[i]).result ().value ();
+                    (*expected)[i] = provider.capture_read_key->task ().result ().value ().value;
+                    provider.capture_read_key.reset ();
+                } else
+                    (*expected)[i] = logical_keys[i].value;
+            }
+        }
         const auto original_object =
           loss == -13 ? native->objects ().find (stateful::object_kind_t::actor, "early")
                       : std::optional<stateful::object_ref_t>{};
@@ -902,9 +925,14 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         enqueue (gate, terminal, handlers);
         enqueue (late, late_terminal, late_handlers);
         enqueue (spot, spot_terminal, spot_handlers);
+        test::scope_exit_t release_held_cas ([&] {
+            provider.cas_release.complete (result_t<void>::success ());
+            memory.cas_release.complete (result_t<void>::success ());
+        });
         if (loss == -38)
             runtime.stop ();
         provider.preserve_writes = memory.preserve_writes = 0;
+        provider.submitted_authorities = memory.submitted_authorities = 0;
         lease_access::heartbeat (runtime, clock_now.load ());
         lease_access::lane (runtime).run_sync ([] {});
         native->objects ()
@@ -941,15 +969,29 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
           loss != -32 && loss != -34 && loss != -38 && loss != -42 && loss != -49;
         EXPECT_EQ (preserved ? next_token.lease_generation : token.lease_generation,
                    exact.owner.lease_generation);
-        std::vector<task_t<serial_execution_queue_t::execution_operation_t>> operations;
-        for (const auto &queue : {gate, late, spot})
-            if (auto pending = queue->pending_execution_operation ())
-                operations.push_back (std::move (*pending));
-        const auto wait_operations = [&] {
-            for (auto &operation : operations)
-                if (!operation.result_for (auto_connect_wait))
-                    return false;
-            return true;
+        const auto collect_operations = [&] {
+            std::vector<outage_operation_t> pending_operations;
+            for (std::size_t i = 0; i < queues.size (); ++i)
+                if (auto pending = queues[i]->pending_execution_operation ())
+                    pending_operations.push_back ({names[i], queues[i], std::move (*pending)});
+            return pending_operations;
+        };
+        auto operations = collect_operations ();
+        if (loss == -43 && !shared) {
+            const auto submitted_mask = GetParam () ? provider.submitted_authorities.load ()
+                                                    : memory.submitted_authorities.load ();
+            for (std::size_t i = 0; i < queues.size (); ++i)
+                ASSERT_TRUE (submitted_mask & (1u << i)) << "CAS submission: " << names[i];
+            ASSERT_EQ (3u, GetParam () ? provider.preserve_writes.load ()
+                                       : memory.preserve_writes.load ())
+              << "CAS submission count";
+            for (std::size_t i = 0; i < queues.size (); ++i)
+                ASSERT_TRUE (queues[i]->pending_execution_operation ())
+                  << "CAS operation: " << names[i];
+            ASSERT_EQ (3u, operations.size ()) << "CAS operation count";
+        }
+        const auto wait_operations = [&] (const char *stage) {
+            return wait_outage_operations (operations, loss, stage);
         };
         scheduler->run_all ();
         EXPECT_EQ (0, handlers);
@@ -996,7 +1038,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             publication.complete (result_t<bool>::success (true));
         if (loss != -34 && loss != -38 && loss != -40 && loss != -41 && loss != -43 && loss != -45
             && loss != -47 && loss > -52)
-            ASSERT_TRUE (wait_operations ());
+            ASSERT_TRUE (wait_operations ("recovery operation"));
         // Flush the object lane after its operation's terminal continuation.
         native->objects ()
           .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
@@ -1013,7 +1055,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             if (loss == -39) {
                 EXPECT_EQ (3u, operations.size ());
                 for (auto &operation : operations) {
-                    const auto failed = detail::task_result_access_t::read (operation);
+                    const auto failed = detail::task_result_access_t::read (operation.terminal);
                     EXPECT_FALSE (failed);
                     EXPECT_EQ (nullptr, failed.error ());
                 }
@@ -1041,14 +1083,14 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
               .value ();
             EXPECT_EQ (2u, recoveries);
             EXPECT_EQ (loss == -39 ? 2u : 1u, publications);
-            for (const auto &queue : {gate, late, spot})
-                if (auto operation = queue->pending_execution_operation ())
-                    ASSERT_TRUE (operation->result_for (auto_connect_wait));
+            auto retried_operations = collect_operations ();
+            ASSERT_TRUE (
+              wait_outage_operations (retried_operations, loss, "renew recovery operation"));
         }
         if (loss == -40 || loss == -41 || loss == -43 || loss == -45 || loss == -47
             || loss <= -52) {
             if (loss == -41)
-                ASSERT_TRUE (wait_operations ());
+                ASSERT_TRUE (wait_operations ("recovery operation"));
             scheduler->run_all ();
             EXPECT_EQ (0, handlers);
             if (loss == -41)
@@ -1069,11 +1111,29 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
                   .result ()
                   .value ();
                 scheduler->run_all ();
-                ASSERT_TRUE (wait_operations ());
+                if (!shared) {
+                    ASSERT_LT (clock_now.load (), episode->cutoff) << "CAS timeout: before T";
+                    ASSERT_TRUE (wait_operations ("CAS timeout"));
+                    for (const auto &operation : operations) {
+                        const auto result = detail::task_result_access_t::read (operation.terminal);
+                        ASSERT_FALSE (result) << "CAS timeout: " << operation.name;
+                        ASSERT_EQ (framework_error_kind_t::deadline_exceeded, result.error_kind ())
+                          << "CAS timeout: " << operation.name;
+                    }
+                } else
+                    ASSERT_TRUE (wait_operations ("recovery operation"));
                 EXPECT_EQ (status_t::stopped, gate->execution_status ());
+                if (!shared) {
+                    ASSERT_EQ (0, handlers) << "CAS timeout: " << names[0] << " handler";
+                    ASSERT_EQ (0, late_handlers) << "CAS timeout: " << names[1] << " handler";
+                    ASSERT_EQ (0, spot_handlers) << "CAS timeout: " << names[2] << " handler";
+                }
             }
             if (loss <= -52)
                 move_to (episode->cutoff + (loss == -52 ? -1ns : loss == -53 ? 0ns : 1ns));
+            if (loss == -40)
+                ASSERT_LT (clock_now.load (), episode->cutoff - options.owner_lease_renew_timeout)
+                  << "CAS response: before timeout and T";
             provider.cas_release.complete (result_t<void>::success ());
             memory.cas_release.complete (result_t<void>::success ());
             native->objects ()
@@ -1083,15 +1143,29 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             if (loss == -43) {
                 move_to (episode->cutoff);
                 detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+                if (!shared) {
+                    auto cutoff_terminal = episode->terminal.task ();
+                    ASSERT_TRUE (cutoff_terminal.result_for (auto_connect_wait))
+                      << "T latch: outage episode";
+                    ASSERT_TRUE (episode->discarded.load ()) << "T latch: outage episode";
+                    for (std::size_t i = 0; i < 3; ++i) {
+                        auto request = (*discard_requests)[i].task ();
+                        ASSERT_TRUE (request.result_for (auto_connect_wait))
+                          << "gate cancellation request: " << names[i];
+                    }
+                }
             }
         }
         if (loss != -38)
-            ASSERT_TRUE (wait_operations ());
-        if (loss != -38)
-            for (auto *signal : {&terminal, &late_terminal, &spot_terminal}) {
-                auto completed = signal->task ();
-                ASSERT_TRUE (scheduler->run_until (completed, auto_connect_wait));
+            ASSERT_TRUE (wait_operations ("recovery operation"));
+        if (loss != -38) {
+            const std::array signals{&terminal, &late_terminal, &spot_terminal};
+            for (std::size_t i = 0; i < signals.size (); ++i) {
+                auto completed = signals[i]->task ();
+                ASSERT_TRUE (scheduler->run_until (completed, auto_connect_wait))
+                  << "work completion: " << names[i];
             }
+        }
         scheduler->run_all ();
         const bool allowed = loss != -31 && loss != -32 && loss != -34 && loss != -36 && loss != -37
                              && loss != -38 && loss != -41 && loss != -43 && loss != -49
@@ -1100,15 +1174,16 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         EXPECT_EQ ((allowed || loss == -32) ? 1 : 0, late_handlers);
         EXPECT_EQ ((allowed || loss == -32) ? 1 : 0, spot_handlers);
         if (loss != -38) {
-            const auto check_outcome = [] (auto &signal, bool expected_allowed) {
+            const auto check_outcome = [] (auto &signal, bool expected_allowed, const char *name) {
                 const auto result = signal.task ().result ();
-                EXPECT_EQ (expected_allowed, result.has_value ());
+                EXPECT_EQ (expected_allowed, result.has_value ()) << "work result: " << name;
                 if (!expected_allowed && !result)
-                    EXPECT_EQ (framework_error_kind_t::not_found, result.error_kind ());
+                    EXPECT_EQ (framework_error_kind_t::not_found, result.error_kind ())
+                      << "work result: " << name;
             };
-            check_outcome (terminal, allowed);
-            check_outcome (late_terminal, allowed || loss == -32);
-            check_outcome (spot_terminal, allowed || loss == -32);
+            check_outcome (terminal, allowed, names[0]);
+            check_outcome (late_terminal, allowed || loss == -32, names[1]);
+            check_outcome (spot_terminal, allowed || loss == -32, names[2]);
         }
         if (loss == -44) {
             ASSERT_TRUE (lease_access::recovery_terminal (runtime, episode, auto_connect_wait));
