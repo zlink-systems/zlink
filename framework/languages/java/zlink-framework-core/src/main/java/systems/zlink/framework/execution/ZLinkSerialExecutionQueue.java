@@ -694,8 +694,8 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     /**
-     * Framework internal; not part of the public contract. Enqueues a message whose accepted
-     * frozen record is built only if relocation captures it.
+     * Framework internal; not part of the public contract. Enqueues a message whose accepted frozen
+     * record is built only if relocation captures it.
      */
     public CompletionStage<Void> enqueueMessage(
             Object message,
