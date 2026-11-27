@@ -12,18 +12,24 @@
   "ticketVectors": [
     {
       "name": "current-key",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
         "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
         "expiresAtUnixMs": 1700000030000,
         "epoch": 42,
         "nowUnixMs": 1700000029999,
         "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
         "verificationEpoch": 42
       },
-      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
       "expect": {
         "accept": true,
         "reason": "ok"
@@ -31,18 +37,24 @@
     },
     {
       "name": "expired",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
         "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
         "expiresAtUnixMs": 1700000030000,
         "epoch": 42,
         "nowUnixMs": 1700000032001,
         "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
         "verificationEpoch": 42
       },
-      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
       "expect": {
         "accept": false,
         "reason": "expired"
@@ -50,18 +62,24 @@
     },
     {
       "name": "skew-boundary",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
         "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
         "expiresAtUnixMs": 1700000030000,
         "epoch": 42,
         "nowUnixMs": 1700000032000,
         "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
         "verificationEpoch": 42
       },
-      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
       "expect": {
         "accept": true,
         "reason": "skewAccepted"
@@ -69,18 +87,99 @@
     },
     {
       "name": "wrong-session",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
         "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
         "expiresAtUnixMs": 1700000030000,
         "epoch": 42,
         "nowUnixMs": 1700000029999,
         "verificationSessionRidBase64Url": "c2Vzc2lvbi1i",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
         "verificationEpoch": 42
       },
-      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": false,
+        "reason": "wrongSession"
+      }
+    },
+    {
+      "name": "other-node-same-session",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1i",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": false,
+        "reason": "wrongSession"
+      }
+    },
+    {
+      "name": "restarted-node-same-session",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 8,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": false,
+        "reason": "wrongSession"
+      }
+    },
+    {
+      "name": "other-stream-same-session",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login-eu",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
       "expect": {
         "accept": false,
         "reason": "wrongSession"
@@ -88,18 +187,24 @@
     },
     {
       "name": "wrong-epoch",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
         "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
         "expiresAtUnixMs": 1700000030000,
         "epoch": 42,
         "nowUnixMs": 1700000029999,
         "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
         "verificationEpoch": 43
       },
-      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
       "expect": {
         "accept": false,
         "reason": "wrongEpoch"
@@ -107,18 +212,24 @@
     },
     {
       "name": "previous-key",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
         "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
         "expiresAtUnixMs": 1700000030000,
         "epoch": 42,
         "nowUnixMs": 1700000029999,
         "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
         "verificationEpoch": 42
       },
-      "ticket": "AQAAAYvP5d0wAAAAAAAAACoWJ0doAwUaJ4UVFk6fvB1oRc3kjk7SUHTTW8ThsOXQnA",
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACqHiNCLzKnAMakiOKyWxxkjlhcar3xapkhHWWHkU0REdw",
       "expect": {
         "accept": true,
         "reason": "previousKeyOk"
@@ -126,18 +237,24 @@
     },
     {
       "name": "short-ticket",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
         "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
         "expiresAtUnixMs": 1700000030000,
         "epoch": 42,
         "nowUnixMs": 1700000029999,
         "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
         "verificationEpoch": 42
       },
-      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7",
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3",
       "expect": {
         "accept": false,
         "reason": "badLength"
@@ -145,18 +262,24 @@
     },
     {
       "name": "wrong-version",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
         "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
         "expiresAtUnixMs": 1700000030000,
         "epoch": 42,
         "nowUnixMs": 1700000029999,
         "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
         "verificationEpoch": 42
       },
-      "ticket": "AgAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "ticket": "AgAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
       "expect": {
         "accept": false,
         "reason": "badVersion"
@@ -164,18 +287,24 @@
     },
     {
       "name": "short-key",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHg",
         "previousKeyBase64Url": null,
         "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
         "expiresAtUnixMs": 1700000030000,
         "epoch": 42,
         "nowUnixMs": 1700000029999,
         "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
         "verificationEpoch": 42
       },
-      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
       "expect": {
         "accept": false,
         "reason": "keyTooShort"
@@ -212,6 +341,56 @@
           "expect": {
             "ticket": "T",
             "newWaiters": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "same-session-rid-on-two-nodes-are-two-waiters",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:214",
+      "given": {
+        "waiters": []
+      },
+      "steps": [
+        {
+          "action": "enqueue",
+          "node": "n1",
+          "nodeLifecycleGeneration": 7,
+          "streamName": "login",
+          "sessionRid": "a",
+          "expect": {
+            "newWaiters": 1,
+            "position": 1
+          }
+        },
+        {
+          "action": "enqueue",
+          "node": "n2",
+          "nodeLifecycleGeneration": 3,
+          "streamName": "login",
+          "sessionRid": "a",
+          "expect": {
+            "newWaiters": 1,
+            "position": 2
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "nodeLifecycleGeneration": 7,
+          "usedTickets": [
+            {
+              "streamName": "login",
+              "sessionRid": "a"
+            }
+          ],
+          "expect": {
+            "waiting": [
+              {
+                "node": "n2",
+                "sessionRid": "a"
+              }
+            ]
           }
         }
       ]
