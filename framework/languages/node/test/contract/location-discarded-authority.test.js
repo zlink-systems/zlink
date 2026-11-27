@@ -212,7 +212,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-for (const kind of ['Actor', 'Spot']) {
+for (const kind of ['Actor', 'Spot', 'SpotFailure']) {
   test(
     `generationShutdownCompletes${kind}DiscardAfterBackendClose`,
     { timeout: 15000 },
@@ -295,10 +295,12 @@ for (const kind of ['Actor', 'Spot']) {
       const resumeSpotDiscard = deferred();
       let disposal;
       let disposalSettled = false;
-      if (kind === 'Spot') {
+      const discardFailure = new Error('Spot discard cleanup failed.');
+      if (kind !== 'Actor') {
         const discardSpot = spots.activationLifecycle.discard;
         t.mock.method(spots.activationLifecycle, 'discard', async function (activation) {
           await resumeSpotDiscard.promise;
+          if (kind === 'SpotFailure') throw discardFailure;
           await discardSpot.call(this, activation);
         });
         const drain = spots.drainForShutdown;
@@ -335,6 +337,15 @@ for (const kind of ['Actor', 'Spot']) {
         assert.equal(result.outcome, internal.ZLinkFrameworkTerminationOutcome.Stopped);
       }
       assert.equal(location.isStarted, false);
+      if (kind === 'SpotFailure') {
+        // The detached task reports the failure once; the drain only waits for it.
+        await assert.rejects(disposal, discardFailure);
+        assert.deepEqual(
+          failures.map(({ taskName, error }) => [taskName, error]),
+          [['Discard Spot execution', discardFailure]]
+        );
+        return;
+      }
       if (kind === 'Spot') {
         assert.ok(disposal);
         await disposal;

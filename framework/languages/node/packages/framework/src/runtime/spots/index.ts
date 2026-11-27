@@ -1229,7 +1229,13 @@ export class DefaultZLinkSpotManager {
             )
           ),
         // A confirmed discard already left the active list; its disposal still uses the backend.
-        ...(this.discardDisposals.get(meshName) ?? [])
+        // The detached task reports its failure, so the drain only waits for it.
+        ...[...(this.discardDisposals.get(meshName) ?? [])].map((disposal) =>
+          disposal.then(
+            () => undefined,
+            () => undefined
+          )
+        )
       ]),
       signal
     );
