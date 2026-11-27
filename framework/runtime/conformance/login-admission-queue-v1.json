@@ -519,7 +519,17 @@
       "given": {
         "globalLimit": 2,
         "epoch": 42,
-        "runningPermits": []
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          },
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
       },
       "steps": [
         {
@@ -563,6 +573,12 @@
             "ownerId": "o1",
             "leaseGeneration": 3
           }
+        ],
+        "validTickets": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
         ]
       },
       "steps": [
@@ -605,6 +621,12 @@
             "node": "n2",
             "sessionRid": "s2",
             "ticket": "T2"
+          }
+        ],
+        "validTickets": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
           }
         ]
       },
@@ -709,7 +731,13 @@
       "given": {
         "globalLimit": 5,
         "epoch": 42,
-        "runningPermits": []
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          }
+        ]
       },
       "steps": [
         {
@@ -733,7 +761,17 @@
       "given": {
         "globalLimit": 1,
         "epoch": 42,
-        "runningPermits": []
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          },
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
       },
       "steps": [
         {
@@ -789,6 +827,12 @@
             "node": "n1",
             "ownerId": "o1",
             "leaseGeneration": 3
+          }
+        ],
+        "validTickets": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
           }
         ]
       },
@@ -859,7 +903,17 @@
       "given": {
         "globalLimit": 1,
         "epoch": 42,
-        "runningPermits": []
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          },
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
       },
       "steps": [
         {
@@ -916,7 +970,17 @@
       "given": {
         "globalLimit": 1,
         "epoch": 42,
-        "runningPermits": []
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          },
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
       },
       "steps": [
         {
@@ -974,7 +1038,17 @@
       "given": {
         "globalLimit": 3,
         "epoch": 42,
-        "runningPermits": []
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          },
+          {
+            "node": "n1",
+            "sessionRid": "s2"
+          }
+        ]
       },
       "steps": [
         {
@@ -1049,7 +1123,13 @@
       "given": {
         "globalLimit": 1,
         "epoch": 42,
-        "runningPermits": []
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          }
+        ]
       },
       "steps": [
         {
