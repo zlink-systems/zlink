@@ -551,6 +551,23 @@ internal sealed class ZLinkActorInboundPipeline(
                 .ConfigureAwait(false);
         }
         catch (ZLinkFrameworkException exception)
+            when (ZLinkActorRuntimeState.IsJoinCompletionRefusal(exception))
+        {
+            requestOutcome = Diagnostics.ZLinkRuntimeMetrics.RequestFailureOutcome(
+                exception,
+                cancellationToken,
+                runtime.ShutdownToken
+            );
+            await RejectSealedActorFrameAsync(
+                    frame,
+                    exception,
+                    acknowledgeHandledFrame,
+                    completeCanonicalReplay,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        catch (ZLinkFrameworkException exception)
             when (allowCapture && IsUnitSealRefusal(exception, state))
         {
             // The frame passed the arrival capture check before its unit
@@ -593,6 +610,69 @@ internal sealed class ZLinkActorInboundPipeline(
         {
             requestMetric?.Complete(requestOutcome);
         }
+    }
+
+    private async ValueTask RejectSealedActorFrameAsync(
+        ZLinkSpotActorFrame frame,
+        ZLinkFrameworkException error,
+        Action? acknowledgeHandledFrame,
+        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>? completeReplay,
+        CancellationToken cancellationToken
+    )
+    {
+        var isRequest = frame.Header.Kind == ZlinkStreamMessageKind.Request;
+        const ZLinkDispatchErrorReason reason = ZLinkDispatchErrorReason.StaleTarget;
+        if (runtime.Flow.DispatchErrorsEnabled)
+            runtime.Flow.TraceDispatchError(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.SpotActor,
+                    isRequest
+                        ? ZLinkDispatchMessageKind.ActorRequest
+                        : ZLinkDispatchMessageKind.ActorSend,
+                    reason,
+                    isRequest ? ZLinkDispatchErrorAction.ReplyError : ZLinkDispatchErrorAction.Drop,
+                    frame.Header.Name,
+                    Exception: error,
+                    ActorId: frame.Actor.ActorId,
+                    CorrelationId: frame.Header.CorrelationId,
+                    MeshName: receiverMeshName
+                )
+            );
+        if (!isRequest)
+            Diagnostics.ZLinkRuntimeMetrics.RecordMessageDropped(
+                receiverMeshName,
+                "actor",
+                "send",
+                Diagnostics.ZLinkTraceFormat.DispatchReasonKey(reason)
+            );
+
+        if (completeReplay is not null)
+        {
+            await completeReplay(
+                    frame,
+                    isRequest ? ZLinkActorReply.FromError(error) : null,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            return;
+        }
+
+        await ZLinkActorBoundSessionRelay
+            .ReplyStaleActorAsync(
+                runtime,
+                frame.Actor,
+                frame.SourceNodeRid,
+                frame.SourceSessionRid,
+                frame.RequestId,
+                frame.Flags,
+                frame.RouteContext.ReplyCapability,
+                frame.Header,
+                error,
+                cancellationToken,
+                frame.DirectReply
+            )
+            .ConfigureAwait(false);
+        acknowledgeHandledFrame?.Invoke();
     }
 
     internal static void EnsureRelocationReplyRoute(ZLinkSpotActorFrame frame)
@@ -835,6 +915,8 @@ internal sealed class ZLinkActorInboundPipeline(
     )
     {
         var disconnected = ZLinkActorBoundSessionRelay.IsSessionDisconnectedPacket(frame.Header);
+        if (callerOwnsDispatchTurn && !disconnected)
+            state.EnsureJoinCompletionAvailable();
         if (disconnected && frame.Header.Kind != ZlinkStreamMessageKind.Request)
         {
             try

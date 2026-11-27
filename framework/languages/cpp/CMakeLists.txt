@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.20)
 project(zlink_framework_cpp VERSION 0.34.1 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
+# Reject an installable instrumented build before the defaults fetch any dependency.
+option(ZLINK_FRAMEWORK_CPP_TEST_PROBES "Enable creation probes for C++ framework tests (not installable)" OFF)
+option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Install C++ framework and HTTP client package artifacts" ON)
+if(ZLINK_FRAMEWORK_CPP_TEST_PROBES AND ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
+  message(FATAL_ERROR
+    "ZLINK_FRAMEWORK_CPP_TEST_PROBES requires ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF")
+endif()
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
 
 # IDE project trees (Visual Studio, Xcode): group targets into solution
@@ -27,15 +34,9 @@ find_package(Threads REQUIRED)
 option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
 option(ZLINK_FRAMEWORK_CPP_WITH_ETCD "Build the etcd location store extension (requires gRPC)" OFF)
-option(ZLINK_FRAMEWORK_CPP_TEST_PROBES "Enable creation probes for C++ framework tests (not installable)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service foundation tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES "Build C++ framework samples (opt-in; samples/sample-build-common.sh enables it for each samples/<Sample>/run_sample.sh)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE "Build the C++ cross-language e2e host" ON)
-option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Install C++ framework and HTTP client package artifacts" ON)
-if(ZLINK_FRAMEWORK_CPP_TEST_PROBES AND ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
-  message(FATAL_ERROR
-    "ZLINK_FRAMEWORK_CPP_TEST_PROBES requires ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF")
-endif()
 if(ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF}")
@@ -386,7 +387,10 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/spots/spot_route_packets.cpp
   framework/src/runtime/streams/stream_compression.cpp
   framework/src/runtime/streams/stream_runtime.cpp
+  framework/src/runtime/streams/stream_host_core.cpp
   framework/src/runtime/streams/stream_host_service.cpp
+  framework/src/runtime/streams/stream_host_session.cpp
+  framework/src/runtime/streams/stream_host_transport.cpp
   framework/src/runtime/timers/timer_runtime.cpp
   framework/src/runtime/utils/uuid.cpp
   framework/src/runtime/transport/endpoint.cpp)
@@ -3084,6 +3088,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_authority_turns.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_return_join.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_join_failure.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_late_ingress.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_entry_placement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relocation_settlement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_deferred_join_reservation.cpp
