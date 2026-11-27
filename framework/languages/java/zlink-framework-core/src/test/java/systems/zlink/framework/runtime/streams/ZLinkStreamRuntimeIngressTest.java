@@ -3818,8 +3818,10 @@ final class ZLinkStreamRuntimeIngressTest {
             if (decodeWirePayload) {
                 decodedWirePayload.set(payload.decode(WirePayload.class));
             }
-            int count = dispatchCount.incrementAndGet();
+            // Record the name before publishing the count: tests that wait for dispatchCount
+            // then read packetNames from another thread.
             packetNames.add(dispatch.packetName());
+            int count = dispatchCount.incrementAndGet();
             dispatchLatch.countDown();
             if (replyOnDispatch && dispatch.canReply()) {
                 return context.client().reply(Map.of("ok", true)).submit();
