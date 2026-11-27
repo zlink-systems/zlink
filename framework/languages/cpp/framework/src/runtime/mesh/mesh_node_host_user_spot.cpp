@@ -26,13 +26,13 @@ namespace zlink::framework::runtime
 {
 
 using mesh_node_host_service_detail::choose_placement_target;
+using mesh_node_host_service_detail::next_mesh_operation;
 using mesh_node_host_service_detail::placement_candidates;
 
 namespace
 {
 constexpr auto creation_authority_poll_interval = std::chrono::milliseconds (10);
 
-std::atomic_uint64_t next_mesh_operation{1};
 } // namespace
 
 task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (

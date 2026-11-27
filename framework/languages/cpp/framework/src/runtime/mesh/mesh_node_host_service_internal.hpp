@@ -4,6 +4,7 @@
 #include "runtime/locations/location_repository_values.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -40,6 +41,9 @@ class live_location_reader_t;
 
 namespace mesh_node_host_service_detail
 {
+// One process-wide Mesh operation id sequence shared by the host TUs.
+inline std::atomic_uint64_t next_mesh_operation{1};
+
 mesh_node_descriptor_t
 choose_placement_target (const std::vector<mesh_node_descriptor_t> &candidates,
                          std::string_view identity);

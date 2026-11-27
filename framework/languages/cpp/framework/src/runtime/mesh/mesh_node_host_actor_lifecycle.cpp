@@ -7,6 +7,8 @@
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
+#include "runtime/mesh/mesh_node_host_service_internal.hpp"
+#include "runtime/timers/async_delay.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -14,6 +16,7 @@
 
 namespace zlink::framework::runtime
 {
+using mesh_node_host_service_detail::next_mesh_operation;
 
 actor_manager_t mesh_node_host_service_t::actor_manager ()
 {
