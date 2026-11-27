@@ -3,6 +3,7 @@
 import ctypes
 from typing import Optional
 
+from ...contracts.core.routing_id import RoutingId
 from ...contracts.errors.codes import CloseResult, ConfigResult
 from ...contracts.sockets.codes import RecvResult, SubmitResult
 from ...contracts.errors.errors import CloseError, ConfigError, RecvError, SubmitError
@@ -382,7 +383,11 @@ class Received(ReceivedMultipart):
 
 
 class SubscriptionEvent:
+    routing_id: Optional[RoutingId]
+
     def __init__(self, topic="", subscribed=False, routing_id=None):
+        if routing_id is not None and not isinstance(routing_id, RoutingId):
+            routing_id = RoutingId(routing_id)
         self.routing_id = routing_id
         self.topic = topic
         self.subscribed = subscribed

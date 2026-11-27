@@ -213,7 +213,7 @@ errno를 담은 `ConfigError`를 발생시킨다.
 함수군별 오류는 [공통 오류 코드 표](../README.ko.md#error-code-표)의 66개 non-OK 코드를 보존한다. 코드의
 열거 타입은 함수군별 `*Result`다. `ErrorCode`는 Core 전용 errno를 열거한다.
 
-Core result를 반환하는 호출은 Python의 대응 error에 `result`, `code`, `native_errno`를 제공한다.
+Core result를 반환하는 호출은 Python의 대응 error에 `result`, `code`, `internal_errno`를 제공한다.
 입력 형식 오류는 호출 전에 검사할 수 있지만, native operation failure를 일반 `ValueError`로 바꾸지
 않는다. `SubmitError`, `RequestError`, `RecvError`, `BindError`, `ConnectError`, `ConfigError`,
 `CloseError`와 `HandlerError`는 `ZlinkError` 계열이다.

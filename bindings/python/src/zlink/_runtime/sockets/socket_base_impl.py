@@ -762,14 +762,11 @@ class XPubSocket(
             subscribed=bool(subscribed.value),
         )
 
-    def _receive_subscription_event(self, *, flags=0):
-        return self._subscription_event(flags)
-
-    def receive_subscription_event_into(self, event, *, flags=0):
+    def receive_subscription_event_into(self, event: SubscriptionEvent, *, flags=0) -> bool:
         if event is None or not hasattr(event, "_adopt_from"):
             raise TypeError("event must be a SubscriptionEvent")
         try:
-            fresh = self._receive_subscription_event(flags=flags)
+            fresh = self._subscription_event(flags)
         except RecvError as ex:
             if (int(flags) & 1) and ex.result == RecvResult.NO_DATA:
                 return False

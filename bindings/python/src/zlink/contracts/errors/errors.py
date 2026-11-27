@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
+import warnings
+
 from .codes import BindResult, CloseResult, ConfigResult, ConnectResult
 from ..sockets.codes import HandlerResult, RecvResult, RequestResult, SubmitResult
 
@@ -7,11 +9,12 @@ from ..sockets.codes import HandlerResult, RecvResult, RequestResult, SubmitResu
 class ZlinkError(RuntimeError):
     """Base class for all errors raised by the zlink bindings."""
 
-    def __init__(self, code: int, native_errno: int = 0):
+    def __init__(self, code: int, internal_errno: int = 0):
         self._code = int(code)
-        self._native_errno = int(native_errno)
+        self._internal_errno = int(internal_errno)
         super().__init__(
-            f"{self.__class__.__name__}(code={self._code}, native_errno={self._native_errno})"
+            f"{self.__class__.__name__}(code={self._code}, "
+            f"internal_errno={self._internal_errno})"
         )
 
     @property
@@ -20,9 +23,19 @@ class ZlinkError(RuntimeError):
         return self._code
 
     @property
-    def native_errno(self):
+    def internal_errno(self) -> int:
         """The native errno that produced this failure, or 0 when none."""
-        return self._native_errno
+        return self._internal_errno
+
+    @property
+    def native_errno(self) -> int:
+        """Deprecated alias for :attr:`internal_errno`."""
+        warnings.warn(
+            "native_errno is deprecated. Use internal_errno instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.internal_errno
 
 
 class _TypedZlinkError(ZlinkError):
@@ -31,7 +44,7 @@ class _TypedZlinkError(ZlinkError):
 
     _result_type = None
 
-    def __init__(self, result, native_errno: int = 0):
+    def __init__(self, result, internal_errno: int = 0):
         if self._result_type is None:
             raise TypeError("typed zlink error missing result type")
         raw_result = int(result)
@@ -42,7 +55,7 @@ class _TypedZlinkError(ZlinkError):
             # Preserve the native value instead of turning it into success or
             # silently classifying it as an unrelated known result.
             self._result = raw_result
-        super().__init__(raw_result, native_errno)
+        super().__init__(raw_result, internal_errno)
 
     @property
     def result(self):

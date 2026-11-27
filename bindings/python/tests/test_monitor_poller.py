@@ -107,13 +107,13 @@ def test_monitor_poller_forwards_core_event_error(
         with pytest.raises(zlink.ConfigError) as error:
             add(monitor, flags, 1)
         assert error.value.result == result
-        assert error.value.native_errno == native_errno
+        assert error.value.internal_errno == native_errno
         assert poller.size() == 0
         add(monitor, zlink.PollEventFlag.POLLIN, 1)
         with pytest.raises(zlink.ConfigError) as error:
             modify(monitor, flags)
         assert error.value.result == result
-        assert error.value.native_errno == native_errno
+        assert error.value.internal_errno == native_errno
         assert poller.size() == 1
         poller.remove_monitor(monitor)
 
@@ -143,12 +143,12 @@ def test_monitor_event_error_comes_from_native_add_and_modify():
             with pytest.raises(zlink.ConfigError) as error:
                 poller.add_monitor(monitor, zlink.PollEventFlag.POLLOUT, 1)
             assert error.value.result == zlink.ConfigResult.NOT_SUPPORTED
-            assert error.value.native_errno == errno.ENOTSUP
+            assert error.value.internal_errno == errno.ENOTSUP
         poller.add_monitor(monitor, zlink.PollEventFlag.POLLIN, 1)
         with patch.object(poller_runtime, "lib", return_value=Native()):
             with pytest.raises(zlink.ConfigError) as error:
                 poller.modify_monitor(monitor, zlink.PollEventFlag.POLLOUT)
             assert error.value.result == zlink.ConfigResult.NOT_SUPPORTED
-            assert error.value.native_errno == errno.ENOTSUP
+            assert error.value.internal_errno == errno.ENOTSUP
         assert calls == ["add", "modify"]
         poller.remove_monitor(monitor)

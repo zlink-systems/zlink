@@ -360,7 +360,7 @@ def test_terminal_writable_is_typed_and_never_retried(
     retry.assert_not_called()
     assert entry.settled
     assert entry._error.result == expected_result
-    assert entry._error.native_errno == (
+    assert entry._error.internal_errno == (
         errno.EPROTO if expected_result == zlink.SubmitResult.INTERNAL_ERROR else native_errno
     )
     assert closer.closed == 1
@@ -405,7 +405,7 @@ def test_request_terminal_writable_is_typed_and_never_retried(
     assert entry.settled
     assert isinstance(entry._error, zlink.SubmitError)
     assert entry._error.result == expected_result
-    assert entry._error.native_errno == (
+    assert entry._error.internal_errno == (
         errno.EPROTO if expected_result == zlink.SubmitResult.INTERNAL_ERROR else native_errno
     )
     assert closer.closed == 1
@@ -454,7 +454,7 @@ def test_public_routed_send_without_route_has_no_wait_token():
                     router.send(missing).message(b"payload").submit()
 
                 assert raised.value.result == zlink.SubmitResult.NOT_CONNECTED
-                assert raised.value.native_errno == errno.EHOSTUNREACH
+                assert raised.value.internal_errno == errno.EHOSTUNREACH
                 assert submissions == [
                     (int(zlink.SubmitResult.NOT_CONNECTED), errno.EHOSTUNREACH, 0)
                 ]

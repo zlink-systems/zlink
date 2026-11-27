@@ -230,7 +230,7 @@ Function-family errors preserve the 66 non-OK codes in the
 these codes. `ErrorCode` enumerates Core-specific errno values.
 
 A call that returns a Core result gives its matching Python error `result`,
-`code`, and `native_errno`. An input-format error can be checked before the
+`code`, and `internal_errno`. An input-format error can be checked before the
 call, but a native operation failure is never turned into a plain
 `ValueError`. `SubmitError`, `RequestError`, `RecvError`, `BindError`,
 `ConnectError`, `ConfigError`, `CloseError`, and `HandlerError` are all in
