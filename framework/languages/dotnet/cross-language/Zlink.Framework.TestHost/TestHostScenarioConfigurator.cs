@@ -33,6 +33,10 @@ internal static class TestHostScenarioConfigurator
             case "spot-route-client":
                 ConfigureSpotRouteClient(services, options);
                 return;
+            case "actor-destroy-owner":
+            case "actor-destroy-caller":
+                ActorDestroyHost.Configure(services, options);
+                return;
             case "entry-spot-source":
                 ConfigureEntryRelocation(services, options, isSource: true);
                 return;
