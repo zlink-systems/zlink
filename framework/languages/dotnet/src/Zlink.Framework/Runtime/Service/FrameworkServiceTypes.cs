@@ -482,7 +482,8 @@ internal sealed class ZLinkCanonicalRelocationPreparationLease
     internal void MarkPrepared() => Volatile.Write(ref _prepared, 1);
 }
 
-internal readonly record struct SpotRelocationRequest(
+internal readonly record struct SpotRelocationIngress(
+    ZLinkPlacementObjectKind ObjectKind,
     string SpotId,
     ulong SpotGeneration,
     ulong NodeGeneration,
@@ -498,8 +499,8 @@ internal sealed record SpotTargetAdmission(
 
 internal interface ICanonicalRelocationTarget
 {
-    Func<Task<bool>>? ConfirmSpotRequest(
-        SpotRelocationRequest request,
+    Func<Task<bool>>? ConfirmSpotIngress(
+        SpotRelocationIngress request,
         CancellationToken cancellationToken
     ) => null;
 
@@ -870,7 +871,6 @@ internal struct MeshReceiveRecord
     // An application reply has either a local callback or a captured native route.
     private readonly object? _replyRoute;
 
-    // Ready Instance Spot ingress has no SpotTargetAdmission payload.
     private readonly object? _kindData;
     private readonly Func<RequestResult, uint, SubmitResult>? _terminalReply;
     private readonly Func<
