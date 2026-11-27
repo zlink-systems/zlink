@@ -810,6 +810,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     private async ValueTask DiscardLocationExecutionsAsync(IReadOnlySet<object> executions)
     {
+        var generationShutdown = _state?.TaskRunner.ShutdownToken ?? CancellationToken.None;
         foreach (var spot in executions.OfType<ZLinkSpotActivation>())
         {
             await _actorHandoffAdmissions
@@ -850,7 +851,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                         .ConfigureAwait(false);
                 await Task.WhenAll(
                         members.Select(member =>
-                            _actorSessionManager.DiscardLocationExecutionAsync(member).AsTask()
+                            _actorSessionManager
+                                .DiscardLocationExecutionAsync(member, generationShutdown)
+                                .AsTask()
                         )
                     )
                     .ConfigureAwait(false);
@@ -867,7 +870,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             );
         }
         foreach (var actor in independent)
-            completions.Add(_actorSessionManager.DiscardLocationExecutionAsync(actor).AsTask());
+            completions.Add(
+                _actorSessionManager
+                    .DiscardLocationExecutionAsync(actor, generationShutdown)
+                    .AsTask()
+            );
         await Task.WhenAll(completions).ConfigureAwait(false);
     }
 

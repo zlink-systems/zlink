@@ -592,7 +592,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         return (terminal.Completion, reply);
     }
 
-    internal ValueTask<ActorDestroyOperationTerminal> DestroyActorLocalAsync(
+    internal ValueTask<bool> DestroyActorLocalAsync(
         ActorDestroyOperation operation,
         ZLinkAuthoritySnapshot snapshot,
         CancellationToken cancellationToken

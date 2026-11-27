@@ -159,26 +159,13 @@ public sealed class ActorCreateCommandRuntimeTests
 
         var actor = new ActorRef("actor-27", 17, "mesh", target.RoutingId);
         var targetGeneration = target.Status().LifecycleGeneration;
-        Assert.Equal(
-            SubmitResult.Ok,
-            source.DestroyActorRemote(
-                actor,
-                targetGeneration,
-                23,
-                29,
-                out var operationId,
-                TimeSpan.FromSeconds(5)
-            )
-        );
-        await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
-
-        var completion = DrainCompletion(source, operationId);
-        Assert.True(completion.ActorDestroyCompletion!.Destroyed);
-        Assert.Equal(actor, operationTarget.Last.Actor);
-        Assert.Equal(target.RoutingId, operationTarget.Last.TargetNodeRid);
-        Assert.Equal(targetGeneration, operationTarget.Last.TargetNodeGeneration);
-        Assert.Equal(29UL, operationTarget.Last.OwnerLeaseGeneration);
-        Assert.Equal(23UL, operationTarget.Last.AuthorityOwnerGeneration);
+        await source.SendActorDestroyAsync(actor, targetGeneration, 23, 29, CancellationToken.None);
+        var received = await operationTarget.Received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(actor, received.Actor);
+        Assert.Equal(target.RoutingId, received.TargetNodeRid);
+        Assert.Equal(targetGeneration, received.TargetNodeGeneration);
+        Assert.Equal(29UL, received.OwnerLeaseGeneration);
+        Assert.Equal(23UL, received.AuthorityOwnerGeneration);
     }
 
     private static ZLinkManagedMeshNode NewNode(IContext context, string rid)
@@ -242,21 +229,16 @@ public sealed class ActorCreateCommandRuntimeTests
 
     private sealed class DestroyingTarget : IActorDestroyOperationTarget
     {
-        public ActorDestroyOperation Last { get; private set; }
+        public TaskCompletionSource<ActorDestroyOperation> Received { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public ValueTask<ActorDestroyOperationTerminal> DestroyAsync(
+        public ValueTask<bool> DestroyAsync(
             ActorDestroyOperation operation,
             CancellationToken cancellationToken
         )
         {
-            Last = operation;
-            return ValueTask.FromResult(
-                new ActorDestroyOperationTerminal(
-                    RequestResult.Ok,
-                    ServiceWireConstants.FrameworkErrorCode.None,
-                    new ActorDestroyCompletion(true)
-                )
-            );
+            Received.SetResult(operation);
+            return ValueTask.FromResult(true);
         }
     }
 }
