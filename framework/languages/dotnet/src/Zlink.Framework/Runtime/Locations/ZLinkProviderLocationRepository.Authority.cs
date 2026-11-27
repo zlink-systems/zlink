@@ -483,8 +483,9 @@ internal sealed partial class ZLinkProviderLocationRepository
             }
             if (meta is not null)
             {
+                // Source Preserve ends the fenced projection, so the new row version becomes visible.
                 if (aggregateFence is not null)
-                    meta = meta.WithoutParticipantFence();
+                    meta = meta.WithoutParticipantFence() with { VisibleStoreVersion = null };
                 mutations.Add(new ZLinkStoreMutation.Put(metaKey, Encode(meta), null));
             }
             var result = await _provider
@@ -5302,7 +5303,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                 AggregateFence = null,
                 AggregateParticipantIndex = null,
                 AggregateExpectedStoreVersion = null,
-                VisibleStoreVersion = null,
             };
     }
 
