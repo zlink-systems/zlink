@@ -42,6 +42,7 @@ enum class actor_move_phase_t
 {
     source_reserved,
     local,
+    local_completion_failed, // Keep the Join seal and reject new application ingress.
     source_remote,
     target_pending,
     target_committing,
@@ -193,7 +194,8 @@ enum class handoff_append_result_t
 {
     appended,
     not_moving,
-    duplicate_request
+    duplicate_request,
+    join_completion_failed
 };
 
 struct actor_transfer_dispatch_state_snapshot_t
@@ -246,6 +248,7 @@ class actor_transfer_coordinator_t
     task_t<void> wait_for_source_completions ();
     result_t<void> try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
     result_t<void> try_begin_local (const std::string &actor_key);
+    task_t<void> mark_local_completion_failed (std::string actor_key);
     result_t<void> try_begin_source_remote (const std::string &actor_key,
                                             std::string transfer_id = {});
     std::vector<handoff_packet_t> cancel_move (const std::string &actor_key,
@@ -468,6 +471,7 @@ class actor_transfer_coordinator_t
         // handler can adopt the target route (spec 28) without a second
         // Location Store resolver lookup for the target's spot address.
         std::optional<reconcile_target_context_t> reconcile_context;
+        std::chrono::steady_clock::time_point local_completion_sealed_at;
     };
 
     static bool is_source_remote (const move_state_t &move) noexcept
@@ -512,7 +516,7 @@ class actor_transfer_coordinator_t
 
     void erase_move_on_lane (const std::string &actor_key);
 
-    bool blocks_dispatch_on_lane (const std::string &actor_key) const;
+    const move_state_t *blocking_move_on_lane (const std::string &actor_key) const;
     bool has_message_follow_route_on_lane (const std::string &actor_key) const;
     bool matches_source_reservation_on_lane (const std::string &actor_key,
                                              const std::string &transfer_id) const;
