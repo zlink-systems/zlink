@@ -40,5 +40,9 @@ class StreamSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the peer identified by ``peer_rid``."""
         ...
 
+    def set_routing_id(self, routing_id): ...
+
+    def get_routing_id(self): ...
+
 
 __all__ = ["StreamSocket"]

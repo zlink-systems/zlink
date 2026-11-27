@@ -24,6 +24,8 @@ class PubSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
+    def disconnect_rid(self, peer_rid): ...
+
     def publish(self, topic) -> PublishOp:
         """Begin publishing under ``topic``; parts are consumed on a successful
         submit."""
@@ -46,6 +48,8 @@ class SubSocket(_socket_contract._SocketContract, Protocol):
     def disconnect(self, endpoint):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
+
+    def disconnect_rid(self, peer_rid): ...
 
     def set_subscription(self, topic):
         """Add a subscription for ``topic`` (an exact topic or pattern);
@@ -85,6 +89,8 @@ class XPubSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
+    def disconnect_rid(self, peer_rid): ...
+
     def publish(self, topic) -> PublishOp:
         """Begin publishing under ``topic``; parts are consumed on a successful
         submit."""
@@ -112,6 +118,8 @@ class XSubSocket(_socket_contract._SocketContract, Protocol):
     def disconnect(self, endpoint):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
+
+    def disconnect_rid(self, peer_rid): ...
 
     def set_subscription(self, topic):
         """Add a subscription for ``topic``; subscriptions accumulate."""

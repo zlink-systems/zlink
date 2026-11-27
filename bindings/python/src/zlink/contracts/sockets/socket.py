@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MPL-2.0
 
-from typing import Protocol, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
+
+from ..eventing.codes import MonitorEventMask
+from .codes import ReceiveFlowState
 
 
 @runtime_checkable
@@ -11,6 +14,25 @@ class _SocketContract(Protocol):
         """Bind to a local transport address (for example ``tcp://*:5555``) to
         accept connections there."""
         ...
+
+    def unbind(self, endpoint: str): ...
+
+    def set_tls_server(
+        self, cert: str, key: str, require_client_cert: bool = False
+    ): ...
+
+    def set_tls_client(
+        self,
+        ca_cert: Optional[str],
+        hostname: Optional[str],
+        trust_system: bool = False,
+    ): ...
+
+    def monitor_open(
+        self, events: MonitorEventMask = MonitorEventMask.ALL, monitor_hwm_bytes: int = 0
+    ): ...
+
+    def set_receive_flow_state(self, state: ReceiveFlowState): ...
 
     def close(self):
         """Close the socket and release its native resources."""
