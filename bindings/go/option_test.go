@@ -134,6 +134,23 @@ func TestSocketSpecificOptions(t *testing.T) {
 	if got, err := router.RoutingID(); err != nil || !got.Equal(rid) {
 		t.Fatalf("RoutingID() = (%v, %v), want (%v, nil)", got, err, rid)
 	}
+	if got, err := router.Mandatory(); err != nil || !got {
+		t.Fatalf("Mandatory() = (%v, %v), want (true, nil)", got, err)
+	}
+	if got, err := router.Probe(); err != nil || !got {
+		t.Fatalf("Probe() = (%v, %v), want (true, nil)", got, err)
+	}
+	if got, err := router.Handover(); err != nil || !got {
+		t.Fatalf("Handover() = (%v, %v), want (true, nil)", got, err)
+	}
+	if err := router.SetLinger(250 * time.Millisecond); err != nil {
+		t.Fatalf("SetLinger() error = %v", err)
+	}
+	direct, err := router.Linger()
+	viaFacade, facadeErr := router.CommonOptions().Linger()
+	if err != nil || facadeErr != nil || direct != viaFacade || direct != 250*time.Millisecond {
+		t.Fatalf("Linger() direct = (%v, %v), via CommonOptions = (%v, %v), want 250ms from both", direct, err, viaFacade, facadeErr)
+	}
 	if err := router.SetRequestTimeout(123 * time.Millisecond); err != nil {
 		t.Fatalf("SetRequestTimeout() error = %v", err)
 	}
@@ -148,6 +165,12 @@ func TestSocketSpecificOptions(t *testing.T) {
 	}
 	if err := dealer.SetRequestTimeout(123 * time.Millisecond); err != nil {
 		t.Fatalf("Dealer.SetRequestTimeout() error = %v", err)
+	}
+	if got, err := dealer.Probe(); err != nil || !got {
+		t.Fatalf("Dealer.Probe() = (%v, %v), want (true, nil)", got, err)
+	}
+	if got, err := dealer.RequestTimeout(); err != nil || got != 123*time.Millisecond {
+		t.Fatalf("Dealer.RequestTimeout() = (%v, %v), want (123ms, nil)", got, err)
 	}
 
 	xpub, _ := ctx.XPubSocket()

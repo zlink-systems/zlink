@@ -133,7 +133,7 @@ fn socket_monitor_add_forwards_core_mask_results() {
     ] {
         let error = poller.add_monitor(&monitor, events, 1).unwrap_err();
         assert_eq!(error.code(), code);
-        assert_eq!(error.native_errno(), native_errno);
+        assert_eq!(error.internal_errno(), native_errno);
         assert_eq!(poller.size().unwrap(), 0);
     }
     poller.add_monitor(&monitor, POLLIN, 1).unwrap();
@@ -164,7 +164,7 @@ fn socket_monitor_modify_forwards_core_mask_results() {
     ] {
         let error = poller.modify_monitor(&monitor, events).unwrap_err();
         assert_eq!(error.code(), code);
-        assert_eq!(error.native_errno(), native_errno);
+        assert_eq!(error.internal_errno(), native_errno);
         assert_eq!(poller.size().unwrap(), 1);
     }
     poller.remove_monitor(&monitor).unwrap();

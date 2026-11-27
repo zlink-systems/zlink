@@ -1,6 +1,7 @@
 """Source guards for raw Core ownership and hot-path cost decisions."""
 
 import json
+import re
 from pathlib import Path
 
 import zlink
@@ -25,6 +26,19 @@ def test_hot_path_cost_inventory_has_no_unclassified_entries():
         assert entry["owner"]
         assert entry["cost_class"] in {"allocation", "copy", "lock", "gil", "none"}
         assert entry["guard_test"]
+
+
+def test_hot_path_cost_inventory_guard_tests_exist():
+    inventory = json.loads(
+        (ROOT / "tests" / "hot-path-cost-inventory.json").read_text(encoding="utf-8")
+    )
+    defined = set()
+    for path in (ROOT / "tests").rglob("*.py"):
+        defined.update(re.findall(r"def (test_\w+)", path.read_text(encoding="utf-8")))
+    missing = sorted(
+        {e["guard_test"] for e in inventory["entries"]} - defined
+    )
+    assert missing == []
 
 
 def test_raw_runtime_does_not_use_dynamic_ffi_or_service_fallbacks():

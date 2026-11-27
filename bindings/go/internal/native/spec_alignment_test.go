@@ -7,12 +7,20 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"zlink.systems/zlink/contracts"
 )
 
 func TestRoutingIDCanonicalHelpers(t *testing.T) {
 	rid := NewRoutingID([]byte{0x00, 0x41, 0x42})
 	if rid.Size() != 3 {
 		t.Fatalf("Size() = %d, want 3", rid.Size())
+	}
+	raw := routingIDToC(rid)
+	if raw.size != 3 || byte(raw.data[0]) != 0x00 || byte(raw.data[1]) != 0x41 || byte(raw.data[2]) != 0x42 {
+		t.Fatalf("routingIDToC() changed routing id bytes")
+	}
+	if got := routingIDFromC(raw); !got.Equal(rid) {
+		t.Fatalf("routingIDFromC() = %v, want %v", got, rid)
 	}
 	if got := rid.Hex(); got != "004142" {
 		t.Fatalf("Hex() = %q, want %q", got, "004142")
@@ -23,33 +31,14 @@ func TestRoutingIDCanonicalHelpers(t *testing.T) {
 	if got := NewRoutingIDFromHex("004142"); !got.Equal(rid) {
 		t.Fatalf("NewRoutingIDFromHex() = %v, want %v", got, rid)
 	}
-	parsed, err := parseRoutingIDHex("004142")
-	if err != nil {
-		t.Fatalf("parseRoutingIDHex() error = %v", err)
-	}
-	if !parsed.Equal(rid) {
-		t.Fatalf("parseRoutingIDHex() = %v, want %v", parsed, rid)
-	}
-	maxParsed, err := parseRoutingIDHex(strings.Repeat("a", 510))
-	if err != nil {
-		t.Fatalf("parseRoutingIDHex(max) error = %v", err)
-	}
-	if maxParsed.Size() != 255 {
-		t.Fatalf("parseRoutingIDHex(max).Size() = %d, want 255", maxParsed.Size())
+	if got := NewRoutingIDFromHex(strings.Repeat("a", 510)); got.Size() != 255 {
+		t.Fatalf("NewRoutingIDFromHex(max).Size() = %d, want 255", got.Size())
 	}
 	if got := NewRoutingIDFromHex("not-hex"); got.Size() != 0 {
 		t.Fatalf("NewRoutingIDFromHex(invalid).Size() = %d, want 0", got.Size())
 	}
 	if got := NewRoutingIDFromHex(strings.Repeat("a", 512)); got.Size() != 0 {
 		t.Fatalf("NewRoutingIDFromHex(oversize).Size() = %d, want 0", got.Size())
-	}
-	if _, err := parseRoutingIDHex(strings.Repeat("a", 512)); err == nil {
-		t.Fatalf("parseRoutingIDHex(oversize) should fail")
-	} else {
-		var configErr *ConfigError
-		if !errors.As(err, &configErr) {
-			t.Fatalf("parseRoutingIDHex(oversize) error type = %T, want *ConfigError", err)
-		}
 	}
 	if got := NewRoutingIDString("dealer-1").String(); got != "dealer-1" {
 		t.Fatalf("NewRoutingIDString().String() = %q, want dealer-1", got)
@@ -255,28 +244,25 @@ func TestMonitorEventFromCPreserves64BitValueAndConnectionMetadata(t *testing.T)
 }
 
 func TestMonitorOpenOptionsUseExactByteHwm(t *testing.T) {
-	config, err := resolveMonitorOpenOptions([]MonitorOpenOption{
-		MonitorEventConnected,
-		MonitorHwmBytes(4096),
-		MonitorEventDisconnected,
-		MonitorHwmBytes(8192),
+	events, hwm, ok := contracts.ResolveMonitorOpenOptions([]contracts.MonitorOpenOption{
+		MonitorEventConnected, contracts.MonitorHwmBytes(4096),
+		MonitorEventDisconnected, contracts.MonitorHwmBytes(8192),
 	})
-	if err != nil {
-		t.Fatalf("resolveMonitorOpenOptions() error = %v", err)
+	if !ok {
+		t.Fatal("ResolveMonitorOpenOptions() rejected valid options")
 	}
-	if want := MonitorEventConnected | MonitorEventDisconnected; config.events != want {
-		t.Fatalf("events = %#x, want %#x", config.events, want)
+	if want := MonitorEventConnected | MonitorEventDisconnected; events != want {
+		t.Fatalf("events = %#x, want %#x", events, want)
 	}
-	if config.monitorHwmBytes != 8192 {
-		t.Fatalf("monitor HWM bytes = %d, want last value 8192", config.monitorHwmBytes)
+	if hwm != 8192 {
+		t.Fatalf("monitor HWM bytes = %d, want 8192", hwm)
 	}
-
-	defaultEvents, err := resolveMonitorOpenOptions([]MonitorOpenOption{MonitorHwmBytes(0)})
-	if err != nil {
-		t.Fatalf("resolveMonitorOpenOptions(default) error = %v", err)
+	defaultEvents, defaultHwm, ok := contracts.ResolveMonitorOpenOptions([]contracts.MonitorOpenOption{contracts.MonitorHwmBytes(0)})
+	if !ok || defaultEvents != MonitorEventAll || defaultHwm != 0 {
+		t.Fatalf("default options = (%#x, %d, %t), want all events and zero HWM", defaultEvents, defaultHwm, ok)
 	}
-	if defaultEvents.events != MonitorEventAll || defaultEvents.monitorHwmBytes != 0 {
-		t.Fatalf("default options = %+v, want all events and Core-default byte HWM", defaultEvents)
+	if _, _, ok := contracts.ResolveMonitorOpenOptions([]contracts.MonitorOpenOption{nil}); ok {
+		t.Fatal("nil monitor option was accepted")
 	}
 }
 

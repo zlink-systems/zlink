@@ -26,6 +26,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -791,6 +792,12 @@ struct user_spot_probe_req_t
     std::string marker;
 };
 
+struct user_spot_late_send_t
+{
+    static constexpr const char *packet_name = "UserSpotLateSend";
+    std::string marker;
+};
+
 struct user_spot_probe_res_t
 {
     static constexpr const char *packet_name = "UserSpotProbeRes";
@@ -858,6 +865,12 @@ template <> struct zlink::json::dto_traits<user_spot_probe_req_t>
 {
     static constexpr auto fields =
       std::tuple{zlink::json::field ("marker", &user_spot_probe_req_t::marker)};
+};
+
+template <> struct zlink::json::dto_traits<user_spot_late_send_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("marker", &user_spot_late_send_t::marker)};
 };
 
 template <> struct zlink::json::dto_traits<user_spot_probe_res_t>
@@ -1389,7 +1402,8 @@ class outage_control_t
                            "staged target executed an application handler");
                     _sink.append ("outage-staged|publicOwner="
                                   + std::string (found->node_rid ().value ()) + "|handlerCalls=0");
-                    _sink.append ("outage-blocker|staged-fence|public_host_runtime.cpp:513"
+                    _sink.append ("outage-blocker|staged-fence|"
+                                  "public_host_runtime_messaging.cpp::read_route_owner_fence"
                                   "|existing fence reader is translation-unit private");
                 } else if (command == "commit") {
                     check (g_outage_store->staged.load (), "target commit was not staged");
@@ -1779,19 +1793,12 @@ class user_spot_source_service_t final : public fw::hosted_service_t
 
         /* Reciprocal barrier: the harness touches this file once BOTH sides
          * have observed the peer, matching the Node and Java sources. */
-        if (!_start_file.empty ()) {
-            const auto start_deadline =
-              std::chrono::steady_clock::now () + std::chrono::seconds (60);
-            while (!std::ifstream (_start_file).good ()) {
-                if (_stopping.load ()) {
-                    return;
-                }
-                if (std::chrono::steady_clock::now () >= start_deadline) {
-                    sink.append ("user-spot-source-start-timeout|file=" + _start_file);
-                    return;
-                }
-                std::this_thread::sleep_for (std::chrono::milliseconds (25));
-            }
+        if (!_start_file.empty () && !wait_for_file (sink, _start_file))
+            return;
+
+        if (const auto *timeout = std::getenv ("ZLINK_CROSS_LATE_REQUEST_TIMEOUT_MS")) {
+            probe_sealed_actor (sink, actors, timeout);
+            return;
         }
 
         /* --placement-weight 0 removes this node from the candidate set of its
@@ -1872,6 +1879,47 @@ class user_spot_source_service_t final : public fw::hosted_service_t
                      + "|actor=" + reply.value ().actor_id + "|spot=" + reply.value ().spot_id);
         if (outage)
             outage->run (false);
+    }
+
+    bool wait_for_file (event_sink_t &sink, const std::string &file)
+    {
+        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (60);
+        while (!std::ifstream (file).good ()) {
+            if (_stopping.load ())
+                return false;
+            if (std::chrono::steady_clock::now () >= deadline) {
+                sink.append ("user-spot-source-start-timeout|file=" + file);
+                return false;
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (25));
+        }
+        return true;
+    }
+
+    void probe_sealed_actor (event_sink_t &sink, fw::actor_client_t &actors, const char *timeout_ms)
+    {
+        const auto submitted =
+          actors.send (fw::actor_id_t (_actor_id), user_spot_late_send_t{"late-send"})
+            .async ()
+            .result ();
+        sink.append (submitted ? "late-actor-send|submitted=true"
+                               : "late-actor-send|submitted=false|kind="
+                                   + error_kind_wire_name (submitted.error_kind ()));
+        if (!wait_for_file (sink, _start_file + ".request"))
+            return;
+        const auto timeout = std::chrono::milliseconds (std::stoi (timeout_ms));
+        const auto started = std::chrono::steady_clock::now ();
+        const auto result =
+          actors.request (fw::actor_id_t (_actor_id), user_spot_probe_req_t{"late-request"})
+            .timeout (timeout)
+            .async<user_spot_probe_res_t> ()
+            .result ();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds> (
+          std::chrono::steady_clock::now () - started);
+        sink.append (std::string ("late-actor-request|kind=")
+                     + (result ? "success" : error_kind_wire_name (result.error_kind ()))
+                     + "|elapsedMs=" + std::to_string (elapsed.count ())
+                     + "|message=" + (result ? "" : result.error ()->what ()));
     }
 
     std::string _mesh_name;
@@ -2048,6 +2096,10 @@ int main (int argc, char **argv)
                    * Spot exists. */
                   .set_placement_weight (100);
                 mesh.channel_name (mesh_name).server ();
+                if (!target && std::getenv ("ZLINK_CROSS_LATE_REQUEST_TIMEOUT_MS")) {
+                    mesh.objects ().client ();
+                    return;
+                }
                 mesh.objects ().server ();
                 mesh.add_route_request_handler<user_spot_discovery_probe_handler_t,
                                                user_spot_discovery_probe_req_t,

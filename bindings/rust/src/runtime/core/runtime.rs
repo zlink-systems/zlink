@@ -1,9 +1,9 @@
-use crate::error::ConfigError;
-use crate::ffi;
-use crate::message::Message;
-use crate::native_errors::check_config_rc;
-use crate::poller::pollable_handle;
-use crate::poller_contracts::Pollable;
+use crate::contracts::errors::errors::ConfigError;
+use crate::contracts::eventing::poller::Pollable;
+use crate::contracts::messaging::message::Message;
+use crate::runtime::errors::native_errors::check_config_rc;
+use crate::runtime::eventing::poller::pollable_handle;
+use crate::runtime::native::ffi;
 
 pub fn proxy(
     frontend: &dyn Pollable,

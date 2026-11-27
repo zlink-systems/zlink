@@ -74,7 +74,7 @@ class DealerSocketOptions(Protocol):
 
     Attributes:
         probe: Whether to send an empty probe on connect so the peer learns this socket's routing id.
-        weight: This peer's relative load-balancing weight (0-100).
+        weight: This peer's relative load-balancing weight (0..10000).
         request_timeout_ms: How long, in ms, a DEALER request waits for a reply.
     """
 
@@ -153,7 +153,7 @@ class RouterSocketOptions(Protocol):
         handover: Whether a new peer reusing an existing routing id takes it over.
         probe: Whether to send an empty probe on connect so the peer learns this socket's routing id.
         connect_routing_id: The routing id assigned to the next outgoing connection.
-        weight: This peer's relative load-balancing weight (0-100).
+        weight: This peer's relative load-balancing weight (0..10000).
         request_timeout_ms: How long, in ms, a ROUTER request waits for a reply.
     """
 

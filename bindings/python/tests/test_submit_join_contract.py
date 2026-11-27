@@ -200,3 +200,10 @@ def test_request_without_timeout_uses_the_socket_request_timeout_option():
         dealer.close()
         router.close()
         context.close()
+
+
+def test_request_timeout_range_is_rejected_not_clamped():
+    assert _timeout_to_ms(0xFFFFFFFF / 1000.0) == 0xFFFFFFFF
+    for bad in (-1, 0xFFFFFFFF / 1000.0 + 1, float("inf")):
+        with pytest.raises(ValueError):
+            _timeout_to_ms(bad)

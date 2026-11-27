@@ -12,228 +12,18 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
+	"zlink.systems/zlink/contracts"
 )
 
-const (
-	MonitorEventConnected               MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_CONNECTED)
-	MonitorEventConnectDelayed          MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_CONNECT_DELAYED)
-	MonitorEventConnectRetried          MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_CONNECT_RETRIED)
-	MonitorEventListening               MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_LISTENING)
-	MonitorEventBindFailed              MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_BIND_FAILED)
-	MonitorEventAccepted                MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_ACCEPTED)
-	MonitorEventAcceptFailed            MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_ACCEPT_FAILED)
-	MonitorEventClosed                  MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_CLOSED)
-	MonitorEventCloseFailed             MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_CLOSE_FAILED)
-	MonitorEventDisconnected            MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_DISCONNECTED)
-	MonitorEventMonitorStopped          MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_MONITOR_STOPPED)
-	MonitorEventHandshakeFailedNoDetail MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_NO_DETAIL)
-	MonitorEventConnectionReady         MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_CONNECTION_READY)
-	MonitorEventHandshakeFailedProtocol MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_PROTOCOL)
-	MonitorEventHandshakeFailedAuth     MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_AUTH)
-	MonitorEventPeerWeightChanged       MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_PEER_WEIGHT_CHANGED)
-	// MonitorEventSendFlowPaused selects the PAUSED-transition event for an
-	// affected Application pipe (core-byte-hwm-flow-control-plan.ko.md §6).
-	MonitorEventSendFlowPaused MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED)
-	// MonitorEventSendFlowResumed selects the RUNNING-transition event for an affected Application pipe.
-	MonitorEventSendFlowResumed MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED)
-	// MonitorEventFlowStateStale selects a rejected stale or duplicate flow-state frame event.
-	MonitorEventFlowStateStale MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE)
-	MonitorEventAll            MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_ALL)
-)
+type MonitorEventMask = contracts.MonitorEventMask
+type MonitorSourceKind = contracts.MonitorSourceKind
+type MonitorEventType = contracts.MonitorEventType
+type MonitorEventFlag = contracts.MonitorEventFlag
+type MonitorTransportLane = contracts.MonitorTransportLane
+type MonitorOpenOption = contracts.MonitorOpenOption
 
-type MonitorEventMask uint32
-type MonitorSourceKind uint32
-type MonitorEventType uint64
-
-// MonitorOpenOption configures a socket monitor when it is opened.
-type MonitorOpenOption interface {
-	applyMonitorOpenOption(*monitorOpenConfig)
-}
-
-type monitorOpenConfig struct {
-	events          MonitorEventMask
-	hasEvents       bool
-	monitorHwmBytes uint64
-}
-
-type monitorHwmBytesOption uint64
-
-func (events MonitorEventMask) applyMonitorOpenOption(config *monitorOpenConfig) {
-	config.events |= events
-	config.hasEvents = true
-}
-
-func (value monitorHwmBytesOption) applyMonitorOpenOption(config *monitorOpenConfig) {
-	config.monitorHwmBytes = uint64(value)
-}
-
-// MonitorHwmBytes sets the monitor queue HWM in bytes. Zero selects the Core
-// default; a positive value is passed to Core unchanged. If supplied more than
-// once, the last value wins.
-func MonitorHwmBytes(value uint64) MonitorOpenOption {
-	return monitorHwmBytesOption(value)
-}
-
-const (
-	MonitorEventTypeConnected               MonitorEventType = MonitorEventType(MonitorEventConnected)
-	MonitorEventTypeConnectDelayed          MonitorEventType = MonitorEventType(MonitorEventConnectDelayed)
-	MonitorEventTypeConnectRetried          MonitorEventType = MonitorEventType(MonitorEventConnectRetried)
-	MonitorEventTypeListening               MonitorEventType = MonitorEventType(MonitorEventListening)
-	MonitorEventTypeBindFailed              MonitorEventType = MonitorEventType(MonitorEventBindFailed)
-	MonitorEventTypeAccepted                MonitorEventType = MonitorEventType(MonitorEventAccepted)
-	MonitorEventTypeAcceptFailed            MonitorEventType = MonitorEventType(MonitorEventAcceptFailed)
-	MonitorEventTypeClosed                  MonitorEventType = MonitorEventType(MonitorEventClosed)
-	MonitorEventTypeCloseFailed             MonitorEventType = MonitorEventType(MonitorEventCloseFailed)
-	MonitorEventTypeDisconnected            MonitorEventType = MonitorEventType(MonitorEventDisconnected)
-	MonitorEventTypeMonitorStopped          MonitorEventType = MonitorEventType(MonitorEventMonitorStopped)
-	MonitorEventTypeHandshakeFailedNoDetail MonitorEventType = MonitorEventType(MonitorEventHandshakeFailedNoDetail)
-	MonitorEventTypeConnectionReady         MonitorEventType = MonitorEventType(MonitorEventConnectionReady)
-	MonitorEventTypeHandshakeFailedProtocol MonitorEventType = MonitorEventType(MonitorEventHandshakeFailedProtocol)
-	MonitorEventTypeHandshakeFailedAuth     MonitorEventType = MonitorEventType(MonitorEventHandshakeFailedAuth)
-	MonitorEventTypePeerWeightChanged       MonitorEventType = MonitorEventType(MonitorEventPeerWeightChanged)
-	MonitorEventTypeSendFlowPaused          MonitorEventType = MonitorEventType(MonitorEventSendFlowPaused)
-	MonitorEventTypeSendFlowResumed         MonitorEventType = MonitorEventType(MonitorEventSendFlowResumed)
-	MonitorEventTypeFlowStateStale          MonitorEventType = MonitorEventType(MonitorEventFlowStateStale)
-	MonitorEventTypeAll                     MonitorEventType = MonitorEventType(MonitorEventAll)
-)
-
-// MonitorEventFlag is a bitmask of event-specific detail flags carried in
-// zlink_monitor_event_t.flags (core-byte-hwm-flow-control-plan.ko.md §6).
-type MonitorEventFlag uint32
-
-const (
-	// MonitorEventFlagConnectionReadyEdge is set on MonitorEventTypeConnectionReady
-	// when the event changes a connection from not-ready to ready.
-	MonitorEventFlagConnectionReadyEdge MonitorEventFlag = MonitorEventFlag(C.ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE)
-	// MonitorEventFlagSendFlowWritable is set on MonitorEventTypeSendFlowResumed when
-	// clearing the remote pause left the pipe actually writable. Value carries the flow epoch.
-	MonitorEventFlagSendFlowWritable MonitorEventFlag = MonitorEventFlag(C.ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE)
-	// MonitorEventFlagFlowStateStaleEpoch is set on MonitorEventTypeFlowStateStale when
-	// the epoch did not advance inside the current generation. Value carries the
-	// received epoch.
-	MonitorEventFlagFlowStateStaleEpoch MonitorEventFlag = MonitorEventFlag(C.ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH)
-)
-
-// MonitorTransportLane identifies the transport lane associated with a monitor event.
-type MonitorTransportLane uint32
-
-const (
-	MonitorTransportLaneApplication MonitorTransportLane = MonitorTransportLane(C.ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION)
-	MonitorTransportLaneCompletion  MonitorTransportLane = MonitorTransportLane(C.ZLINK_MONITOR_TRANSPORT_LANE_COMPLETION)
-)
-
-const (
-	MonitorSourceSocket MonitorSourceKind = MonitorSourceKind(C.ZLINK_MONITOR_SOURCE_SOCKET)
-)
-
-type MonitorEvent struct {
-	Event      MonitorEventType
-	Value      uint64
-	RoutingID  RoutingID
-	LocalAddr  string
-	RemoteAddr string
-	// ConnectionID is the process-local identity of the physical transport attempt.
-	ConnectionID uint64
-	// TransportLane identifies which lane of a paired transport this event describes.
-	TransportLane MonitorTransportLane
-	// Flags carries event-specific detail bits; see MonitorEventFlag.
-	Flags MonitorEventFlag
-}
-
-func (e *MonitorEvent) HasRoutingID() bool {
-	return e != nil && monitorHasRoutingID(e.RoutingID)
-}
-
-func (e *MonitorEvent) IsConnected() bool {
-	return e != nil && e.Event&MonitorEventTypeConnected != 0
-}
-
-func (e *MonitorEvent) IsDisconnected() bool {
-	return e != nil && e.Event&MonitorEventTypeDisconnected != 0
-}
-
-func (e *MonitorEvent) IsListening() bool {
-	return e != nil && e.Event&MonitorEventTypeListening != 0
-}
-
-func (e *MonitorEvent) IsAccepted() bool {
-	return e != nil && e.Event&MonitorEventTypeAccepted != 0
-}
-
-func (e *MonitorEvent) IsConnectionReady() bool {
-	return e != nil && e.Event&MonitorEventTypeConnectionReady != 0
-}
-
-func (e *MonitorEvent) IsSendFlowPaused() bool {
-	return e != nil && e.Event&MonitorEventTypeSendFlowPaused != 0
-}
-
-func (e *MonitorEvent) IsSendFlowResumed() bool {
-	return e != nil && e.Event&MonitorEventTypeSendFlowResumed != 0
-}
-
-func (e *MonitorEvent) IsFlowStateStale() bool {
-	return e != nil && e.Event&MonitorEventTypeFlowStateStale != 0
-}
-
-func (e *MonitorEvent) HasFlag(flag MonitorEventFlag) bool {
-	return e != nil && e.Flags&flag != 0
-}
-
-type MonitorStatus struct {
-	ABIVersion                       uint32
-	StructSize                       uint32
-	SourceKind                       MonitorSourceKind
-	StateFlags                       uint32
-	DetailFlags                      uint32
-	SndPendingMsgs                   uint64
-	RcvPendingMsgs                   uint64
-	SndPendingBytes                  uint64
-	RcvPendingBytes                  uint64
-	AutoHwmEnabled                   bool
-	AutoHwmProfile                   uint32
-	AutoHwmRole                      uint32
-	AutoHwmPolicyClass               uint32
-	AutoHwmPlannedSndHwmBytes        uint64
-	AutoHwmPlannedRcvHwmBytes        uint64
-	AutoHwmAppliedSndHwmBytes        uint64
-	AutoHwmAppliedRcvHwmBytes        uint64
-	AutoHwmEffectiveSndBuf           int32
-	AutoHwmEffectiveRcvBuf           int32
-	AutoHwmLastRecalcMs              uint64
-	AutoHwmLastRecalcReason          AutoHwmRecalcReason
-	AutoHwmSendBlockedRatioPPM       uint32
-	AutoHwmDeferredSndHwmBytes       uint64
-	AutoHwmDeferredRcvHwmBytes       uint64
-	AutoHwmDeferredSndHwmValid       bool
-	AutoHwmDeferredRcvHwmValid       bool
-	SndBytesInFlight                 uint64
-	RcvBytesInFlight                 uint64
-	MinimumCoreMessageChargeBytes    uint64
-	OversizeMessageAdmissionCount    uint64
-	OversizeMessageAdmissionMaxBytes uint64
-	// DEALER/ROUTER receive-flow observation for affected Application pipes.
-	// Control uses the Application connection for count-1 peers and the
-	// Completion connection for count-2 ROUTER-ROUTER peers. Present since ABI 4;
-	// zero on socket types other than DEALER/ROUTER.
-	FlowPausedConnections  uint64
-	FlowPauseAppliedTotal  uint64
-	FlowResumeAppliedTotal uint64
-	FlowStateStaleTotal    uint64
-	FlowPauseDurationMs    uint64
-}
-
-func (s *MonitorStatus) IsReady() bool {
-	return s != nil && s.StateFlags&uint32(C.ZLINK_MONITOR_STATE_READY) != 0
-}
-
-// IsFlowStateDetailPopulated reports whether FlowPausedConnections and the
-// other flow_* fields are populated (ABI 4+, paired DEALER/ROUTER sockets
-// only). Mirrors ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE in
-// core/include/zlink_enum.h.
-func (s *MonitorStatus) IsFlowStateDetailPopulated() bool {
-	return s != nil && s.DetailFlags&uint32(C.ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE) != 0
-}
+type MonitorEvent = contracts.MonitorEvent
+type MonitorStatus = contracts.MonitorStatus
 
 func monitorStatusFromC(raw C.zlink_monitor_status_t) MonitorStatus {
 	return MonitorStatus{
@@ -281,31 +71,17 @@ type SocketMonitor struct {
 	closeMu sync.Mutex
 }
 
-func resolveMonitorOpenOptions(options []MonitorOpenOption) (monitorOpenConfig, error) {
-	config := monitorOpenConfig{}
-	for _, option := range options {
-		if option == nil {
-			return monitorOpenConfig{}, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
-		}
-		option.applyMonitorOpenOption(&config)
-	}
-	if !config.hasEvents {
-		config.events = MonitorEventAll
-	}
-	return config, nil
-}
-
 func OpenSocketMonitor(socket SocketTarget, options ...MonitorOpenOption) (*SocketMonitor, error) {
 	if socket == nil {
-		return nil, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return nil, newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
-	config, err := resolveMonitorOpenOptions(options)
-	if err != nil {
-		return nil, err
+	events, monitorHwmBytes, ok := contracts.ResolveMonitorOpenOptions(options)
+	if !ok {
+		return nil, newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	nativeOptions := C.zlink_socket_monitor_open_options_t{
-		events:            C.zlink_socket_monitor_event_mask_t(config.events),
-		monitor_hwm_bytes: C.uint64_t(config.monitorHwmBytes),
+		events:            C.zlink_socket_monitor_event_mask_t(events),
+		monitor_hwm_bytes: C.uint64_t(monitorHwmBytes),
 	}
 	handle, cerr := C.zlink_socket_monitor_open(socket.raw(), &nativeOptions)
 	if handle == nil {
@@ -329,7 +105,7 @@ func (m *SocketMonitor) raw() unsafe.Pointer {
 func (m *SocketMonitor) Recv(flags RecvFlags) (*MonitorEvent, error) {
 	handle := m.raw()
 	if handle == nil {
-		return nil, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return nil, newRecvError(RecvInvalidHandle, int(C.EFAULT))
 	}
 	var raw C.zlink_socket_monitor_event_t
 	rc, cerr := C.zlink_socket_monitor_recv(handle, &raw, C.zlink_recv_flags_t(flags))
@@ -342,7 +118,7 @@ func (m *SocketMonitor) Recv(flags RecvFlags) (*MonitorEvent, error) {
 func (m *SocketMonitor) Status() (*MonitorStatus, error) {
 	handle := m.raw()
 	if handle == nil {
-		return nil, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return nil, newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	var raw C.zlink_monitor_status_t
 	rc, cerr := C.zlink_monitor_status(handle, &raw)

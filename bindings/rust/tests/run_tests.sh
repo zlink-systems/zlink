@@ -84,6 +84,8 @@ run_test_file option_tests
 run_test_file flow_state_tests
 run_test_file ownership_tests
 run_test_file monitor_tests
+run_test_file context_poller_close_tests
+run_test_file connection_attempt_tests
 
 TOTAL=$((TOTAL + 1))
 echo -n "  samples ... "

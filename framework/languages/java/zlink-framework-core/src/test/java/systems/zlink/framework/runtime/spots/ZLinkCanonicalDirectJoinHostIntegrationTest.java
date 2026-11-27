@@ -892,45 +892,62 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 assertEquals(1, targetCommits.get());
                 return;
             }
-            if (scenario.joinedFailure() != null || scenario == Scenario.COMPLETION_FAILURE) {
+            if (scenario == Scenario.COMPLETION_FAILURE) {
+                var accepted =
+                        assertInstanceOf(
+                                ZLinkActorJoinCompletion.Accepted.class,
+                                COMPLETION.get().get(4, TimeUnit.SECONDS));
+                assertEquals(operationId, accepted.operationId());
+                PUSH_TERMINAL.get().complete(null);
+                link.targetCompletion.get(4, TimeUnit.SECONDS);
+                assertEquals(TARGET_RID, moved.get(4, TimeUnit.SECONDS).targetActor().nodeRid());
+                assertEquals(1, targetCommits.get());
+                assertEquals(1, EVENTS.stream().filter("target.completion"::equals).count());
+                assertBefore("target.completion", "command44");
+                assertBefore("command44", "target.open");
+                ZLinkTelemetryTestFence.awaitIdle();
+                assertTrue(
+                        diagnostics.errors.stream()
+                                .anyMatch(
+                                        message ->
+                                                message.contains("packet=OnJoinCompleted")
+                                                        && message.contains("action=drop")
+                                                        && message.contains(
+                                                                "injected completion callback failure")),
+                        diagnostics.errors.toString());
+                return;
+            }
+            if (scenario.joinedFailure() != null) {
                 ZLinkActorJoinCompletion completion = COMPLETION.get().get(4, TimeUnit.SECONDS);
-                if (scenario.joinedFailure() != null) {
-                    var failed =
-                            assertInstanceOf(ZLinkActorJoinCompletion.Failed.class, completion);
-                    assertEquals(operationId, failed.operationId());
-                    ZLinkTelemetryTestFence.awaitIdle();
-                    assertTrue(
-                            diagnostics.errors.stream()
-                                    .anyMatch(
-                                            message ->
-                                                    message.contains(
-                                                                    "injected target joined"
-                                                                            + " failure")
-                                                            && message.contains(
-                                                                    scenario.joinedFailure()
-                                                                                    instanceof
-                                                                                    ZLinkFrameworkException
-                                                                            ? "ZLinkFrameworkException"
-                                                                            : "IllegalStateException")),
-                            diagnostics.errors.toString());
-                    assertEquals(
-                            switch (scenario) {
-                                case JOINED_TYPED_FAILURE -> ZLinkFrameworkErrorKind.DATA_LOST;
-                                case JOINED_NOT_FOUND -> ZLinkFrameworkErrorKind.NOT_FOUND;
-                                case JOINED_UNAVAILABLE -> ZLinkFrameworkErrorKind.UNAVAILABLE;
-                                default -> ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
-                            },
-                            failed.kind());
-                    assertFalse(
-                            EVENTS.contains("leave.submit"),
-                            "failed target lifecycle must not submit source OnLeave");
-                    assertFalse(EVENTS.contains("source.leave"));
-                } else {
-                    assertEquals(
-                            operationId,
-                            assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, completion)
-                                    .operationId());
-                }
+                var failed = assertInstanceOf(ZLinkActorJoinCompletion.Failed.class, completion);
+                assertEquals(operationId, failed.operationId());
+                ZLinkTelemetryTestFence.awaitIdle();
+                assertTrue(
+                        diagnostics.errors.stream()
+                                .anyMatch(
+                                        message ->
+                                                message.contains(
+                                                                "injected target joined"
+                                                                        + " failure")
+                                                        && message.contains(
+                                                                scenario.joinedFailure()
+                                                                                instanceof
+                                                                                ZLinkFrameworkException
+                                                                        ? "ZLinkFrameworkException"
+                                                                        : "IllegalStateException")),
+                        diagnostics.errors.toString());
+                assertEquals(
+                        switch (scenario) {
+                            case JOINED_TYPED_FAILURE -> ZLinkFrameworkErrorKind.DATA_LOST;
+                            case JOINED_NOT_FOUND -> ZLinkFrameworkErrorKind.NOT_FOUND;
+                            case JOINED_UNAVAILABLE -> ZLinkFrameworkErrorKind.UNAVAILABLE;
+                            default -> ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+                        },
+                        failed.kind());
+                assertFalse(
+                        EVENTS.contains("leave.submit"),
+                        "failed target lifecycle must not submit source OnLeave");
+                assertFalse(EVENTS.contains("source.leave"));
                 assertThrows(
                         java.util.concurrent.ExecutionException.class,
                         () -> link.targetCompletion.get(4, TimeUnit.SECONDS));
