@@ -57,3 +57,25 @@ def test_monitor_event_and_status_are_typed():
         finally:
             client.close()
             server.close()
+
+
+def test_unknown_core_values_stay_raw_integers():
+    from zlink._runtime.eventing.monitor import _known_or_raw
+    from zlink import MonitorSourceKind, TransportLane
+
+    assert _known_or_raw(TransportLane, 1) is TransportLane.COMPLETION
+    assert _known_or_raw(TransportLane, 7) == 7
+    assert not isinstance(_known_or_raw(MonitorSourceKind, 99), MonitorSourceKind)
+
+
+def test_welcome_message_getter_failure_names_the_cause():
+    import pytest
+    import zlink
+
+    with zlink.create_context() as context:
+        with zlink.create_xpub_socket(context) as sock:
+            sock.pub_options.welcome_message = b"x" * 300
+            with pytest.raises(zlink.ConfigError) as info:
+                sock.pub_options.welcome_message
+            notes = getattr(info.value, "__notes__", [])
+            assert not hasattr(info.value, "add_note") or any("256 bytes" in n for n in notes)

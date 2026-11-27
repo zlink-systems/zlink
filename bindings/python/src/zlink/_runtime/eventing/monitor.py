@@ -33,11 +33,20 @@ def _decode_fixed(buf):
     return bytes(buf).split(b"\0", 1)[0].decode("utf-8", errors="replace")
 
 
+def _known_or_raw(enum_type, value):
+    """Core may add values; keep an unknown value as the raw int instead of
+    failing event delivery (C++, Java, .NET and Node carry the raw integer)."""
+    try:
+        return enum_type(value)
+    except ValueError:
+        return value
+
+
 def _monitor_status_from_native(snapshot):
     return MonitorStatus(
         abi_version=int(snapshot.abi_version),
         struct_size=int(snapshot.struct_size),
-        source_kind=MonitorSourceKind(int(snapshot.source_kind)),
+        source_kind=_known_or_raw(MonitorSourceKind, int(snapshot.source_kind)),
         state_flags=MonitorStateFlag(int(snapshot.state_flags)),
         detail_flags=MonitorStatusDetail(int(snapshot.detail_flags)),
         snd_pending_msgs=int(snapshot.snd_pending_msgs),
@@ -93,7 +102,7 @@ class NativeMonitorSocket:
             local_addr=_decode_fixed(native.local_addr),
             remote_addr=_decode_fixed(native.remote_addr),
             connection_id=int(native.connection_id),
-            transport_lane=TransportLane(int(native.transport_lane)),
+            transport_lane=_known_or_raw(TransportLane, int(native.transport_lane)),
             flags=MonitorEventFlag(int(native.flags)),
         )
 
