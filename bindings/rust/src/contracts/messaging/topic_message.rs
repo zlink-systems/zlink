@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::RecvError;
-use crate::domain::recv_state_error;
-use crate::error::CloseError;
-use crate::message::{Message, RoutingId};
+use crate::contracts::errors::errors::CloseError;
+use crate::contracts::messaging::message::{Message, RoutingId};
+use crate::contracts::messaging::received::recv_state_error;
 
 /// A received publish: its topic, source routing id, and message parts.
 ///
@@ -15,8 +15,8 @@ pub struct TopicMessage {
     topic: smol_str::SmolStr,
     /// The message parts, owned by this envelope.
     parts: Vec<Message>,
-    receive_scratch: Vec<Message>,
-    native_receive_scratch: Vec<crate::ffi::zlink_msg_t>,
+    pub(crate) receive_scratch: Vec<Message>,
+    pub(crate) native_receive_scratch: crate::internal::NativeReceiveScratch,
 }
 
 impl TopicMessage {
@@ -27,14 +27,8 @@ impl TopicMessage {
             topic: smol_str::SmolStr::default(),
             parts: Vec::new(),
             receive_scratch: Vec::new(),
-            native_receive_scratch: Vec::new(),
+            native_receive_scratch: crate::internal::NativeReceiveScratch::default(),
         }
-    }
-
-    pub(crate) fn receive_scratch(
-        &mut self,
-    ) -> (&mut Vec<Message>, &mut Vec<crate::ffi::zlink_msg_t>) {
-        (&mut self.receive_scratch, &mut self.native_receive_scratch)
     }
 
     pub(crate) fn replace_received_parts(

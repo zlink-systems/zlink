@@ -1,8 +1,8 @@
-use crate::error::{
+use crate::contracts::errors::errors::{
     BindError, BindResult, CloseError, CloseResult, ConfigError, ConfigResult, ConnectError,
     ConnectResult, RecvError, RecvResult, RequestError, RequestResult, SubmitError, SubmitResult,
 };
-use crate::ffi;
+use crate::runtime::native::ffi;
 
 const ETERM: i32 = 156_384_765;
 const EFSM: i32 = 156_384_763;
