@@ -215,6 +215,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
     public async ValueTask StageAsync(
         ZLinkSpotRetireReservation reservation,
         ZLinkPreparedSpotRetireStaging relocation,
+        Func<ValueTask<IReadOnlyList<ZLinkRelocationQueuedJob>>> freezeBoundary,
         DateTimeOffset deadline,
         CancellationToken cancellationToken
     )
@@ -298,33 +299,43 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            try
-            {
-                //  The spot aggregate relays no post-capture ingress via
-                //  command 31 — held ingress travels inside the envelope —
-                //  so the boundary batch is empty (spec 28 §4.4).
-                await canonical
-                    .SendCanonicalRelocationCutoverAsync(
-                        reservation.TargetDescriptor.Rid,
-                        new ZLinkServiceWireCodec.RelocationCutoverRecord(
-                            prepare.RelocationId,
-                            prepare.TargetAttemptGeneration,
-                            prepare.Coordinator,
-                            prepare.InitiatorRole,
-                            prepare.Object,
-                            0,
-                            ZLinkRelocationBoundaryBatch.ComputeChecksum([])
-                        ),
-                        cancellationToken
+            var held = await freezeBoundary().ConfigureAwait(false);
+            var data = held.Select(job => new ZLinkServiceWireCodec.RelocationDataRecord(
+                    prepare.RelocationId,
+                    prepare.TargetAttemptGeneration,
+                    prepare.Coordinator,
+                    prepare.InitiatorRole,
+                    prepare.Object,
+                    new(
+                        ZLinkCanonicalSpotRelocationWriter.EncodeAcceptedJob(
+                            job,
+                            reservation.Inventory.SpotId,
+                            spot,
+                            reservation.Inventory.SourceNodeRid
+                        )
                     )
-                    .ConfigureAwait(false);
-            }
-            catch (Exception error)
-            {
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"cutover_send_uncertain object=spot error={error.GetType().Name}"
-                );
-            }
+                ))
+                .ToArray();
+            var cutover = new ZLinkServiceWireCodec.RelocationCutoverRecord(
+                prepare.RelocationId,
+                prepare.TargetAttemptGeneration,
+                prepare.Coordinator,
+                prepare.InitiatorRole,
+                prepare.Object,
+                checked((ulong)data.Length),
+                ZLinkRelocationBoundaryBatch.ComputeChecksum(
+                    data.Select(static record => record.FrozenRecord.Encoded)
+                )
+            );
+            await ZLinkStandaloneActorRelocationRuntime
+                .SubmitBoundaryAsync(
+                    canonical,
+                    reservation.TargetDescriptor.Rid,
+                    data,
+                    cutover,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
             return;
         }
         throw new ZLinkConfigurationException(
@@ -2894,13 +2905,17 @@ internal sealed record TargetStage(
                         .DefaultIfEmpty(0UL)
                         .Max()
                     : HeldRecords[^1].AcceptedSequence;
-            HeldRecords.Add(
-                new ZLinkRelocationQueuedJob(
-                    checked(previous + 1),
-                    data.FrozenRecord.Encoded.ToArray()
-                )
-            );
-            TrackRelayRecord(data.FrozenRecord.Encoded.Span);
+            var order = checked(previous + 1);
+            var frozen = data.FrozenRecord.Encoded.ToArray();
+            var job = Envelope.CanonicalLogicalStream.IsEmpty
+                ? new ZLinkRelocationQueuedJob(order, frozen)
+                : ZLinkRelocationEnvelopeCodec.ProjectCanonicalQueuedJob(
+                    order,
+                    frozen,
+                    data.Object
+                );
+            HeldRecords.Add(job);
+            TrackRelayRecord(frozen);
         });
 
     private AbortCleanupPreparation PrepareAbortCleanup()

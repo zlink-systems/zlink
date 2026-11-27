@@ -1,3 +1,4 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Streams;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Messaging;
@@ -47,6 +48,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         IDisposable? payloadOwner = null,
         ZLinkMultipartPayloadView? applicationPayloadView = null,
         bool instanceIntent = false,
+        ServiceWireCodec.InstanceRouteV1Case0? readyInstanceRoute = null,
         DateTimeOffset? receivedAt = null,
         TimeProvider? timeProvider = null,
         ZLinkManagedMeshNode.NativeApplicationReply? nativeApplicationReply = null
@@ -68,7 +70,10 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         RequestSource = requestSource;
         DeadlineUnixMs = deadlineUnixMs;
         ApplicationPayloadView = applicationPayloadView;
-        InstanceIntent = instanceIntent;
+        ReadyInstanceRoute = readyInstanceRoute;
+        InstanceIntent = readyInstanceRoute is null
+            ? instanceIntent
+            : readyInstanceRoute.InstanceIntent == ServiceWireCodec.Bool8.True;
         ReceivedAt = (
             receivedAt ?? (timeProvider ?? TimeProvider.System).GetUtcNow()
         ).ToUniversalTime();
@@ -84,6 +89,8 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
     // The immutable application-metadata snapshot decoded from the record's
     // application-metadata frame (S8-06A). Empty when the sender attached none.
     public ZLinkMessageMetadata Metadata { get; }
+
+    internal ServiceWireCodec.InstanceRouteV1Case0? ReadyInstanceRoute { get; }
 
     public RoutingId? SourceNodeRid { get; }
 

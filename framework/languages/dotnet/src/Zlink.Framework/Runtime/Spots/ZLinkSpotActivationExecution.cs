@@ -2796,6 +2796,57 @@ internal abstract partial class ZLinkSpotActivation
     {
         if (job.CanonicalRequest is not { } request)
             return ZLinkSpotAcceptedJournal.Decode(job.Payload.Span);
+        return new ZLinkSpotAcceptedJournalRecord(
+            RoutingId.FromHex(request.Source.NodeRid),
+            request.Source.NodeGeneration,
+            new ZLinkServiceWireCodec.RequestSourceFence(
+                request.Source.OwnerId,
+                request.Source.OwnerLeaseGeneration,
+                RoutingId.FromHex(request.Source.NodeRid),
+                request.Source.NodeGeneration
+            ),
+            request.SourceSpotId,
+            request.ReplyRouteId != 0 ? request.ReplyRouteId : null,
+            request.ReplyRouteId,
+            new MeshOperationId(request.OperationHigh, request.OperationLow),
+            request.TargetNodeGeneration,
+            request.TargetAuthorityOwnerGeneration,
+            request.TargetOwnerLeaseGeneration,
+            0,
+            request.Metadata,
+            MaterializeCanonicalReplayParts(request, channelName),
+            request.InstanceIntent
+        );
+    }
+
+    private static IReadOnlyList<ReadOnlyMemory<byte>> MaterializeCanonicalReplayParts(
+        ZLinkCanonicalAcceptedRequest request,
+        string channelName
+    )
+    {
+        var application = request.ApplicationPayload;
+        if (application.PacketName == ServiceWireConstants.FrameworkMultipartPacketName)
+        {
+            if (
+                !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                    new ZLinkApplicationPayloadEnvelope(
+                        application.PacketName,
+                        application.ContentType,
+                        application.Payload
+                    ),
+                    out var parts
+                )
+            )
+                throw new InvalidDataException("The accepted Spot multipart payload is invalid.");
+            try
+            {
+                return parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray();
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+            }
+        }
         var kind = request.ReplyRouteId == 0 ? ZLinkMessageKind.Command : ZLinkMessageKind.Request;
         using var header = ZLinkEnvelopeCodec.EncodeHeader(
             new ZLinkEnvelopeHeader(
@@ -2815,26 +2866,7 @@ internal abstract partial class ZLinkSpotActivation
                 request.SourceSpotId
             )
         );
-        return new ZLinkSpotAcceptedJournalRecord(
-            RoutingId.FromHex(request.Source.NodeRid),
-            request.Source.NodeGeneration,
-            new ZLinkServiceWireCodec.RequestSourceFence(
-                request.Source.OwnerId,
-                request.Source.OwnerLeaseGeneration,
-                RoutingId.FromHex(request.Source.NodeRid),
-                request.Source.NodeGeneration
-            ),
-            request.SourceSpotId,
-            null,
-            request.ReplyRouteId,
-            new MeshOperationId(request.OperationHigh, request.OperationLow),
-            request.TargetNodeGeneration,
-            request.TargetAuthorityOwnerGeneration,
-            request.TargetOwnerLeaseGeneration,
-            0,
-            request.Metadata,
-            [header.ToArray(), request.ApplicationPayload.Payload.ToArray()]
-        );
+        return [header.ToArray(), application.Payload];
     }
 
     private async ValueTask<bool> DispatchTimerAsync(

@@ -1613,7 +1613,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 "The expected request source must identify the ACK target.",
                 nameof(expectedSource)
             );
-        if (!IsReplyRelayPayloadAllowed(relay.TerminalResult, payload.Count))
+        // All application parts are packed into one wire payload frame.
+        if (!IsReplyRelayPayloadAllowed(relay.TerminalResult, payload.Count == 0 ? 0 : 1))
             throw new ArgumentException(
                 "A failed relocation reply cannot carry application payload.",
                 nameof(payload)
@@ -5023,21 +5024,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         var (peer, authority) = await RequireDirectSpotPeerAsync(targetRid, spotId, spotGeneration)
             .ConfigureAwait(false);
-        var operationId = NextStandaloneOperationId();
         var head = readyRoute is not null
             ? ZLinkServiceWireCodec.EncodeInstanceSpotReady(
                 readyRoute,
                 _lifecycleGeneration,
                 _routingId,
                 sourceSpotId,
-                operationId,
+                default,
                 false,
                 !metadata.IsEmpty
             )
             : ZLinkServiceWireCodec.EncodeSpot(
                 ServiceWireConstants.Command.SpotSend,
                 0,
-                operationId,
+                NextStandaloneOperationId(),
                 sourceSpotId,
                 spotId,
                 spotGeneration,
@@ -5075,12 +5075,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var requestDeadline =
             _deadlineClock.Elapsed
             + (timeout <= TimeSpan.Zero ? DefaultServiceRequestTimeout : timeout);
+        var requestKind = readyRoute is null
+            ? MeshOperationKind.SpotRequest
+            : MeshOperationKind.InstanceSpotRequest;
         if (targetRid == _routingId)
         {
             var effectiveTimeout =
                 timeout <= TimeSpan.Zero ? DefaultServiceRequestTimeout : timeout;
             var (correlation, operation, completionTask) = await CreateOperationAsync(
-                    MeshOperationKind.SpotRequest,
+                    requestKind,
                     NextStandaloneOperationId(),
                     awaitCompletion: true,
                     managedTimeout: effectiveTimeout,
@@ -5173,19 +5176,33 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 !metadata.IsEmpty,
                 0
             );
-        var reply = await RequestNativeDurableWireAsync(
+        var pendingRequest = new PendingOperation<ZLinkBackendRouteReceived>(
+            operationId,
+            requestKind,
+            _localRequestSourceFence,
+            static completion => new(DecodeDeadlineReply(completion), null, null, null, null)
+        )
+        {
+            LogicalTarget = targetRid,
+        };
+        return await RequestNativeDurableWireAsync(
                 targetRid,
                 authority.TargetNodeGeneration,
                 CreateApplicationWire(Message.From(head), parts, metadata),
                 requestStarted,
                 timeout,
                 cancellationToken,
+                reply =>
+                {
+                    Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
+                    return DecodeDirectApplicationReply(operationId.Low, reply);
+                },
+                static failure => failure,
                 requestAdmission: requestAdmission,
-                absoluteDeadline: requestDeadline
+                absoluteDeadline: requestDeadline,
+                originalRequest: pendingRequest
             )
             .ConfigureAwait(false);
-        Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
-        return DecodeDirectApplicationReply(operationId.Low, reply);
     }
 
     private async ValueTask<(
@@ -5243,9 +5260,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (parts.Count == 0)
             throw new ArgumentException("Application payload is required.", nameof(parts));
         var routedOperationId =
-            messageFollowRoute?.OperationId
-            ?? operation?.OperationId
-            ?? NextStandaloneOperationId();
+            readyRoute is not null && !request
+                ? default
+                : messageFollowRoute?.OperationId
+                    ?? operation?.OperationId
+                    ?? NextStandaloneOperationId();
         if (targetNodeRid != _routingId)
         {
             var preparation = TryPrepareRemoteSpotWire(
@@ -5355,7 +5374,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             string.Empty,
             _lifecycleGeneration,
             default,
-            readyRoute is not null && !request ? default : routedOperationId,
+            routedOperationId,
             request ? MeshOperationKind.SpotRequest : default,
             null,
             null,
@@ -5377,7 +5396,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         "Spot requests require an absolute deadline."
                     )
                 : 0,
-            instanceIntent: readyRoute?.InstanceIntent == ServiceWireCodec.Bool8.True
+            readyInstanceRoute: readyRoute
         );
         record.ApplicationPayloadBytes = SumParts(retained, 1);
         EnqueueOwned(
@@ -7538,13 +7557,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 {
                     if (readySource != sourceRid || ready.SourceNodeGeneration != sourceGeneration)
                         break;
-                    return ProcessStateful(
-                        sourceRid,
-                        sourceGeneration,
-                        ready,
-                        ref ownership,
-                        instanceReadyRoute: true
-                    );
+                    return ProcessStateful(sourceRid, sourceGeneration, ready, ref ownership);
                 }
                 if (
                     !ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
@@ -9007,10 +9020,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId sourceRid,
         ulong sourceGeneration,
         ZLinkServiceWireCodec.StatefulRecord stateful,
-        ref RawIngressOwnership ownership,
-        bool instanceReadyRoute = false
+        ref RawIngressOwnership ownership
     )
     {
+        var instanceReadyRoute = stateful.ReadyInstanceRoute is not null;
         var received = ownership.Receipt;
         var admitted = RunState(() =>
         {
@@ -9133,7 +9146,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 stateful.TargetSpotId,
                 stateful.TargetSpotGeneration,
                 authority,
-                instanceReadyRoute ? stateful.TargetOwnerId : null,
+                stateful.ReadyInstanceRoute?.Authority.OwnerId.Value,
                 out var spot
             );
             var hasTargetSpot = spot is not null;
@@ -9389,7 +9402,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ownerLeaseGeneration: stateful.OwnerLeaseGeneration,
             messageFollowHopCount: stateful.MessageFollowHopCount,
             replyRouteId: stateful.Correlation,
-            instanceIntent: stateful.InstanceIntent
+            readyInstanceRoute: stateful.ReadyInstanceRoute
         );
         record.ApplicationPayloadBytes = SumParts(parts, 1);
         return EnqueueOwned(owner, record, parts, true, ownership.TakeApplicationOwner());
@@ -12007,7 +12020,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkRequestAdmission? requestAdmission = null,
         PendingOperation? ownerOperation = null,
         TimeSpan? absoluteDeadline = null,
-        NativeDurableRequestLifetime? suppliedLifetime = null
+        NativeDurableRequestLifetime? suppliedLifetime = null,
+        PendingOperation<TReply>? originalRequest = null
     )
     {
         IReadOnlyList<Message>? ownedWire = wire;
@@ -12019,15 +12033,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (ownerOperation is null && suppliedLifetime is null)
             {
                 requestAdmission ??= new ZLinkRequestAdmission();
-                var operation = new PendingOperation<TReply>(
-                    NextStandaloneOperationId(),
-                    MeshOperationKind.NodeRequest,
-                    _localRequestSourceFence,
-                    Decode
-                )
-                {
-                    LogicalTarget = target,
-                };
+                var operation =
+                    originalRequest
+                    ?? new PendingOperation<TReply>(
+                        NextStandaloneOperationId(),
+                        MeshOperationKind.NodeRequest,
+                        _localRequestSourceFence,
+                        Decode
+                    )
+                    {
+                        LogicalTarget = target,
+                    };
                 var completion = operation.Completion;
                 // Hand registration to its owner before releasing selection. An intent
                 // retirement queues behind it; this turn never waits for that owner.

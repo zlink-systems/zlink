@@ -1,13 +1,13 @@
 using System.Buffers.Binary;
-using System.Text;
-using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Locations;
+using Wire = Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec;
 
 namespace Zlink.Framework.Runtime.Spots;
 
 internal static class ZLinkCanonicalSpotRelocationWriter
 {
-    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly Wire.DecodeContext WireContext =
+        ZLinkRelocationEnvelopeCodec.FrozenWireContext(int.MaxValue);
 
     internal static ZLinkRelocationEnvelope CreateInitial(
         ZLinkRelocationEnvelope inventory,
@@ -31,42 +31,32 @@ internal static class ZLinkCanonicalSpotRelocationWriter
                     or ZLinkPlacementObjectKind.InstanceSpot
         );
         var spotParticipantId = checked((ulong)Array.IndexOf(ordered, spot) + 1);
-        if (
-            spot.ObjectKind
-            is not (ZLinkPlacementObjectKind.UserSpot or ZLinkPlacementObjectKind.InstanceSpot)
-        )
-            throw new ArgumentException(
-                "Canonical SPOT relocation has no root SPOT.",
-                nameof(inventory)
-            );
-        ServiceWirePilotCodec.RelocationObjectIdentity identity;
-        if (spot.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot)
-        {
-            identity = new ServiceWirePilotCodec.RelocationInstanceSpotIdentity(
-                stableType,
-                spotId,
-                spot.ObjectGeneration
-            );
-        }
-        else
-        {
-            identity = new ServiceWirePilotCodec.RelocationUserSpotIdentity(
-                spotId,
-                spot.ObjectGeneration,
-                spot.AuthorityOwnerGeneration
-            );
-        }
+        Wire.RelocationObjectIdentity identity =
+            spot.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
+                ? new Wire.RelocationObjectIdentityCase2(
+                    Wire.StatefulObjectKind.InstanceSpot,
+                    new(stableType),
+                    new(spotId),
+                    new(spot.ObjectGeneration)
+                )
+                : new Wire.RelocationObjectIdentityCase1(
+                    Wire.StatefulObjectKind.UserSpot,
+                    new(new(spotId), new(spot.ObjectGeneration)),
+                    new(spot.AuthorityOwnerGeneration)
+                );
         var states = ordered
             .Select(
                 (participant, index) =>
-                    new ServiceWirePilotCodec.RelocationApplicationState(
-                        checked((ulong)index + 1),
-                        HasState: true,
-                        participant.ApplicationState.ToArray()
+                    new Wire.RelocationParticipantApplicationState(
+                        new(checked((ulong)index + 1)),
+                        new Wire.RelocationApplicationStateCase1(
+                            Wire.Bool8.True,
+                            new(participant.ApplicationState.ToArray())
+                        )
                     )
             )
             .ToArray();
-        var savedWork = new List<ServiceWirePilotCodec.RelocationSavedWork>();
+        var savedWork = new List<Wire.SavedWorkEntry>();
         for (var index = 0; index < ordered.Length; index++)
         {
             var participant = ordered[index];
@@ -74,31 +64,12 @@ internal static class ZLinkCanonicalSpotRelocationWriter
                 var job in participant.AcceptedJobs.OrderBy(static job => job.AcceptedSequence)
             )
             {
-                byte[] frozenRecord;
-                if (participant == spot)
-                {
-                    using var record = new MemoryStream();
-                    WriteAcceptedRequest(record, job, spotId, spot, targetNodeRid);
-                    frozenRecord = record.ToArray();
-                }
-                else
-                {
-                    if (
-                        !ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(
-                            job.Payload.Span
-                        )
-                    )
-                        throw new ZLinkRelocationDataLostException(
-                            $"Actor participant '{participant.AuthorityKey.Value}' accepted journal is malformed."
-                        );
-                    frozenRecord = job.Payload.ToArray();
-                }
+                var record =
+                    participant == spot
+                        ? CreateAcceptedRecord(job, spotId, spot, targetNodeRid)
+                        : Wire.DecodeFrozenRecord(job.Payload.ToArray(), WireContext);
                 savedWork.Add(
-                    new ServiceWirePilotCodec.RelocationSavedWork(
-                        checked((ulong)index + 1),
-                        job.AcceptedSequence,
-                        frozenRecord
-                    )
+                    new(new(checked((ulong)index + 1)), new(job.AcceptedSequence), record)
                 );
             }
         }
@@ -112,23 +83,27 @@ internal static class ZLinkCanonicalSpotRelocationWriter
             .Select(item =>
             {
                 var timer = item.Snapshot.Timer;
-                return new ServiceWirePilotCodec.RelocationTimerRegistration(
-                    ParticipantId: spotParticipantId,
-                    timer.Name,
-                    item.Snapshot.HandlerType.AssemblyQualifiedName
-                        ?? item.Snapshot.HandlerType.FullName
-                        ?? item.Snapshot.HandlerType.Name,
-                    checked((ulong)Math.Max(1, Math.Ceiling(timer.Period.TotalMilliseconds))),
-                    (byte)timer.Options.OverrunPolicy,
-                    checked((ulong)Math.Max(1, timer.Options.MaxCatchUpTicks)),
-                    timer.Options.StopOnUnhandledException,
-                    timer.DeliveryIndex,
-                    timer.LastScheduledIndex,
-                    checked(
-                        (ulong)
-                            (
-                                timer.NextScheduledAt ?? timer.StartedAt + timer.Period
-                            ).ToUnixTimeMilliseconds()
+                return new Wire.RelocationTimerRegistration(
+                    new(spotParticipantId),
+                    new(timer.Name),
+                    new(
+                        item.Snapshot.HandlerType.AssemblyQualifiedName
+                            ?? item.Snapshot.HandlerType.FullName
+                            ?? item.Snapshot.HandlerType.Name
+                    ),
+                    new(checked((ulong)Math.Max(1, Math.Ceiling(timer.Period.TotalMilliseconds)))),
+                    (Wire.TimerOverrunPolicyKind)timer.Options.OverrunPolicy,
+                    new(checked((ulong)Math.Max(1, timer.Options.MaxCatchUpTicks))),
+                    timer.Options.StopOnUnhandledException ? Wire.Bool8.True : Wire.Bool8.False,
+                    new(timer.DeliveryIndex),
+                    new(timer.LastScheduledIndex),
+                    new(
+                        checked(
+                            (ulong)
+                                (
+                                    timer.NextScheduledAt ?? timer.StartedAt + timer.Period
+                                ).ToUnixTimeMilliseconds()
+                        )
                     )
                 );
             })
@@ -139,41 +114,47 @@ internal static class ZLinkCanonicalSpotRelocationWriter
             .Select(item =>
             {
                 var tick = item.Snapshot.Timer.PendingTick!.Value;
-                return new ServiceWirePilotCodec.RelocationPendingTimerTick(
-                    ParticipantId: spotParticipantId,
-                    item.Timer.PendingAcceptedSequence,
-                    item.Timer.TimerId,
-                    tick.DeliveryIndex,
-                    tick.ScheduledIndex,
-                    checked((ulong)tick.ScheduledAt.ToUnixTimeMilliseconds()),
-                    tick.SkippedTicks
+                return new Wire.RelocationPendingTimerTick(
+                    new(spotParticipantId),
+                    new(item.Timer.PendingAcceptedSequence),
+                    new(item.Timer.TimerId),
+                    new(tick.DeliveryIndex),
+                    new(tick.ScheduledIndex),
+                    new(checked((ulong)tick.ScheduledAt.ToUnixTimeMilliseconds())),
+                    new(tick.SkippedTicks)
                 );
             })
             .ToArray();
         var aggregateId = inventory.AggregateId.ToByteArray(bigEndian: true);
-        var encoded = ServiceWirePilotCodec.EncodeRelocationEnvelopeV1(
-            new(
-                BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(0, 8)),
-                BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(8, 8)),
-                identity,
-                applicationVersion,
-                states,
-                savedWork,
-                timers,
-                pending,
-                ordered
-                    .Select(
-                        (participant, index) =>
-                            participant.SessionBinding is { } binding
-                                ? binding with
-                                {
-                                    ParticipantId = checked((ulong)index + 1),
-                                }
-                                : null
+        var bindings = new List<Wire.RelocationSessionBinding>();
+        for (var index = 0; index < ordered.Length; index++)
+            if (ordered[index].SessionBinding is { } binding)
+                bindings.Add(
+                    new(
+                        new(checked((ulong)index + 1)),
+                        new(binding.SessionOwnerNodeRid),
+                        new(binding.SessionOwnerNodeGeneration),
+                        new(binding.SessionOwnerId),
+                        new(binding.SessionOwnerLeaseGeneration),
+                        new(binding.SessionRid),
+                        new(binding.BindingGeneration)
                     )
-                    .OfType<ServiceWirePilotCodec.RelocationSessionBinding>()
-                    .ToArray()
-            )
+                );
+        var encoded = Wire.EncodeLogicalRelocationEnvelopeV1(
+            new(
+                new(
+                    new(BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(0, 8))),
+                    new(BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(8, 8)))
+                ),
+                identity,
+                new(applicationVersion),
+                new(states),
+                new(savedWork),
+                new(timers),
+                new(pending),
+                new(bindings)
+            ),
+            WireContext
         );
         using var stream = new MemoryStream(encoded, writable: false);
         var canonical = ZLinkRelocationEnvelopeCodec.Decode(stream, inventory.InventoryDigest);
@@ -203,8 +184,18 @@ internal static class ZLinkCanonicalSpotRelocationWriter
         };
     }
 
-    private static void WriteAcceptedRequest(
-        Stream stream,
+    internal static byte[] EncodeAcceptedJob(
+        ZLinkRelocationQueuedJob job,
+        string targetSpotId,
+        ZLinkRelocationParticipantEnvelope spot,
+        RoutingId targetNodeRid
+    ) =>
+        Wire.EncodeFrozenRecord(
+            CreateAcceptedRecord(job, targetSpotId, spot, targetNodeRid),
+            WireContext
+        );
+
+    private static Wire.FrozenRecord CreateAcceptedRecord(
         ZLinkRelocationQueuedJob job,
         string targetSpotId,
         ZLinkRelocationParticipantEnvelope spot,
@@ -217,145 +208,116 @@ internal static class ZLinkCanonicalSpotRelocationWriter
             ?? throw new ZLinkRelocationDataLostException(
                 "Accepted request source fence was not captured."
             );
-        if (journal.OperationId == default || journal.SourceNodeGeneration == 0)
+        var ready = journal.ReadyInstanceAuthority;
+        if (journal.SourceNodeGeneration == 0 || (ready is null && journal.OperationId == default))
             throw new ZLinkRelocationDataLostException(
                 "Accepted request operation fence was not captured."
             );
-        var parts = ZLinkRawRouterServicePort.CreateMessages(journal.Parts);
-        ZLinkEnvelopeHeader header;
-        byte[] payload;
-        try
-        {
-            header = ZLinkEnvelopeCodec.DecodeHeader(parts);
-            if (parts.Length != 2)
-                throw new InvalidDataException(
-                    "Canonical accepted application payload must contain header and body parts."
-                );
-            payload = parts[1].ToArray();
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(parts);
-        }
+        if (journal.Parts.Count != 2)
+            throw new InvalidDataException(
+                "Canonical accepted application payload must contain header and body parts."
+            );
         var request = journal.ReplyRouteId != 0;
-        stream.WriteByte(
+        // Preserve the pre-existing ordinary Spot journal representation.
+        var rid = new Wire.Rid(
+            ready is null ? RoutingId.From(source.NodeRid) : RoutingId.FromHex(source.NodeRid)
+        );
+        var generation = new Wire.NonzeroU64(source.NodeGeneration);
+        Wire.FrozenSourceIdentity sourceIdentity = string.IsNullOrEmpty(journal.SpotId)
+            ? new Wire.FrozenSourceIdentityCase0(
+                Wire.FrozenSourceKind.Node,
+                rid,
+                generation,
+                new(source.OwnerId),
+                new(source.OwnerLeaseGeneration)
+            )
+            : new Wire.FrozenSourceIdentityCase1(
+                Wire.FrozenSourceKind.Spot,
+                rid,
+                generation,
+                new(source.OwnerId),
+                new(source.OwnerLeaseGeneration),
+                new(journal.SpotId)
+            );
+        Wire.MetadataFrame? metadata =
+            journal.Metadata.Values.Count == 0
+                ? null
+                : new(
+                    journal
+                        .Metadata.Values.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+                        .Select(static pair => new Wire.MetadataEntry(
+                            new(pair.Key),
+                            new(pair.Value)
+                        ))
+                        .ToArray()
+                );
+        var hasMetadata = metadata.HasValue ? Wire.Bool8.True : Wire.Bool8.False;
+        var operation = new Wire.OperationIdOrZero(
+            new(journal.OperationId.High),
+            new(journal.OperationId.Low)
+        );
+        if (ready is { } authority)
+            return new(
+                Wire.MeshRecordKind.InstanceSpotActivation,
+                sourceIdentity,
+                hasMetadata,
+                metadata,
+                operation,
+                request ? Wire.MeshOperationKind.InstanceSpotRequest : Wire.MeshOperationKind.None,
+                request
+                    ? new Wire.FrozenReplyRouteCase4(new(journal.ReplyRouteId))
+                    : new Wire.FrozenReplyRouteOtherwise(),
+                new Wire.FrozenRecordBodyCase13(
+                    new Wire.InstanceRouteV1Case0(
+                        Wire.InstanceRouteKind.Ready,
+                        new(targetNodeRid),
+                        new(journal.TargetNodeGeneration),
+                        new(targetSpotId),
+                        new(
+                            new(spot.ObjectGeneration),
+                            new(authority.OwnerId),
+                            new(journal.AuthorityOwnerGeneration),
+                            new(journal.OwnerLeaseGeneration),
+                            new(authority.StoreVersion)
+                        ),
+                        journal.InstanceIntent ? Wire.Bool8.True : Wire.Bool8.False
+                    ),
+                    new(journal.SourceNodeGeneration),
+                    request ? Wire.InstanceOperationKind.Request : Wire.InstanceOperationKind.Send,
+                    Wire.DecodeApplicationPayloadEnvelopeV1(
+                        ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
+                            journal.Parts
+                        ),
+                        WireContext
+                    )
+                )
+            );
+        var header = ZLinkEnvelopeCodec.DecodeHeader(journal.Parts[0].Span, validateFlow: true);
+        var payload = new Wire.ApplicationPayloadEnvelopeV1(
+            new(header.MessageName),
+            new(header.ContentType),
+            new(journal.Parts[1].ToArray())
+        );
+        var fence = new Wire.SpotRouteFence(
+            new(new(targetSpotId), new(spot.ObjectGeneration)),
+            new(RoutingId.From(targetNodeRid.ToHex())),
+            new(journal.TargetNodeGeneration),
+            new(journal.AuthorityOwnerGeneration),
+            new(journal.OwnerLeaseGeneration)
+        );
+        return new(
+            request ? Wire.MeshRecordKind.SpotRequest : Wire.MeshRecordKind.SpotSend,
+            sourceIdentity,
+            hasMetadata,
+            metadata,
+            operation,
+            request ? Wire.MeshOperationKind.SpotRequest : Wire.MeshOperationKind.None,
             request
-                ? (byte)ServiceWireCodec.MeshRecordKind.SpotRequest
-                : (byte)ServiceWireCodec.MeshRecordKind.SpotSend
-        );
-        stream.WriteByte(
-            journal.SpotId is null
-                ? (byte)ServiceWireCodec.FrozenSourceKind.Node
-                : (byte)ServiceWireCodec.FrozenSourceKind.Spot
-        );
-        using (var sourceBody = new MemoryStream())
-        {
-            Text8(sourceBody, source.NodeRid);
-            U64(sourceBody, source.NodeGeneration);
-            Text8(sourceBody, source.OwnerId);
-            U64(sourceBody, source.OwnerLeaseGeneration);
-            if (journal.SpotId is not null)
-                Text8(sourceBody, journal.SpotId);
-            U16(stream, checked((ushort)sourceBody.Length));
-            sourceBody.Position = 0;
-            sourceBody.CopyTo(stream);
-        }
-        WriteMetadata(stream, journal.Metadata);
-        U64(stream, journal.OperationId.High);
-        U64(stream, journal.OperationId.Low);
-        U32(
-            stream,
+                ? new Wire.FrozenReplyRouteCase2(new(journal.ReplyRouteId))
+                : new Wire.FrozenReplyRouteOtherwise(),
             request
-                ? (uint)ServiceWireCodec.MeshOperationKind.SpotRequest
-                : (uint)ServiceWireCodec.MeshOperationKind.None
+                ? new Wire.FrozenRecordBodyCase5(fence, payload)
+                : new Wire.FrozenRecordBodyCase4(fence, payload)
         );
-        U16(stream, request ? (ushort)sizeof(ulong) : (ushort)0);
-        if (request)
-            U64(stream, journal.ReplyRouteId);
-        Text8(stream, targetSpotId);
-        U64(stream, spot.ObjectGeneration);
-        Text8(stream, targetNodeRid.ToHex());
-        U64(stream, journal.TargetNodeGeneration);
-        U64(stream, journal.AuthorityOwnerGeneration);
-        U64(stream, journal.OwnerLeaseGeneration);
-        WriteApplicationPayload(stream, header.MessageName, header.ContentType, payload);
-    }
-
-    private static void WriteMetadata(Stream stream, ZLinkMessageMetadata metadata)
-    {
-        if (metadata.Values.Count == 0)
-        {
-            stream.WriteByte(0);
-            return;
-        }
-        if (metadata.Values.Count > byte.MaxValue)
-            throw new InvalidDataException("Canonical metadata exceeds its entry bound.");
-        stream.WriteByte(1);
-        stream.WriteByte(1);
-        stream.WriteByte(checked((byte)metadata.Values.Count));
-        foreach (
-            var pair in metadata.Values.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
-        )
-        {
-            Text8(stream, pair.Key);
-            Text16(stream, pair.Value);
-        }
-    }
-
-    private static void WriteApplicationPayload(
-        Stream stream,
-        string packetName,
-        string contentType,
-        ReadOnlySpan<byte> payload
-    )
-    {
-        using var body = new MemoryStream();
-        Text8(body, packetName);
-        Text8(body, contentType);
-        U32(body, checked((uint)payload.Length));
-        body.Write(payload);
-        stream.WriteByte(1);
-        U32(stream, checked((uint)body.Length));
-        body.Position = 0;
-        body.CopyTo(stream);
-    }
-
-    private static void Text8(Stream stream, string value)
-    {
-        var bytes = StrictUtf8.GetBytes(value);
-        if (bytes.Length is < 1 or > byte.MaxValue || bytes.AsSpan().Contains((byte)0))
-            throw new ArgumentOutOfRangeException(nameof(value));
-        stream.WriteByte(checked((byte)bytes.Length));
-        stream.Write(bytes);
-    }
-
-    private static void Text16(Stream stream, string value)
-    {
-        var bytes = StrictUtf8.GetBytes(value);
-        if (bytes.Length is < 1 or > ushort.MaxValue || bytes.AsSpan().Contains((byte)0))
-            throw new ArgumentOutOfRangeException(nameof(value));
-        U16(stream, checked((ushort)bytes.Length));
-        stream.Write(bytes);
-    }
-
-    private static void U16(Stream stream, ushort value)
-    {
-        Span<byte> bytes = stackalloc byte[2];
-        BinaryPrimitives.WriteUInt16BigEndian(bytes, value);
-        stream.Write(bytes);
-    }
-
-    private static void U32(Stream stream, uint value)
-    {
-        Span<byte> bytes = stackalloc byte[4];
-        BinaryPrimitives.WriteUInt32BigEndian(bytes, value);
-        stream.Write(bytes);
-    }
-
-    private static void U64(Stream stream, ulong value)
-    {
-        Span<byte> bytes = stackalloc byte[8];
-        BinaryPrimitives.WriteUInt64BigEndian(bytes, value);
-        stream.Write(bytes);
     }
 }

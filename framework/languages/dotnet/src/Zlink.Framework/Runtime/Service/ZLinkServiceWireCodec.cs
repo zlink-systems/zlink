@@ -61,11 +61,14 @@ internal static partial class ZLinkServiceWireCodec
         ulong OwnerLeaseGeneration,
         byte MessageFollowHopCount,
         bool HasMetadata,
-        bool InstanceIntent = false,
         ulong SourceNodeGeneration = 0,
-        string TargetOwnerId = "",
+        ServiceWireCodec.InstanceRouteV1Case0? ReadyInstanceRoute = null,
         (string ActorId, ulong Generation)? SourceActor = null
-    );
+    )
+    {
+        internal bool InstanceIntent =>
+            ReadyInstanceRoute?.InstanceIntent == ServiceWireCodec.Bool8.True;
+    }
 
     internal readonly record struct UserSpotOperationRecord(
         ServiceWireConstants.Command Command,
@@ -1626,7 +1629,7 @@ internal static partial class ZLinkServiceWireCodec
         var request = operationKind == (byte)ServiceWireCodec.InstanceOperationKind.Request;
         if (
             request
-                ? operationHigh == 0 || operationLow == 0
+                ? operationHigh == 0 && operationLow == 0
                 : operationHigh != 0 || operationLow != 0
         )
             return false;
@@ -1653,9 +1656,8 @@ internal static partial class ZLinkServiceWireCodec
             route.Authority.LeaseGeneration.Value,
             0,
             (flags & ServiceWireConstants.Flag.Metadata) != 0,
-            route.InstanceIntent == ServiceWireCodec.Bool8.True,
             sourceGeneration,
-            route.Authority.OwnerId.Value
+            route
         );
         return true;
     }
