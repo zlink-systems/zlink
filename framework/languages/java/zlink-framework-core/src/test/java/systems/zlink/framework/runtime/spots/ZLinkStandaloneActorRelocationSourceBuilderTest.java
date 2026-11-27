@@ -427,7 +427,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             TARGET_RID,
                             9,
                             coordinator,
-                            new InMemoryRelocationStore(),
                             unusedSpotStaging(),
                             ignored -> null,
                             (lane, record) -> {

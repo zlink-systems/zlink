@@ -17,6 +17,11 @@ import java.util.function.Function;
 public interface ZLinkActorJoinRelocationPort {
     CompletionStage<Submission> relocate(Goal goal, Duration timeout);
 
+    default CompletionStage<Void> awaitTargetPublication(
+            ZLinkBackendActorRef actor, long deadlineNanos) {
+        return java.util.concurrent.CompletableFuture.completedFuture(null);
+    }
+
     /** Joins the existing departure terminal before preparing the same incarnation again. */
     default CompletionStage<Void> awaitSourceCleanup(String actorId, long objectGeneration) {
         return java.util.concurrent.CompletableFuture.completedFuture(null);

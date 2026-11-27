@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
-import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
@@ -120,7 +119,6 @@ public final class ZLinkSpotRuntimeTestAccess {
             ZLinkLocationRepository locations,
             ZLinkStoreLocationResolvers locationResolvers,
             ZLinkLocationRepository authorities,
-            systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore completionStore,
             ZLinkLocationOptions options,
             ZLinkRelocationAdapterRegistry adapters,
             long applicationVersion,
@@ -138,7 +136,6 @@ public final class ZLinkSpotRuntimeTestAccess {
                 locations,
                 locationResolvers,
                 authorities,
-                completionStore,
                 options,
                 adapters,
                 applicationVersion,
@@ -158,7 +155,7 @@ public final class ZLinkSpotRuntimeTestAccess {
             }
 
             @Override
-            public ZLinkTargetRelocationCompletions prepareCompletions(
+            public ZLinkTargetRelocationReplies prepareCompletions(
                     ZLinkSpotRetireControl.StageRequest request,
                     List<byte[]> verifiedBatch,
                     Consumer<Runnable> resubmit) {
@@ -168,7 +165,7 @@ public final class ZLinkSpotRuntimeTestAccess {
             @Override
             public CompletionStage<Void> publish(
                     ZLinkSpotRetireControl.StageRequest request,
-                    ZLinkTargetRelocationCompletions completions) {
+                    ZLinkTargetRelocationReplies completions) {
                 return CompletableFuture.failedFuture(unexpectedTargetCall());
             }
 
@@ -183,15 +180,14 @@ public final class ZLinkSpotRuntimeTestAccess {
         };
     }
 
-    static ZLinkTargetRelocationCompletions noAcceptedRelocationRequests(
+    static ZLinkTargetRelocationReplies noAcceptedRelocationRequests(
             ZLinkSpotRetireControl.StageRequest request, Consumer<Runnable> resubmit) {
         var locations = new ZLinkInMemoryLocationStore();
-        return new ZLinkTargetRelocationCompletions(
+        return new ZLinkTargetRelocationReplies(
                 request,
                 new systems.zlink.framework.runtime.internal.locations
                         .ZLinkAggregateRelocationCoordinator(locations),
                 locations,
-                new InMemoryRelocationStore(),
                 resubmit,
                 List.of());
     }

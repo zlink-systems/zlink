@@ -1,9 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import static systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireTargetEndpointTest.acceptedSpotRequest;
@@ -11,12 +9,11 @@ import static systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireTargetEnd
 import static systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireTargetEndpointTest.sourceAuthority;
 
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
-import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
@@ -27,11 +24,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToke
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationDeleteResult;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReadResult;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationRenewResult;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStored;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow;
 import systems.zlink.framework.runtime.internal.locations.ZLinkSpotTypeCapacityDelta;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -46,20 +39,17 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
-final class ZLinkTargetRelocationCompletionsTest {
+final class ZLinkTargetRelocationRepliesTest {
     private static final ZLinkStoreCancellation OPEN = () -> false;
 
     @ParameterizedTest
-    @ValueSource(ints = {1, 2})
-    void persistsRepliesBeforeRelayAndSettlesAfterAcknowledgement(int requests) {
-        //  The frozen record's request-source fence names "journal-node"
-        //  while the relocation source (the node that owns the landed reply
-        //  capability) is "source-node". Command 33 must be addressed to the
-        //  relocation source, not to the request-source fence.
+    @CsvSource({"1, false", "2, false", "1, true"})
+    void persistsRepliesAndSettlesFromAcknowledgementOrExpiredLease(
+            int requests, boolean sourceExpired) {
+        // The original requester and the relocation source use different routing IDs.
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId journalRid = RoutingId.from("journal-node");
         RoutingId targetRid = RoutingId.from("target-node");
@@ -70,44 +60,9 @@ final class ZLinkTargetRelocationCompletionsTest {
         String authorityKey = ZLinkAuthorityKeyCodec.spot(spotId);
         String actorAuthorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
         AuthorityState authority = new AuthorityState();
+        authority.sourceExpired = sourceExpired;
         ZLinkLocationRepository authorityStore = authority.proxy();
         var trace = authority.completionTrace;
-        var memory = new InMemoryRelocationStore();
-        ZLinkRelocationStore blobs =
-                new ZLinkRelocationStore() {
-                    @Override
-                    public CompletionStage<ZLinkRelocationStored> put(
-                            byte[] payload,
-                            Duration retention,
-                            ZLinkStoreCancellation cancellation) {
-                        trace.add("put");
-                        return memory.put(payload, retention, cancellation);
-                    }
-
-                    @Override
-                    public CompletionStage<ZLinkRelocationReadResult> get(
-                            String reference, ZLinkStoreCancellation cancellation) {
-                        trace.add("get");
-                        return memory.get(reference, cancellation);
-                    }
-
-                    @Override
-                    public CompletionStage<ZLinkRelocationRenewResult> renew(
-                            String reference,
-                            Duration retention,
-                            ZLinkStoreCancellation cancellation) {
-                        trace.add("renew");
-                        return memory.renew(reference, retention, cancellation);
-                    }
-
-                    @Override
-                    public CompletionStage<ZLinkRelocationDeleteResult> delete(
-                            String reference, ZLinkStoreCancellation cancellation) {
-                        assertNull(authority.rows.get(authorityKey).relocation());
-                        trace.add("delete");
-                        return memory.delete(reference, cancellation);
-                    }
-                };
         var coordinator = new ZLinkAggregateRelocationCoordinator(authorityStore, ignored -> true);
         UUID aggregateId = UUID.randomUUID();
         var participants =
@@ -200,7 +155,6 @@ final class ZLinkTargetRelocationCompletionsTest {
                         targetRid,
                         targetNodeGeneration,
                         coordinator,
-                        blobs,
                         staging,
                         ignored -> TestSpot.class,
                         (lane, record) ->
@@ -261,7 +215,8 @@ final class ZLinkTargetRelocationCompletionsTest {
                             "source", spotId, 43, "packet-3", Map.of(), new byte[] {3}, 3);
             endpoint.stageRelayedRecord(request, concurrentRequest).toCompletableFuture().join();
             verified = List.of(concurrentRequest);
-            memory.gateNextInternalPut(firstPutEntered, releaseFirstPut);
+            authority.pendingWriteEntered = firstPutEntered;
+            authority.pendingWriteRelease = releaseFirstPut;
         }
         var completion =
                 endpoint.prepareCompletions(
@@ -272,41 +227,13 @@ final class ZLinkTargetRelocationCompletionsTest {
                             operation.run();
                         });
         coordinator
-                .commit(finalPrepared, completion.acceptedRequests(), OPEN)
+                .commit(finalPrepared, completion.acceptedRows(), OPEN)
                 .toCompletableFuture()
                 .join();
-        assertEquals(
-                Integer.toString(requests),
-                authority
-                        .rows
-                        .get(authorityKey)
-                        .relocation()
-                        .json()
-                        .path("completion")
-                        .path("acceptedRequests")
-                        .asText(),
-                "target commit must include the source-accepted request count");
-
-        var premature =
-                assertThrows(
-                        java.util.concurrent.CompletionException.class,
-                        () ->
-                                coordinator
-                                        .advancePublished(
-                                                List.of(
-                                                        new ZLinkAggregateRelocationCoordinator
-                                                                .ExpectedParticipant(
-                                                                authorityKey, 3, 5)),
-                                                new ZLinkAggregateFence(
-                                                        aggregateId, targetAttemptGeneration),
-                                                "completed",
-                                                OPEN)
-                                        .toCompletableFuture()
-                                        .join());
-        assertInstanceOf(
-                ZLinkAggregateRelocationCoordinator.RelocationDataLostException.class,
-                premature.getCause());
-        authority.dropCompletionCasResponse = true;
+        assertEquals(requests, authority.replyRows.size());
+        assertTrue(
+                authority.replyRows.values().stream()
+                        .allMatch(row -> row.state().equals("accepted")));
         try {
             endpoint.publish(request, completion).toCompletableFuture().join();
             if (requests == 2) {
@@ -319,26 +246,35 @@ final class ZLinkTargetRelocationCompletionsTest {
             releaseFirstPut.complete(null);
         }
 
-        assertEquals(
-                requests - 1, resubmissions.get(), "only the version conflict needs resubmission");
+        assertEquals(0, resubmissions.get(), "independent rows do not conflict");
         assertEquals(requests, trace.stream().filter("pending-cas"::equals).count());
         assertEquals(requests, trace.stream().filter("ack-cas"::equals).count());
-        if (requests == 1) {
-            assertTrue(trace.indexOf("pending-cas") >= 4, trace::toString);
-            assertEquals(List.of("put", "get", "put", "get"), trace.subList(0, 4));
+        if (requests == 2) {
+            assertTrue(trace.indexOf("completed") < trace.lastIndexOf("ack-cas"), trace::toString);
         }
-        assertTrue(trace.indexOf("confirmed-cas") > trace.indexOf("pending-cas"), trace::toString);
-        assertTrue(trace.indexOf("ack-cas") > trace.indexOf("confirmed-cas"), trace::toString);
-        assertTrue(trace.indexOf("completed") > trace.lastIndexOf("ack-cas"), trace::toString);
-        assertTrue(trace.indexOf("delete") > trace.indexOf("completed"), trace::toString);
         assertNull(authority.rows.get(authorityKey).relocation());
 
-        assertEquals(requests, relays.get(), "each preserved request reply must relay once");
+        var states =
+                authority.replyRows.values().stream()
+                        .map(ZLinkRelocationReplyRow::state)
+                        .sorted()
+                        .toList();
+        var expectedStates =
+                sourceExpired
+                        ? List.of(ZLinkRelocationReplyRow.SOURCE_LEASE_EXPIRED)
+                        : requests == 1
+                                ? List.of(ZLinkRelocationReplyRow.TERMINAL_RECEIVED)
+                                : List.of(
+                                        ZLinkRelocationReplyRow.ALREADY_TERMINAL,
+                                        ZLinkRelocationReplyRow.TERMINAL_RECEIVED);
+        assertEquals(expectedStates, states);
+        int expectedRelays = sourceExpired ? 0 : requests;
+        assertEquals(expectedRelays, relays.get());
         assertEquals(
-                java.util.Collections.nCopies(requests, sourceRid),
+                java.util.Collections.nCopies(expectedRelays, journalRid),
                 relayDestinations,
-                "command 33 must be addressed to the relocation source node");
-        assertEquals(requests, relayExpectedSources.size());
+                "command 33 must reach the original requester");
+        assertEquals(expectedRelays, relayExpectedSources.size());
         relayExpectedSources.forEach(
                 expected ->
                         assertEquals(
@@ -346,7 +282,7 @@ final class ZLinkTargetRelocationCompletionsTest {
                                 expected.nodeRid(),
                                 "the expected source keeps the request-source lease fence"));
         assertEquals(
-                java.util.Collections.nCopies(requests, targetAttemptGeneration),
+                java.util.Collections.nCopies(expectedRelays, targetAttemptGeneration),
                 relayAttempts,
                 "command 33 must echo the PREPARE targetAttemptGeneration");
     }

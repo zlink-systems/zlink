@@ -879,7 +879,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         }
 
         @Override
-        public ZLinkTargetRelocationCompletions prepareCompletions(
+        public ZLinkTargetRelocationReplies prepareCompletions(
                 ZLinkSpotRetireControl.StageRequest request,
                 List<byte[]> verifiedBatch,
                 java.util.function.Consumer<Runnable> resubmit) {
@@ -889,7 +889,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         @Override
         public CompletionStage<Void> publish(
                 ZLinkSpotRetireControl.StageRequest request,
-                ZLinkTargetRelocationCompletions completions) {
+                ZLinkTargetRelocationReplies completions) {
             published.incrementAndGet();
             return CompletableFuture.completedFuture(null);
         }

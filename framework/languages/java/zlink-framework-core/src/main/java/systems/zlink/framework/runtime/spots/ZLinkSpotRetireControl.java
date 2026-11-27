@@ -305,11 +305,11 @@ final class ZLinkSpotRetireControl {
             return stage(request);
         }
 
-        ZLinkTargetRelocationCompletions prepareCompletions(
+        ZLinkTargetRelocationReplies prepareCompletions(
                 StageRequest request, List<byte[]> verifiedBatch, Consumer<Runnable> resubmit);
 
         CompletionStage<Void> publish(
-                StageRequest request, ZLinkTargetRelocationCompletions completions);
+                StageRequest request, ZLinkTargetRelocationReplies completions);
 
         /** Stages one command 31 frozen application record in arrival order. */
         default CompletionStage<Void> stageRelayedRecord(

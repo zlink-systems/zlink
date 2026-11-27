@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
@@ -224,22 +225,24 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             boolean requireCommittedShell) {
         return readOwned(actorId, cancellation)
                 .thenCompose(
-                        owned ->
-                                committedShell(owned, cancellation, requireCommittedShell)
-                                        .thenCompose(
-                                                shell ->
-                                                        listDescriptors(cancellation)
-                                                                .thenApply(
-                                                                        descriptors ->
-                                                                                new Admission(
-                                                                                        owned,
-                                                                                        selectTarget(
-                                                                                                owned,
-                                                                                                descriptors,
-                                                                                                targetPolicy,
-                                                                                                shell),
-                                                                                        sessionRoute(
-                                                                                                owned)))));
+                        owned -> {
+                            ZLinkUserSpotRetireRuntime.requireReleasedPublication(owned.snapshot());
+                            return committedShell(owned, cancellation, requireCommittedShell)
+                                    .thenCompose(
+                                            shell ->
+                                                    listDescriptors(cancellation)
+                                                            .thenApply(
+                                                                    descriptors ->
+                                                                            new Admission(
+                                                                                    owned,
+                                                                                    selectTarget(
+                                                                                            owned,
+                                                                                            descriptors,
+                                                                                            targetPolicy,
+                                                                                            shell),
+                                                                                    sessionRoute(
+                                                                                            owned))));
+                        });
     }
 
     private CompletionStage<Optional<ZLinkAuthoritySnapshot>> committedShell(
@@ -637,6 +640,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         });
     }
 
+    CompletionStage<ZLinkAuthorityReadResult> readActorAuthority(
+            String actorId, ZLinkStoreCancellation cancellation) {
+        return locations.read(ZLinkAuthorityKeyCodec.actor(actorId), cancellation);
+    }
+
     private CompletionStage<Owned> readOwned(String actorId, ZLinkStoreCancellation cancellation) {
         String key = ZLinkAuthorityKeyCodec.actor(actorId);
         return locations
@@ -663,7 +671,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                 "Actor authority is not Ready on the source: "
                                                         + key));
                             }
-                            ZLinkUserSpotRetireRuntime.requireRelocationCompletion(snapshot);
                             var authority =
                                     authorities
                                             .decode(snapshot.payload())
@@ -1436,7 +1443,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             return captureCompletion.thenCompose(
                     journal ->
                             relocationReplies.bindCanonicalRelocationRepliesAsync(
-                                    Map.of("actor:" + owned.actorId(), journal),
+                                    Map.of(
+                                            "actor:" + owned.actorId(),
+                                            java.util.stream.Stream.concat(
+                                                            seal.captured().stream(),
+                                                            journal.stream())
+                                                    .toList()),
                                     stageRequest.targetNodeRid(),
                                     stageRequest.targetNodeGeneration(),
                                     Map.of(

@@ -47,7 +47,11 @@ final class ZLinkAggregateRelocationCoordinatorTest {
         assertEquals("owner-b", stagedOwner.ownerId());
         assertEquals(12, stagedOwner.ownerLeaseGeneration());
 
-        var published = coordinator.commit(prepared, Map.of(), NEVER).toCompletableFuture().join();
+        var published =
+                coordinator
+                        .commit(prepared, java.util.List.of(), NEVER)
+                        .toCompletableFuture()
+                        .join();
         assertEquals(prepared.fence(), published.fence());
         assertEquals(1, authority.commitCount);
 
@@ -193,7 +197,10 @@ final class ZLinkAggregateRelocationCoordinatorTest {
         @Override
         public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
                 ZLinkAggregateFence fence,
-                java.util.List<Long> acceptedRequests,
+                java.util.List<
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkRelocationReplyRow>
+                        acceptedReplies,
                 ZLinkStoreCancellation cancellation) {
             commitCount++;
             for (var participant : prepared.participants()) {

@@ -58,6 +58,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewRe
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewStale;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewed;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseWaitTracker;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 
 import java.time.Clock;
@@ -71,6 +72,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.LongSupplier;
@@ -241,9 +243,30 @@ public final class ZLinkInMemoryLocationStore
     @Override
     public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
             ZLinkAggregateFence fence,
-            List<Long> acceptedRequests,
+            List<ZLinkRelocationReplyRow> acceptedReplies,
             ZLinkStoreCancellation cancellation) {
-        return authority.commitAggregate(fence, acceptedRequests, cancellation);
+        return authority.commitAggregate(fence, acceptedReplies, cancellation);
+    }
+
+    @Override
+    public CompletionStage<ZLinkRelocationReplyRow> updateRelocationReply(
+            ZLinkRelocationReplyRow update, ZLinkStoreCancellation cancellation) {
+        return authority.updateRelocationReply(update);
+    }
+
+    @Override
+    public CompletionStage<Optional<ZLinkRelocationReplyRow>> readRelocationReply(
+            UUID relocationId,
+            ZLinkRelocationReplyRow.Source source,
+            String operationId,
+            ZLinkStoreCancellation cancellation) {
+        return authority.readRelocationReply(relocationId, source, operationId);
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkRelocationReplyRow.Stored>> readActiveRelocationReplies(
+            UUID relocationId, ZLinkStoreCancellation cancellation) {
+        return authority.readActiveRelocationReplies(relocationId);
     }
 
     @Override

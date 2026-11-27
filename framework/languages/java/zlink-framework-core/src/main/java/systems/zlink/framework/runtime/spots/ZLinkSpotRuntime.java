@@ -1679,7 +1679,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                             throw new ZLinkFrameworkException(
                                                                                     ZLinkFrameworkErrorKind
                                                                                             .UNAVAILABLE,
-                                                                                    "User Spot authority is unavailable");
+                                                                                    "User Spot"
+                                                                                            + " authority"
+                                                                                            + " is unavailable");
                                                                         }
                                                                         return existing;
                                                                     });
@@ -2323,22 +2325,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     CompletionStage<Void> failRelocationRepliesUnavailable(
             boolean actor, String objectId, long objectGeneration) {
         return relocationReplyRoutes.failUnavailable(actor, objectId, objectGeneration);
-    }
-
-    void bindCanonicalRelocationReplies(
-            Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal,
-            RoutingId targetNodeRid,
-            long targetNodeGeneration,
-            Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence> fences) {
-        forEachCanonicalReplyBinding(
-                journal,
-                fences,
-                (records, fence) ->
-                        relocationReplyRoutes.bindCommitted(
-                                records, targetNodeRid, targetNodeGeneration, fence),
-                (records, fence) ->
-                        relocationReplyRoutes.bindActorCommitted(
-                                records, targetNodeRid, targetNodeGeneration, fence));
     }
 
     CompletionStage<Void> bindCanonicalRelocationRepliesAsync(
@@ -4642,7 +4628,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private CompletionStage<Void> deliverRelocatedActorReply(
             String actorId,
-            ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorRef actorRef,
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
@@ -4655,11 +4640,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     new IllegalArgumentException(
                             "relocated Actor reply requires one payload part"));
         }
-        byte[] frameBytes;
-        try (Message payload = Message.from(parts.getFirst());
-                Message frame = ActorPacketFrames.encodeReply(packetHeader, payload)) {
-            frameBytes = frame.toByteArray();
-        }
         return sendActorReplyFrame(
                 actorId,
                 actorRef,
@@ -4668,7 +4648,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 requestId,
                 flags,
                 noBindRequest,
-                frameBytes);
+                parts.getFirst());
     }
 
     /** Delivers a relocated Actor request's error terminal on its original reply route. */
@@ -7130,7 +7110,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     parts ->
                                             deliverRelocatedActorReply(
                                                     actor.context().actorId(),
-                                                    packetHeader,
                                                     headerCopy.actor(),
                                                     headerCopy.sourceNodeRid(),
                                                     headerCopy.sourceSessionRid(),

@@ -5,11 +5,17 @@ import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
@@ -56,6 +62,45 @@ public final class ZLinkMeshPeerAuthorityResolver
         this.leases = new ZLinkOwnerLeaseTracker(store, pollingInterval, nanoTime);
         this.cacheNanos = pollingInterval.toNanos();
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+    }
+
+    @Override
+    public CompletionStage<Boolean> confirmsRelocationReply(
+            ZLinkInternalMeshNode.PeerAuthorityFence requester,
+            ZLinkServiceRelocationWireCodec.ReplyRelay relay,
+            List<byte[]> payload) {
+        var source =
+                new ZLinkRelocationReplyRow.Source(
+                        requester.ownerId(),
+                        Long.toUnsignedString(requester.ownerLeaseGeneration()),
+                        requester.sourceNodeRid().toHex(),
+                        Long.toUnsignedString(requester.sourceNodeGeneration()));
+        var id = new UUID(relay.relocation().high(), relay.relocation().low());
+        String operation =
+                HexFormat.of().toHexDigits(relay.operation().high())
+                        + HexFormat.of().toHexDigits(relay.operation().low());
+        return store.readRelocationReply(id, source, operation, () -> false)
+                .thenApply(
+                        found ->
+                                found.filter(row -> replyMatches(row, relay, payload)).isPresent());
+    }
+
+    private static boolean replyMatches(
+            ZLinkRelocationReplyRow row,
+            ZLinkServiceRelocationWireCodec.ReplyRelay relay,
+            List<byte[]> payload) {
+        if (row.state().equals(ZLinkRelocationReplyRow.ACCEPTED)
+                || !row.writer().ownerId().equals(relay.coordinator().ownerId())
+                || row.writer().leaseGeneration() != relay.coordinator().leaseGeneration()
+                || !row.replyRouteId().equals(Long.toUnsignedString(relay.replyRouteId()))) {
+            return false;
+        }
+        var stored = new ZLinkServiceRelocationWireCodec().decodeStoredReply(row.reply());
+        return stored.relay().equals(relay)
+                && (stored.payload() == null
+                        ? payload.isEmpty()
+                        : payload.size() == 1
+                                && Arrays.equals(payload.getFirst(), stored.payload().payload()));
     }
 
     @Override

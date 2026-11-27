@@ -21,9 +21,8 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCompletionRecordCodec.Entry;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCompletionRecordCodec.Source;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow.Source;
 import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
@@ -35,7 +34,6 @@ import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.spots.ZLinkSpot;
-import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -72,7 +70,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private final RoutingId localNodeRid;
     private final long localNodeGeneration;
     final ZLinkAggregateRelocationCoordinator coordinator;
-    private final ZLinkRelocationStore completionStore;
     private final ZLinkUserSpotAggregateStagingOwner staging;
     private final Function<String, Class<? extends ZLinkSpot<?>>> spotTypes;
     private final ZLinkUserSpotAggregateStagingOwner.JournalReplayer fallbackReplayer;
@@ -99,7 +96,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
             RoutingId localNodeRid,
             long localNodeGeneration,
             ZLinkAggregateRelocationCoordinator coordinator,
-            ZLinkRelocationStore completionStore,
             ZLinkUserSpotAggregateStagingOwner staging,
             Function<String, Class<? extends ZLinkSpot<?>>> spotTypes,
             ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer,
@@ -110,7 +106,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 localNodeRid,
                 localNodeGeneration,
                 coordinator,
-                completionStore,
                 staging,
                 spotTypes,
                 replayer,
@@ -129,7 +124,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
             RoutingId localNodeRid,
             long localNodeGeneration,
             ZLinkAggregateRelocationCoordinator coordinator,
-            ZLinkRelocationStore completionStore,
             ZLinkUserSpotAggregateStagingOwner staging,
             Function<String, Class<? extends ZLinkSpot<?>>> spotTypes,
             ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer,
@@ -144,7 +138,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 localNodeRid,
                 localNodeGeneration,
                 coordinator,
-                completionStore,
                 staging,
                 spotTypes,
                 replayer,
@@ -163,7 +156,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
             RoutingId localNodeRid,
             long localNodeGeneration,
             ZLinkAggregateRelocationCoordinator coordinator,
-            ZLinkRelocationStore completionStore,
             ZLinkUserSpotAggregateStagingOwner staging,
             Function<String, Class<? extends ZLinkSpot<?>>> spotTypes,
             ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer,
@@ -190,7 +182,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
         }
         this.localNodeGeneration = localNodeGeneration;
         this.coordinator = Objects.requireNonNull(coordinator, "coordinator");
-        this.completionStore = Objects.requireNonNull(completionStore, "completionStore");
         this.staging = Objects.requireNonNull(staging, "staging");
         this.spotTypes = Objects.requireNonNull(spotTypes, "spotTypes");
         fallbackReplayer =
@@ -302,39 +293,37 @@ final class ZLinkUserSpotRetireTargetEndpoint
     }
 
     @Override
-    public ZLinkTargetRelocationCompletions prepareCompletions(
+    public ZLinkTargetRelocationReplies prepareCompletions(
             ZLinkSpotRetireControl.StageRequest request,
             List<byte[]> verifiedBatch,
             Consumer<Runnable> resubmit) {
-        List<Entry> failures = new ArrayList<>();
+        List<ZLinkRelocationReplyRow> accepted = new ArrayList<>();
         var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(request.relocationPayload());
         for (var work : envelope.savedWork()) {
-            reserveFailure(request, work.frozenRecord(), work.sequence(), failures);
+            captureRequest(request, work.frozenRecord(), accepted);
         }
         for (byte[] record : verifiedBatch) {
-            reserveFailure(request, record, 1, failures);
+            captureRequest(request, record, accepted);
         }
-        return new ZLinkTargetRelocationCompletions(
-                request, coordinator, locations, completionStore, resubmit, failures);
+        return new ZLinkTargetRelocationReplies(
+                request, coordinator, locations, resubmit, accepted);
     }
 
-    private void reserveFailure(
+    private void captureRequest(
             ZLinkSpotRetireControl.StageRequest request,
             byte[] frozen,
-            long sequence,
-            List<Entry> failures) {
+            List<ZLinkRelocationReplyRow> accepted) {
         if (!ZLinkServiceFrozenRecordCodec.isRequest(frozen)) return;
         if (ZLinkServiceFrozenRecordCodec.isActor(frozen)) {
             var record = ZLinkActorAcceptedJournal.decode(frozen);
             record.replyRouteId()
                     .ifPresent(
                             route ->
-                                    failures.add(
-                                            failureEntry(
+                                    accepted.add(
+                                            acceptedRow(
                                                     request,
                                                     participant(
                                                             request, record.actorId(), true, route),
-                                                    sequence,
                                                     record.operationHigh(),
                                                     record.operationLow(),
                                                     record.sourceOwnerId(),
@@ -346,15 +335,14 @@ final class ZLinkUserSpotRetireTargetEndpoint
             record.requestSequence()
                     .ifPresent(
                             route ->
-                                    failures.add(
-                                            failureEntry(
+                                    accepted.add(
+                                            acceptedRow(
                                                     request,
                                                     participant(
                                                             request,
                                                             request.spotId(),
                                                             false,
                                                             route),
-                                                    sequence,
                                                     record.operationHigh(),
                                                     record.operationLow(),
                                                     record.sourceOwnerId(),
@@ -364,36 +352,31 @@ final class ZLinkUserSpotRetireTargetEndpoint
         }
     }
 
-    private Entry failureEntry(
+    private ZLinkRelocationReplyRow acceptedRow(
             ZLinkSpotRetireControl.StageRequest request,
             ParticipantSlot participant,
-            long sequence,
             long operationHigh,
             long operationLow,
             String sourceOwner,
             long sourceLease,
             RoutingId sourceNode,
             long sourceGeneration) {
-        return entry(
+        return replyRow(
                 request,
                 participant,
-                new CanonicalReply(
-                        operationHigh,
-                        operationLow,
-                        sourceOwner,
-                        sourceLease,
-                        sourceNode,
-                        sourceGeneration,
-                        sequence,
-                        RequestResult.INTERNAL_ERROR.value(),
-                        (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED,
-                        null));
+                operationHigh,
+                operationLow,
+                sourceOwner,
+                sourceLease,
+                sourceNode,
+                sourceGeneration,
+                ZLinkRelocationReplyRow.ACCEPTED,
+                null);
     }
 
     @Override
     public CompletionStage<Void> publish(
-            ZLinkSpotRetireControl.StageRequest request,
-            ZLinkTargetRelocationCompletions completions) {
+            ZLinkSpotRetireControl.StageRequest request, ZLinkTargetRelocationReplies completions) {
         if (isStandaloneActor(request)) {
             return publishActor(request, completions);
         }
@@ -483,9 +466,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                             ignored -> switchSessionRoutes(request, generations))
                                     .thenCompose(
                                             ignored ->
-                                                    publishWithCompletions(
+                                                    openAndNormalize(
                                                             request,
-                                                            completions,
                                                             () ->
                                                                     staging.openAdmission(
                                                                                     target.staged())
@@ -858,7 +840,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private ZLinkUserSpotAggregateStagingOwner.JournalReplayer productionReplayer(
             TargetStage target,
             ZLinkSpotRetireControl.StageRequest request,
-            ZLinkTargetRelocationCompletions completions) {
+            ZLinkTargetRelocationReplies completions) {
         if (relocationClient == null) {
             return fallbackReplayer;
         }
@@ -869,8 +851,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     }
 
     ZLinkAcceptedJournalReplayer.ReplyRelay productionReplyRelay(
-            ZLinkSpotRetireControl.StageRequest request,
-            ZLinkTargetRelocationCompletions completions) {
+            ZLinkSpotRetireControl.StageRequest request, ZLinkTargetRelocationReplies completions) {
         return new ZLinkAcceptedJournalReplayer.ReplyRelay() {
             @Override
             public CompletionStage<Void> completeSpot(
@@ -933,12 +914,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     Throwable failure) {
                 CanonicalReplyPayload payload =
                         (reply == null ? Optional.<byte[]>empty() : reply)
-                                .map(
-                                        bytes ->
-                                                new CanonicalReplyPayload(
-                                                        record.header().name(),
-                                                        actorContentType(record.header().codec()),
-                                                        bytes))
+                                .map(bytes -> canonicalActorReply(record, bytes))
                                 .orElse(null);
                 return completeCanonicalReplay(
                         request,
@@ -960,9 +936,23 @@ final class ZLinkUserSpotRetireTargetEndpoint
         };
     }
 
+    private static CanonicalReplyPayload canonicalActorReply(
+            ZLinkActorAcceptedJournal.Record record, byte[] bytes) {
+        var request = record.header();
+        try (var message = Message.from(bytes);
+                var frame =
+                        ActorPacketFrames.encodeRoutedReply(
+                                request,
+                                new systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime
+                                        .LocalActorReply(message, request.codec()))) {
+            return new CanonicalReplyPayload(
+                    request.name(), "application/octet-stream", frame.toByteArray());
+        }
+    }
+
     private CompletionStage<Void> completeCanonicalReplay(
             ZLinkSpotRetireControl.StageRequest request,
-            ZLinkTargetRelocationCompletions completions,
+            ZLinkTargetRelocationReplies completions,
             ParticipantSlot participant,
             long acceptedSequence,
             long operationHigh,
@@ -1031,7 +1021,24 @@ final class ZLinkUserSpotRetireTargetEndpoint
         var delivery =
                 completions.complete(
                         entry(request, participant, completion),
-                        stored -> sendStored(request, stored));
+                        () ->
+                                entry(
+                                        request,
+                                        participant,
+                                        new CanonicalReply(
+                                                operationHigh,
+                                                operationLow,
+                                                sourceOwnerId,
+                                                sourceOwnerLeaseGeneration,
+                                                sourceNodeRid,
+                                                sourceNodeGeneration,
+                                                acceptedSequence,
+                                                RequestResult.INTERNAL_ERROR.value(),
+                                                (int)
+                                                        ServiceWireConstants
+                                                                .FRAMEWORK_ERROR_REQUEST_FAILED,
+                                                null)),
+                        this::sendStored);
         return delivery.whenComplete(
                 (ignored, relayFailure) -> {
                     if (relayFailure != null
@@ -1079,7 +1086,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 completion.failureCode());
     }
 
-    private Entry entry(
+    private ZLinkRelocationReplyRow entry(
             ZLinkSpotRetireControl.StageRequest request,
             ParticipantSlot participant,
             CanonicalReply result) {
@@ -1090,27 +1097,52 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                 result.payload().packetName(),
                                 result.payload().contentType(),
                                 result.payload().bytes());
-        return new Entry(
-                participant.fence().authorityKey(),
-                new Source(
-                        result.sourceOwnerId(),
-                        Long.toUnsignedString(result.sourceOwnerLeaseGeneration()),
-                        result.sourceNodeRid().toHex(),
-                        Long.toUnsignedString(result.sourceNodeGeneration())),
-                HexFormat.of().toHexDigits(result.operationHigh())
-                        + HexFormat.of().toHexDigits(result.operationLow()),
-                Long.toUnsignedString(participant.replyRouteId()),
+        return replyRow(
+                request,
+                participant,
+                result.operationHigh(),
+                result.operationLow(),
+                result.sourceOwnerId(),
+                result.sourceOwnerLeaseGeneration(),
+                result.sourceNodeRid(),
+                result.sourceNodeGeneration(),
+                ZLinkRelocationReplyRow.PENDING,
                 relocationWire.encodeStoredReply(
-                        canonicalRelay(request, participant, result), payload),
-                "pending");
+                        canonicalRelay(request, participant, result), payload));
     }
 
-    private CompletionStage<String> sendStored(
-            ZLinkSpotRetireControl.StageRequest request, Entry entry) {
+    private static ZLinkRelocationReplyRow replyRow(
+            ZLinkSpotRetireControl.StageRequest request,
+            ParticipantSlot participant,
+            long operationHigh,
+            long operationLow,
+            String sourceOwner,
+            long sourceLease,
+            RoutingId sourceNode,
+            long sourceGeneration,
+            String state,
+            byte[] reply) {
+        return new ZLinkRelocationReplyRow(
+                request.fence().aggregateId(),
+                participant.fence().authorityKey(),
+                new Source(
+                        sourceOwner,
+                        Long.toUnsignedString(sourceLease),
+                        sourceNode.toHex(),
+                        Long.toUnsignedString(sourceGeneration)),
+                HexFormat.of().toHexDigits(operationHigh)
+                        + HexFormat.of().toHexDigits(operationLow),
+                Long.toUnsignedString(participant.replyRouteId()),
+                new ZLinkLocationOwnerToken(
+                        request.targetOwnerId(), request.targetOwnerLeaseGeneration()),
+                state,
+                reply);
+    }
+
+    private CompletionStage<String> sendStored(ZLinkRelocationReplyRow entry) {
         var stored = relocationWire.decodeStoredReply(entry.reply());
         var source = entry.source();
         return sendReply(
-                request,
                 stored.relay(),
                 new ZLinkServiceRelocationWireCodec.RequestSourceFence(
                         source.ownerId(), Long.parseUnsignedLong(source.leaseGeneration()),
@@ -1120,24 +1152,21 @@ final class ZLinkUserSpotRetireTargetEndpoint
     }
 
     private CompletionStage<String> sendReply(
-            ZLinkSpotRetireControl.StageRequest request,
             ZLinkServiceRelocationWireCodec.ReplyRelay relay,
             ZLinkServiceRelocationWireCodec.RequestSourceFence expectedSource,
             List<byte[]> payload) {
         byte[] command = relocationWire.encodeReplyRelay(relay);
-        //  The reply capability landed on the relocation source node, which
-        //  differs from the request-source fence for cross-node accepted
-        //  requests. The ACK still closes the exact request-source fence.
+        // Command 33 carries the original reply route to its requester.
         return relocationClient
                 .relayCanonicalReply(
-                        request.sourceNodeRid(), expectedSource, command, payload, routeTimeout)
+                        expectedSource.nodeRid(), expectedSource, command, payload, routeTimeout)
                 .thenApply(
                         encoded -> {
                             var ack = relocationWire.decodeReplyRelayAck(encoded);
                             validateCanonicalAck(relay, expectedSource, ack);
                             return ack.status() == 1
-                                    ? ZLinkTargetRelocationCompletions.TERMINAL_RECEIVED
-                                    : ZLinkTargetRelocationCompletions.ALREADY_TERMINAL;
+                                    ? ZLinkRelocationReplyRow.TERMINAL_RECEIVED
+                                    : ZLinkRelocationReplyRow.ALREADY_TERMINAL;
                         });
     }
 
@@ -1150,7 +1179,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     new IllegalStateException("relocation reply runtime is unavailable"));
         }
         var route = sourceReplies.canonicalRelocationReplyRoute(relay, transportSource);
-        if (route == null) {
+        if (route == null
+                || !localNodeRid.equals(route.sourceNodeRid())
+                || localNodeGeneration != route.sourceNodeGeneration()) {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("canonical reply capability fence differs"));
         }
@@ -1224,15 +1255,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                         value.objectGeneration(),
                                         value.sourceAuthorityOwnerGeneration()))
                 .toList();
-    }
-
-    private static String actorContentType(ZLinkStreamCodec codec) {
-        return switch (codec) {
-            case RAW -> "application/octet-stream";
-            case JSON -> "application/json";
-            case MESSAGE_PACK -> "application/msgpack";
-            case PROTOBUF -> "application/protobuf";
-        };
     }
 
     private record ParticipantSlot(
@@ -1356,8 +1378,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     }
 
     private CompletionStage<Void> publishActor(
-            ZLinkSpotRetireControl.StageRequest request,
-            ZLinkTargetRelocationCompletions completions) {
+            ZLinkSpotRetireControl.StageRequest request, ZLinkTargetRelocationReplies completions) {
         ActorTargetStage target = requireActorStage(request);
         if (target.directAdmission() != null) {
             target.publishRequested().complete(completions);
@@ -1405,7 +1426,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private CompletionStage<Void> publishDirectJoinActor(
             ZLinkSpotRetireControl.StageRequest request,
             ActorTargetStage target,
-            ZLinkTargetRelocationCompletions completions) {
+            ZLinkTargetRelocationReplies completions) {
         var participant = request.participants().getFirst();
         return ZLinkSerialExecutionQueue.yieldCurrent(
                         coordinator.readTargetOwnerGenerations(
@@ -1479,9 +1500,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                                 })
                                                         .thenCompose(
                                                                 failure ->
-                                                                        publishWithCompletions(
+                                                                        openAndNormalize(
                                                                                 request,
-                                                                                completions,
                                                                                 () ->
                                                                                         finishDirectJoinPublication(
                                                                                                 request,
@@ -1551,7 +1571,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private ZLinkUserSpotAggregateStagingOwner.JournalReplayer productionActorReplayer(
             ActorTargetStage target,
             ZLinkSpotRetireControl.StageRequest request,
-            ZLinkTargetRelocationCompletions completions) {
+            ZLinkTargetRelocationReplies completions) {
         if (relocationClient == null) {
             return fallbackReplayer;
         }
@@ -1567,10 +1587,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private CompletionStage<Void> openPublishedActor(
             ZLinkSpotRetireControl.StageRequest request,
             ActorTargetStage target,
-            ZLinkTargetRelocationCompletions completions) {
-        return publishWithCompletions(
+            ZLinkTargetRelocationReplies completions) {
+        return openAndNormalize(
                 request,
-                completions,
                 () -> {
                     openActorAdmission(request, target);
                     return CompletableFuture.completedFuture(null);
@@ -1583,32 +1602,15 @@ final class ZLinkUserSpotRetireTargetEndpoint
         releasePublishedActor(request, target);
     }
 
-    private CompletionStage<Void> publishWithCompletions(
+    private CompletionStage<Void> openAndNormalize(
             ZLinkSpotRetireControl.StageRequest request,
-            ZLinkTargetRelocationCompletions completions,
-            Supplier<CompletionStage<Void>> publish) {
-        if (!completions.hasRequests()) {
-            return ZLinkSerialExecutionQueue.yieldCurrent(normalizer.normalize(request))
-                    .thenCompose(ignored -> publish.get());
-        }
-        return publish.get()
-                .thenRun(
-                        () ->
-                                completions
-                                        .finish(
-                                                expectedParticipants(request),
-                                                () -> normalizer.normalize(request))
-                                        .whenComplete(
-                                                (ignored, failure) -> {
-                                                    if (failure != null)
-                                                        LOGGER.log(
-                                                                java.util.logging.Level.WARNING,
-                                                                "Relocation completion cleanup"
-                                                                        + " failed: "
-                                                                        + request.fence()
-                                                                                .aggregateId(),
-                                                                failure);
-                                                }));
+            Supplier<CompletionStage<Void>> openDispatch) {
+        return openDispatch
+                .get()
+                .thenCompose(
+                        ignored ->
+                                ZLinkSerialExecutionQueue.yieldCurrent(
+                                        normalizer.normalize(request)));
     }
 
     private void releasePublishedTarget(
@@ -1858,7 +1860,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             TargetIngressAuthority authority,
             ZLinkActorJoinRelocationPort.Admission directAdmission,
             ZLinkActorJoinCanonicalAdapter.PreviousMembership previousMembership,
-            CompletableFuture<ZLinkTargetRelocationCompletions> publishRequested,
+            CompletableFuture<ZLinkTargetRelocationReplies> publishRequested,
             CompletableFuture<Void> joinPublished) {}
 
     private record CanonicalReply(

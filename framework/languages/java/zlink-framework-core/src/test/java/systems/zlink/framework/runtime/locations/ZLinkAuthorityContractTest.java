@@ -210,7 +210,10 @@ final class ZLinkAuthorityContractTest {
         @Override
         public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
                 ZLinkAggregateFence fence,
-                java.util.List<Long> acceptedRequests,
+                java.util.List<
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkRelocationReplyRow>
+                        acceptedReplies,
                 ZLinkStoreCancellation cancellation) {
             throw new AssertionError();
         }

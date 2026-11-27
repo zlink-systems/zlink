@@ -37,7 +37,8 @@ public final class ZLinkAggregateRelocationCoordinatorTestAccess {
         CompletionStage<ZLinkAggregateCommitResult> commit(
                 ZLinkLocationRepository repository,
                 ZLinkAggregateFence fence,
-                List<Long> acceptedRequests,
+                List<systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow>
+                        acceptedReplies,
                 ZLinkStoreCancellation cancellation);
     }
 
@@ -57,7 +58,7 @@ public final class ZLinkAggregateRelocationCoordinatorTestAccess {
                 return current.commit(
                         delegate,
                         (ZLinkAggregateFence) arguments[0],
-                        (List<Long>) arguments[1],
+                        (List<ZLinkRelocationReplyRow>) arguments[1],
                         (ZLinkStoreCancellation) arguments[2]);
             }
             try {

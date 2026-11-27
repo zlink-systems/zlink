@@ -23,7 +23,7 @@ final class ZLinkRuntimeConstructorVisibilityTest {
                 constructorWith(
                         ZLinkUserSpotRetireRuntime.class,
                         parameters ->
-                                parameters.length == 17 && parameters[14] == java.util.List.class));
+                                parameters.length == 16 && parameters[13] == java.util.List.class));
         assertPackagePrivate(
                 constructorWith(
                         ZLinkSpotRuntime.class,

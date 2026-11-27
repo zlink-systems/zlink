@@ -443,6 +443,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         actorJoinRelocationPort = Objects.requireNonNull(port, "port");
     }
 
+    CompletionStage<Void> awaitActorTargetPublication(
+            ZLinkBackendActorRef actor, long deadlineNanos) {
+        var port = actorJoinRelocationPort;
+        return port == null
+                ? CompletableFuture.completedFuture(null)
+                : port.awaitTargetPublication(actor, deadlineNanos);
+    }
+
     CompletionStage<ZLinkActorJoinRelocationPort.Submission> relocateActorJoin(
             ZLinkActorJoinRelocationPort.Goal goal, Duration timeout) {
         locations.ensureOwnerAdmissionOpen();
@@ -2454,7 +2462,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                             throw new ZLinkFrameworkException(
                                                                     ZLinkFrameworkErrorKind
                                                                             .UNAVAILABLE,
-                                                                    "Actor is sealed for relocation: "
+                                                                    "Actor is sealed for"
+                                                                            + " relocation: "
                                                                             + actorId);
                                                         }
                                                         context.state.closeDestroyAdmission(

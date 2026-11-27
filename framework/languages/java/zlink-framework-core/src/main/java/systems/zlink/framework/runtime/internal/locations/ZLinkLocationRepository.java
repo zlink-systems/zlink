@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -164,8 +165,45 @@ public interface ZLinkLocationRepository {
 
     CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
             ZLinkAggregateFence fence,
-            List<Long> acceptedRequests,
+            List<ZLinkRelocationReplyRow> acceptedReplies,
             ZLinkStoreCancellation cancellation);
+
+    default CompletionStage<ZLinkRelocationReplyRow> updateRelocationReply(
+            ZLinkRelocationReplyRow update, ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("relocation reply rows are not supported"));
+    }
+
+    default CompletionStage<Optional<ZLinkRelocationReplyRow>> readRelocationReply(
+            UUID relocationId,
+            ZLinkRelocationReplyRow.Source source,
+            String operationId,
+            ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("relocation reply rows are not supported"));
+    }
+
+    default CompletionStage<List<ZLinkRelocationReplyRow.Stored>> readActiveRelocationReplies(
+            UUID relocationId, ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("relocation reply scan is not supported"));
+    }
+
+    default CompletionStage<List<ZLinkRelocationReplyRow>> readPendingRelocationReplies(
+            UUID relocationId, ZLinkStoreCancellation cancellation) {
+        return readActiveRelocationReplies(relocationId, cancellation)
+                .thenApply(
+                        rows ->
+                                rows.stream()
+                                        .map(ZLinkRelocationReplyRow.Stored::row)
+                                        .filter(
+                                                row ->
+                                                        row.state()
+                                                                .equals(
+                                                                        ZLinkRelocationReplyRow
+                                                                                .PENDING))
+                                        .toList());
+    }
 
     CompletionStage<ZLinkAggregateAbortResult> abortAggregate(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation);

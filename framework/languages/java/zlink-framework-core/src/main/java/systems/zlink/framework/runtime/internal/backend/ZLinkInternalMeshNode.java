@@ -512,9 +512,8 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     /**
      * Sends one canonical command 33 record plus its application payload and returns the exact
-     * command 46 closed acknowledgement. The landing node is the relocation source that owns the
-     * reply capability; it may differ from the request-source fence carried in {@code
-     * expectedSource}.
+     * command 46 acknowledgement authenticated against {@code expectedSource}. The landing node
+     * owns the original reply capability.
      */
     default CompletionStage<byte[]> requestRelocationReplyRelay(
             RoutingId landingNodeRid,
@@ -804,6 +803,13 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     interface PeerAuthorityResolver {
         CompletionStage<Optional<PeerAuthorityFence>> resolve(
                 String meshName, RoutingId sourceNodeRid, long sourceNodeGeneration);
+
+        default CompletionStage<Boolean> confirmsRelocationReply(
+                PeerAuthorityFence requester,
+                ZLinkServiceRelocationWireCodec.ReplyRelay relay,
+                List<byte[]> payload) {
+            return CompletableFuture.completedFuture(false);
+        }
 
         default boolean acceptsSessionOwnerLease(
                 PeerAuthorityFence current, String ownerId, long generation) {

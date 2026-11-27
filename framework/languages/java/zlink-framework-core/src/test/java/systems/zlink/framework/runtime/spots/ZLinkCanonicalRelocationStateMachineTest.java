@@ -273,7 +273,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     @Override
                     public CompletionStage<Void> publish(
                             ZLinkSpotRetireControl.StageRequest request,
-                            ZLinkTargetRelocationCompletions completions) {
+                            ZLinkTargetRelocationReplies completions) {
                         super.publish(request, completions);
                         publicationEntered.complete(null);
                         return publication;
@@ -676,7 +676,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     }
 
                     @Override
-                    public ZLinkTargetRelocationCompletions prepareCompletions(
+                    public ZLinkTargetRelocationReplies prepareCompletions(
                             ZLinkSpotRetireControl.StageRequest request,
                             List<byte[]> verifiedBatch,
                             java.util.function.Consumer<Runnable> resubmit) {
@@ -687,7 +687,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     @Override
                     public CompletionStage<Void> publish(
                             ZLinkSpotRetireControl.StageRequest request,
-                            ZLinkTargetRelocationCompletions completions) {
+                            ZLinkTargetRelocationReplies completions) {
                         publishes.incrementAndGet();
                         if (reentered.compareAndSet(false, true)) {
                             reentrantPublication.set(
@@ -2105,7 +2105,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         }
 
         @Override
-        public ZLinkTargetRelocationCompletions prepareCompletions(
+        public ZLinkTargetRelocationReplies prepareCompletions(
                 ZLinkSpotRetireControl.StageRequest request,
                 List<byte[]> verifiedBatch,
                 java.util.function.Consumer<Runnable> resubmit) {
@@ -2115,7 +2115,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         @Override
         public CompletionStage<Void> publish(
                 ZLinkSpotRetireControl.StageRequest request,
-                ZLinkTargetRelocationCompletions completions) {
+                ZLinkTargetRelocationReplies completions) {
             published.incrementAndGet();
             if (onPublish != null) {
                 onPublish.run();

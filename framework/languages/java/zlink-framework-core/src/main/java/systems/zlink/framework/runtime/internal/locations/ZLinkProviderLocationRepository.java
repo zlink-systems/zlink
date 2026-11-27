@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -387,11 +388,40 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     @Override
     public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
             ZLinkAggregateFence fence,
-            List<Long> acceptedRequests,
+            List<ZLinkRelocationReplyRow> acceptedReplies,
             ZLinkStoreCancellation cancellation) {
         return observeStore(
                 LocationOperation.COMPARE_EXCHANGE,
-                () -> authority.commitAggregate(fence, acceptedRequests, cancellation));
+                () -> authority.commitAggregate(fence, acceptedReplies, cancellation));
+    }
+
+    @Override
+    public CompletionStage<ZLinkRelocationReplyRow> updateRelocationReply(
+            ZLinkRelocationReplyRow update, ZLinkStoreCancellation cancellation) {
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.updateRelocationReply(update, cancellation));
+    }
+
+    @Override
+    public CompletionStage<Optional<ZLinkRelocationReplyRow>> readRelocationReply(
+            UUID relocationId,
+            ZLinkRelocationReplyRow.Source source,
+            String operationId,
+            ZLinkStoreCancellation cancellation) {
+        return observeStore(
+                LocationOperation.READ,
+                () ->
+                        authority.readRelocationReply(
+                                relocationId, source, operationId, cancellation));
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkRelocationReplyRow.Stored>> readActiveRelocationReplies(
+            UUID relocationId, ZLinkStoreCancellation cancellation) {
+        return observeStore(
+                LocationOperation.READ,
+                () -> authority.readActiveRelocationReplies(relocationId, cancellation));
     }
 
     @Override

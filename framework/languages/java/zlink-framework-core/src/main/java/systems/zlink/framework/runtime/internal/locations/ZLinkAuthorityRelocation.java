@@ -9,7 +9,7 @@ import systems.zlink.contracts.core.RoutingId;
 import java.util.List;
 import java.util.UUID;
 
-/** Immutable Location runtime §3.4 relocation value; extensions survive authority CAS. */
+/** Immutable Location runtime §3.4 closed relocation value. */
 public final class ZLinkAuthorityRelocation {
     private static final List<String> PHASES =
             List.of(
@@ -29,7 +29,9 @@ public final class ZLinkAuthorityRelocation {
         uuid(value.get("relocationId"));
         String phase = text(value.get("phase"));
         if (!PHASES.contains(phase)) throw invalid();
-        fence(value.get("source"));
+        var source = value.get("source");
+        fence(source);
+        requireFieldCount(source, 4);
         JsonNode target = value.get("target");
         if (target == null) throw invalid();
         boolean beforeTarget = phase.equals("preparing") || phase.equals("captured");
@@ -39,66 +41,16 @@ public final class ZLinkAuthorityRelocation {
             if (beforeTarget) throw invalid();
             fence(target);
             integer(target.get("attemptGeneration"));
+            requireFieldCount(target, 5);
         }
-        fence(value.get("coordinator"));
-        text(value.get("coordinator").get("expectedStoreVersion"));
+        var coordinator = value.get("coordinator");
+        fence(coordinator);
+        text(coordinator.get("expectedStoreVersion"));
+        requireFieldCount(coordinator, 5);
         sha(value.get("sourceInventorySha256"));
         integer(value.get("applicationVersion"));
-        if (value.has("completion")) readCompletion(value.get("completion"));
+        requireFieldCount(value, 7);
         this.value = ((ObjectNode) value).deepCopy();
-    }
-
-    public record Completion(
-            long acceptedRequests,
-            long completedResults,
-            long pendingDeliveries,
-            String reference,
-            String sha256) {}
-
-    public Completion completion() {
-        JsonNode completion = value.get("completion");
-        return completion == null ? null : readCompletion(completion);
-    }
-
-    public ZLinkAuthorityRelocation committed(Long acceptedRequests) {
-        var committed = phase("committed");
-        return acceptedRequests == null
-                ? committed
-                : committed.withCompletion(new Completion(acceptedRequests, 0, 0, null, null));
-    }
-
-    boolean publishesCompletionAfter(ZLinkAuthorityRelocation previous) {
-        JsonNode reference = value.path("completion").path("reference");
-        return reference.isTextual()
-                && (previous == null
-                        || !reference.equals(previous.value.path("completion").path("reference")));
-    }
-
-    ZLinkAuthorityRelocation withCompletion(Completion completion) {
-        ObjectNode next = json();
-        ObjectNode node = next.withObjectProperty("completion");
-        node.put("acceptedRequests", Long.toUnsignedString(completion.acceptedRequests()));
-        node.put("completedResults", Long.toUnsignedString(completion.completedResults()));
-        node.put("pendingDeliveries", Long.toUnsignedString(completion.pendingDeliveries()));
-        node.put("reference", completion.reference());
-        node.put("sha256", completion.sha256());
-        return new ZLinkAuthorityRelocation(next);
-    }
-
-    private static Completion readCompletion(JsonNode completion) {
-        object(completion);
-        long accepted = integer(completion.get("acceptedRequests"));
-        long completed = integer(completion.get("completedResults"));
-        long pending = integer(completion.get("pendingDeliveries"));
-        if (Long.compareUnsigned(completed, accepted) > 0
-                || Long.compareUnsigned(pending, completed) > 0) throw invalid();
-        JsonNode reference = completion.get("reference");
-        JsonNode checksum = completion.get("sha256");
-        if (reference == null || checksum == null || reference.isNull() != checksum.isNull())
-            throw invalid();
-        if (reference.isNull()) return new Completion(accepted, completed, pending, null, null);
-        sha(checksum);
-        return new Completion(accepted, completed, pending, text(reference), checksum.textValue());
     }
 
     public ObjectNode json() {
@@ -121,6 +73,10 @@ public final class ZLinkAuthorityRelocation {
         if (!PHASES.contains(phase)) throw new IllegalArgumentException("Unknown relocation phase");
         if (aborted() || phase.equals("aborted")) return aborted() && phase.equals("aborted");
         return phaseOrdinal() >= PHASES.indexOf(phase) + 1;
+    }
+
+    public boolean targetPublicationPending() {
+        return hasReached("committed");
     }
 
     public boolean aborted() {
@@ -338,6 +294,13 @@ public final class ZLinkAuthorityRelocation {
 
     static void sha(JsonNode value) {
         if (!text(value).matches("[0-9a-f]{64}")) throw invalid();
+    }
+
+    private static void requireFieldCount(JsonNode value, int expected) {
+        if (value.size() != expected) {
+            throw new ZLinkAggregateRelocationCoordinator.RelocationDataLostException(
+                    "Location Store relocation record contains an unknown field.");
+        }
     }
 
     private static void fence(JsonNode value) {

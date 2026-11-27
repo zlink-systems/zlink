@@ -66,29 +66,22 @@ public final class ZLinkUserSpotRetireRuntime {
         }
     }
 
+    static void requireReleasedPublication(
+            systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot snapshot) {
+        if (snapshot.relocation() != null && snapshot.relocation().targetPublicationPending()) {
+            throw new RelocationBlockedException(
+                    ZLinkFrameworkRelocationReason.OPERATION_IN_PROGRESS,
+                    "Authority has an in-progress relocation publication: "
+                            + snapshot.relocation().relocationId());
+        }
+    }
+
     /**
      * A relocation whose settled unit authority leaves the host split — some units committed on the
      * target while others stayed on the source — or whose source owner lease expired before the
      * {@code Preserve} fence. The host enters {@code Error} with {@code Blocked/RelocationFailed}
      * (spec 30 §13).
      */
-    static void requireRelocationCompletion(
-            systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot snapshot) {
-        var relocation = snapshot.relocation();
-        var completion = relocation == null ? null : relocation.completion();
-        if (completion == null
-                || relocation.hasReached("completed")
-                || completion.acceptedRequests() == 0) return;
-        String details =
-                "RelocationId="
-                        + relocation.relocationId()
-                        + " pendingDeliveries="
-                        + Long.toUnsignedString(completion.pendingDeliveries());
-        throw new RelocationBlockedException(
-                ZLinkFrameworkRelocationReason.OPERATION_IN_PROGRESS,
-                "Relocation has unfinished completion delivery: " + details);
-    }
-
     public static final class RelocationAuthorityErrorException extends RelocationBlockedException {
         public RelocationAuthorityErrorException(String message) {
             super(ZLinkFrameworkRelocationReason.RELOCATION_FAILED, message);
@@ -103,7 +96,6 @@ public final class ZLinkUserSpotRetireRuntime {
             ZLinkLocationRepository locations,
             ZLinkStoreLocationResolvers locationResolvers,
             ZLinkLocationRepository authorities,
-            systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore completionStore,
             ZLinkLocationOptions options,
             ZLinkRelocationAdapterRegistry adapters,
             long applicationVersion,
@@ -118,7 +110,6 @@ public final class ZLinkUserSpotRetireRuntime {
                 locations,
                 locationResolvers,
                 authorities,
-                completionStore,
                 options,
                 adapters,
                 applicationVersion,
@@ -138,7 +129,6 @@ public final class ZLinkUserSpotRetireRuntime {
             ZLinkLocationRepository locations,
             ZLinkStoreLocationResolvers locationResolvers,
             ZLinkLocationRepository authorities,
-            systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore completionStore,
             ZLinkLocationOptions options,
             ZLinkRelocationAdapterRegistry adapters,
             long applicationVersion,
@@ -168,7 +158,6 @@ public final class ZLinkUserSpotRetireRuntime {
         this.sessionRelocationSealTimeout = sessionRelocationSealTimeout;
         this.registrations = List.copyOf(registrations);
         Objects.requireNonNull(nodes, "nodes");
-        Objects.requireNonNull(completionStore, "completionStore");
         var coordinator =
                 new ZLinkAggregateRelocationCoordinator(
                         aggregateRelocationAuthorityStoreDecorator == null
@@ -253,7 +242,6 @@ public final class ZLinkUserSpotRetireRuntime {
                             node.status().routingId(),
                             node.status().lifecycleGeneration(),
                             coordinator,
-                            completionStore,
                             staging,
                             stableType ->
                                     relocatableSpots.containsKey(stableType)
@@ -387,6 +375,13 @@ public final class ZLinkUserSpotRetireRuntime {
      * (S4) and its cutover retransmission window — the source-local SafeToShutdown condition (spec
      * 30 §11).
      */
+    public CompletionStage<Void> renewReplyRows(Instant storeNow) {
+        return CompletableFuture.allOf(
+                stateMachines.stream()
+                        .map(machine -> machine.renewReplyRows(storeNow).toCompletableFuture())
+                        .toArray(CompletableFuture[]::new));
+    }
+
     public boolean relocationSourceQuiescent() {
         return stateMachines.stream()
                 .allMatch(ZLinkCanonicalRelocationStateMachine::sourceQuiescent);

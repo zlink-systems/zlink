@@ -297,7 +297,6 @@ final class ZLinkActorJoinPrewarmIngressTest {
                             TARGET_RID,
                             TARGET_NODE_GENERATION,
                             coordinator,
-                            new InMemoryRelocationStore(),
                             unusedSpotStaging(),
                             ignored -> null,
                             (lane, queued) ->
@@ -416,7 +415,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                             .get(5, TimeUnit.SECONDS);
             endpoint.stage(request).toCompletableFuture().get(5, TimeUnit.SECONDS);
             coordinator
-                    .commit(prepared, Map.of(), OPEN)
+                    .commit(prepared, List.of(), OPEN)
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
         }

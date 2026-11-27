@@ -201,7 +201,6 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
                                 TARGET_RID,
                                 9,
                                 targetCoordinator,
-                                new InMemoryRelocationStore(),
                                 new ZLinkUserSpotAggregateStagingOwner(new TestStagingBackend()),
                                 ignored -> TestSpot.class,
                                 (lane, record) -> CompletableFuture.completedFuture(null),
@@ -230,7 +229,7 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
                                 .toCompletableFuture()
                                 .get(10, TimeUnit.SECONDS);
                 targetCoordinator
-                        .commit(targetPrepared, Map.of(), NEVER)
+                        .commit(targetPrepared, List.of(), NEVER)
                         .toCompletableFuture()
                         .get(10, TimeUnit.SECONDS);
                 targetCommitted.set(true);

@@ -18,7 +18,6 @@ import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
-import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
@@ -37,6 +36,7 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
@@ -130,7 +130,6 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                             node,
                             1,
                             new ZLinkAggregateRelocationCoordinator(new AuthorityState().proxy()),
-                            new InMemoryRelocationStore(),
                             new ZLinkUserSpotAggregateStagingOwner(new FakeStagingBackend()),
                             ignored -> TestSpot.class,
                             null,
@@ -253,7 +252,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
     }
 
     @Test
-    void publishedStandaloneActorKeepsFifoClosedWhileNormalizationIsPending() {
+    void publishedStandaloneActorOpensFifoBeforeNormalization() {
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
         RoutingId sessionOwnerRid = RoutingId.from("session-owner");
@@ -325,7 +324,6 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         targetRid,
                         targetNodeGeneration,
                         coordinator,
-                        new InMemoryRelocationStore(),
                         new ZLinkUserSpotAggregateStagingOwner(new FakeStagingBackend()),
                         ignored -> TestSpot.class,
                         (lane, queued) ->
@@ -382,7 +380,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         33)));
 
         endpoint.stage(request).toCompletableFuture().join();
-        coordinator.commit(prepared, Map.of(), OPEN).toCompletableFuture().join();
+        coordinator.commit(prepared, List.of(), OPEN).toCompletableFuture().join();
         authority.reads.set(0);
         CompletionStage<Void> publishing =
                 endpoint.publish(
@@ -451,22 +449,22 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     null);
             actorBackend.tasks.drainUntil(admission);
             assertTrue(admission.isDone() && !admission.isCompletedExceptionally());
+            actorBackend.tasks.drainUntil(handled);
             assertFalse(
-                    handled.isDone(),
-                    "ordinary Actor handler must wait for route and normalization finalization");
+                    publishing.toCompletableFuture().isDone(),
+                    "publication remains in progress during normalization");
             assertEquals(
                     List.of(
                             "prepare-actor",
                             "publish-actor",
                             "install-target-binding",
                             "command44",
+                            "open",
                             "normalize"),
                     operations);
             normalization.complete(null);
             actorBackend.tasks.drainUntil(publishing);
             publishing.toCompletableFuture().join();
-            actorBackend.tasks.drainUntil(handled);
-            assertTrue(handled.isDone());
             assertFalse(terminal.isDone(), "publication must not await handler terminal");
             terminal.complete(null);
             actorBackend.drain();
@@ -798,7 +796,6 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         targetRid,
                         targetNodeGeneration,
                         coordinator,
-                        new InMemoryRelocationStore(),
                         staging,
                         ignored -> TestSpot.class,
                         (lane, record) -> {
@@ -907,7 +904,6 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         targetRid,
                         targetNodeGeneration,
                         coordinator,
-                        new InMemoryRelocationStore(),
                         recoveredStaging,
                         ignored -> TestSpot.class,
                         (lane, record) ->
@@ -918,14 +914,6 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         new ZLinkSessionRelocationPeerClient(recoveryPeer),
                         Duration.ofSeconds(1),
                         ignored -> {
-                            var completion =
-                                    authority
-                                            .rows
-                                            .get(ZLinkAuthorityKeyCodec.spot(spotId))
-                                            .relocation()
-                                            .completion();
-                            assertEquals(1, completion.completedResults());
-                            assertEquals(0, completion.pendingDeliveries());
                             recoveredBackend.operations.add("normalize");
                             return CompletableFuture.completedFuture(null);
                         },
@@ -987,7 +975,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             var completions =
                     recoveredEndpoint.prepareCompletions(request, List.of(relayed), Runnable::run);
             coordinator
-                    .commit(prepared, completions.acceptedRequests(), OPEN)
+                    .commit(prepared, completions.acceptedRows(), OPEN)
                     .toCompletableFuture()
                     .join();
             var publication = recoveredEndpoint.publish(request, completions).toCompletableFuture();
@@ -1318,7 +1306,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         private final AtomicInteger leaseReads = new AtomicInteger();
         private String progressStoreVersion;
         final List<String> completionTrace = new CopyOnWriteArrayList<>();
-        boolean dropCompletionCasResponse;
+        final Map<systems.zlink.framework.locationprovider.ZLinkStoreKey, ZLinkRelocationReplyRow>
+                replyRows = new ConcurrentHashMap<>();
+        boolean sourceExpired;
+        CompletableFuture<Void> pendingWriteEntered;
+        CompletableFuture<Void> pendingWriteRelease;
 
         List<Integer> storeReads() {
             return List.of(reads.get(), progressReads.get(), leaseReads.get());
@@ -1395,16 +1387,15 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         case "commitAggregate" ->
                                                 commit(
                                                         (ZLinkAggregateFence) arguments[0],
-                                                        (List<Long>) arguments[1]);
+                                                        (List<ZLinkRelocationReplyRow>)
+                                                                arguments[1]);
+                                        case "updateRelocationReply" ->
+                                                updateReply((ZLinkRelocationReplyRow) arguments[0]);
                                         case "abortAggregate" ->
                                                 CompletableFuture.completedFuture(
                                                         ZLinkAggregateAbortResult.ABORTED);
                                         case "read" -> {
                                             reads.incrementAndGet();
-                                            if (completionTrace.contains("pending-cas")
-                                                    && !completionTrace.contains("confirmed-cas")) {
-                                                completionTrace.add("confirmed-cas");
-                                            }
                                             yield read.apply(
                                                     (String) arguments[0],
                                                     rows.getOrDefault((String) arguments[0], null)
@@ -1421,6 +1412,13 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         case "readOwnerLease" -> {
                                             leaseReads.incrementAndGet();
                                             var now = Instant.now();
+                                            if (sourceExpired
+                                                    && "journal-owner".equals(arguments[0])) {
+                                                yield CompletableFuture.completedFuture(
+                                                        new systems.zlink.framework.runtime.internal
+                                                                .locations
+                                                                .ZLinkOwnerLeaseMissing());
+                                            }
                                             yield CompletableFuture.completedFuture(
                                                     new ZLinkOwnerLeaseFound(
                                                             "journal-owner".equals(arguments[0])
@@ -1455,7 +1453,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         private CompletionStage<ZLinkAggregateCommitResult> commit(
-                ZLinkAggregateFence fence, List<Long> acceptedRequests) {
+                ZLinkAggregateFence fence, List<ZLinkRelocationReplyRow> acceptedRows) {
             if (prepared == null
                     || !prepared.aggregateId().equals(fence.aggregateId())
                     || prepared.aggregateGeneration() != fence.aggregateGeneration()) {
@@ -1486,17 +1484,36 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                 Instant.now(),
                                 participant.relocation() == null
                                         ? null
-                                        : participant
-                                                .relocation()
-                                                .committed(
-                                                        acceptedRequests.isEmpty()
-                                                                ? null
-                                                                : acceptedRequests.get(index)),
+                                        : participant.relocation().phase("committed"),
                                 0));
             }
             progress = true;
+            acceptedRows.forEach(row -> replyRows.put(row.key(), row));
             progressStoreVersion = "aggregate-commit";
             return CompletableFuture.completedFuture(ZLinkAggregateCommitResult.COMMITTED);
+        }
+
+        private CompletionStage<ZLinkRelocationReplyRow> updateReply(
+                ZLinkRelocationReplyRow update) {
+            if (update.state().equals(ZLinkRelocationReplyRow.PENDING)
+                    && pendingWriteEntered != null
+                    && pendingWriteEntered.complete(null)) {
+                return pendingWriteRelease.thenApply(ignored -> applyReply(update));
+            }
+            return CompletableFuture.completedFuture(applyReply(update));
+        }
+
+        private ZLinkRelocationReplyRow applyReply(ZLinkRelocationReplyRow update) {
+            return replyRows.compute(
+                    update.key(),
+                    (key, current) -> {
+                        assertNotNull(current, "target commit must accept the request");
+                        var now = Instant.now();
+                        var next = update.transition(current, now, now.plus(Duration.ofHours(24)));
+                        if (next == null) return current;
+                        completionTrace.add(next.terminal() ? "ack-cas" : "pending-cas");
+                        return next;
+                    });
         }
 
         private CompletionStage<Optional<ZLinkAggregateProgressSnapshot>> readAggregateProgress(
@@ -1548,25 +1565,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                             put.replaceRelocation() ? put.relocation() : current.relocation(),
                             0);
             rows.put(key, stored);
-            var prior = current.relocation();
-            var next = stored.relocation();
-            if (next != null && next.completion() != null) {
-                if (next.phase().equals("completed")) {
-                    assertEquals(
-                            next.completion().acceptedRequests(),
-                            next.completion().completedResults());
-                    assertEquals(0, next.completion().pendingDeliveries());
-                    if (next.completion().acceptedRequests() != 0) completionTrace.add("completed");
-                } else if (!java.util.Objects.equals(
-                        next.completion().reference(), prior.completion().reference())) {
-                    boolean pending = next.completion().pendingDeliveries() != 0;
-                    completionTrace.add(pending ? "pending-cas" : "ack-cas");
-                    if (pending && dropCompletionCasResponse) {
-                        dropCompletionCasResponse = false;
-                        return CompletableFuture.failedFuture(
-                                new java.io.IOException("CAS response lost"));
-                    }
-                }
+            if (stored.relocation() != null && stored.relocation().phase().equals("completed")) {
+                completionTrace.add("completed");
             }
             return CompletableFuture.completedFuture(
                     new ZLinkAuthorityStored(

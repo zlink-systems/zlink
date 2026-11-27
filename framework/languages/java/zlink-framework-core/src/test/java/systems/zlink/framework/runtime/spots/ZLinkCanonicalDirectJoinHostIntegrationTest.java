@@ -414,7 +414,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             TARGET_RID,
                             targetDescriptor.lifecycleGeneration(),
                             coordinator,
-                            new InMemoryRelocationStore(),
                             unusedSpotStaging(),
                             ignored -> null,
                             (lane, queued) -> {
@@ -561,7 +560,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         }
 
                         @Override
-                        public ZLinkTargetRelocationCompletions prepareCompletions(
+                        public ZLinkTargetRelocationReplies prepareCompletions(
                                 ZLinkSpotRetireControl.StageRequest request,
                                 List<byte[]> verifiedBatch,
                                 java.util.function.Consumer<Runnable> resubmit) {
@@ -571,7 +570,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         @Override
                         public CompletionStage<Void> publish(
                                 ZLinkSpotRetireControl.StageRequest request,
-                                ZLinkTargetRelocationCompletions completions) {
+                                ZLinkTargetRelocationReplies completions) {
                             return endpoint.publish(request, completions)
                                     .whenComplete(
                                             (ignored, failure) -> {
@@ -1089,12 +1088,11 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertBefore("target.accepted", "client.push.submitted");
             assertBefore("target.accepted", "target.open");
             assertBefore("target.open", "replay:B1");
-            assertBefore("target.normalize", "target.open");
+            assertBefore("target.open", "target.normalize");
             assertBefore("prefix.admitted", "target.joined");
             assertBefore("prefix.admitted", "target.open");
             assertBefore("prefix.admitted", "command44");
             assertBefore("command44", "client.push.terminal");
-            assertBefore("target.normalize", "target.accepted");
             link.checkCanonicalBindingRetries().toCompletableFuture().get(1, TimeUnit.SECONDS);
             assertTrue(EVENTS.contains("route.duplicate.noop"));
             assertTrue(EVENTS.contains("route.changed.conflict"));

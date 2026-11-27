@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.binding;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -14,6 +15,9 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
@@ -29,6 +33,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 final class ZLinkJavaRawMeshNodeRelocationReplyTest {
     @Test
@@ -147,7 +153,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                                     Optional.of(
                                             new systems.zlink.framework.runtime.internal.backend
                                                     .ZLinkInternalMeshNode.PeerAuthorityFence(
-                                                    rid, generation, "peer-owner", 1))));
+                                                    rid, generation, "source-owner", 12))));
             source.setRelocationReplyRelayHandler(
                     (transportSource, command, frames) -> {
                         handlerCalled.set(true);
@@ -402,21 +408,21 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                 Thread.sleep(1);
             }
 
-            byte[] encodedAck =
-                    target.requestRelocationReplyRelay(
-                                    landingRid,
-                                    expectedSource,
-                                    codec.encodeReplyRelay(relay),
-                                    List.of(payload),
-                                    Duration.ofSeconds(10))
-                            .toCompletableFuture()
-                            .get(10, TimeUnit.SECONDS);
-            var ack = codec.decodeReplyRelayAck(encodedAck);
+            var intermediate =
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    target.requestRelocationReplyRelay(
+                                                    landingRid,
+                                                    expectedSource,
+                                                    codec.encodeReplyRelay(relay),
+                                                    List.of(payload),
+                                                    Duration.ofMillis(100))
+                                            .toCompletableFuture()
+                                            .get(1, TimeUnit.SECONDS));
             assertEquals(
-                    requesterRid,
-                    ack.requestSource().nodeRid(),
-                    "the ACK closes the request-source fence, not the landing");
-            assertEquals(41, ack.requestSource().nodeGeneration());
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    ((ZLinkFrameworkException) intermediate.getCause()).kind());
 
             //  An ACK that claims a different request-source fence (here the
             //  landing itself) can never close the pending command 33.
@@ -464,6 +470,163 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                                             .toCompletableFuture()
                                             .get(2, TimeUnit.SECONDS));
             assertNotNull(wrongLanding.getCause());
+        }
+    }
+
+    @Test
+    void originalRequesterAcceptsAndAuthenticatesTheStoredTerminal() throws Exception {
+        var requesterRid = RoutingId.from("reply-requester");
+        var landingRid = RoutingId.from("reply-acceptor");
+        var writerRid = RoutingId.from("reply-writer");
+        var seen = new CompletableFuture<ZLinkServiceM6BWireCodec.ActorMessage>();
+        try (var context = Zlink.createContext();
+                var requester = new ZLinkJavaRawMeshNode(context, "mesh");
+                var landing = new ZLinkJavaRawMeshNode(context, "mesh");
+                var writer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            startReplyPeer(requester, requesterRid);
+            requester.setPeerAuthorityResolver(
+                    new ZLinkInternalMeshNode.PeerAuthorityResolver() {
+                        @Override
+                        public CompletionStage<Optional<ZLinkInternalMeshNode.PeerAuthorityFence>>
+                                resolve(String mesh, RoutingId peer, long generation) {
+                            return CompletableFuture.completedFuture(
+                                    Optional.of(
+                                            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                                    peer, generation, "owner", 1)));
+                        }
+
+                        @Override
+                        public CompletionStage<Boolean> confirmsRelocationReply(
+                                ZLinkInternalMeshNode.PeerAuthorityFence source,
+                                ZLinkServiceRelocationWireCodec.ReplyRelay relay,
+                                List<byte[]> payload) {
+                            return CompletableFuture.completedFuture(payload.getFirst()[0] == 11);
+                        }
+                    });
+            startReplyPeer(landing, landingRid);
+            startReplyPeer(writer, writerRid);
+            requester.connectPeer(landing.status().localEndpoint(), landingRid);
+            writer.connectPeer(landing.status().localEndpoint(), landingRid);
+            requester.connectPeer(writer.status().localEndpoint(), writerRid);
+            awaitReplyPeers(requester, landingRid, writerRid);
+            awaitReplyPeers(landing, requesterRid, writerRid);
+            awaitReplyPeers(writer, requesterRid, landingRid);
+
+            landing.spotNode()
+                    .setRelocationStagingIngressHandler(
+                            new ZLinkInternalSpotNode.RelocationStagingIngressHandler() {
+                                @Override
+                                public boolean handleSpot(
+                                        ZLinkInternalMeshNode.PeerAuthorityFence source,
+                                        ZLinkServiceM6BWireCodec.SpotMessage header,
+                                        byte[] metadata,
+                                        Supplier<byte[]> frozen,
+                                        int size,
+                                        List<Message> parts,
+                                        String contentType,
+                                        Consumer<List<Message>> reply,
+                                        Consumer<Throwable> failure) {
+                                    return false;
+                                }
+
+                                @Override
+                                public boolean handleActor(
+                                        ZLinkInternalMeshNode.PeerAuthorityFence source,
+                                        ZLinkServiceM6BWireCodec.ActorMessage header,
+                                        Supplier<byte[]> frozen,
+                                        List<Message> parts,
+                                        String contentType,
+                                        Consumer<List<Message>> reply,
+                                        Consumer<Throwable> failure) {
+                                    Message.closeAll(parts);
+                                    seen.complete(header);
+                                    return true;
+                                }
+                            });
+            var actor = new ZLinkBackendActorRef(landingRid, "relocating-actor", 1);
+            requester.spotNode().rememberActorAuthority(actor, 1, 1, landing.lifecycleGeneration());
+            try (var part = Message.from("request")) {
+                var operation =
+                        requester.requestActor(
+                                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                        actor, landing.lifecycleGeneration(), 1, 1),
+                                List.of(part),
+                                Duration.ofSeconds(5),
+                                null);
+                var original = seen.get(5, TimeUnit.SECONDS);
+                var reply =
+                        new ZLinkServiceRelocationWireCodec.ReplyRelay(
+                                new ZLinkServiceRelocationWireCodec.Operation(
+                                        original.operationHigh(), original.operationLow()),
+                                original.correlation(),
+                                new ZLinkServiceRelocationWireCodec.RelocationId(4, 5),
+                                6,
+                                new ZLinkServiceRelocationWireCodec.CoordinatorFence(
+                                        "owner",
+                                        1,
+                                        writerRid,
+                                        writer.lifecycleGeneration(),
+                                        "version"),
+                                1,
+                                1,
+                                0,
+                                0);
+                var codec = new ZLinkServiceRelocationWireCodec();
+                var source =
+                        new ZLinkServiceRelocationWireCodec.RequestSourceFence(
+                                "owner", 1, requesterRid, requester.lifecycleGeneration());
+                var payload = new byte[] {11, 12, 13};
+                for (int expected : List.of(1, 2)) {
+                    var ack =
+                            codec.decodeReplyRelayAck(
+                                    writer.requestRelocationReplyRelay(
+                                                    requesterRid,
+                                                    source,
+                                                    codec.encodeReplyRelay(reply),
+                                                    List.of(payload),
+                                                    Duration.ofSeconds(2))
+                                            .toCompletableFuture()
+                                            .get(3, TimeUnit.SECONDS));
+                    assertEquals(expected, ack.status());
+                    assertEquals(source, ack.requestSource());
+                }
+                var value = operation.toCompletableFuture().get(5, TimeUnit.SECONDS);
+                try {
+                    assertArrayEquals(payload, value.getFirst().toByteArray());
+                } finally {
+                    Message.closeAll(value);
+                }
+            }
+        }
+    }
+
+    private static void startReplyPeer(ZLinkJavaRawMeshNode node, RoutingId rid) {
+        node.setRoutingId(rid);
+        node.setBind("tcp://127.0.0.1:0");
+        node.setPeerAuthorityResolver(
+                (mesh, peer, generation) ->
+                        CompletableFuture.completedFuture(
+                                Optional.of(
+                                        new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                                peer, generation, "owner", 1))));
+        node.start();
+        node.confirmLocalOwnerFence(
+                new ZLinkInternalMeshNode.PeerAuthorityFence(
+                        rid, node.lifecycleGeneration(), "owner", 1));
+    }
+
+    private static void awaitReplyPeers(ZLinkJavaRawMeshNode node, RoutingId... expected)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        for (var rid : expected) {
+            while (!node.peers().stream()
+                    .anyMatch(
+                            peer ->
+                                    peer.routingId().equals(rid)
+                                            && peer.state().name().equals("ADMITTED"))) {
+                assertTrue(System.nanoTime() < deadline, "reply peer was not admitted");
+                Thread.sleep(1);
+            }
         }
     }
 

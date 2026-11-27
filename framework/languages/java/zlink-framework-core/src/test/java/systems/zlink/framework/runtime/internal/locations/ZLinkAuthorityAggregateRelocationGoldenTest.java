@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 
 import java.util.stream.Stream;
@@ -14,6 +15,34 @@ import java.util.stream.StreamSupport;
 
 final class ZLinkAuthorityAggregateRelocationGoldenTest {
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    @Test
+    void rejectsAnUnknownFieldAtEveryRelocationRecordLevel() throws Exception {
+        var input = getClass().getResourceAsStream("/authority-aggregate-relocation-v1.json");
+        assertNotNull(input);
+        try (input) {
+            var cases = JSON.readTree(input).path("cases");
+            var prepared =
+                    StreamSupport.stream(cases.spliterator(), false)
+                            .filter(
+                                    vector ->
+                                            vector.path("name")
+                                                    .asText()
+                                                    .equals("relocation-only-prepared"))
+                            .findFirst()
+                            .orElseThrow()
+                            .path("aggregate")
+                            .path("relocation");
+            for (var field : new String[] {"", "source", "target", "coordinator"}) {
+                ObjectNode value = prepared.deepCopy();
+                ObjectNode object = field.isEmpty() ? value : (ObjectNode) value.path(field);
+                object.put("unknownField", "value");
+                assertThrows(
+                        ZLinkAggregateRelocationCoordinator.RelocationDataLostException.class,
+                        () -> new ZLinkAuthorityRelocation(value));
+            }
+        }
+    }
 
     @TestFactory
     Stream<DynamicTest> canonicalProviderReaderAndWriter() throws Exception {
@@ -40,15 +69,29 @@ final class ZLinkAuthorityAggregateRelocationGoldenTest {
                                                     "allocation",
                                                     JSON.readTree(
                                                             """
-                    {"state":"active","objectKind":"actor","stableType":"actor",
-                     "descriptor":{"meshName":"mesh","routingIdHex":"0a0b"},
-                     "descriptorLifecycleGeneration":"3",
-                     "capacity":{"actors":1,"spots":0,"spotType":null}}
-                    """));
+                                                            {"state":"active","objectKind":"actor","stableType":"actor",
+                                                             "descriptor":{"meshName":"mesh","routingIdHex":"0a0b"},
+                                                             "descriptorLifecycleGeneration":"3",
+                                                             "capacity":{"actors":1,"spots":0,"spotType":null}}
+                                                            """));
                                             record.putNull("pendingCreation");
                                             record.set("aggregate", c.path("aggregate"));
                                             if (c.path("aggregate").has("aggregateId"))
                                                 record.put("visibleStoreVersion", "opaque-v1");
+                                            if (c.path("aggregate")
+                                                    .path("relocation")
+                                                    .has("completion")) {
+                                                assertThrows(
+                                                        ZLinkAggregateRelocationCoordinator
+                                                                .RelocationDataLostException.class,
+                                                        () ->
+                                                                ZLinkProviderAuthorityRepository
+                                                                        .decode(
+                                                                                JSON
+                                                                                        .writeValueAsBytes(
+                                                                                                record)));
+                                                return;
+                                            }
                                             if (c.path("expect").asText().equals("reject")) {
                                                 assertThrows(
                                                         IllegalStateException.class,

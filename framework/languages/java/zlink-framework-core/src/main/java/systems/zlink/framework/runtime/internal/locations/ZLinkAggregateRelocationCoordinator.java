@@ -57,29 +57,6 @@ public final class ZLinkAggregateRelocationCoordinator {
         return ownerLeaseValid.test(owner);
     }
 
-    public CompletionStage<ZLinkAuthoritySnapshot> readCompletionAuthority(
-            String key,
-            UUID relocationId,
-            String ownerId,
-            long ownerLeaseGeneration,
-            ZLinkStoreCancellation cancellation) {
-        return authorityStore
-                .read(key, cancellation)
-                .thenApply(
-                        read -> {
-                            if (read instanceof ZLinkAuthoritySnapshot snapshot
-                                    && snapshot.ownerId().equals(ownerId)
-                                    && snapshot.ownerLeaseGeneration() == ownerLeaseGeneration
-                                    && snapshot.relocation() != null
-                                    && snapshot.relocation().relocationId().equals(relocationId)) {
-                                requireCompletion(snapshot);
-                                return snapshot;
-                            }
-                            throw new RelocationDataLostException(
-                                    "Completion authority fence changed.");
-                        });
-    }
-
     public CompletionStage<Prepared> prepare(Request request, ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(cancellation, "cancellation");
@@ -88,21 +65,11 @@ public final class ZLinkAggregateRelocationCoordinator {
 
     public CompletionStage<Published> commit(
             Prepared prepared,
-            Map<String, Long> acceptedRequests,
+            List<ZLinkRelocationReplyRow> acceptedReplies,
             ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(prepared, "prepared");
         Objects.requireNonNull(cancellation, "cancellation");
-        List<Long> counts =
-                prepared.request().participants().stream()
-                        .sorted(
-                                (first, second) ->
-                                        compareUtf8(first.authorityKey(), second.authorityKey()))
-                        .map(
-                                participant ->
-                                        acceptedRequests.getOrDefault(
-                                                participant.authorityKey(), 0L))
-                        .toList();
-        return commitAuthority(prepared, counts, cancellation);
+        return commitAuthority(prepared, acceptedReplies, cancellation);
     }
 
     public record ExpectedParticipant(
@@ -675,196 +642,6 @@ public final class ZLinkAggregateRelocationCoordinator {
         return writes;
     }
 
-    /** Publishes only after every new blob has been read back from the Relocation Store. */
-    public CompletionStage<ZLinkAuthoritySnapshot> publishCompletion(
-            String key,
-            ZLinkAuthoritySnapshot expected,
-            ZLinkRelocationStore blobs,
-            ZLinkRelocationCompletionRecordCodec.Record record,
-            List<ZLinkRelocationCompletionRecordCodec.Entry> remainingFailures,
-            ZLinkStoreCancellation cancellation) {
-        var relocation = expected.relocation();
-        var progress = requireCompletion(expected);
-        long accounted = (long) record.entries().size() + remainingFailures.size();
-        if (!relocation.relocationId().toString().equals(record.relocationId())
-                || record.entries().isEmpty()
-                || accounted != progress.acceptedRequests()
-                || record.entries().size() < progress.completedResults()) {
-            return failed(
-                    new RelocationDataLostException(
-                            "Completion identity or result count differs."));
-        }
-        try {
-            requireCompletionFits(record, remainingFailures);
-        } catch (ZLinkFrameworkException failure) {
-            return failed(failure);
-        }
-        var storage = new ZLinkRelocationCompletionBlob(blobs);
-        return storage.put(record, relocation.sourceInventorySha256(), cancellation)
-                .thenCompose(
-                        stored -> {
-                            var next =
-                                    relocation.withCompletion(
-                                            new ZLinkAuthorityRelocation.Completion(
-                                                    progress.acceptedRequests(),
-                                                    record.entries().size(),
-                                                    record.pendingDeliveries(),
-                                                    stored.reference(),
-                                                    stored.sha256()));
-                            return writeRelocation(
-                                            key, expected, expected.payload(), next, cancellation)
-                                    .exceptionallyCompose(
-                                            failure ->
-                                                    confirmCompletionPublication(
-                                                            key,
-                                                            expected,
-                                                            next,
-                                                            storage,
-                                                            unwrap(failure),
-                                                            cancellation));
-                        });
-    }
-
-    public static void requireCompletionFits(
-            ZLinkRelocationCompletionRecordCodec.Record record,
-            List<ZLinkRelocationCompletionRecordCodec.Entry> remainingFailures) {
-        requireCompletionFits(record, remainingFailures, ZLinkRelocationCompletionBlob.MAX_BYTES);
-    }
-
-    static void requireCompletionFits(
-            ZLinkRelocationCompletionRecordCodec.Record record,
-            List<ZLinkRelocationCompletionRecordCodec.Entry> remainingFailures,
-            long maximumBytes) {
-        if (ZLinkRelocationCompletionRecordCodec.finalSize(record, remainingFailures)
-                > maximumBytes) {
-            throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                    "Final relocation completion record exceeds the Relocation Store limit.");
-        }
-    }
-
-    public CompletionStage<ZLinkRelocationCompletionRecordCodec.Record> readCompletion(
-            ZLinkAuthoritySnapshot authority,
-            ZLinkRelocationStore blobs,
-            ZLinkStoreCancellation cancellation) {
-        return readCompletion(authority, new ZLinkRelocationCompletionBlob(blobs), cancellation);
-    }
-
-    private static CompletionStage<ZLinkRelocationCompletionRecordCodec.Record> readCompletion(
-            ZLinkAuthoritySnapshot authority,
-            ZLinkRelocationCompletionBlob storage,
-            ZLinkStoreCancellation cancellation) {
-        var completion = requireCompletion(authority);
-        var relocation = authority.relocation();
-        String identity = relocation.relocationId().toString();
-        var read =
-                completion.reference() == null
-                        ? CompletableFuture.completedFuture(
-                                new ZLinkRelocationCompletionRecordCodec.Record(
-                                        identity, List.of()))
-                        : storage.read(
-                                completion.reference(),
-                                completion.sha256(),
-                                relocation.sourceInventorySha256(),
-                                completion.pendingDeliveries() != 0,
-                                cancellation);
-        return read.thenApply(
-                record -> {
-                    if (!identity.equals(record.relocationId())
-                            || record.entries().size() != completion.completedResults()
-                            || record.pendingDeliveries() != completion.pendingDeliveries()) {
-                        throw new RelocationDataLostException(
-                                "Completion payload differs from authority.");
-                    }
-                    return record;
-                });
-    }
-
-    private CompletionStage<ZLinkAuthoritySnapshot> confirmCompletionPublication(
-            String key,
-            ZLinkAuthoritySnapshot expected,
-            ZLinkAuthorityRelocation candidate,
-            ZLinkRelocationCompletionBlob storage,
-            Throwable failure,
-            ZLinkStoreCancellation cancellation) {
-        if (failure instanceof AuthorityConflictException conflict
-                && conflict.result() instanceof ZLinkAuthorityConflict rejected
-                && rejected.membershipFailure() == null
-                && rejected.current() instanceof ZLinkAuthoritySnapshot current
-                && !current.storeVersion().equals(expected.storeVersion())
-                && matchesCompletionAuthority(current, expected, candidate)
-                && !current.relocation().hasReached("completed")) {
-            return failed(new CompletionVersionConflictException(conflict));
-        }
-        if (failure instanceof AuthorityConflictException
-                || failure instanceof IllegalArgumentException
-                || failure instanceof java.util.concurrent.CancellationException
-                || (failure instanceof ZLinkFrameworkException framework
-                        && framework.kind() == ZLinkFrameworkErrorKind.DATA_LOST)
-                || failure instanceof Error
-                || cancellation.isCancellationRequested()) {
-            return failed(failure);
-        }
-        String reference = candidate.completion().reference();
-        return CompletableFuture.completedFuture(null)
-                .thenCompose(ignored -> authorityStore.read(key, cancellation))
-                .exceptionallyCompose(
-                        readFailure ->
-                                failed(
-                                        new CompletionPublicationUnknownException(
-                                                reference, failure, unwrap(readFailure))))
-                .thenCompose(
-                        read -> {
-                            if (read instanceof ZLinkAuthoritySnapshot observed
-                                    && matchesCompletionAuthority(observed, expected, candidate)
-                                    && reference.equals(
-                                            observed.relocation().completion().reference())) {
-                                return readCompletion(observed, storage, cancellation)
-                                        .thenApply(record -> observed);
-                            }
-                            return failed(failure);
-                        });
-    }
-
-    private static boolean matchesCompletionAuthority(
-            ZLinkAuthoritySnapshot observed,
-            ZLinkAuthoritySnapshot expected,
-            ZLinkAuthorityRelocation relocation) {
-        return observed.sameIncarnation(expected)
-                && observed.ownerLeaseGeneration() == expected.ownerLeaseGeneration()
-                && observed.relocation() != null
-                && observed.relocation().relocationId().equals(relocation.relocationId())
-                && observed.relocation().completion() != null;
-    }
-
-    public CompletionStage<Void> deleteCompletion(
-            ZLinkAuthoritySnapshot authority,
-            ZLinkRelocationStore blobs,
-            ZLinkStoreCancellation cancellation) {
-        String reference = requireCompletion(authority).reference();
-        return reference == null
-                ? CompletableFuture.completedFuture(null)
-                : new ZLinkRelocationCompletionBlob(blobs).delete(reference, cancellation);
-    }
-
-    private static void requireCompleted(ZLinkAuthoritySnapshot snapshot) {
-        var completion = requireCompletion(snapshot);
-        if (completion.acceptedRequests() != completion.completedResults()
-                || completion.pendingDeliveries() != 0) {
-            throw new RelocationDataLostException("Relocation completion has unfinished requests.");
-        }
-    }
-
-    private static ZLinkAuthorityRelocation.Completion requireCompletion(
-            ZLinkAuthoritySnapshot authority) {
-        var relocation = authority.relocation();
-        var completion = relocation == null ? null : relocation.completion();
-        if (completion == null) {
-            throw new RelocationDataLostException("Completion authority is missing.");
-        }
-        return completion;
-    }
-
     private CompletionStage<ZLinkAuthoritySnapshot> writePhase(
             String key,
             ZLinkAuthoritySnapshot snapshot,
@@ -961,12 +738,6 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                                         .hasReached(phase))
                                                             return CompletableFuture
                                                                     .completedFuture(null);
-                                                        if (phase.equals("completed")
-                                                                && snapshot.relocation()
-                                                                                .completion()
-                                                                        != null) {
-                                                            requireCompleted(snapshot);
-                                                        }
                                                         return writePhase(
                                                                         participant.authorityKey(),
                                                                         snapshot,
@@ -1050,6 +821,11 @@ public final class ZLinkAggregateRelocationCoordinator {
                         request.targetDescriptor().rid(),
                         request.targetDescriptorLifecycleGeneration(),
                         value.activationRecoveryState());
+    }
+
+    private static int compareUtf8(String left, String right) {
+        return Arrays.compareUnsigned(
+                left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
     }
 
     private CompletionStage<Prepared> prepareAuthority(
@@ -1164,12 +940,13 @@ public final class ZLinkAggregateRelocationCoordinator {
     }
 
     private CompletionStage<Published> commitAuthority(
-            Prepared prepared, List<Long> acceptedRequests, ZLinkStoreCancellation cancellation) {
+            Prepared prepared,
+            List<ZLinkRelocationReplyRow> acceptedReplies,
+            ZLinkStoreCancellation cancellation) {
         CompletionStage<ZLinkAggregateCommitResult> operation;
         try {
             operation =
-                    authorityStore.commitAggregate(
-                            prepared.fence(), acceptedRequests, cancellation);
+                    authorityStore.commitAggregate(prepared.fence(), acceptedReplies, cancellation);
         } catch (RuntimeException failure) {
             operation = failed(failure);
         }
@@ -1274,11 +1051,6 @@ public final class ZLinkAggregateRelocationCoordinator {
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException(impossible);
         }
-    }
-
-    private static int compareUtf8(String left, String right) {
-        return Arrays.compareUnsigned(
-                left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
     }
 
     private static Throwable unwrap(Throwable failure) {
@@ -1788,8 +1560,7 @@ public final class ZLinkAggregateRelocationCoordinator {
         return generation;
     }
 
-    public static sealed class AuthorityConflictException extends RuntimeException
-            permits CompletionVersionConflictException {
+    public static final class AuthorityConflictException extends RuntimeException {
         private final Object result;
 
         public AuthorityConflictException(Object result) {
@@ -1804,14 +1575,6 @@ public final class ZLinkAggregateRelocationCoordinator {
         }
     }
 
-    /** The same relocation is still current, but the completion CAS must be rebuilt. */
-    public static final class CompletionVersionConflictException
-            extends AuthorityConflictException {
-        private CompletionVersionConflictException(AuthorityConflictException conflict) {
-            super(conflict.result());
-        }
-    }
-
     public static final class RelocationDataLostException extends ZLinkFrameworkException {
         public RelocationDataLostException(String message) {
             this(message, null);
@@ -1819,21 +1582,6 @@ public final class ZLinkAggregateRelocationCoordinator {
 
         RelocationDataLostException(String message, Throwable cause) {
             super(ZLinkFrameworkErrorKind.DATA_LOST, message, cause);
-        }
-    }
-
-    public static final class CompletionPublicationUnknownException extends RuntimeException {
-        private final String reference;
-
-        CompletionPublicationUnknownException(
-                String reference, Throwable writeFailure, Throwable readFailure) {
-            super("Completion publication could not be read back.", readFailure);
-            this.reference = reference;
-            addSuppressed(writeFailure);
-        }
-
-        public String reference() {
-            return reference;
         }
     }
 

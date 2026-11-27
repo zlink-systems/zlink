@@ -13,7 +13,6 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.locations.*;
-import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode.PeerAuthorityFence;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
@@ -387,7 +386,6 @@ final class ZLinkTargetEarlyAdmissionTest {
                             TARGET,
                             17,
                             coordinator,
-                            new InMemoryRelocationStore(),
                             new ZLinkUserSpotAggregateStagingOwner(backend),
                             ignored -> TestSpot.class,
                             (lane, record) -> {
@@ -449,7 +447,7 @@ final class ZLinkTargetEarlyAdmissionTest {
                     .join();
             publication.complete(
                     coordinator
-                            .commit(prepared, Map.of(), () -> false)
+                            .commit(prepared, List.of(), () -> false)
                             .toCompletableFuture()
                             .join());
             committed.set(true);
