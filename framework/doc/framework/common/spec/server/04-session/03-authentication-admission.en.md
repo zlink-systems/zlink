@@ -278,7 +278,8 @@ Instance Spot default mesh), or the name of a STREAM registration with stage 2 o
   - Every node is set to the same value. The Spot uses the value of the node its incarnation runs on. A new incarnation starts at
     zero permits; nodes holding an earlier incarnation's permits treat them as returned after the report Response with the new
     epoch and don't count them again, so right after an incarnation change the limit can be exceeded briefly, by at most the
-    number of authentications running at the change.
+    number of permits that were executing or whose answer was in flight at the change (including a grant from the earlier
+    incarnation that arrives late).
 - The estimated wait `estimatedWaitMs` is `ceil(position × 1000 / r)`, where r is the number of tickets issued in the last
   30 seconds divided by 30 (per second). When r is 0, it's `position × 1000`. The result is clamped to 2^31 − 1.
   `position` is the 1-based position across the mesh.
