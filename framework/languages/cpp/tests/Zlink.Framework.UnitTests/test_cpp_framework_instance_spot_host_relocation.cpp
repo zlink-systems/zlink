@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/instance_spot_activation_messages.hpp"
 #include "../support/spot_host_relocation_fixture.hpp"
-#include "runtime/channels/channel_runtime.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/relocation_authority_payload.hpp"
+#include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include <zlink/framework.hpp>
 #include <gtest/gtest.h>
@@ -14,6 +15,8 @@ namespace
 {
 namespace fw = zlink::framework;
 namespace stateful = fw::runtime::stateful;
+namespace wire = fw::runtime::protocol;
+namespace messaging = fw::runtime::messaging;
 using namespace framework_instance_spot_activation_fixture;
 using namespace std::chrono_literals;
 
@@ -25,29 +28,6 @@ constexpr auto spot_id = "instance-alice";
 using fw::test::spot_host_relocation::host_t;
 using fw::test::spot_host_relocation::observe;
 using fw::test::spot_host_relocation::wait_budget;
-
-class retained_address_resolver_t final : public fw::runtime::spot_address_resolver_t
-{
-  public:
-    explicit retained_address_resolver_t (fw::runtime::spot_address_t address) :
-        _address (std::move (address))
-    {
-    }
-
-    fw::task_t<std::optional<fw::runtime::spot_address_t>>
-    resolve_spot_address (std::string, std::string id) override
-    {
-        if (id == _address.spot_id)
-            co_return _address;
-        co_return std::nullopt;
-    }
-
-    void invalidate_spot_address (std::string_view) override {}
-    void invalidate_all_routes_after_store_recovery () override {}
-
-  private:
-    const fw::runtime::spot_address_t _address;
-};
 
 class instance_t final : public fw::instance_spot_t
 {
@@ -197,8 +177,8 @@ TEST_F (InstanceSpotHostRelocation, MovesAnInstanceOnlyHost)
     const auto before = std::get<fw::authority_snapshot_t> (read_authority ());
     ASSERT_NO_FATAL_FAILURE (start_target ());
     auto services = target.app.advanced ().services ().build_provider ();
-    auto client = target.app.advanced ().zlink ().route_client (
-      services.get_required<fw::serializer_registry_t> ());
+    auto &serializers = services.get_required<fw::serializer_registry_t> ();
+    auto client = target.app.advanced ().zlink ().route_client (serializers);
     const auto read = [&] {
         return client.request_to_spot (spot_id, request_t{})
           .timeout (wait_budget)
@@ -209,10 +189,6 @@ TEST_F (InstanceSpotHostRelocation, MovesAnInstanceOnlyHost)
     const auto seeded = read ();
     ASSERT_TRUE (seeded) << (seeded.error () ? seeded.error ()->what () : "");
     ASSERT_EQ (seeded.value ().value, 7);
-    auto &resolver = services.get_required<fw::runtime::spot_address_resolver_t> ();
-    const auto source_address = resolver.resolve_spot_address (mesh_name, spot_id).result ();
-    ASSERT_TRUE (source_address && source_address.value ());
-    ASSERT_EQ (source_address.value ()->node_rid.to_string (), source_rid);
     ASSERT_NO_FATAL_FAILURE (relocate ());
 
     const auto after = std::get<fw::authority_snapshot_t> (read_authority ());
@@ -233,16 +209,63 @@ TEST_F (InstanceSpotHostRelocation, MovesAnInstanceOnlyHost)
     EXPECT_EQ (ready->node_generation, after.allocation.target.node_lifecycle_generation);
     EXPECT_EQ (restores.load (), 1u);
 
-    // The submitted messages keep their pre-relocation address even if the
-    // live resolver has already received the Store commit.
-    auto channels =
-      fw::detail::channel_runtime_t::from (target.app.advanced ().zlink ().message_bus ());
-    channels.bind_spot_address_resolver (
-      std::make_shared<retained_address_resolver_t> (*source_address.value ()));
-    ASSERT_TRUE (client.send_to_spot (spot_id, event_t{8}).async ().result ());
-    const auto received = read ();
-    ASSERT_TRUE (received) << (received.error () ? received.error ()->what () : "");
-    EXPECT_EQ (received.value ().value, 78);
+    // Submit against the captured fence to exercise packets that were already
+    // addressed to the previous owner when the Store changed.
+    const auto runtime =
+      fw::detail::spot_node_runtime_t::from (target.app.advanced ().zlink (), mesh_name);
+    ASSERT_TRUE (runtime);
+    const auto native = runtime->native_node ();
+    ASSERT_TRUE (native);
+    auto &transport = native->transport ();
+    const auto caller_spot = native->entry_spot ().spot_id ();
+    const auto old_rid = zlink::routing_id_t::from (source_rid).to_bytes ();
+    const wire::spot_route_fence_t old_fence{
+      spot_id,
+      before.object_generation,
+      old_rid,
+      before.allocation.target.node_lifecycle_generation,
+      before.authority_owner_generation,
+      static_cast<std::uint64_t> (before.owner.lease_generation)};
+    const messaging::client_call_codec_t codec;
+    const auto encode = [&]<typename T> (messaging::message_kind_t kind, const T &message) {
+        const auto envelope = codec.create_envelope (kind, mesh_name, T::packet_name, wait_budget);
+        return codec.encode_envelope_parts (envelope, message, serializers)
+          .take_application_payload ();
+    };
+    const auto sent =
+      transport
+        .send_to_spot_result (old_rid, caller_spot, old_fence,
+                              encode (messaging::message_kind_t::command, event_t{8}))
+        .result ();
+    ASSERT_TRUE (sent) << (sent.error () ? sent.error ()->what () : "");
+    ASSERT_EQ (sent.value (), zlink::submit_result_t::ok);
+
+    using terminal_t = fw::runtime::foundation::operation_terminal_t;
+    using response_t = std::pair<terminal_t, fw::result_t<zlink::message_t>>;
+    const auto response = std::make_shared<fw::task_completion_source_t<response_t>> ();
+    const auto submitted =
+      transport
+        .request_to_spot (old_rid, caller_spot, old_fence,
+                          encode (messaging::message_kind_t::request, request_t{}), wait_budget,
+                          [response] (terminal_t terminal, fw::result_t<zlink::message_t> payload) {
+                              response->complete (fw::result_t<response_t>::success (
+                                {terminal, std::move (payload)}));
+                          })
+        .result ();
+    ASSERT_TRUE (submitted && submitted.value ())
+      << (submitted.error () ? submitted.error ()->what () : "");
+    const auto received = response->task ().result_for (wait_budget);
+    ASSERT_TRUE (received && *received);
+    const auto &[terminal, payload] = received->value ();
+    ASSERT_EQ (terminal, terminal_t::completed);
+    ASSERT_TRUE (payload) << (payload.error () ? payload.error ()->what () : "");
+    const auto parts = wire::decode_application_parts (
+      wire::decode_application_payload (wire::message_bytes (payload.value ())));
+    const auto reply = codec.decode_envelope_reply<reply_t> (messaging::message_parts_t (parts),
+                                                             serializers, "Empty Spot reply",
+                                                             "Invalid Spot reply", "Spot request");
+    ASSERT_TRUE (reply) << (reply.error () ? reply.error ()->what () : "");
+    EXPECT_EQ (reply.value ().value, 78);
     const auto late_close = source_spot->context ().close ().result ();
     ASSERT_FALSE (late_close);
     EXPECT_EQ (late_close.error_kind (), fw::framework_error_kind_t::unavailable);
