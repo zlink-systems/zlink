@@ -16,11 +16,11 @@ type directSocket struct {
 
 func (s *directSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	if out == nil {
-		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return false, newRecvError(RecvInvalidHandle, int(C.EFAULT))
 	}
 	handle := s.raw()
 	if handle == nil {
-		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return false, newRecvError(RecvInvalidHandle, int(C.EFAULT))
 	}
 	reuse := out.beginReceive()
 	var sourceRID *C.zlink_routing_id_t

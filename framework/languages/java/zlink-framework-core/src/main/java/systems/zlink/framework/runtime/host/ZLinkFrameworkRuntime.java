@@ -2531,6 +2531,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (drainStarted.compareAndSet(false, true)) {
             try {
                 terminationDeadline.compareAndSet(null, Instant.now().plus(deadline));
+                if (spotRetire != null) spotRetire.onStopDeadline(terminationDeadline.get());
                 meshDrains.sealAll();
                 meshNodes
                         .nodesByName()

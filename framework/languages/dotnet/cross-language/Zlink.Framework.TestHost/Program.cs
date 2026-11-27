@@ -124,7 +124,11 @@ internal sealed class ChannelClientStartupRequestHostedService(
 /// today. A whole-node RelocateAsync() drain then moves it to the peer node,
 /// and a post-relocation probe confirms it answers on the new owner.
 /// </summary>
-internal sealed class RelocationActor(string actorId, IZLinkActorContext context) : IZLinkActor
+internal sealed class RelocationActor(
+    string actorId,
+    IZLinkActorContext context,
+    SealedJoinObservation? sealedJoin
+) : IZLinkActor
 {
     public string InstanceId { get; } = Guid.NewGuid().ToString("N");
     public int CreationCount { get; } = OutageActorObservations.Created(actorId);
@@ -132,16 +136,27 @@ internal sealed class RelocationActor(string actorId, IZLinkActorContext context
     public IZLinkActorContext Context { get; } = context;
     public byte[] ApplicationState { get; set; } = [];
     public int StateVersion { get; set; }
+
+    public ValueTask OnJoinCompletedAsync(
+        ZLinkActorJoinCompletion completion,
+        CancellationToken cancellationToken
+    )
+    {
+        if (completion is ZLinkActorJoinCompletion.Accepted accepted)
+            sealedJoin?.FailCompletion(ActorId, accepted.Actor.NodeRid.ToString());
+        return ValueTask.CompletedTask;
+    }
 }
 
-internal sealed class RelocationActorFactory : IZLinkActorFactory<RelocationActor>
+internal sealed class RelocationActorFactory(SealedJoinObservation? sealedJoin = null)
+    : IZLinkActorFactory<RelocationActor>
 {
     public ValueTask<RelocationActor> CreateAsync(
         IZLinkActorContext context,
         CancellationToken cancellationToken = default
     )
     {
-        return ValueTask.FromResult(new RelocationActor(context.ActorId, context));
+        return ValueTask.FromResult(new RelocationActor(context.ActorId, context, sealedJoin));
     }
 }
 
@@ -372,6 +387,7 @@ internal sealed class RelocationUserSpot(
     public void Configure()
     {
         Context.Handlers.AddHandler<UserSpotProbeHandler>();
+        Context.Handlers.AddHandler<UserSpotLateSendHandler>();
     }
 
     public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
@@ -452,6 +468,22 @@ internal sealed class UserSpotProbeHandler(TestHostEventSink sink)
     }
 }
 
+internal sealed class UserSpotLateSendHandler(TestHostEventSink sink)
+    : IZLinkSpotActorSendHandler<RelocationUserSpot, RelocationActor, UserSpotLateSend>
+{
+    public ValueTask HandleAsync(
+        RelocationUserSpot spot,
+        RelocationActor actor,
+        IZLinkMessageContext context,
+        UserSpotLateSend message,
+        CancellationToken cancellationToken
+    )
+    {
+        sink.Append($"late-actor-send-executed|actor={actor.ActorId}|marker={message.Marker}");
+        return ValueTask.CompletedTask;
+    }
+}
+
 internal sealed class UserSpotTargetHostedService(
     IZLinkFrameworkRuntime runtime,
     IZLinkSpotManager spots,
@@ -465,11 +497,16 @@ internal sealed class UserSpotTargetHostedService(
     string actorId,
     string meshName,
     string sourceNodeRid,
-    int placementWeight
+    int placementWeight,
+    SealedJoinObservation? sealedJoin,
+    TestHostMessageFlowListener? flow
 ) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // The flow listener is a lazily built singleton; taking it here makes
+        // it start listening before the first Join, and keeps it alive.
+        GC.KeepAlive(flow);
         var serving = false;
         await foreach (var observed in runtime.ObserveAsync(cancellationToken))
         {
@@ -514,7 +551,8 @@ internal sealed class UserSpotTargetHostedService(
             $"user-spot-created|spot={created.Spot.SpotId}|nodeRid={targetNodeRid}|state={created.State}"
         );
         _ = ObserveSourcePeerAsync(routes, routeMesh, cancellationToken);
-        _ = ProbeAsync(targetNodeRid, observer, cancellationToken);
+        if (sealedJoin is null)
+            _ = ProbeAsync(targetNodeRid, observer, cancellationToken);
     }
 
     private async Task ObserveSourcePeerAsync(

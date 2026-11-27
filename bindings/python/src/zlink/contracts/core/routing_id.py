@@ -69,10 +69,9 @@ class RoutingId:
     def __eq__(self, other):
         if isinstance(other, RoutingId):
             return self._raw == other._raw
-        try:
-            return self._raw == _validated_routing_id_bytes(other)
-        except Exception:
-            return False
+        if isinstance(other, (bytes, bytearray, memoryview)):
+            return self._raw == bytes(other)
+        return NotImplemented
 
     def __repr__(self):
         return f"RoutingId({self._raw!r})"

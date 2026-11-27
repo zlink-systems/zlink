@@ -1,10 +1,7 @@
 use std::any::Any;
 use std::os::fd::RawFd;
-use std::sync::Arc;
 
-use crate::SocketMonitor;
-use crate::error::{CloseError, ConfigError, RecvError, ZlinkError};
-use crate::internal::{PollerStorage, TimerStorage};
+use crate::internal::PollerStorage;
 
 pub(crate) mod private {
     pub(crate) trait Sealed {}
@@ -25,6 +22,9 @@ pub const POLLCOMPLETION: i16 = 32;
 /// Poll event flag: a ROUTER's selected route changed; read
 /// `RouterSocket::routes_snapshot`.
 pub const POLLROUTE: i16 = 64;
+/// Poll event flag: outbound connection attempts changed; read
+/// `connection_attempts_snapshot`.
+pub const POLLCONNECT: i16 = 128;
 
 /// A built-in socket source that can be registered with a [`Poller`].
 ///
@@ -99,138 +99,4 @@ pub struct PollItem {
 /// Poller for monitoring socket and monitor readiness, file descriptors, and timers.
 pub struct Poller {
     pub(crate) inner: Box<PollerStorage>,
-}
-
-impl Poller {
-    /// Creates an empty poller. The caller owns it and releases it on drop.
-    pub fn new() -> Result<Self, ConfigError> {
-        crate::poller::poller_new()
-    }
-
-    /// Destroys the poller. A native `EBUSY` leaves it available for a later close.
-    pub fn close(&mut self) -> Result<(), CloseError> {
-        self.inner.close()
-    }
-
-    /// Registers `socket` to be watched for `events`; `slot` is a caller token
-    /// echoed back in the matching [`PollEvent`].
-    ///
-    /// Register both [`POLLOUT`] and [`POLLCOMPLETION`] when this poller owns
-    /// progress for managed SEND admission or REQUEST admission/reply stages.
-    pub fn add_socket(
-        &self,
-        socket: &dyn Pollable,
-        events: i16,
-        slot: usize,
-    ) -> Result<(), ConfigError> {
-        self.inner.add_socket(socket, events, slot)
-    }
-
-    /// Modifies the event mask for a previously added socket.
-    ///
-    /// Adding or removing [`POLLCOMPLETION`] transfers the socket completion
-    /// drain owner atomically with the native registration change. Register
-    /// [`POLLOUT`] with it when this poller drives backpressured SEND or REQUEST
-    /// futures.
-    pub fn modify_socket(&self, socket: &dyn Pollable, events: i16) -> Result<(), ConfigError> {
-        self.inner.modify_socket(socket, events)
-    }
-
-    /// Remove a socket from the poller.
-    pub fn remove_socket(&self, socket: &dyn Pollable) -> Result<(), ConfigError> {
-        self.inner.remove_socket(socket)
-    }
-
-    /// Registers a socket monitor for readable events; `slot` is echoed back
-    /// in the matching [`PollEvent`]. Only [`POLLIN`] is valid for monitors.
-    pub fn add_monitor(
-        &self,
-        monitor: &SocketMonitor,
-        events: i16,
-        slot: usize,
-    ) -> Result<(), ConfigError> {
-        self.inner.add_monitor(monitor, events, slot)
-    }
-
-    /// Modifies a previously added socket monitor. Only [`POLLIN`] is valid.
-    pub fn modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError> {
-        self.inner.modify_monitor(monitor, events)
-    }
-
-    /// Removes a socket monitor from the poller.
-    pub fn remove_monitor(&self, monitor: &SocketMonitor) -> Result<(), ConfigError> {
-        self.inner.remove_monitor(monitor)
-    }
-
-    /// Registers raw file descriptor `fd` to be watched for `events`; `slot` is
-    /// echoed back in the matching [`PollEvent`].
-    pub fn add_fd(&self, fd: RawFd, events: i16, slot: usize) -> Result<(), ConfigError> {
-        self.inner.add_fd(fd, events, slot)
-    }
-
-    /// Changes the watched events for an already-registered file descriptor.
-    pub fn modify_fd(&self, fd: RawFd, events: i16) -> Result<(), ConfigError> {
-        self.inner.modify_fd(fd, events)
-    }
-
-    /// Unregisters file descriptor `fd`.
-    pub fn remove_fd(&self, fd: RawFd) -> Result<(), ConfigError> {
-        self.inner.remove_fd(fd)
-    }
-
-    /// Registers `timer`; its expirations surface as poll events tagged with
-    /// `slot`.
-    pub fn add_timer(&self, timer: &Timer, slot: usize) -> Result<(), ConfigError> {
-        self.inner.add_timer(timer, slot)
-    }
-
-    /// Unregisters `timer`.
-    pub fn remove_timer(&self, timer: &Timer) -> Result<(), ConfigError> {
-        self.inner.remove_timer(timer)
-    }
-
-    /// Waits up to `timeout_ms` milliseconds for sources to become ready,
-    /// writing up to `events.len()` results into `events`; a negative timeout
-    /// blocks indefinitely. Returns the number of ready sources written.
-    /// Before returning a socket's [`POLLOUT`] or [`POLLCOMPLETION`] event,
-    /// the owning poller pulls completion records through NO_DATA so matching
-    /// WRITABLE waiters can retry and admitted REQUEST waiters can receive
-    /// their reply or terminal result. Native wait failures retain Core's
-    /// configuration result; completion drain failures are receive errors.
-    pub fn wait(&self, events: &mut [PollEvent], timeout_ms: i64) -> Result<usize, ZlinkError> {
-        self.inner.wait(events, timeout_ms)
-    }
-
-    /// Returns the number of registered sources, or Core's configuration error.
-    pub fn size(&self) -> Result<i32, ConfigError> {
-        self.inner.size()
-    }
-}
-
-/// A timer that fires on an interval and can be polled or awaited.
-pub struct Timer {
-    pub(crate) inner: Arc<TimerStorage>,
-}
-
-impl Timer {
-    /// Creates a standalone timer. The caller owns it and releases it on drop.
-    pub fn new() -> Result<Self, ConfigError> {
-        crate::poller::timer_new()
-    }
-
-    /// Starts the timer firing once per `interval_ns` nanoseconds;
-    /// `repeat_count` sets how many times it fires.
-    pub fn start(&self, interval_ns: u64, repeat_count: u64) -> Result<(), ConfigError> {
-        self.inner.start(interval_ns, repeat_count)
-    }
-
-    /// Stops the timer; it can be restarted with [`start`](Self::start).
-    pub fn stop(&self) -> Result<(), ConfigError> {
-        self.inner.stop()
-    }
-
-    /// Receive a timer fire count. Returns `Ok(None)` when no data is available.
-    pub fn recv(&self) -> Result<Option<u64>, RecvError> {
-        self.inner.recv()
-    }
 }

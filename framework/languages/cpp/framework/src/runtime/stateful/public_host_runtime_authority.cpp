@@ -505,7 +505,8 @@ public_host_runtime_t::accept_committed_actor_request (
       [&] () -> std::optional<stateful::relocation_restore_identity_t> {
           for (const auto &[key, attempt] : _relocation_target_attempts) {
               const auto &target = attempt.prepare.target;
-              if (!staged_owner || !attempt.cutover_received || relocation_target_terminal (attempt)
+              if (!staged_owner || attempt.phase == relocation_target_phase_t::waiting_cutover
+                  || relocation_target_terminal (attempt)
                   || target.target_node_routing_id != query.target_node_routing_id
                   || target.target_node_generation != query.target_node_generation
                   || target.target_owner_id != staged_owner->owner_id
@@ -3034,7 +3035,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
                         || found->second.prepare.source_node_generation
                              != mailbox_record.source_node_generation
                         || _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
-                        || found->second.cutover_received) {
+                        || found->second.phase != relocation_target_phase_t::waiting_cutover) {
                         /* Late or duplicate cutover (28 §4.4): the
                            * boundary already resolved and is never
                            * re-verified or changed. */
@@ -3057,7 +3058,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
                         matches = accumulator.value () == cutover->boundary_checksum_crc32c;
                     }
                     if (matches) {
-                        found->second.cutover_received = true;
+                        found->second.phase = relocation_target_phase_t::cutover_received;
                         lower_relocation_next_due_on_lane (relocation_due_now);
                         verified.emplace (std::make_move_iterator (
                                             batch.end () - static_cast<std::ptrdiff_t> (count)),

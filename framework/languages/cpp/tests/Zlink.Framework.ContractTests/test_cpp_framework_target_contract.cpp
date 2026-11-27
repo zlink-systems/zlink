@@ -139,9 +139,11 @@ int main ()
     const auto authority_key_codec =
       read_text_file (root / "framework/src/runtime/locations/authority_key_codec.hpp");
     const auto in_memory_location_store =
-      read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp");
+      read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp")
+      + read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.cpp");
     const auto provider_location_repository =
-      read_text_file (root / "framework/src/runtime/locations/provider_location_repository.hpp");
+      read_text_file (root / "framework/src/runtime/locations/provider_location_repository.hpp")
+      + read_text_file (root / "framework/src/runtime/locations/provider_location_repository.cpp");
     const auto public_store_adapters =
       read_text_file (root / "framework/src/runtime/stateful/public_store_adapters.hpp");
     const auto actor_client =
@@ -165,7 +167,17 @@ int main ()
     const auto actor_transfer_coordinator =
       read_text_file (root / "framework/src/runtime/spots/actor_transfer_coordinator.cpp");
     const auto mesh_node_host_service =
-      read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
+      read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp")
+      + read_text_file (root
+                        / "framework/src/runtime/mesh/mesh_node_host_actor_creation_completion.cpp")
+      + read_text_file (root
+                        / "framework/src/runtime/mesh/mesh_node_host_actor_creation_target.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_actor_lifecycle.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_descriptors.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_dispatch.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_operations.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_placement.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_user_spot.cpp");
     const auto framework_message =
       read_text_file (include_root / "zlink/framework/contracts/messaging/message.hpp");
     const auto serializer_header =

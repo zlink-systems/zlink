@@ -77,16 +77,16 @@
         "internal/native/socket_misc_helpers.go:42-60"
       ],
       "reason": "Core writes option values into caller-provided scratch storage; returned strings and message values acquire Go ownership at the public boundary.",
-      "guardTest": "TestOptionRoundTrips"
+      "guardTest": "TestCommonTypedOptions"
     },
     {
-      "id": "completion-owner-worker",
+      "id": "completion-owner-queue",
       "classification": "required",
       "sources": [
-        "internal/native/completion_owner.go:321-505"
+        "internal/native/completion_owner.go:331-913"
       ],
-      "reason": "One scheduler-yielding event-loop pump per active socket owns WRITABLE and REQUEST completion progress until a public poller atomically takes ownership.",
-      "guardTest": "TestPollerCompletionOwnsRequestProgressAndTransfersBack"
+      "reason": "Each socket keeps a completion entry table and early-WRITABLE records; progress is drained by the PollCompletion poller owner, and no binding-runtime goroutine drains the queue.",
+      "guardTest": "TestPollerCompletionOwnsRequestProgressAndReleaseRemovesOwner"
     },
     {
       "id": "cgo-package-runtime-rpath",
@@ -95,7 +95,7 @@
         "internal/native/ffi.go:5-10"
       ],
       "reason": "The package must link and load the runtime shipped beside the module, including in a clean consumer without repository paths.",
-      "guardTest": "build-wsl.sh clean consumer ldd check"
+      "guardTest": "TestCgoPackageRuntimeRpathIsDeclared"
     }
   ]
 }

@@ -305,7 +305,8 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                 ZLinkDispatchErrorReason.STALE_TARGET,
                                 context.spotId(),
                                 headerPart.actor().actorId(),
-                                headerPart.sourceNodeRid());
+                                headerPart.sourceNodeRid(),
+                                null);
                         if (packetHeader.requestSeq().isPresent()) {
                             ZLinkBackendActorReceived headerCopy =
                                     pendingHeader ? headerPart : host.copyActorReceived(headerPart);

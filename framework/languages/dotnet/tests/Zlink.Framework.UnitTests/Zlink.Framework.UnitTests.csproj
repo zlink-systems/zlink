@@ -93,6 +93,7 @@
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberOwnershipTests.cs"/>
+        <Compile Include="Runtime/SpotWideMemberReplayFailureTests.cs"/>
         <Compile Include="Runtime/SpotWideTargetAdmissionTests.cs"/>
         <Compile Include="Runtime/SpotWideTargetSpotAdmissionTests.cs"/>
         <Compile Include="Runtime/SpotWideFindReadinessTests.cs"/>
@@ -355,6 +356,9 @@
         <Compile Include="Runtime/AuditRuntimeFailureReporter.cs"/>
         <Compile Include="Runtime/ActorMembershipOwnershipTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>
+        <Compile Include="Runtime/RelocationBehaviorConformanceTests.ActorPreflight.cs"/>
+        <Compile Include="Runtime/RelocationBehaviorConformanceTests.SpotPreflight.cs"/>
+        <Compile Include="Runtime/RelocationBehaviorConformanceTests.JoinPublication.cs"/>
         <Compile Include="Runtime/RelocationSourceRestoreTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTestRestoration.cs"/>
         <Compile Include="Runtime/RouteChangeProxy.cs"/>

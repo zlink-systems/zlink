@@ -1,4 +1,4 @@
-use crate::routing_id::RoutingId;
+use crate::contracts::core::routing_id::RoutingId;
 
 /// A subscriber's subscribe or unsubscribe as observed by an XPUB socket.
 pub struct SubscriptionEvent {
