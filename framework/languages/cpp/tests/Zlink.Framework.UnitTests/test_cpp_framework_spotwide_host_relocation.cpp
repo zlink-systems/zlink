@@ -240,8 +240,7 @@ TEST (SpotRequestAdmission, NewHostRequestsExistingSpotImmediatelyAfterReady)
     };
     host_t owner, requester;
     configure (owner, "first-request-owner");
-    owner.start ("spotwide-relocation");
-    ASSERT_TRUE (observe ([&] { return owner.app.is_ready (); }));
+    ASSERT_TRUE (owner.start ("spotwide-relocation"));
     auto owner_services = owner.app.advanced ().services ().build_provider ();
     const auto created = owner_services.get_required<fw::spot_manager_t> ()
                            .get_or_create (fw::spot_id_t (room_id), room_type)
@@ -251,8 +250,7 @@ TEST (SpotRequestAdmission, NewHostRequestsExistingSpotImmediatelyAfterReady)
     ASSERT_EQ (created.value ().state, fw::spot_create_state_t::created);
 
     configure (requester, "first-request-caller");
-    requester.start ("spotwide-relocation");
-    ASSERT_TRUE (observe ([&] { return requester.app.is_ready (); }));
+    ASSERT_TRUE (requester.start ("spotwide-relocation"));
     auto services = requester.app.advanced ().services ().build_provider ();
     const auto existing = services.get_required<fw::spot_manager_t> ()
                             .get_or_create (fw::spot_id_t (room_id), room_type)
@@ -307,8 +305,7 @@ TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregat
         };
         host_t source, target;
         configure (source, source_rid);
-        source.start ("spotwide-relocation");
-        ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+        ASSERT_TRUE (source.start ("spotwide-relocation"));
         auto services = source.app.advanced ().services ().build_provider ();
         ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
                        .get_or_create (fw::spot_id_t (room_id), room_type)
@@ -328,8 +325,7 @@ TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregat
               joins.changed.wait_for (lock, wait_budget, [&] { return joins.accepted == 1; }));
         }
         configure (target, target_rid);
-        target.start ("spotwide-relocation");
-        ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+        ASSERT_TRUE (target.start ("spotwide-relocation"));
         auto &repository = services.get_required<fw::location_repository_t> ();
         const auto spot = std::get<fw::authority_snapshot_t> (
           repository.read_authority (fw::runtime::spot_authority_key (room_id)).result ().value ());
@@ -448,8 +444,7 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
     };
     host_t source, target;
     configure (source, source_rid);
-    source.start ("spotwide-relocation");
-    ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+    ASSERT_TRUE (source.start ("spotwide-relocation"));
     auto services = source.app.advanced ().services ().build_provider ();
     repository = &services.get_required<fw::location_repository_t> ();
     auto &actors = services.get_required<fw::actor_manager_t> ();
@@ -478,8 +473,7 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
         ASSERT_EQ (before.value ().node, source_rid);
     }
     configure (target, target_rid);
-    target.start ("spotwide-relocation");
-    ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+    ASSERT_TRUE (target.start ("spotwide-relocation"));
     auto &routes = services.get_required<fw::route_mesh_runtime_t> ();
     ASSERT_TRUE (observe ([&] { return routes.snapshot (mesh_name).ready_peer_count == 1; }));
     const auto moved =
@@ -537,8 +531,7 @@ TEST (SpotWideHostRelocation, GetOrCreateReturnsExistingRelocationTarget)
     };
     host_t source, target;
     configure (source, source_rid);
-    source.start ("spotwide-relocation");
-    ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+    ASSERT_TRUE (source.start ("spotwide-relocation"));
     auto services = source.app.advanced ().services ().build_provider ();
     const auto created = services.get_required<fw::spot_manager_t> ()
                            .get_or_create (fw::spot_id_t (room_id), room_type)
@@ -548,8 +541,7 @@ TEST (SpotWideHostRelocation, GetOrCreateReturnsExistingRelocationTarget)
     ASSERT_EQ (created.value ().state, fw::spot_create_state_t::created);
     ASSERT_EQ (created.value ().spot.node_rid ().value (), source_rid);
     configure (target, target_rid);
-    target.start ("spotwide-relocation");
-    ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+    ASSERT_TRUE (target.start ("spotwide-relocation"));
     ASSERT_TRUE (observe ([&] {
         return services.get_required<fw::route_mesh_runtime_t> ()
                  .snapshot (mesh_name)
@@ -650,8 +642,7 @@ TEST (SpotWideHostRelocation, AbortRunsAcceptedSpotPrefixWithoutNewIngress)
         }
     } release_capture{release};
     configure (source, "abort-source");
-    source.start ("spotwide-relocation");
-    ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+    ASSERT_TRUE (source.start ("spotwide-relocation"));
     auto services = source.app.advanced ().services ().build_provider ();
     const auto created = services.get_required<fw::spot_manager_t> ()
                            .get_or_create (fw::spot_id_t (room_id), room_type)
@@ -660,8 +651,7 @@ TEST (SpotWideHostRelocation, AbortRunsAcceptedSpotPrefixWithoutNewIngress)
     ASSERT_TRUE (created);
     ASSERT_EQ (created.value ().spot.node_rid ().value (), "abort-source");
     configure (target, "abort-target");
-    target.start ("spotwide-relocation");
-    ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+    ASSERT_TRUE (target.start ("spotwide-relocation"));
     ASSERT_TRUE (observe ([&] {
         return services.get_required<fw::route_mesh_runtime_t> ()
                  .snapshot (mesh_name)

@@ -115,8 +115,7 @@ class InstanceSpotHostRelocation : public ::testing::Test
     void start_source ()
     {
         configure (source, source_rid);
-        source.start ();
-        ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+        ASSERT_TRUE (source.start ());
         auto services = source.app.advanced ().services ().build_provider ();
         auto client = source.app.advanced ().zlink ().route_client (
           services.get_required<fw::serializer_registry_t> ());
@@ -133,8 +132,7 @@ class InstanceSpotHostRelocation : public ::testing::Test
     void start_target ()
     {
         configure (target, target_rid);
-        target.start ();
-        ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+        ASSERT_TRUE (target.start ());
         auto services = source.app.advanced ().services ().build_provider ();
         auto &routes = services.get_required<fw::route_mesh_runtime_t> ();
         ASSERT_TRUE (observe ([&] { return routes.snapshot (mesh_name).ready_peer_count == 1; }));

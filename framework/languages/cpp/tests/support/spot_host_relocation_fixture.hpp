@@ -1,10 +1,14 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
-#include <zlink/framework/contracts/configuration/app.hpp>
+#include "host_lifecycle_ready_probe.hpp"
+#include "host_lifecycle_wait.hpp"
 #include <chrono>
+#include <functional>
+#include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace zlink::framework::test::spot_host_relocation
 {
@@ -20,8 +24,11 @@ class host_t
             _worker.join ();
     }
 
-    void start (std::string program = {})
+    bool start (std::string program = {})
     {
+        auto readiness = std::make_unique<host_lifecycle::ready_host_probe_t> ();
+        auto &probe = *readiness;
+        app.add_hosted_service (std::move (readiness));
         _worker = std::thread ([this, program = std::move (program)] () mutable {
             if (program.empty ()) {
                 app.run (0, nullptr);
@@ -30,6 +37,7 @@ class host_t
             char *argv[]{program.data (), nullptr};
             app.run (1, argv);
         });
+        return probe.wait_ready (wait_budget);
     }
 
     app_t app = app_t::create ();
@@ -38,11 +46,8 @@ class host_t
     std::thread _worker;
 };
 
-template <class Predicate> bool observe (Predicate predicate)
+inline bool observe (const std::function<bool ()> &predicate)
 {
-    const auto deadline = std::chrono::steady_clock::now () + wait_budget;
-    while (!predicate () && std::chrono::steady_clock::now () < deadline)
-        std::this_thread::yield ();
-    return predicate ();
+    return host_lifecycle::wait_until (predicate, wait_budget);
 }
 } // namespace zlink::framework::test::spot_host_relocation
