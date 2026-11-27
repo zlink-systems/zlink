@@ -225,6 +225,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/mesh/service_liveness_registry.cpp
   framework/src/runtime/mesh/service_mailbox.cpp
   framework/src/runtime/mesh/service_topology_registry.cpp
+  framework/src/runtime/locations/location_store_format.cpp
   framework/src/runtime/locations/service_descriptor_registry.cpp
   framework/src/runtime/fanout/raw_fanout_owner.cpp
   framework/src/runtime/fanout/fanout_subscription.cpp
@@ -2969,6 +2970,67 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       --gtest_filter=*CreationTerminal*
     LABELS "framework-unit;framework-regression"
     TIMEOUT 30)
+
+  add_executable(test_cpp_framework_location_store_format
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_store_format.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_store_legacy_aggregate.cpp)
+  target_compile_features(test_cpp_framework_location_store_format PRIVATE cxx_std_20)
+  target_link_zlink_test_harness(test_cpp_framework_location_store_format)
+  target_use_zlink_gtest_main(test_cpp_framework_location_store_format)
+  target_link_libraries(test_cpp_framework_location_store_format PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_location_store_format PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_location_store_format PRIVATE
+    ZLINK_LOCATION_CONTENTION_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/location-contention-v1.json")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_store_format
+    COMMAND test_cpp_framework_location_store_format
+    LABELS "framework-unit;framework-location"
+    TIMEOUT 60)
+
+  add_executable(test_cpp_framework_location_aggregate_abort
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_aggregate_abort.cpp)
+  target_compile_features(test_cpp_framework_location_aggregate_abort PRIVATE cxx_std_20)
+  target_link_zlink_test_harness(test_cpp_framework_location_aggregate_abort)
+  target_use_zlink_gtest_main(test_cpp_framework_location_aggregate_abort)
+  target_link_libraries(test_cpp_framework_location_aggregate_abort PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_location_aggregate_abort PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_aggregate_abort
+    COMMAND test_cpp_framework_location_aggregate_abort
+    LABELS "framework-unit;framework-location"
+    TIMEOUT 60)
+
+  add_executable(test_cpp_framework_location_contention
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_contention.cpp)
+  target_compile_features(test_cpp_framework_location_contention PRIVATE cxx_std_20)
+  target_link_zlink_test_harness(test_cpp_framework_location_contention)
+  target_use_zlink_gtest_main(test_cpp_framework_location_contention)
+  target_link_libraries(test_cpp_framework_location_contention PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_location_contention PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_location_contention PRIVATE
+    ZLINK_LOCATION_CONTENTION_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/location-contention-v1.json")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_contention
+    COMMAND test_cpp_framework_location_contention --gtest_filter=InMemory/*
+    LABELS "framework-unit;framework-location"
+    TIMEOUT 180)
+  if(_zlink_framework_redis_target)
+    target_link_libraries(test_cpp_framework_location_contention PRIVATE zlink::framework_locations_redis)
+    target_compile_definitions(test_cpp_framework_location_contention PRIVATE
+      ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_location_contention_redis
+      COMMAND test_cpp_framework_location_contention --gtest_filter=Redis/*
+      LABELS "framework-extension;framework-location;redis"
+      TIER integration
+      TIMEOUT 180)
+  endif()
 
   add_executable(test_cpp_framework_discarded_authority
     tests/Zlink.Framework.UnitTests/test_cpp_framework_discarded_authority.cpp
