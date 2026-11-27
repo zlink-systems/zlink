@@ -145,6 +145,20 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             var payload = current.Canonical is { } canonical
                 ? canonical.SteadyAuthorityPayload
                 : LegacySteadyPayload(current.Authority.Payload, current.Phase);
+            var key = identity.Participants.Single().AuthorityKey;
+            var authority = current.Authority;
+            var relocation = authority.Relocation;
+            if (relocation is { Completion: not null })
+            {
+                var completion = new ZLinkRelocationCompletionStore(
+                    authorityStore,
+                    relocationStore
+                );
+                await completion.ReadAsync(relocation, cancellationToken).ConfigureAwait(false);
+                authority = await completion
+                    .MarkCompletedAsync(key, authority, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             // Direct transfer (spec 52 §3.1.7) carries the immutable root on
             // command 52 rather than through the Relocation Store.  Its
             // canonical authority has no tree pointer to load or delete.
@@ -156,21 +170,6 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                 )
             )
             {
-                var key = identity.Participants.Single().AuthorityKey;
-                var authority = current.Authority;
-                var relocation = authority.Relocation;
-                if (relocation is { Completion: not null })
-                {
-                    var completion = new ZLinkRelocationCompletionStore(
-                        authorityStore,
-                        relocationStore
-                    );
-                    await completion.ReadAsync(relocation, cancellationToken).ConfigureAwait(false);
-                    authority = await completion
-                        .MarkCompletedAsync(key, authority, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-
                 ZLinkAuthorityCompareExchangeResult direct;
                 try
                 {
@@ -248,20 +247,25 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                 current.Canonical?.RelocationReference ?? publication.Reference;
             var exchanged = await authorityStore
                 .CompareExchangeAuthorityAsync(
-                    identity.Participants.Single().AuthorityKey,
-                    current.Authority.StoreVersion,
+                    key,
+                    authority.StoreVersion,
                     new ZLinkAuthorityMutation.Put(
                         payload,
                         ZLinkAuthorityGenerationTransition.Preserve,
                         null,
                         null
-                    ),
+                    )
+                    {
+                        ClearRelocation = true,
+                    },
                     cancellationToken
                 )
                 .ConfigureAwait(false);
             if (exchanged is ZLinkAuthorityCompareExchangeResult.Stored stored)
             {
                 await ReleaseUnreferencedRootAsync(relocationReference).ConfigureAwait(false);
+                await ReleaseUnreferencedRootAsync(relocation?.Completion?.Reference)
+                    .ConfigureAwait(false);
                 return stored.Snapshot;
             }
             if (exchanged is not ZLinkAuthorityCompareExchangeResult.Conflict)

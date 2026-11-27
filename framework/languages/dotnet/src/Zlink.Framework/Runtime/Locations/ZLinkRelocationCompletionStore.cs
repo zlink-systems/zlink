@@ -56,13 +56,11 @@ internal sealed class ZLinkRelocationCompletionStore(
             throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, blocker);
     }
 
-    internal async ValueTask<ZLinkRelocationCompletionRecord> ReadAsync(
-        ZLinkAuthorityRelocation relocation,
-        CancellationToken cancellationToken,
-        bool renew = false
+    internal static ZLinkRelocationCompletionProgress RequireProgress(
+        ZLinkAuthorityRelocation? relocation
     )
     {
-        var progress = relocation.Completion ?? throw DataLost("Completion authority is missing.");
+        var progress = relocation?.Completion ?? throw DataLost("Completion authority is missing.");
         if (
             progress.CompletedResults > progress.AcceptedRequests
             || progress.PendingDeliveries > progress.CompletedResults
@@ -70,6 +68,27 @@ internal sealed class ZLinkRelocationCompletionStore(
             || (progress.Reference is null) != (progress.Sha256 is null)
         )
             throw DataLost("Completion authority reference or counts disagree.");
+        return progress;
+    }
+
+    internal static ZLinkRelocationCompletionProgress RequireAcceptedRequests(
+        ZLinkAuthorityRelocation relocation,
+        ulong acceptedRequests
+    )
+    {
+        var progress = RequireProgress(relocation);
+        if (progress.AcceptedRequests != acceptedRequests)
+            throw DataLost("Relocation completion reservation differs from accepted requests.");
+        return progress;
+    }
+
+    internal async ValueTask<ZLinkRelocationCompletionRecord> ReadAsync(
+        ZLinkAuthorityRelocation relocation,
+        CancellationToken cancellationToken,
+        bool renew = false
+    )
+    {
+        var progress = RequireProgress(relocation);
         if (progress.Reference is null)
             return new(relocation.RelocationId, []);
 
@@ -110,6 +129,52 @@ internal sealed class ZLinkRelocationCompletionStore(
             ZLinkRelocationCompletionDelivery.Pending,
             cancellationToken
         );
+
+    internal async Task PublishReplayResultsAsync(
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot current,
+        IAsyncEnumerable<ZLinkRelocationCompletionEntry> results,
+        Func<
+            ZLinkAuthoritySnapshot,
+            ZLinkRelocationCompletionEntry,
+            CancellationToken,
+            ValueTask<ZLinkRelocationCompletionDelivery>
+        > deliver,
+        CancellationToken cancellationToken
+    )
+    {
+        // A single reader appends in replay order. Each delivery waits for its
+        // CAS, and later appends can proceed while a reply waits for its source.
+        var deliveries = new List<Task>();
+        try
+        {
+            await foreach (
+                var entry in results.WithCancellation(cancellationToken).ConfigureAwait(false)
+            )
+            {
+                ZLinkRelocationCompletionEntry stored;
+                (current, stored) = await AppendAsync(key, current, entry, cancellationToken)
+                    .ConfigureAwait(false);
+                if (stored.Delivery == ZLinkRelocationCompletionDelivery.Pending)
+                    deliveries.Add(DeliverAndAcknowledgeAsync(current, stored));
+            }
+        }
+        finally
+        {
+            await Task.WhenAll(deliveries).ConfigureAwait(false);
+        }
+
+        async Task DeliverAndAcknowledgeAsync(
+            ZLinkAuthoritySnapshot published,
+            ZLinkRelocationCompletionEntry entry
+        )
+        {
+            var acknowledged = await deliver(published, entry, cancellationToken)
+                .ConfigureAwait(false);
+            await AcknowledgeAsync(key, published, entry, acknowledged, cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
 
     internal async ValueTask<ZLinkAuthoritySnapshot> AcknowledgeAsync(
         ZLinkAuthorityKey key,
@@ -159,7 +224,7 @@ internal sealed class ZLinkRelocationCompletionStore(
 
     internal static void RequireCompleted(ZLinkAuthorityRelocation relocation)
     {
-        if (relocation.Completion is not { IsReady: true })
+        if (!RequireProgress(relocation).IsReady)
             throw DataLost("Relocation still has incomplete requests or pending delivery.");
     }
 
@@ -251,7 +316,8 @@ internal sealed class ZLinkRelocationCompletionStore(
                 expected = await ReadCurrentAsync(key, expected, cancellationToken)
                     .ConfigureAwait(false);
             }
-            catch (Exception error) when (IsStoreUnavailable(error, cancellationToken))
+            catch (Exception error)
+                when (ZLinkLocationStoreFailure.IsUnavailable(error, cancellationToken))
             {
                 await RetainIfPendingAsync(expected.Relocation!, cancellationToken)
                     .ConfigureAwait(false);
@@ -344,10 +410,7 @@ internal sealed class ZLinkRelocationCompletionStore(
                 throw DataLost("Relocation completion has no matching accepted request.");
             if (budget is not null)
             {
-                if (progress.AcceptedRequests != budget.AcceptedRequests)
-                    throw DataLost(
-                        "Relocation completion reservation differs from accepted requests."
-                    );
+                RequireAcceptedRequests(relocation, budget.AcceptedRequests);
                 entry = budget.SelectReply(entries, entry);
             }
             var successor = entries.FindIndex(value =>
@@ -414,7 +477,7 @@ internal sealed class ZLinkRelocationCompletionStore(
                         break;
                     }
                     catch (Exception readError)
-                        when (IsStoreUnavailable(readError, cancellationToken))
+                        when (ZLinkLocationStoreFailure.IsUnavailable(readError, cancellationToken))
                     {
                         await RetainIfPendingAsync(relocation, cancellationToken)
                             .ConfigureAwait(false);
@@ -435,19 +498,6 @@ internal sealed class ZLinkRelocationCompletionStore(
         }
     }
 
-    internal static bool IsStoreUnavailable(Exception error, CancellationToken token) =>
-        !token.IsCancellationRequested
-        && error is not ZLinkRelocationDataLostException
-        && error
-            is IOException
-                or TimeoutException
-                or ZLinkFrameworkException
-                {
-                    Kind: ZLinkFrameworkErrorKind.Unavailable
-                        or ZLinkFrameworkErrorKind.Rejected
-                        or ZLinkFrameworkErrorKind.DeadlineExceeded,
-                };
-
     internal async ValueTask RetainIfPendingAsync(
         ZLinkAuthorityRelocation relocation,
         CancellationToken cancellationToken
@@ -461,7 +511,7 @@ internal sealed class ZLinkRelocationCompletionStore(
         }
         catch (Exception error)
             when (error is ZLinkRelocationDataLostException
-                || IsStoreUnavailable(error, cancellationToken)
+                || ZLinkLocationStoreFailure.IsUnavailable(error, cancellationToken)
             )
         {
             // A reference from an uncertain or superseded CAS does not establish data loss.

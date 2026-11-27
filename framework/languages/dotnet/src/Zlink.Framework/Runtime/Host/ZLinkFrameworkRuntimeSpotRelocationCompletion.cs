@@ -16,9 +16,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             var requests = jobs.Where(static job =>
                 job.CanonicalRequest is { ReplyRouteId: not 0 }
             );
-            if (!requests.Any())
-                continue;
-
             var coordinator = new ZLinkServiceWireCodec.RelocationCoordinatorFence(
                 owner.OwnerId,
                 checked((ulong)owner.LeaseGeneration),
@@ -123,7 +120,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     .ConfigureAwait(false);
             }
             catch (Exception error)
-                when (ZLinkRelocationCompletionStore.IsStoreUnavailable(error, cancellationToken))
+                when (ZLinkLocationStoreFailure.IsUnavailable(error, cancellationToken))
             {
                 await store
                     .RetainIfPendingAsync(expected.Relocation!, cancellationToken)
@@ -131,15 +128,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                 throw;
             }
             completion.LastObserved = current;
-            var progress =
-                current.Relocation!.Completion
-                ?? throw new ZLinkRelocationDataLostException(
-                    "Aggregate completion progress is missing."
-                );
-            if (progress.AcceptedRequests != completion.Budget.AcceptedRequests)
-                throw new ZLinkRelocationDataLostException(
-                    "Aggregate completion count differs from commit."
-                );
+            var progress = ZLinkRelocationCompletionStore.RequireAcceptedRequests(
+                current.Relocation!,
+                completion.Budget.AcceptedRequests
+            );
             if (progress.CompletedResults != progress.AcceptedRequests)
             {
                 if ((ulong)completion.Results.Count != progress.AcceptedRequests)

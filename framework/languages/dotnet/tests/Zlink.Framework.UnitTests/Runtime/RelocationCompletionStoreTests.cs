@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Contracts.Locations;
@@ -79,6 +80,50 @@ public sealed class RelocationCompletionStoreTests
             stored.Entries[0].Delivery
         );
         Assert.Equal(ZLinkRelocationCompletionDelivery.AlreadyTerminal, stored.Entries[1].Delivery);
+    }
+
+    [Fact]
+    public async Task Replay_appends_the_next_result_while_the_first_delivery_waits()
+    {
+        var authority = new AuthorityStore();
+        var store = new ZLinkRelocationCompletionStore(authority, new InMemoryRelocationStore());
+        using var shutdown = new CancellationTokenSource();
+        var sourceAcknowledged = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondPublished = new TaskCompletionSource<ZLinkAuthoritySnapshot>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var results = Channel.CreateUnbounded<ZLinkRelocationCompletionEntry>();
+        Assert.True(results.Writer.TryWrite(First));
+        Assert.True(results.Writer.TryWrite(Second));
+        results.Writer.Complete();
+        var publication = store.PublishReplayResultsAsync(
+            Key,
+            authority.Snapshot,
+            results.Reader.ReadAllAsync(),
+            async (snapshot, entry, token) =>
+            {
+                if (entry == Second)
+                    secondPublished.SetResult(snapshot);
+                await sourceAcknowledged.Task.WaitAsync(token);
+                return ZLinkRelocationCompletionDelivery.TerminalReceived;
+            },
+            shutdown.Token
+        );
+        try
+        {
+            var observed = await secondPublished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var record = await store.ReadAsync(observed.Relocation!, default);
+            Assert.Equal(new[] { First, Second }, record.Entries);
+            Assert.Equal(2, record.PendingDeliveries);
+            Assert.False(publication.IsCompleted);
+        }
+        finally
+        {
+            shutdown.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => publication);
+        }
     }
 
     [Fact]
@@ -290,8 +335,10 @@ public sealed class RelocationCompletionStoreTests
             [fallback, Second],
             bound - 1
         );
-        var error = Assert.Throws<ZLinkFrameworkException>(rejected.EnsureFitsBeforeCommit);
-        Assert.Equal(ZLinkFrameworkErrorKind.InternalFailure, error.Kind);
+        var error = Assert.Throws<ZLinkRelocationCompletionReservationException>(
+            rejected.EnsureFitsBeforeCommit
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.InternalFailure, error.ToFrameworkException().Kind);
         var budget = new ZLinkRelocationCompletionBudget(
             relocationId,
             [fallback, Second],

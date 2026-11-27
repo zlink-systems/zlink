@@ -1018,14 +1018,13 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             catch (Exception error)
                 when (error
                         is ZLinkRelocationTargetSettledException
-                            or ZLinkFrameworkException
-                            {
-                                Kind: ZLinkFrameworkErrorKind.InternalFailure
-                            }
+                            or ZLinkRelocationCompletionReservationException
                 )
             {
                 _ = await DiscardUnpublishedStageAsync(fence, stage, cancellationToken)
                     .ConfigureAwait(false);
+                if (error is ZLinkRelocationCompletionReservationException reservation)
+                    throw reservation.ToFrameworkException();
                 throw;
             }
             var resumeStartedTimestamp = Stopwatch.GetTimestamp();
@@ -1115,7 +1114,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             runtime.LocationLifecycle?.OwnerToken
             ?? throw new ZLinkConfigurationException("The target owner lease is not established.");
         runtime.ReserveAggregateCompletion(stage, targetOwner);
-        var emptyBudget = new ZLinkRelocationCompletionBudget(stage.Envelope.AggregateId, []);
         var participants = stage
             .Envelope.Participants.Select(state =>
             {
@@ -1141,7 +1139,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                         )
                         : recovery.AuthorityPayload,
                     recovery.MembershipMutation,
-                    stage.Completion.GetValueOrDefault(state.AuthorityKey)?.Budget ?? emptyBudget
+                    stage.Completion[state.AuthorityKey].Budget
                 );
             })
             .ToArray();
@@ -1986,7 +1984,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 .ConfigureAwait(false);
         }
         catch (Exception error)
-            when (ZLinkRelocationCompletionStore.IsStoreUnavailable(error, cancellationToken))
+            when (ZLinkLocationStoreFailure.IsUnavailable(error, cancellationToken))
         {
             await runtime
                 .RetainAggregateCompletionAsync(stage, cancellationToken)
@@ -2499,13 +2497,13 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
     //  time passed; only its authority settlement discards it
     //  (DiscardUnpublishedStageAsync). Retention bounds only published stages.
     private static bool IsCleanupCandidate(TargetStage stage, TimeSpan now) =>
-        stage.Completion.Count == 0
-        && stage.ExpiresAt <= now
+        stage.ExpiresAt <= now
         && Volatile.Read(ref stage.Published) != 0
         // Session route convergence runs detached after admission
         // opens; an expired but unconverged stage must survive so the
         // reconciliation poller can keep re-driving the route commit.
-        && Volatile.Read(ref stage.SessionRoutesConverged) != 0;
+        && Volatile.Read(ref stage.SessionRoutesConverged) != 0
+        && !stage.Completion.Values.Any(completion => completion.Budget.AcceptedRequests != 0);
 
     internal void CompleteStage(TargetStage stage, TargetStageTerminalOutcome outcome)
     {

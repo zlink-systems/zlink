@@ -1490,6 +1490,10 @@ internal sealed partial class ZLinkFrameworkRuntime
             );
             ZLinkStandaloneActorRelocationProgress? replayProgress = null;
             ZLinkRelocationEnvelope? replayIdentity = null;
+            ZLinkLocationOwnerToken replayOwner = default;
+            ZLinkStandaloneActorRelocationProgressCoordinator? replayCoordinator = null;
+            var replayHasAcceptedRequests = false;
+            Task? durablePrefix = null;
             await ZLinkActorTargetActivation
                 .CompleteAsync(
                     async () =>
@@ -1504,15 +1508,33 @@ internal sealed partial class ZLinkFrameworkRuntime
                                     cancellationToken
                                 )
                                 .ConfigureAwait(false);
-                            var owner = RequireStandaloneActorTargetOwner();
-                            replayProgress = await CreateStandaloneActorProgressCoordinator(
-                                    publishedActorAuthority,
-                                    canonical.TargetAttemptGeneration,
-                                    relocationId,
-                                    owner
-                                )
-                                .ReadAsync(replayIdentity, owner, cancellationToken)
+                            replayOwner = RequireStandaloneActorTargetOwner();
+                            replayCoordinator = CreateStandaloneActorProgressCoordinator(
+                                publishedActorAuthority,
+                                canonical.TargetAttemptGeneration,
+                                relocationId,
+                                replayOwner
+                            );
+                            replayProgress = await replayCoordinator
+                                .ReadAsync(replayIdentity, replayOwner, cancellationToken)
                                 .ConfigureAwait(false);
+                            replayHasAcceptedRequests =
+                                ZLinkRelocationCompletionStore
+                                    .RequireProgress(replayProgress.Authority.Relocation)
+                                    .AcceptedRequests != 0;
+                            if (replayHasAcceptedRequests)
+                                return;
+                            var steady = await replayCoordinator
+                                .NormalizeSteadyAsync(
+                                    replayIdentity,
+                                    replayOwner,
+                                    cancellationToken
+                                )
+                                .ConfigureAwait(false);
+                            await actorLocations
+                                .UpdateTrackedSnapshotAsync(request.ActorId, steady)
+                                .ConfigureAwait(false);
+                            return;
                         }
                         var released = await new ZLinkRelocationPublicationCoordinator(
                             ErrorSink,
@@ -1529,8 +1551,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                             await actorLocations
                                 .UpdateTrackedSnapshotAsync(request.ActorId, releasedSnapshot)
                                 .ConfigureAwait(false);
-                        if (replayProgress is not null && released is { } normalized)
-                            replayProgress = replayProgress with { Authority = normalized };
                     },
                     () =>
                     {
@@ -1542,7 +1562,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                             actorState.TrackRelocationCompletion(
                                 replayProgress!.Authority.Relocation
                             );
-                            _ = QueueCanonicalStandaloneActorFrames(
+                            var prefix = QueueCanonicalStandaloneActorFrames(
                                 actorState,
                                 publishedActorAuthority,
                                 replayIdentity!,
@@ -1553,9 +1573,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                                         replayProgress.Root.Participants.Single().AcceptedJobs
                                     )
                                     .Select(record => record.Frame)
-                                    .ToArray(),
-                                replayProgress.Canonical?.TargetAttemptGeneration
+                                    .ToArray()
                             );
+                            if (replayHasAcceptedRequests)
+                                durablePrefix = prefix;
                         }
                         else
                         {
@@ -1626,9 +1647,20 @@ internal sealed partial class ZLinkFrameworkRuntime
                         await _actorHandoffAdmissions
                             .RecordCompletionAsync(request, spotId)
                             .ConfigureAwait(false);
-                        await _actorHandoffAdmissions
-                            .CompleteAsync(request.HandoffId)
-                            .ConfigureAwait(false);
+                        if (
+                            durablePrefix is null
+                            || !TryFinishDurableActorCompletion(
+                                actorState,
+                                durablePrefix,
+                                replayIdentity!,
+                                replayOwner,
+                                replayCoordinator!,
+                                () => _actorHandoffAdmissions.CompleteAsync(request.HandoffId)
+                            )
+                        )
+                            await _actorHandoffAdmissions
+                                .CompleteAsync(request.HandoffId)
+                                .ConfigureAwait(false);
                         actorState.Handoff.Complete(request.HandoffId);
                     }
                 )

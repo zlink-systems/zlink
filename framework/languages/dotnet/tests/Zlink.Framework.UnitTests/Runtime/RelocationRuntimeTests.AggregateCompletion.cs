@@ -54,10 +54,9 @@ public sealed partial class RelocationRuntimeTests
 
         if (spaceAfterReservation < 0)
         {
-            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            await Assert.ThrowsAsync<ZLinkRelocationCompletionReservationException>(() =>
                 coordinator.PublishAsync(request).AsTask()
             );
-            Assert.Equal(ZLinkFrameworkErrorKind.InternalFailure, failure.Kind);
             Assert.Empty(authority.Events);
             Assert.Empty(blobs.Events);
             return;

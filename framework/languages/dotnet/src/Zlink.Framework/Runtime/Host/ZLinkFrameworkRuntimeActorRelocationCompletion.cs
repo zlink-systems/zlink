@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -10,8 +11,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRelocationEnvelope identity,
         string handoffId,
         ZLinkAuthoritySnapshot authority,
-        IReadOnlyList<ZLinkActorHandoffFrame> acceptedFrames,
-        ulong? legacyTargetAttempt = null
+        IReadOnlyList<ZLinkActorHandoffFrame> acceptedFrames
     )
     {
         var actorRef =
@@ -19,39 +19,39 @@ internal sealed partial class ZLinkFrameworkRuntime
             ?? throw new ZLinkRelocationDataLostException(
                 "Standalone Actor target reference is unavailable during replay."
             );
-        var participant = identity.Participants.Single();
+        var relocation = authority.Relocation;
+        if (relocation?.Target is not { } target || relocation.RelocationId != identity.AggregateId)
+            throw new ZLinkRelocationDataLostException(
+                "Standalone Actor completion authority has no matching target fence."
+            );
         var requests = acceptedFrames
             .Where(frame => frame.RelocationReplyRouteId != 0)
             .ToDictionary(frame => (frame.RouteContext.OperationId, frame.RequestSource));
-        if (requests.Count == 0)
-            return AdmitTransferredActorPrefix(actorState, handoffId, targetAuthority.MeshName);
-        var pipeline = new ZLinkActorInboundPipeline(
-            this,
-            new ZLinkEntrySpotActorInboundEndpoint(this),
-            targetAuthority.MeshName
-        );
-        var relocation = authority.Relocation;
         var coordinator = new ZLinkServiceWireCodec.RelocationCoordinatorFence(
             authority.OwnerId,
             checked((ulong)authority.OwnerLeaseGeneration),
             targetAuthority.NodeRid,
             targetAuthority.NodeGeneration,
-            relocation?.Coordinator.ExpectedStoreVersion ?? authority.StoreVersion
+            relocation.Coordinator.ExpectedStoreVersion
         );
-        var budget = relocation?.Completion is { AcceptedRequests: > 0 }
-            ? CreateStandaloneActorCompletionBudget(
-                identity,
-                acceptedFrames,
-                coordinator,
-                relocation.Target!.AttemptGeneration
-            )
-            : null;
-        var completionStore = budget is null ? null : CreateRelocationCompletionStore(budget);
-        Task<(
-            ZLinkAuthoritySnapshot Authority,
-            ZLinkRelocationCompletionEntry Entry
-        )>? persistence = null;
-        var delivery = Task.CompletedTask;
+        var budget = CreateStandaloneActorCompletionBudget(
+            identity,
+            requests.Values,
+            coordinator,
+            target.AttemptGeneration
+        );
+        var completionStore = CreateRelocationCompletionStore(budget);
+        ZLinkRelocationCompletionStore.RequireAcceptedRequests(relocation, budget.AcceptedRequests);
+        var key = identity.Participants.Single().AuthorityKey;
+        var pipeline = new ZLinkActorInboundPipeline(
+            this,
+            new ZLinkEntrySpotActorInboundEndpoint(this),
+            targetAuthority.MeshName
+        );
+        var results = Channel.CreateUnbounded<ZLinkRelocationCompletionEntry>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = true }
+        );
+        var cancellationToken = ShutdownToken;
         var prefix = AdmitTransferredActorPrefix(
             actorState,
             handoffId,
@@ -67,143 +67,74 @@ internal sealed partial class ZLinkFrameworkRuntime
                     (frame.RouteContext.OperationId, frame.RequestSource),
                     out var accepted
                 )
-                    ? (replay, reply, token) => Complete(accepted, replay, reply, token)
+                    ? (replay, reply, _) => Complete(accepted, replay, reply)
                     : null;
                 return actorState.LiveActivation is { } activation
                     ? activation.DispatchOwnedActorFrameAsync(
                         actorRef,
                         frame,
                         complete,
-                        ShutdownToken
+                        cancellationToken
                     )
                     : pipeline.DispatchOwnedFrameAsync(
                         ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
                         complete,
-                        ShutdownToken
+                        cancellationToken
                     );
-
-                async ValueTask Complete(
-                    ZLinkActorHandoffFrame accepted,
-                    ZLinkSpotActorFrame replay,
-                    ZLinkActorReply? reply,
-                    CancellationToken token
-                )
-                {
-                    var attempt =
-                        authority.Relocation?.Target?.AttemptGeneration ?? legacyTargetAttempt;
-                    if (
-                        reply is null
-                        || accepted.RequestSource is not { } source
-                        || attempt is null
-                    )
-                        throw new ZLinkRelocationDataLostException(
-                            "Standalone Actor accepted request has no reply or relocation fence."
-                        );
-                    var relay = CreateStandaloneActorReplyRelay(
-                        identity,
-                        coordinator,
-                        attempt.Value,
-                        accepted
-                    );
-                    var payload = reply.ToFrame(replay.Header);
-                    if (completionStore is null)
-                    {
-                        var ack = await RelayRelocationReplyAsync(
-                                source.NodeRid,
-                                relay with
-                                {
-                                    Coordinator = coordinator with
-                                    {
-                                        ExpectedAuthorityStoreVersion = authority.StoreVersion,
-                                    },
-                                },
-                                source,
-                                [payload],
-                                token
-                            )
-                            .ConfigureAwait(false);
-                        if (ack != ZLinkRelocationReplyAckState.NotAcknowledged)
-                            return;
-                        var lease = await Registration
-                            .Locations.ResolveStore()!
-                            .ReadOwnerLeaseAsync(source.OwnerId, token)
-                            .ConfigureAwait(false);
-                        if (
-                            !IsExactSourceLeaseExpired(
-                                lease,
-                                source.OwnerId,
-                                source.LeaseGeneration
-                            )
-                        )
-                            throw new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.Unavailable,
-                                "Standalone Actor reply is waiting for its exact source acknowledgement.",
-                                ZLinkRetryAdvice.RetryAfterBackoff
-                            );
-                        return;
-                    }
-                    var entry = CreateRelocationCompletionEntry(
-                        participant.AuthorityKey,
-                        relay,
-                        source,
-                        [payload]
-                    );
-                    // The Actor FIFO owns result order. Store I/O runs after the
-                    // result is emitted without holding the Actor execution turn.
-                    var previous = persistence;
-                    var previousDelivery = delivery;
-                    using (ExecutionContext.SuppressFlow())
-                    {
-                        persistence = Task.Run(async () =>
-                        {
-                            var expected = previous is null
-                                ? authority
-                                : (await previous.ConfigureAwait(false)).Authority;
-                            return await completionStore
-                                .AppendAsync(
-                                    participant.AuthorityKey,
-                                    expected,
-                                    entry,
-                                    ShutdownToken
-                                )
-                                .ConfigureAwait(false);
-                        });
-                        var published = persistence;
-                        delivery = Task.Run(async () =>
-                        {
-                            await previousDelivery.ConfigureAwait(false);
-                            var (current, storedEntry) = await published.ConfigureAwait(false);
-                            if (storedEntry.Delivery != ZLinkRelocationCompletionDelivery.Pending)
-                                return;
-                            var acknowledged = await DeliverStoredRelocationReplyAsync(
-                                    current,
-                                    storedEntry,
-                                    completionStore,
-                                    ShutdownToken
-                                )
-                                .ConfigureAwait(false);
-                            await completionStore
-                                .AcknowledgeAsync(
-                                    participant.AuthorityKey,
-                                    current,
-                                    storedEntry,
-                                    acknowledged,
-                                    ShutdownToken
-                                )
-                                .ConfigureAwait(false);
-                        });
-                    }
-                }
             }
         );
-        return completionStore is null ? prefix : WaitForPersistenceAsync();
+        Task publication;
+        using (ExecutionContext.SuppressFlow())
+            publication = Task.Run(() =>
+                completionStore.PublishReplayResultsAsync(
+                    key,
+                    authority,
+                    results.Reader.ReadAllAsync(cancellationToken),
+                    (current, entry, token) =>
+                        DeliverStoredRelocationReplyAsync(current, entry, completionStore, token),
+                    cancellationToken
+                )
+            );
+        return Task.WhenAll(publication, CloseResultsAfterPrefixAsync());
 
-        async Task WaitForPersistenceAsync()
+        ValueTask Complete(
+            ZLinkActorHandoffFrame accepted,
+            ZLinkSpotActorFrame replay,
+            ZLinkActorReply? reply
+        )
         {
-            // Await the prefix's terminal state before reading its last publication task.
-            await Task.WhenAny(prefix).ConfigureAwait(false);
-            await Task.WhenAll((Task?)persistence ?? Task.CompletedTask, delivery, prefix)
-                .ConfigureAwait(false);
+            if (reply is null || accepted.RequestSource is not { } source)
+                throw new ZLinkRelocationDataLostException(
+                    "Standalone Actor accepted request has no reply or source fence."
+                );
+            var relay = CreateStandaloneActorReplyRelay(
+                identity,
+                coordinator,
+                target.AttemptGeneration,
+                accepted
+            );
+            var entry = CreateRelocationCompletionEntry(
+                key,
+                relay,
+                source,
+                [reply.ToFrame(replay.Header)]
+            );
+            // The prefix owns the writer until every Actor turn has completed.
+            if (!results.Writer.TryWrite(entry))
+                throw new InvalidOperationException("The Actor completion writer is closed.");
+            return ValueTask.CompletedTask;
+        }
+
+        async Task CloseResultsAfterPrefixAsync()
+        {
+            try
+            {
+                await prefix.ConfigureAwait(false);
+            }
+            finally
+            {
+                results.Writer.Complete();
+            }
         }
     }
 
@@ -389,7 +320,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     .ConfigureAwait(false);
             }
             catch (Exception error)
-                when (ZLinkRelocationCompletionStore.IsStoreUnavailable(error, cancellationToken))
+                when (ZLinkLocationStoreFailure.IsUnavailable(error, cancellationToken))
             {
                 await store
                     .RetainIfPendingAsync(authority.Relocation!, cancellationToken)
@@ -462,7 +393,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             };
         }
         catch (Exception error)
-            when (ZLinkRelocationCompletionStore.IsStoreUnavailable(error, cancellationToken))
+            when (ZLinkLocationStoreFailure.IsUnavailable(error, cancellationToken))
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"relocation_completion_pending relocation={relocation.RelocationId:N} error={error.Message}"
