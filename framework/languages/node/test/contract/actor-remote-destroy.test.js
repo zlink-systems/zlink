@@ -14,6 +14,9 @@ const { setTimeout: delay } = require('node:timers/promises');
 const {
   SERVICE_WIRE_COMMAND_OFFSET
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-binary-primitives');
+const {
+  decodeActorAuthorityPayload
+} = require('../../packages/framework/dist/runtime/actors/actor-authority-payload-codec');
 
 const mesh = 'remote-destroy';
 const actorId = 'remote-player';
@@ -186,3 +189,55 @@ test(
     assert.equal((await store.read(authorityKey)).kind, 'missing');
   }
 );
+
+test('remoteDestroyReleasesClosingAfterOwnerLeaseEnds', { timeout: 15000 }, async (t) => {
+  const { actors, ref, store } = await startActors(t);
+  const deletion = deferred();
+  const release = deferred();
+  const write = store.write.bind(store);
+  let ownerDeletePending = false;
+  t.mock.method(store, 'write', async (request, signal) => {
+    if (
+      !ownerDeletePending &&
+      request.mutations.some(
+        ({ kind, key }) => kind === 'delete' && key.value === authorityKey.value
+      )
+    ) {
+      ownerDeletePending = true;
+      deletion.resolve();
+      await release.promise;
+    }
+    return write(request, signal);
+  });
+  const destroy = actors.destroy(ref, AbortSignal.timeout(3000));
+  const result = destroy.then(
+    (value) => ({ value }),
+    (error) => ({ error })
+  );
+  try {
+    await Promise.race([deletion.promise, destroy]);
+    const authority = await store.read(authorityKey);
+    assert.equal(authority.kind, 'found');
+    const record = JSON.parse(Buffer.from(authority.value.bytes).toString('utf8'));
+    assert.equal(record.objectGeneration, String(ref.objectGeneration));
+    assert.equal(
+      decodeActorAuthorityPayload(Buffer.from(record.payload, 'base64')).state,
+      'closing'
+    );
+    const leaseKey = { value: 'owner-lease\0' + record.ownerId };
+    const lease = await store.read(leaseKey);
+    assert.equal(lease.kind, 'found');
+    const removed = await write({
+      conditions: [{ kind: 'version', key: leaseKey, expected: lease.value.version }],
+      mutations: [{ kind: 'delete', key: leaseKey }]
+    });
+    assert.equal(removed.kind, 'applied');
+    assert.equal((await store.read(leaseKey)).kind, 'missing');
+    const outcome = await result;
+    if ('error' in outcome) throw outcome.error;
+    assert.equal(outcome.value, true);
+    assert.equal((await store.read(authorityKey)).kind, 'missing');
+  } finally {
+    release.resolve();
+  }
+});

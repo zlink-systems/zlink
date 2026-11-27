@@ -431,9 +431,7 @@ public final class ZLinkSerialExecutionQueue {
 
     private synchronized void publish(Entry entry) {
         if (entry.ownerMailbox == null) entry.ownerMailbox = this;
-        if (entry.lane == Lane.APPLICATION
-                && !entry.continuation
-                && lanePolicy instanceof ZLinkExecutionLanePolicy.ActorDelivery) {
+        if (entry.lane == Lane.APPLICATION && !entry.continuation) {
             Entry tail = sharedSpotGate == null ? null : publishedApplication.peekLast();
             boolean durable =
                     tail == null
