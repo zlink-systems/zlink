@@ -15,9 +15,10 @@ const {
   SubmitResult
 } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 
-function deliver(runtime, sourceNodeRid, frames) {
+function deliver(runtime, sourceNodeRid, frames, sourceNodeGeneration) {
   return runtime.tryHandleControl('mesh', {
     sourceNodeRid,
+    sourceNodeGeneration,
     parts: (Array.isArray(frames) ? frames : [frames]).map((frame) => ({
       data: () => Buffer.from(frame),
       close() {}
@@ -166,7 +167,7 @@ async function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEn
     assert.equal(rid, targetRid);
     const ack = wire.decodeMaintenanceReplyRelayAck(bytes);
     acks.push(ack);
-    await deliver(target, sourceRid, bytes);
+    await deliver(target, sourceRid, bytes, source.nodeGeneration);
     return SubmitResult.Ok;
   };
   const packet = {
@@ -303,7 +304,12 @@ for (const targetRid of ['C', 'D']) {
       assert.equal(f.acks[0].status, 'terminalReceived');
       await deliver(f.receiver, targetRid, wire.encodeMaintenanceReplyRelay(f.relays[0]));
       assert.equal(f.acks[1].status, 'alreadyTerminal');
-      await deliver(f.target, 'A', wire.encodeMaintenanceReplyRelayAck(f.acks[0]));
+      await deliver(
+        f.target,
+        'A',
+        wire.encodeMaintenanceReplyRelayAck(f.acks[0]),
+        f.source.nodeGeneration
+      );
       assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 0);
       assert.equal(f.requester.pendingOperationCount, 0);
       assert.equal(
@@ -460,20 +466,20 @@ test('the target rejects an ACK whose original source generation changed', async
           ...request,
           requestSource: { ...f.source, nodeGeneration: 8n },
           status: 'terminalReceived'
-        })
+        }),
+        f.source.nodeGeneration
       ),
       /durable source fence/
     );
     assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 1);
-    await deliver(
-      f.target,
-      'A',
-      wire.encodeMaintenanceReplyRelayAck({
-        ...request,
-        requestSource: f.source,
-        status: 'terminalReceived'
-      })
-    );
+    const validAck = wire.encodeMaintenanceReplyRelayAck({
+      ...request,
+      requestSource: f.source,
+      status: 'terminalReceived'
+    });
+    await assert.rejects(deliver(f.target, 'A', validAck, 8n), /durable source fence/);
+    assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 1);
+    await deliver(f.target, 'A', validAck, f.source.nodeGeneration);
     assert.equal(await delivery, 'terminalReceived');
     assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 0);
   } finally {

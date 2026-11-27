@@ -329,7 +329,6 @@ export class ZLinkActorHandoffCoordinator {
   private readonly staleGenerations = new Map<string, Map<bigint, bigint>>();
   private readonly staleActorRefs = new Map<string, Map<string, bigint>>();
   private readonly messageFollowDurationMs: number;
-  private nextReplyRouteId = 0n;
   private readonly replyRoutes = new Map<string, ReplyRoute>();
 
   constructor(private readonly options: ZLinkActorHandoffCoordinatorOptions) {
@@ -798,10 +797,7 @@ export class ZLinkActorHandoffCoordinator {
           `Actor '${actorId}' provisional packet handoff has no replay target.`
         );
         for (const pending of handoff.pending) {
-          if (pending.packet.source !== undefined) {
-            this.removeReplyRoute(pending.packet.source.replyRouteId);
-          }
-          pending.reject?.(error);
+          this.failReleasedPending(pending, error);
         }
         throw error;
       }
@@ -839,12 +835,7 @@ export class ZLinkActorHandoffCoordinator {
         return admission === undefined ? operation() : admission(operation);
       }
     );
-    if (
-      pending.packet.source !== undefined &&
-      pending.packet.messageFollowOrigin?.requestSource === undefined
-    ) {
-      this.removeReplyRoute(pending.packet.source.replyRouteId);
-    }
+    this.removeReplyRoute(pending.packet.source);
     const result = results[0]!;
     if (result.ok === true) {
       pending.resolve?.(result.response);
@@ -865,12 +856,7 @@ export class ZLinkActorHandoffCoordinator {
   }
 
   private failReleasedPending(pending: PendingPacket, error: unknown): void {
-    if (
-      pending.packet.source !== undefined &&
-      pending.packet.messageFollowOrigin?.requestSource === undefined
-    ) {
-      this.removeReplyRoute(pending.packet.source.replyRouteId);
-    }
+    this.removeReplyRoute(pending.packet.source);
     pending.reject?.(error);
   }
 
@@ -1029,7 +1015,11 @@ export class ZLinkActorHandoffCoordinator {
         }
         const original = originalHandoffRequestSource(messageFollowOrigin);
         const source =
-          original ?? this.captureRequestSource(handoff.sourceEvidence, context.replyRouteId);
+          original ??
+          this.captureRequestSource(
+            handoff.sourceEvidence,
+            requestOperation?.id ?? this.requests.registry.allocateId()
+          );
         const requestPacket = { ...packet, source };
         if (original !== undefined) {
           handoff.pending.push({ packet: requestPacket, origin, resolve, reject });
@@ -1047,7 +1037,7 @@ export class ZLinkActorHandoffCoordinator {
         if (requestOperation !== undefined) {
           const settle = (finish: () => void) => {
             if (this.replyRoutes.get(source.replyRouteId) !== route) return;
-            this.removeReplyRoute(source.replyRouteId);
+            this.removeReplyRoute(source);
             finish();
           };
           void requestOperation.promise.then(
@@ -1057,7 +1047,7 @@ export class ZLinkActorHandoffCoordinator {
         } else if (context.deadlineUnixMs !== undefined) {
           route.deadline = setTimeout(
             () => {
-              this.removeReplyRoute(source.replyRouteId);
+              this.removeReplyRoute(source);
               route.reject(actorDeadlineExceeded(actorId));
             },
             Math.max(0, context.deadlineUnixMs - Date.now())
@@ -1247,9 +1237,7 @@ export class ZLinkActorHandoffCoordinator {
       targetActorRef
     );
     for (const pending of handoff.pending) {
-      const source = pending.packet.source;
-      if (source === undefined) continue;
-      const route = this.replyRoutes.get(source.replyRouteId);
+      const route = this.replyRouteForSource(pending.packet.source);
       if (route !== undefined) {
         route.targetNodeRid = target.targetNodeRid;
         route.targetAuthorityOwnerGeneration = BigInt(
@@ -1259,9 +1247,7 @@ export class ZLinkActorHandoffCoordinator {
     }
     for (let i = handoff.snapshotIndex + 1; i < handoff.pending.length; i++) {
       const pending = handoff.pending[i];
-      if (pending.packet.source !== undefined) {
-        this.removeReplyRoute(pending.packet.source.replyRouteId);
-      }
+      this.removeReplyRoute(pending.packet.source);
       void this.enqueueMessageFollow(followRoute, actorId, pending.packet).then(
         (value) => {
           pending.resolve?.(value);
@@ -1364,7 +1350,7 @@ export class ZLinkActorHandoffCoordinator {
       return 'notAcknowledged';
     }
     const result = readResult();
-    this.removeReplyRoute(replyRouteId);
+    this.removeReplyRoute(route.source);
     if (result.ok) {
       route.resolve(result.response);
     } else if (result.errorKind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded) {
@@ -1377,26 +1363,30 @@ export class ZLinkActorHandoffCoordinator {
 
   private captureRequestSource(
     source: ReplySourceEvidence,
-    replyRouteId?: string
+    replyRouteId: bigint
   ): ZLinkActorHandoffRequestSource {
-    if (replyRouteId === undefined) {
-      this.nextReplyRouteId += 1n;
-      replyRouteId = this.nextReplyRouteId.toString();
-    }
     return {
       ownerId: source.ownerId,
       ownerLeaseGeneration: source.ownerLeaseGeneration.toString(),
       nodeRid: source.nodeRid,
       nodeGeneration: source.nodeGeneration.toString(),
-      replyRouteId
+      replyRouteId: replyRouteId.toString()
     };
   }
 
-  private removeReplyRoute(replyRouteId: string): void {
-    const route = this.replyRoutes.get(replyRouteId);
+  private replyRouteForSource(
+    source: ZLinkActorHandoffRequestSource | undefined
+  ): ReplyRoute | undefined {
+    if (source === undefined) return undefined;
+    const route = this.replyRoutes.get(source.replyRouteId);
+    return route?.source === source ? route : undefined;
+  }
+
+  private removeReplyRoute(source: ZLinkActorHandoffRequestSource | undefined): void {
+    const route = this.replyRouteForSource(source);
     if (route === undefined) return;
     if (route.deadline !== undefined) clearTimeout(route.deadline);
-    this.replyRoutes.delete(replyRouteId);
+    this.replyRoutes.delete(route.source.replyRouteId);
   }
 
   private reportRequestFrame(actorId: string, packet: ZLinkActorHandoffPacket): void {

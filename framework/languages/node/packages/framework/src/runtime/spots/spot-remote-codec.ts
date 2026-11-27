@@ -1,5 +1,5 @@
 import { ZLINK_MAX_SPOT_ID_BYTES } from '../../contracts/Common/CoreTypes';
-import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import type { ZLinkBackendActorRef } from '../backend/contracts';
 import { decodeActorMessageFollowContext, type ZLinkRemoteBoundSessionTarget } from '../actors';
 import type { RoutingId, ZLinkActor } from '../../contracts';
@@ -176,14 +176,15 @@ export function decodeHandoffBacklog(value: unknown): readonly ZLinkActorHandoff
           BigInt(source.ownerLeaseGeneration) <= 0n ||
           source.nodeRid.length === 0 ||
           BigInt(source.nodeGeneration) <= 0n ||
-          source.replyRouteId !==
-            (packet.messageFollowOrigin !== undefined &&
+          typeof source.replyRouteId !== 'string' ||
+          !/^[1-9][0-9]{0,19}$/.test(source.replyRouteId) ||
+          BigInt(source.replyRouteId) > UINT64_MAX ||
+          (packet.messageFollowOrigin !== undefined &&
             routingIdsEqual(
               decodeWireRoutingId(source.nodeRid, source.nodeRidHex),
               packet.messageFollowOrigin.sourceNodeRid
-            )
-              ? packet.messageFollowOrigin.originalReplyRouteId.toString()
-              : messageFollowContext.replyRouteId))) ||
+            ) &&
+            source.replyRouteId !== packet.messageFollowOrigin.originalReplyRouteId.toString()))) ||
       (!packet.returnResponse && source !== undefined)
     ) {
       throw new Error('Remote actor handoff request source fence is invalid.');

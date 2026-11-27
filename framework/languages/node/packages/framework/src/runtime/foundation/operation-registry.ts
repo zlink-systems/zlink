@@ -1,3 +1,4 @@
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { createAbortError, NORMAL_COMPLETION } from '../abort';
 export interface OperationClock {
   now(): number;
@@ -258,7 +259,7 @@ export class OperationRegistry<T, Context = unknown> {
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
       throw new RangeError('timeoutMs must be a non-negative finite number.');
     }
-    const id = this.nextId++;
+    const id = this.allocateId();
     const deadlineMs =
       timeoutOwner === 'registry'
         ? (absoluteDeadlineMs ?? this.clock.now() + timeoutMs)
@@ -288,12 +289,18 @@ export class OperationRegistry<T, Context = unknown> {
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
       throw new RangeError('timeoutMs must be a non-negative finite number.');
     }
-    const id = this.nextId++;
+    const id = this.allocateId();
     const deadlineMs = this.clock.now() + timeoutMs;
     const entry = new RegistryOperation(this, id, deadlineMs, context);
     entry.observer = observer;
     this.registerPending(entry);
     return id;
+  }
+
+  /** Reserves an ID in the same sequence as registered requests. */
+  allocateId(): bigint {
+    if (this.nextId > UINT64_MAX) throw new RangeError('Operation registry ID space is exhausted.');
+    return this.nextId++;
   }
 
   deadline(id: bigint): number | undefined {

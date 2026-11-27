@@ -2664,6 +2664,7 @@ function decodeMultipartRecord(
       kind: request ? ReceiveKind.NodeRequest : ReceiveKind.NodeSend,
       domain: readyDomain(record.domain),
       sourceNodeRid: (record.sourceRoutingId as RoutingId | undefined) ?? null,
+      sourceNodeGeneration: record.sourceNodeGeneration,
       sourceSpotId: null,
       sourceBindingGeneration: 0n,
       sourceActor: null,

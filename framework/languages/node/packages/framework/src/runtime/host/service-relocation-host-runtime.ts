@@ -404,8 +404,6 @@ interface SourceActorJoinProfile {
 }
 
 interface PendingRelocationReplyRelay {
-  readonly ackTargetNodeRid: RoutingId;
-  readonly request: ServiceMaintenanceReplyRelay;
   readonly expectedRequestSource: ServiceWireRequestSourceFence;
   readonly resolve: (delivery: RelocationReplyDelivery | undefined) => void;
   readonly reject: (error: unknown) => void;
@@ -1070,12 +1068,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       return true;
     }
     if (command === M6bServiceWireCommand.replyRelayAck) {
-      await this.acceptReplyRelayAck(
-        meshName,
-        decodeMaintenanceReplyRelayAck(payload),
-        record.sourceNodeRid,
-        signal
-      );
+      this.acceptReplyRelayAck(decodeMaintenanceReplyRelayAck(payload), record);
       return true;
     }
     let request = decodeServiceRelocationControlRequest(payload);
@@ -4099,8 +4092,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         action();
       };
       const pending: PendingRelocationReplyRelay = {
-        ackTargetNodeRid,
-        request,
         expectedRequestSource,
         resolve: (delivery) => finish(() => resolve(delivery)),
         reject: (error) => finish(() => reject(error))
@@ -4148,26 +4139,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     });
   }
 
-  private async acceptReplyRelayAck(
-    meshName: string,
-    ack: ServiceMaintenanceReplyRelayAck,
-    sourceNodeRid: RoutingId | null,
-    signal?: AbortSignal
-  ): Promise<void> {
-    const exactKey = sourceNodeRid === null ? undefined : replyRelayPendingKey(sourceNodeRid, ack);
-    const pending = exactKey === undefined ? undefined : this.pendingReplyRelays.get(exactKey);
+  private acceptReplyRelayAck(ack: ServiceMaintenanceReplyRelayAck, record: ReceiveRecord): void {
+    const { sourceNodeRid, sourceNodeGeneration } = record;
+    if (sourceNodeRid === null) return;
+    const pending = this.pendingReplyRelays.get(replyRelayPendingKey(sourceNodeRid, ack));
     if (pending === undefined) return;
-    await this.requireAdmittedPeer(
-      meshName,
-      pending.ackTargetNodeRid,
-      pending.expectedRequestSource,
-      signal
-    );
     if (
-      !sameWireId(ack.relocation, pending.request.relocation) ||
-      !sameWireId(ack.operation, pending.request.operation) ||
-      ack.replyRouteId !== pending.request.replyRouteId ||
-      !sameCoordinator(ack.coordinator, pending.request.coordinator) ||
+      !routingIdsEqual(sourceNodeRid, ack.requestSource.nodeRid) ||
+      sourceNodeGeneration !== ack.requestSource.nodeGeneration ||
       !sameRequestSource(ack.requestSource, pending.expectedRequestSource)
     ) {
       throw new Error('Relocation reply relay ACK does not match its durable source fence.');

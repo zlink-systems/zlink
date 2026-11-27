@@ -1330,13 +1330,14 @@ export class RawServiceMeshRuntime {
       ) {
         return this.finishPendingProtocolReceive(this.processLiveness(received, nowMs));
       }
+      const sourceNodeGeneration = peer.descriptor.lifecycleGeneration;
       const stateful =
         this.serviceIngress !== undefined && this.serviceIngressAccepts?.(header.command) !== false
           ? this.serviceIngress({
               command: header.command,
               flags: header.flags,
               sourceRoutingId: received.sourceRid,
-              sourceNodeGeneration: peer.descriptor.lifecycleGeneration,
+              sourceNodeGeneration,
               sourceRoute: received.sourceRoute,
               ...(received.reply === undefined ? {} : { reply: received.reply }),
               ...(received.requestSeq === undefined
@@ -1347,9 +1348,20 @@ export class RawServiceMeshRuntime {
             })
           : undefined;
       if (stateful instanceof Promise)
-        return this.finishPendingStatefulReceive(stateful, received, header, applicationJobOwner);
+        return this.finishPendingStatefulReceive(
+          stateful,
+          received,
+          header,
+          applicationJobOwner,
+          sourceNodeGeneration
+        );
       if (stateful !== undefined) return stateful;
-      return this.processApplicationReceived(received, header, applicationJobOwner);
+      return this.processApplicationReceived(
+        received,
+        header,
+        applicationJobOwner,
+        sourceNodeGeneration
+      );
     } catch (error) {
       if (!currentSource && error instanceof ServiceWireProtocolError) return 'dropped';
       return this.receiveProtocolFailure(error);
@@ -1366,10 +1378,12 @@ export class RawServiceMeshRuntime {
     pending: Promise<RawServicePumpResult | undefined>,
     received: ZLinkRawReceivedRecord,
     header: ReturnType<typeof decodeHeader>,
-    owner: ApplicationIngressRecordOwner
+    owner: ApplicationIngressRecordOwner,
+    sourceNodeGeneration: bigint
   ): Promise<RawServicePumpResult> {
     return pending.then(
-      (result) => result ?? this.processApplicationReceived(received, header, owner),
+      (result) =>
+        result ?? this.processApplicationReceived(received, header, owner, sourceNodeGeneration),
       (error) => this.receiveProtocolFailure(error)
     );
   }
@@ -1496,7 +1510,8 @@ export class RawServiceMeshRuntime {
   private processApplicationReceived(
     received: ZLinkRawReceivedRecord,
     header: ReturnType<typeof decodeHeader>,
-    applicationJobOwner: ApplicationIngressRecordOwner
+    applicationJobOwner: ApplicationIngressRecordOwner,
+    sourceNodeGeneration: bigint
   ): RawServicePumpResult | Promise<RawServicePumpResult> {
     try {
       if (
@@ -1520,6 +1535,7 @@ export class RawServiceMeshRuntime {
           domain: 'infrastructure',
           parts: received.parts,
           sourceRoutingId: received.sourceRid,
+          sourceNodeGeneration,
           sourceRoute: received.sourceRoute,
           ...(received.reply === undefined ? {} : { reply: received.reply }),
           ...(received.requestSeq === undefined ? {} : { requestSequence: received.requestSeq })
