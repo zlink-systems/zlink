@@ -35,6 +35,7 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/stateful/public_store_adapters.hpp"
+#include "runtime/streams/admission_queue_node.hpp"
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 #include "runtime/utils/weak_runtime_owner.hpp"
@@ -773,6 +774,11 @@ void app_t::_apply_zlink_framework ()
     auto mesh_node_registrations = detail::mesh_node_runtime_t::registrations (_state->zlink);
     detail::validate_object_store_configuration (mesh_node_registrations, has_public_location_store,
                                                  has_public_relocation_store);
+    const auto stream_snapshot = detail::stream_runtime_t::from (_state->zlink).snapshots ();
+    const auto live_locations = location_provider.get<runtime::live_location_reader_t> ();
+    auto queue_settings = runtime::admission_queue::configure (
+      stream_snapshot, mesh_node_registrations,
+      has_public_location_store && live_locations ? &live_locations->get () : nullptr);
     const auto shared_core_context =
       detail::zlink_builder_access_t::shared_core_context (_state->zlink);
     for (const auto &registration : mesh_node_registrations) {
@@ -1345,7 +1351,6 @@ void app_t::_apply_zlink_framework ()
               });
         }
     }
-    const auto stream_snapshot = detail::stream_runtime_t::from (_state->zlink).snapshots ();
     const auto read_framework_state = [state = _state.get ()] {
         return state->runtime_state.load (std::memory_order_acquire);
     };
@@ -1427,6 +1432,15 @@ void app_t::_apply_zlink_framework ()
           _state->termination_operation.cleanup_cancellation.get_token ());
         stream_service->bind_delay_owner (_state->delays);
         stream_service->bind_monitoring (_state->monitoring);
+        if (queue_settings) {
+            const auto queue_mesh = std::ranges::find_if (mesh_nodes, [&] (const auto &node) {
+                return node->mesh_name () == queue_settings->mesh_name;
+            });
+            stream_service->bind_admission_queue (
+              std::make_shared<runtime::admission_queue::queue_node_t> (
+                std::move (*queue_settings), location_provider.get_required<route_client_t> (),
+                *queue_mesh, *location_runtime));
+        }
         add_hosted_service (std::move (stream_service));
     }
     if (!http_snapshot.endpoints.empty ()) {

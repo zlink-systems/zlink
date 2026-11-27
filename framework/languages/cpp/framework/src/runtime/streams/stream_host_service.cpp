@@ -781,14 +781,14 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 detail::stream_session_factory_t session_factory,
                 service_provider_t &services,
                 detail::delay_owner_t *delay_owner,
-                std::atomic_bool &stop,
+                std::shared_ptr<std::atomic_bool> stop,
                 std::shared_ptr<std::atomic_bool> drain_flag,
                 std::stop_token shutdown_cancellation,
                 std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring,
                 std::shared_ptr<runtime_failure_collector_t> runtime_failures,
                 std::shared_ptr<detail::mesh_node_runtime_t> mesh_node,
                 std::shared_ptr<application_job_queue_t> application_jobs,
-                stream_host_ingress_t &ingress,
+                std::shared_ptr<stream_host_ingress_t> ingress,
                 std::chrono::milliseconds session_replacement_callback_timeout,
                 asio::io_context &liveness_io) :
         _runtime (std::move (runtime)),
@@ -800,14 +800,14 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         _session_factory (std::move (session_factory)),
         _services (&services),
         _delay_owner (delay_owner),
-        _stop (&stop),
+        _stop (std::move (stop)),
         _drain_flag (std::move (drain_flag)),
         _shutdown_cancellation (std::move (shutdown_cancellation)),
         _monitoring (std::move (monitoring)),
         _runtime_failures (std::move (runtime_failures)),
         _mesh_node (std::move (mesh_node)),
         _application_jobs (std::move (application_jobs)),
-        _ingress (ingress),
+        _ingress (std::move (ingress)),
         _session_replacement_callback_timeout (session_replacement_callback_timeout),
         _liveness_io (liveness_io),
         _acceptor (_io),
@@ -1008,6 +1008,12 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
 
     void unregister_active_stream (const stream_t &stream)
     {
+        if (const auto queue = _ingress->queue ()) {
+            if (const auto rid = stream.routing_id ()) {
+                if (const auto identity = queue->connection (_stream.name, *rid))
+                    queue->ended (*identity);
+            }
+        }
         _active_streams_lane
           .run ([this, &stream] {
               for (auto it = _active_streams.begin (); it != _active_streams.end (); ++it) {
@@ -1018,6 +1024,66 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
               }
           })
           .get ();
+    }
+
+    template <typename Work> void schedule_admission (Work work)
+    {
+        asio::post (_liveness_io, [self = shared_from_this (), work = std::move (work)] () mutable {
+            work (std::move (self));
+        });
+    }
+
+    void push_admission (const std::vector<admission_queue::delivery_t> &deliveries)
+    {
+        using namespace admission_queue;
+        if (std::ranges::none_of (deliveries, [&] (const auto &delivery) {
+                return delivery.session.stream == _stream.name;
+            }))
+            return;
+        auto streams =
+          _active_streams_lane
+            .run ([this] {
+                std::map<bytes_t, stream_t> result;
+                for (const auto &entry : _active_streams) {
+                    if (const auto rid = entry.stream.routing_id ()) {
+                        const auto raw = rid->to_bytes ();
+                        const auto bytes = std::as_bytes (std::span (raw));
+                        result.emplace (bytes_t (bytes.begin (), bytes.end ()), entry.stream);
+                    }
+                }
+                return result;
+            })
+            .get ();
+        for (const auto &delivery : deliveries) {
+            if (delivery.session.stream != _stream.name)
+                continue;
+            const auto stream = streams.find (delivery.session.rid);
+            if (stream == streams.end ()
+                || _runtime.session_closed (stream->second).stop_requested ())
+                continue;
+            const auto *name = std::holds_alternative<position_t> (delivery.value)
+                                 ? client_position_packet
+                                 : client_ticket_packet;
+            try {
+                auto sent = _runtime.write_admission_packet (stream->second, name,
+                                                             client_payload (delivery.value));
+                detail::observe_task_completion (
+                  sent, [weak = weak_from_this ()] (const result_t<void> &result) {
+                      if (!result) {
+                          if (const auto owner = weak.lock ())
+                              owner->report_admission_error (result.exception ());
+                      }
+                  });
+            }
+            catch (const std::exception &) {
+                report_admission_error (std::current_exception ());
+            }
+        }
+    }
+
+    void report_admission_error (std::exception_ptr error)
+    {
+        report_control_failure ([&] { return error; });
     }
 
     std::size_t active_session_count ()
@@ -2684,10 +2750,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             std::lock_guard session_lock (current->gate);
             if (current->connected && !current->closing) {
                 trace_stream_host ("core-dispatch-submit", _stream, header, "rid=" + rid.to_hex ());
-                auto dispatched = _ingress.publish (
-                  _runtime, *current->session, current->stream, header, payload,
+                auto dispatched = _ingress->publish (
+                  _runtime, *current->session, current->stream, _stream.name, header, payload,
                   std::move (application_permit),
-                  [this, current, rid, header] (const result_t<void> &result) {
+                  [this, self = shared_from_this (), current, rid,
+                   header] (const result_t<void> &result, detail::stream_metadata_t metadata = {}) {
                       trace_stream_host (
                         "core-dispatch-complete", _stream, header,
                         std::string ("result=") + (result ? "success" : "failure")
@@ -2698,14 +2765,16 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                    + (result.error () ? result.error ()->what () : "unknown")));
                       if (!result) {
                           report_packet_dispatch_error (header, result);
-                          send_core_error_frame (rid, current->stream, header, result);
+                          send_core_error_frame (rid, current->stream, header, result, {},
+                                                 std::move (metadata));
                       }
                   },
                   [this] { return _stop->load (std::memory_order_acquire); },
                   [&] (const result_t<void> &error, detail::stream_metadata_t metadata) {
                       rejected.emplace (error);
                       admission_metadata = std::move (metadata);
-                  });
+                  },
+                  [this] (auto work) { schedule_admission (std::move (work)); });
                 if (!dispatched) {
                     /* Session-gate invariant (cpp-internals): no task may be
                      * completed and no close may be entered while
@@ -3628,11 +3697,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                     }
                     const auto header = received_frame.header;
                     trace_stream_host ("dispatch-submit", _stream, header);
-                    auto dispatched = _ingress.publish (
-                      _runtime, session, stream, header, received_frame.payload,
+                    auto dispatched = _ingress->publish (
+                      _runtime, session, stream, _stream.name, header, received_frame.payload,
                       std::move (application_permit),
-                      [this, owner, connection, connection_state, header, stream,
-                       liveness] (const result_t<void> &result) {
+                      [this, owner, connection, connection_state, header, stream, liveness] (
+                        const result_t<void> &result, detail::stream_metadata_t metadata = {}) {
                           trace_stream_host ("dispatch-complete", _stream, header,
                                              std::string ("result=")
                                                + (result ? "success" : "failure"));
@@ -3641,7 +3710,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                               if (header.kind () == stream_message_kind_t::request
                                   && !_shutdown_cancellation.stop_requested ()) {
                                   try {
-                                      write_error_frame (owner, connection, stream, header, result);
+                                      write_error_frame (owner, connection, stream, header, result,
+                                                         std::move (metadata));
                                   }
                                   catch (...) {
                                       report_packet_dispatch_error (
@@ -3658,7 +3728,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                           report_packet_dispatch_error (header, error);
                           write_error_frame (owner, connection, stream, header, error,
                                              std::move (metadata));
-                      });
+                      },
+                      [this] (auto work) { schedule_admission (std::move (work)); });
                     if (!dispatched) {
                         report_packet_dispatch_error (header, dispatched);
                         if (header.kind () == stream_message_kind_t::request) {
@@ -3846,14 +3917,14 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     detail::stream_session_factory_t _session_factory;
     service_provider_t *_services;
     detail::delay_owner_t *_delay_owner;
-    std::atomic_bool *_stop;
+    std::shared_ptr<std::atomic_bool> _stop;
     std::shared_ptr<std::atomic_bool> _drain_flag;
     std::stop_token _shutdown_cancellation;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
     std::shared_ptr<runtime_failure_collector_t> _runtime_failures;
     std::shared_ptr<detail::mesh_node_runtime_t> _mesh_node;
     std::shared_ptr<application_job_queue_t> _application_jobs;
-    stream_host_ingress_t &_ingress;
+    std::shared_ptr<stream_host_ingress_t> _ingress;
     std::chrono::milliseconds _session_replacement_callback_timeout;
 
     runtime::state_lane_t _active_streams_lane;
@@ -4039,10 +4110,56 @@ stream_host_service_t::~stream_host_service_t ()
     stop ();
 }
 
+void stream_host_service_t::bind_admission_queue (
+  std::shared_ptr<admission_queue::queue_node_t> queue)
+{
+    _ingress->bind_queue (std::move (queue));
+}
+
+task_t<void>
+stream_host_service_t::report_admission (std::weak_ptr<stream_host_ingress_t> weak_ingress,
+                                         std::shared_ptr<std::atomic_bool> stop,
+                                         detail::delay_owner_t &delays,
+                                         std::stop_token cancellation,
+                                         std::vector<std::weak_ptr<listener_t>> listeners)
+{
+    using clock = std::chrono::steady_clock;
+    constexpr auto period = std::chrono::seconds (1);
+    auto next = clock::now ();
+    while (!stop->load (std::memory_order_acquire)) {
+        const auto ingress = weak_ingress.lock ();
+        if (!ingress)
+            break;
+        try {
+            auto deliveries =
+              co_await ingress->queue ()->report (ingress->limit (), ingress->in_flight ());
+            for (const auto &weak_listener : listeners) {
+                if (const auto listener = weak_listener.lock ())
+                    listener->push_admission (deliveries);
+            }
+        }
+        catch (const std::exception &) {
+            for (const auto &weak_listener : listeners) {
+                if (const auto listener = weak_listener.lock ()) {
+                    listener->report_admission_error (std::current_exception ());
+                    break;
+                }
+            }
+        }
+        const auto now = clock::now ();
+        next += period;
+        if (next <= now)
+            next = now + period;
+        co_await delays.start (std::chrono::ceil<std::chrono::milliseconds> (next - now),
+                               cancellation);
+    }
+    co_return;
+}
+
 task_t<void> stream_host_service_t::start (service_provider_t &services)
 {
     _services = &services;
-    _stop.store (false, std::memory_order_release);
+    _stop->store (false, std::memory_order_release);
     try {
         if (_monitoring)
             _ingress->connect_metrics (_monitoring->metric_provider);
@@ -4059,7 +4176,7 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
             auto listener = std::make_shared<listener_t> (
               _runtime, stream, advertise_host, factory->second, services, _delay_owner, _stop,
               _drain_flag, _shutdown_cancellation, _monitoring, _runtime_failures, _mesh_node,
-              _application_jobs, *_ingress, _session_replacement_callback_timeout, _liveness_io);
+              _application_jobs, _ingress, _session_replacement_callback_timeout, _liveness_io);
             auto *raw = listener.get ();
             _listeners.push_back (std::move (listener));
             _threads.emplace_back ([raw] { raw->run_guarded (); });
@@ -4090,6 +4207,13 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
                     request_stop ();
                 }
             });
+            if (_ingress->queue () && _delay_owner) {
+                std::vector<std::weak_ptr<listener_t>> listeners (_listeners.begin (),
+                                                                  _listeners.end ());
+                auto reporter = report_admission (_ingress, _stop, *_delay_owner,
+                                                  _shutdown_cancellation, std::move (listeners));
+                (void) reporter;
+            }
         }
     }
     catch (...) {
@@ -4162,7 +4286,7 @@ bool stream_host_service_t::drain_sessions_until (
 
 void stream_host_service_t::request_stop () noexcept
 {
-    _stop.store (true, std::memory_order_release);
+    _stop->store (true, std::memory_order_release);
     _liveness_io.stop ();
     if (_application_jobs)
         _application_jobs->stop ();

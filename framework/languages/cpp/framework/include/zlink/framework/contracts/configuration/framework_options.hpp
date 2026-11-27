@@ -1297,6 +1297,41 @@ class stream_node_options_builder_t
         return *this;
     }
 
+    stream_node_options_builder_t &set_admission_queue_enabled (bool value)
+    {
+        _authentication.queue_enabled = value;
+        apply ();
+        return *this;
+    }
+
+    stream_node_options_builder_t &set_admission_queue_key (std::string value)
+    {
+        _authentication.queue_key = std::move (value);
+        apply ();
+        return *this;
+    }
+
+    stream_node_options_builder_t &set_admission_queue_previous_key (std::string value)
+    {
+        _authentication.queue_previous_key = std::move (value);
+        apply ();
+        return *this;
+    }
+
+    stream_node_options_builder_t &set_admission_global_limit (std::int64_t value)
+    {
+        _authentication.global_limit = value;
+        apply ();
+        return *this;
+    }
+
+    stream_node_options_builder_t &set_admission_queue_mesh_name (std::string value)
+    {
+        _authentication.queue_mesh_name = std::move (value);
+        apply ();
+        return *this;
+    }
+
     stream_node_options_builder_t &set_tls_server (std::string certificate_file,
                                                    std::string private_key_file,
                                                    bool require_client_certificate = false)

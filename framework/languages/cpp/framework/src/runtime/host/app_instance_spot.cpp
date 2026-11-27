@@ -9,6 +9,7 @@
 #include "runtime/mesh/mesh_metadata_codec.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "runtime/streams/admission_queue_messages.hpp"
 #include "runtime/utils/weak_runtime_owner.hpp"
 #include <algorithm>
 #include <cstdint>
@@ -348,7 +349,8 @@ void configure_app_instance_spot (
                 metadata_frame.empty () ? std::optional<std::vector<std::uint8_t>>{}
                                         : std::make_optional (std::move (metadata_frame)),
                 std::move (application_payload), timeout,
-                [completion, dispatch, flow, trace_context] (
+                [completion, dispatch, flow, trace_context,
+                 expected_reply = runtime::admission_queue::reply_packet_name (packet_name)] (
                   runtime::foundation::operation_terminal_t terminal,
                   runtime::protocol::reply_header_t reply,
                   std::optional<runtime::protocol::application_payload_t> application_reply) {
@@ -381,10 +383,12 @@ void configure_app_instance_spot (
                         }
                         return;
                     }
-                    if (!application_reply) {
+                    if (!application_reply
+                        || (expected_reply
+                            && application_reply->packet_name () != *expected_reply)) {
                         auto failure = result_t<zlink::message_t>::failure (
                           framework_error_kind_t::protocol_error,
-                          "Instance Spot activation reply payload is missing");
+                          "Invalid Instance Spot activation reply envelope");
                         const auto error = failure.exception ();
                         if (completion->complete (std::move (failure)) && trace_context) {
                             trace_instance_spot_activation (

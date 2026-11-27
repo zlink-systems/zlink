@@ -30,6 +30,7 @@
 #include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/utils/weak_runtime_owner.hpp"
 #include "runtime/timers/async_delay.hpp"
+#include "runtime/streams/admission_queue_messages.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
@@ -3017,9 +3018,14 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                               }
                               std::optional<protocol::application_payload_t> response;
                               if (original_command->activation.request) {
+                                  const auto &application = original_command->application_payload;
+                                  auto queue_reply =
+                                    admission_queue::reply_packet_name (application.packet_name ());
                                   response = protocol::application_payload_t{
-                                    original_command->application_payload.packet_name (),
-                                    "application/octet-stream", reply.value ().to_bytes ()};
+                                    queue_reply.value_or (application.packet_name ()),
+                                    queue_reply ? application.content_type ()
+                                                : "application/octet-stream",
+                                    reply.value ().to_bytes ()};
                                   if (detail::message_flow_tracer_t (_dispatch_options)
                                         .flow_tracing ()) {
                                       response->flow_id =
