@@ -176,7 +176,7 @@ Connector는 다음과 같이 처리한다.
 | `AdmissionGlobalLimit` | mesh 전체 동시 인증 상한(§3.5.3). `1..2147483647` 정수, 선택 | 없음(node별 예산만) |
 
 `AdmissionQueueEnabled`가 `true`인데 `AuthenticationPacketName`이나 `AdmissionQueueKey`가 없거나, MeshNode가 없거나, MeshNode가 여럿인데
-`AdmissionQueueMeshName`이 없으면(`Mesh selection is required`, Instance Spot 기본 mesh 판정과 같다) 시작할 때 설정 오류다. 모든 node에 같은 값을 둔다.
+`AdmissionQueueMeshName`이 없으면(`Mesh selection is required`, Instance Spot 기본 mesh 판정과 같다), 2단계를 켠 STREAM 등록 이름이 UTF-8 1~255 byte가 아니면(ticket MAC의 `len(StreamName)`이 1 byte다) 시작할 때 설정 오류다. 모든 node에 같은 값을 둔다.
 `false`이면 나머지 2단계 설정은 읽지 않는다.
 
 #### 3.5.1 대기열 Spot과 epoch
@@ -219,6 +219,9 @@ Connector는 다음과 같이 처리한다.
 - 전역 상한(아래)이 있으면 발급 예산에도 넣는다: `예산(N) = min(node 예산(N), max(0, AdmissionGlobalLimit − 실행 중 permit 수 − 아직 쓰이지 않은 미만료 발급 ticket 수))`.
   그래서 permit이 빌 만큼만 ticket이 나간다. `AdmitPermit`이 `granted=false`를 받은 연결의 ticket은 그 자리에서 무효가 되고, Spot은 그
   대기자를 그 node FIFO의 맨 앞에 다시 둔다. 그 연결이 다시 enqueue하면 같은 ticket이 아니라 현재 순번을 받는다.
+  Spot은 `AdmitPermit`을 받은 연결에 지금 유효한(발급됐고 만료·무효가 아닌) ticket이 있을 때만 `granted`를 검토하고, 없으면 `granted=false`다.
+  그래서 무효화 뒤 새 ticket이 나가기 전에 옛 ticket으로 다시 온 인증은 거절되고, 새 ticket이 나간 뒤에는 같은 연결·같은 epoch이므로
+  ticket 바이트와 상관없이 같게 다룬다.
 - **전역 상한.** 설정 값 `AdmissionGlobalLimit`(양의 정수, 선택)이 있으면 mesh 전체의 동시 인증 실행 수를 이 값으로 막는다.
   Ticket은 입장 자격일 뿐이고, 실행 permit은 대기열 Spot이 따로 준다.
   - Node는 유효한 ticket을 가진 인증을 handler에 넣기 전에 대기열 Spot에 `AdmitPermit` Spot request를 한 번 보낸다. 내용은 node
