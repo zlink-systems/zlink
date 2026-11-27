@@ -318,7 +318,9 @@ def dotnet(temp, selected, results):
                    "Prepare the Core release runtime for this platform"):
         results["dotnet" if "dotnet" in selected else "dotnet-contract"] = "fail"
         return
-    tests = [step["name"] for step in job.steps if step.get("run", "").startswith("bash scripts/ci/dotnet-test.sh ")]
+    tests = [step["name"] for step in job.steps
+             if step.get("run", "").startswith(("bash scripts/ci/dotnet-test.sh ",
+                                                "bash scripts/ci/dotnet-run-check.sh "))]
     contracts = [name for name in tests if name.startswith("Run framework contract tests")]
     if not contracts:
         raise ValueError("No .NET contract test steps found in framework-dotnet.yml")
