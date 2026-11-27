@@ -4193,6 +4193,13 @@ final class ZLinkProviderAuthorityRepository {
                             }
                             PreparedAggregate aggregate =
                                     decodeAggregate(aggregateFound.value().bytes(), fence);
+                            if (aggregate.state() == AGGREGATE_ABORTED) {
+                                return completed(
+                                        snapshot(
+                                                record.withAggregate(null, null),
+                                                found.value().version().value(),
+                                                found.value().storeNow()));
+                            }
                             if (aggregate.state() != AGGREGATE_COMMITTED) {
                                 return completed(
                                         snapshot(
