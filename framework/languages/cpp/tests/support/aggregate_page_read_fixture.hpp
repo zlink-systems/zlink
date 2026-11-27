@@ -17,10 +17,10 @@ namespace zlink::framework::test
 using namespace zlink::framework::runtime;
 using namespace std::chrono_literals;
 
-class paused_aggregate_page_store_t final : public location_store_t
+class paused_aggregate_commit_store_t final : public location_store_t
 {
   public:
-    explicit paused_aggregate_page_store_t (location_store_t &store) : inner (store) {}
+    explicit paused_aggregate_commit_store_t (location_store_t &store) : inner (store) {}
     task_t<store_read_result_t> read (store_key_t key) override
     {
         return inner.read (std::move (key));
@@ -31,42 +31,41 @@ class paused_aggregate_page_store_t final : public location_store_t
     }
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
-        const bool page = std::any_of (
-          request.mutations.begin (), request.mutations.end (), [] (const auto &mutation) {
-              return std::visit (
-                [] (const auto &value) {
-                    return value.key.value.starts_with ("zlink:v11:aggregate-commit:");
-                },
-                mutation);
-          });
-        auto written = co_await inner.write (std::move (request));
-        if (page && std::holds_alternative<store_write_applied_t> (written)) {
-            page_written.complete (result_t<bool>::success (true));
+        const bool committing = std::ranges::any_of (request.mutations, [] (const auto &mutation) {
+            const auto *put = std::get_if<store_put_t> (&mutation);
+            if (!put || !put->key.value.starts_with ("zlink:v11:aggregate:"))
+                return false;
+            const auto record = nlohmann::json::parse (put->bytes);
+            return record.at ("state") == "committed";
+        });
+        if (committing) {
+            commit_waiting.complete (result_t<bool>::success (true));
             co_await release.task ();
         }
-        co_return written;
+        co_return co_await inner.write (std::move (request));
     }
     location_store_t &inner;
-    task_completion_source_t<bool> page_written;
+    task_completion_source_t<bool> commit_waiting;
     task_completion_source_t<void> release;
 };
 
 inline task_t<aggregate_commit_result_t>
-observe_aggregate_page_commit (task_t<aggregate_commit_result_t> commit,
-                               task_completion_source_t<bool> &page_written)
+observe_aggregate_commit (task_t<aggregate_commit_result_t> commit,
+                          task_completion_source_t<bool> &commit_waiting)
 {
-    scope_exit_t signal_terminal ([&] { page_written.complete (result_t<bool>::success (false)); });
+    scope_exit_t signal_terminal (
+      [&] { commit_waiting.complete (result_t<bool>::success (false)); });
     co_return co_await commit;
 }
 
 template <typename TBytes>
-void aggregate_page_read_keeps_source_version_until_commit (
+void aggregate_read_keeps_source_version_until_commit (
   location_store_t &store,
   TBytes bytes,
   authority_aggregate_codec::json_t relocation_record = nullptr)
 {
     namespace stateful = zlink::framework::runtime::stateful;
-    paused_aggregate_page_store_t provider (store);
+    paused_aggregate_commit_store_t provider (store);
     provider_location_repository_t repository (provider);
     repository.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto make_target = [&] (const std::string &id) {
@@ -198,12 +197,12 @@ void aggregate_page_read_keeps_source_version_until_commit (
       << "prepare result variant " << prepared.index ();
     const auto fence = std::get<aggregate_prepared_t> (prepared).fence;
     auto pending =
-      observe_aggregate_page_commit (repository.commit_aggregate (fence), provider.page_written);
+      observe_aggregate_commit (repository.commit_aggregate (fence), provider.commit_waiting);
     scope_exit_t release_commit ([&] {
         provider.release.complete (result_t<void>::success ());
         (void) pending.result ();
     });
-    ASSERT_TRUE (provider.page_written.task ().result ().value ());
+    ASSERT_TRUE (provider.commit_waiting.task ().result ().value ());
     EXPECT_FALSE (pending.await_ready ());
     // Release the commit even if an observation fails, so the fixture owns no pending work.
     const auto read = repository.read_authority (key).result ().value ();
@@ -236,7 +235,7 @@ void aggregate_page_read_keeps_source_version_until_commit (
         .value ()));
     auto settlement = adapter.settle_source_relocation (source_fence, {participant}, false);
     EXPECT_EQ (settlement.outcome, stateful::relocation_authority_t::unsettled)
-      << "A staged page must not report source_preserved";
+      << "A prepared authority must remain unsettled before commit";
     release_commit.run ();
     EXPECT_EQ (pending.result ().value (), aggregate_commit_result_t::committed);
     // Source settlement remains eligible to observe the terminal target owner.
