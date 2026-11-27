@@ -7,4 +7,9 @@ public record ZLinkAggregateFence(UUID aggregateId, long aggregateGeneration) {
     public ZLinkAggregateFence {
         Objects.requireNonNull(aggregateId, "aggregateId");
     }
+
+    /** Markerless relocation key identity; target attempt generation remains a separate fence. */
+    public static ZLinkAggregateFence markerlessRelocation(UUID relocationId) {
+        return new ZLinkAggregateFence(relocationId, 1);
+    }
 }

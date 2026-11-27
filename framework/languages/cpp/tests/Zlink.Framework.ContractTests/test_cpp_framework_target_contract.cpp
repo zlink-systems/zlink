@@ -145,7 +145,14 @@ int main ()
       read_text_file (root / "framework/src/runtime/utils/relocation_id_generator.hpp");
     const auto live_location_reader =
       read_text_file (root / "framework/src/runtime/locations/live_location_reader.hpp");
-    const auto app_runtime = read_text_file (root / "framework/src/runtime/host/app.cpp");
+    const auto app_host = root / "framework/src/runtime/host";
+    const auto app_runtime = read_text_file (app_host / "app.cpp")
+                             + read_text_file (app_host / "app_actor_gateway.cpp")
+                             + read_text_file (app_host / "app_framework_assembly.cpp")
+                             + read_text_file (app_host / "app_instance_spot.cpp")
+                             + read_text_file (app_host / "app_maintenance.cpp")
+                             + read_text_file (app_host / "app_store_repositories.cpp")
+                             + read_text_file (app_host / "app_internal.hpp");
     const auto dispatch_events =
       read_text_file (root / "framework/src/runtime/diagnostics/dispatch_events.hpp");
     const auto mesh_node_runtime =

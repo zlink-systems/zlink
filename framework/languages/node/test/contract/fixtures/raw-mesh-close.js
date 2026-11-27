@@ -36,10 +36,10 @@ function fixture(taskRunner) {
       guard('routesSnapshot');
       return routes;
     },
-    submitSend(target) {
+    submitSend(target, parts) {
       guard('submitSend');
       events.push(`submit:${target}`);
-      return f.onSubmit(target) ?? { result: SubmitResult.Ok, admitted: Promise.resolve() };
+      return f.onSubmit(target, parts) ?? { result: SubmitResult.Ok, admitted: Promise.resolve() };
     },
     receive() {
       guard('receive');

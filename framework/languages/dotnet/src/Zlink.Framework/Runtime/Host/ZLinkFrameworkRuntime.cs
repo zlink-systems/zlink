@@ -864,8 +864,12 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             completions.Add(
                 (
                     node is null
-                        ? spot.DiscardLocationExecutionAsync(DiscardMembers)
-                        : node.DiscardLocationExecutionAsync(spot, DiscardMembers)
+                        ? spot.DiscardLocationExecutionAsync(DiscardMembers, generationShutdown)
+                        : node.DiscardLocationExecutionAsync(
+                            spot,
+                            DiscardMembers,
+                            generationShutdown
+                        )
                 ).AsTask()
             );
         }
