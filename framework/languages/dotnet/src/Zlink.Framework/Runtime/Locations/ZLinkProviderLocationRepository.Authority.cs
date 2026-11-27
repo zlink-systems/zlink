@@ -840,7 +840,8 @@ internal sealed partial class ZLinkProviderLocationRepository
         var endedUserSpotId = active
             ? ZLinkAuthorityCleanup.RequireReclaimableAuthority(current.Snapshot)
             : null;
-        if (active && !ownerLive)
+        var requiresReleaseWait = active && !ownerLive && !actorClosing;
+        if (requiresReleaseWait)
             _ownerLeaseReleaseWait.Observe(currentOwner);
         if (endedUserSpotId is not null && !discarded)
             members = await ReadEndedUserSpotMembersAsync(
@@ -909,7 +910,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     ? new ZLinkStoreCondition.Version(OwnerKey(ownerId), found.Value.Version)
                     : new ZLinkStoreCondition.Missing(OwnerKey(ownerId))
             );
-        if (active && !ownerLive)
+        if (requiresReleaseWait)
         {
             releaseWaitElapsed = _ownerLeaseReleaseWait.HasElapsed(
                 currentOwner,
