@@ -48,6 +48,67 @@ public sealed partial class StandaloneActorRelocationPrecommitTests
         Assert.Equal(callsAtStop, store.Calls);
     }
 
+    // Host relocation §14 (#5797): a Store failure that arrives after the stop
+    // deadline is not treated as indeterminate and retried; the settlement ends.
+    [Fact]
+    public async Task Preserve_failure_after_the_stop_deadline_ends_the_settlement()
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(inner);
+        using var restoreDeadline = new CancellationTokenSource();
+        using var stopDeadline = new CancellationTokenSource();
+        restoreDeadline.Cancel();
+        var store = new StopThenFailPreserveStore(inner, stopDeadline);
+
+        await Assert.ThrowsAsync<ZLinkAuthorityUnsettledAtStopException>(async () =>
+            await ZLinkStandaloneActorRelocationRuntime
+                .SettleSourceAsync(
+                    store,
+                    source.Key,
+                    source.Steady,
+                    source.RelocationId,
+                    source.Target,
+                    TimeSpan.MaxValue,
+                    static () => true,
+                    static _ => ValueTask.CompletedTask,
+                    TimeSpan.FromMilliseconds(5),
+                    restoreDeadline.Token,
+                    ReadyRoute,
+                    stopDeadline.Token
+                )
+                .AsTask()
+                .WaitAsync(ReadBarrierTimeout)
+        );
+        Assert.Equal(1, store.Preserves);
+    }
+
+    private sealed class StopThenFailPreserveStore(
+        IZLinkLocationRepository inner,
+        CancellationTokenSource stopDeadline
+    ) : ZLinkLocationStoreTestDouble
+    {
+        private int _preserves;
+
+        internal int Preserves => Volatile.Read(ref _preserves);
+
+        public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
+            ZLinkAuthorityKey key,
+            CancellationToken cancellationToken = default
+        ) => inner.ReadAuthorityAsync(key, cancellationToken);
+
+        public override ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
+            ZLinkAuthorityKey key,
+            string expectedStoreVersion,
+            ZLinkAuthorityMutation mutation,
+            CancellationToken cancellationToken = default
+        )
+        {
+            Interlocked.Increment(ref _preserves);
+            stopDeadline.Cancel();
+            throw new IOException("The Store failed as the stop deadline passed.");
+        }
+    }
+
     private sealed class UndecidedPreserveStore(IZLinkLocationRepository inner)
         : ZLinkLocationStoreTestDouble
     {

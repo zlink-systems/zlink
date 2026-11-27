@@ -581,6 +581,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     .ReadAuthorityAsync(authorityKey, token)
                     .ConfigureAwait(false);
             }
+            catch (Exception) when (stopDeadline.IsCancellationRequested)
+            {
+                //  Host relocation §14: a read that fails or is cancelled after the
+                //  stop deadline ends the settlement without another Store call.
+                throw new ZLinkAuthorityUnsettledAtStopException();
+            }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 // Re-enter the existing settlement loop with its deadline reached.
@@ -645,8 +651,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                             )
                             .ConfigureAwait(false);
                     }
-                    catch (OperationCanceledException) when (stopDeadline.IsCancellationRequested)
+                    catch (Exception) when (stopDeadline.IsCancellationRequested)
                     {
+                        //  A Preserve failure after the stop deadline is not retried.
                         throw new ZLinkAuthorityUnsettledAtStopException();
                     }
                     catch (Exception error)
