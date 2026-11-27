@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 const assert = require('node:assert/strict');
-const { on, once } = require('node:events');
+const { once } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
@@ -130,6 +130,7 @@ async function probe(endpoint, wire) {
   const signal = AbortSignal.timeout(timeoutMs);
   const sockets = [];
   const kinds = wire.ZlinkStreamMessageKind;
+  const control = wire.ZlinkStreamControlPacket;
   const json = wire.ZlinkStreamCodec.Json;
   const enqueueName = '$zlink.admission.enqueue';
   const ticketName = '$zlink.admission.ticket';
@@ -138,7 +139,38 @@ async function probe(endpoint, wire) {
     const socket = new WebSocket(endpoint);
     sockets.push(socket);
     socket.binaryType = 'arraybuffer';
-    const messages = on(socket, 'message', { signal, close: ['close'] });
+    // Frames are read as they arrive, not only while a step awaits this socket: a
+    // connection the probe is not reading at the moment must still answer the
+    // server's liveness ping with an empty pong (stream connector §4), or the
+    // server closes it for heartbeat timeout.
+    const frames = [];
+    let wake;
+    let closed = false;
+    socket.addEventListener('message', (event) => {
+      const frame = wire.decodeStreamWireFrame(new Uint8Array(event.data));
+      const header = wire.decodeStreamWireHeader(frame.header);
+      append(
+        'probe.frames',
+        `kind=${header.kind} codec=${header.codec} name=${header.name} ` +
+          `requestSeq=${header.requestSeq} payloadBytes=${frame.payload.length}\n`
+      );
+      if (header.kind === kinds.Control && header.name === control.HeartbeatPing) {
+        const pong = wire.encodeStreamWireHeader({
+          kind: kinds.Control,
+          codec: wire.ZlinkStreamCodec.Raw,
+          name: control.HeartbeatPong,
+          metadata: new Map()
+        });
+        socket.send(wire.encodeStreamWireFrame(pong, new Uint8Array()));
+        return;
+      }
+      frames.push({ header, frame });
+      wake?.();
+    });
+    socket.addEventListener('close', () => {
+      closed = true;
+      wake?.();
+    });
     await once(socket, 'open', { signal });
     return {
       send(name, seq, value, metadata = new Map()) {
@@ -152,16 +184,17 @@ async function probe(endpoint, wire) {
         socket.send(wire.encodeStreamWireFrame(header, Buffer.from(JSON.stringify(value))));
       },
       async receive() {
-        const next = await messages.next();
-        assert.ok(!next.done, 'STREAM connection closed before reply');
-        const [event] = next.value;
-        const frame = wire.decodeStreamWireFrame(new Uint8Array(event.data));
-        const header = wire.decodeStreamWireHeader(frame.header);
-        const seen =
-          `kind=${header.kind} codec=${header.codec} name=${header.name} ` +
-          `requestSeq=${header.requestSeq} payloadBytes=${frame.payload.length}`;
-        append('probe.frames', `${seen}\n`);
-        assert.equal(header.codec, json, seen);
+        while (frames.length === 0) {
+          assert.ok(!closed, 'STREAM connection closed before reply');
+          assert.ok(!signal.aborted, 'Timed out waiting for a STREAM frame');
+          await new Promise((resolve) => {
+            wake = resolve;
+            signal.addEventListener('abort', resolve, { once: true });
+          });
+          wake = undefined;
+        }
+        const { header, frame } = frames.shift();
+        assert.equal(header.codec, json, `kind=${header.kind} name=${header.name}`);
         return { header, body: JSON.parse(Buffer.from(frame.payload).toString('utf8')) };
       }
     };

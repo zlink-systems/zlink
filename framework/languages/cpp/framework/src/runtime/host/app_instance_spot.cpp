@@ -9,6 +9,7 @@
 #include "runtime/mesh/mesh_metadata_codec.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "runtime/spots/instance_spot_application.hpp"
 #include "runtime/streams/admission_queue_messages.hpp"
 #include "runtime/utils/weak_runtime_owner.hpp"
 #include <algorithm>
@@ -324,13 +325,12 @@ void configure_app_instance_spot (
             auto header =
               make_activation (selected.value (), spot_id, true, !metadata_frame.empty (),
                                std::chrono::system_clock::now () + timeout, intent, cached_route);
-            const auto serialized = encode_payload (*serializers);
-            runtime::protocol::application_payload_t application_payload{
-              packet_name, serialized.content_type, serialized.payload.to_bytes ()};
-            if (flow && !flow->flow_id.empty ()) {
-                application_payload.flow_id = flow->flow_id;
-                application_payload.flow_origin = flow->origin;
-            }
+            auto serialized = encode_payload (*serializers);
+            auto application_payload = runtime::messaging::encode_instance_spot_application (
+              {.kind = runtime::messaging::message_kind_t::request,
+               .message_name = packet_name,
+               .content_type = serialized.content_type},
+              detail::encoded_payload_to_raw (std::move (serialized.payload)));
             const auto trace_context = make_instance_spot_activation_trace_context (
               detail::message_flow_tracer_t (dispatch).enabled_for (
                 message_flow_outcome_t::reply_received, message_flow_result_t::failed),
@@ -383,9 +383,16 @@ void configure_app_instance_spot (
                         }
                         return;
                     }
-                    if (!application_reply
+                    auto decoded =
+                      application_reply
+                        ? runtime::messaging::decode_instance_spot_application (
+                            *application_reply, runtime::messaging::message_kind_t::response)
+                        : result_t<runtime::messaging::instance_spot_application_t>::failure (
+                            framework_error_kind_t::protocol_error,
+                            "Instance Spot activation reply is missing");
+                    if (!decoded
                         || (expected_reply
-                            && application_reply->packet_name () != *expected_reply)) {
+                            && decoded.value ().header.message_name != *expected_reply)) {
                         auto failure = result_t<zlink::message_t>::failure (
                           framework_error_kind_t::protocol_error,
                           "Invalid Instance Spot activation reply envelope");
@@ -404,8 +411,8 @@ void configure_app_instance_spot (
                           dispatch, flow, message_flow_outcome_t::reply_received,
                           dispatch_message_kind_t::response, *trace_context);
                     }
-                    completion->complete (result_t<zlink::message_t>::success (
-                      zlink::message_t::from (std::move (application_reply->payload_bytes ()))));
+                    completion->complete (
+                      result_t<zlink::message_t>::success (std::move (decoded.value ().body)));
                 });
             if (!submitted) {
                 auto failure = result_t<zlink::message_t>::failure (
@@ -450,13 +457,12 @@ void configure_app_instance_spot (
               make_activation (selected.value (), spot_id, false, !metadata_frame.empty (),
                                started_at + selected.value ().source->default_request_timeout (),
                                intent, cached_route);
-            const auto serialized = encode_payload (*serializers);
-            runtime::protocol::application_payload_t application_payload{
-              packet_name, serialized.content_type, serialized.payload.to_bytes ()};
-            if (flow && !flow->flow_id.empty ()) {
-                application_payload.flow_id = flow->flow_id;
-                application_payload.flow_origin = flow->origin;
-            }
+            auto serialized = encode_payload (*serializers);
+            auto application_payload = runtime::messaging::encode_instance_spot_application (
+              {.kind = runtime::messaging::message_kind_t::command,
+               .message_name = packet_name,
+               .content_type = serialized.content_type},
+              detail::encoded_payload_to_raw (std::move (serialized.payload)));
             const auto trace_context = make_instance_spot_activation_trace_context (
               detail::message_flow_tracer_t (dispatch).enabled_for (
                 message_flow_outcome_t::dropped),

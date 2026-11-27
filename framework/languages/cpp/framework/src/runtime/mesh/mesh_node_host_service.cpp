@@ -30,7 +30,7 @@
 #include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/utils/weak_runtime_owner.hpp"
 #include "runtime/timers/async_delay.hpp"
-#include "runtime/streams/admission_queue_messages.hpp"
+#include "runtime/spots/instance_spot_application.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
@@ -2968,12 +2968,19 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                               result_t<host::instance_spot_activation_result_t>::success (
                                 std::move (result)));
                         };
+                        auto decoded_application = messaging::decode_instance_spot_application (
+                          application,
+                          request.request ? messaging::message_kind_t::request
+                                          : messaging::message_kind_t::command,
+                          detail::message_flow_tracer_t (_dispatch_options).flow_tracing ());
                         std::map<std::string, std::string> decoded;
-                        if (metadata
-                            && !detail::mesh_metadata_codec_t::decode (*metadata, decoded)) {
-                            done ({107,
+                        if (!decoded_application
+                            || (metadata
+                                && !detail::mesh_metadata_codec_t::decode (*metadata, decoded))) {
+                            done ({static_cast<std::uint32_t> (
+                                     protocol::request_terminal_result::protocolError),
                                    static_cast<std::uint32_t> (
-                                     protocol::framework_error_code::requestFailed),
+                                     protocol::framework_error_code::requestProtocolError),
                                    std::nullopt});
                             return output;
                         }
@@ -2987,19 +2994,27 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                     return missing (*terminal);
                                 });
                         }
+                        auto &decoded_header = decoded_application.value ().header;
+                        auto flow_id =
+                          decoded_header.flow_id
+                            ? std::make_optional (std::string (*decoded_header.flow_id))
+                            : std::nullopt;
                         auto running = std::make_shared<task_t<zlink::message_t>> (
                           detail::spot_node_runtime_t (registration->spot_state)
                             .dispatch_instance_activation (
-                              spot_id_t (request.target.spot_id), application.packet_name (),
-                              application.content_type (), application.payload_bytes (),
-                              std::move (decoded), request.request,
+                              spot_id_t (request.target.spot_id),
+                              std::string (decoded_header.message_name),
+                              std::string (decoded_header.content_type),
+                              std::move (decoded_application.value ().body), std::move (decoded),
+                              request.request,
                               std::to_string (request.operation.high) + ":"
                                 + std::to_string (request.operation.low),
                               services, *_serializers, std::move (accept_activation),
-                              application.flow_id, application.flow_origin, terminal.get (),
+                              std::move (flow_id), decoded_header.flow_origin, terminal.get (),
                               original));
                         detail::observe_task_completion (
-                          *running, [this, running, original_command, terminal,
+                          *running, [running, is_request = request.request,
+                                     decoded_header = std::move (decoded_header), terminal,
                                      done] (const result_t<zlink::message_t> &reply) {
                               if (!reply) {
                                   const auto failure =
@@ -3017,22 +3032,14 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   return;
                               }
                               std::optional<protocol::application_payload_t> response;
-                              if (original_command->activation.request) {
-                                  const auto &application = original_command->application_payload;
-                                  auto queue_reply =
-                                    admission_queue::reply_packet_name (application.packet_name ());
-                                  response = protocol::application_payload_t{
-                                    queue_reply.value_or (application.packet_name ()),
-                                    queue_reply ? application.content_type ()
-                                                : "application/octet-stream",
-                                    reply.value ().to_bytes ()};
-                                  if (detail::message_flow_tracer_t (_dispatch_options)
-                                        .flow_tracing ()) {
-                                      response->flow_id =
-                                        original_command->application_payload.flow_id;
-                                      response->flow_origin =
-                                        original_command->application_payload.flow_origin;
-                                  }
+                              if (is_request) {
+                                  auto reply_header =
+                                    detail::channel_reply_writer_t{}.create_reply_header (
+                                      messaging::message_kind_t::response, {}, decoded_header);
+                                  reply_header.flow_id = decoded_header.flow_id;
+                                  reply_header.flow_origin = decoded_header.flow_origin;
+                                  response = messaging::encode_instance_spot_application (
+                                    reply_header, reply.value ().copy ());
                               }
                               done ({0, 0, std::move (response), std::move (*terminal)});
                           });

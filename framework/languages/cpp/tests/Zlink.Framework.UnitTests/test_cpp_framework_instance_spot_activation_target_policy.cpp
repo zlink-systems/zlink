@@ -99,7 +99,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       runtime
         ->dispatch_instance_activation (
           zlink::framework::spot_id_t ("traced-player-1"), traced_event_t::packet_name,
-          serializers.get<traced_event_t> ().content_type (), event_payload.to_bytes (), {}, false,
+          serializers.get<traced_event_t> ().content_type (), event_payload.copy (), {}, false,
           "operation-send", provider, serializers, [] {}, activation_flow_id,
           zlink::framework::flow_origin_t::application)
         .result ();
@@ -111,8 +111,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       runtime
         ->dispatch_instance_activation (
           zlink::framework::spot_id_t ("traced-player-1"), traced_request_t::packet_name,
-          serializers.get<traced_request_t> ().content_type (), request_payload.to_bytes (), {},
-          true, "operation-request", provider, serializers, [] {}, activation_flow_id,
+          serializers.get<traced_request_t> ().content_type (), request_payload.copy (), {}, true,
+          "operation-request", provider, serializers, [] {}, activation_flow_id,
           zlink::framework::flow_origin_t::application)
         .result ();
     ASSERT_TRUE (request_result);
