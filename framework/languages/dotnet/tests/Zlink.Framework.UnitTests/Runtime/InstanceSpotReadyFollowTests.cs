@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Dispatch;
@@ -82,7 +83,14 @@ public sealed class InstanceSpotReadyFollowTests
         Assert.True(relocated.Completed, relocated.ToString());
         Assert.Equal(1UL, relocated.CommittedUnitCount);
         if (scenario == "expired")
-            await Task.Delay(duration, deadline.Token);
+        {
+            // Measure the full monotonic Follow duration from the confirmed commit.
+            var completedAt = Stopwatch.GetTimestamp();
+            await WaitUntilAsync(
+                () => Stopwatch.GetElapsedTime(completedAt) >= duration,
+                deadline.Token
+            );
+        }
 
         if (scenario == "hop-limit")
         {

@@ -35,7 +35,8 @@ internal sealed record ZLinkCanonicalAcceptedRequest(
     ulong TargetAuthorityOwnerGeneration,
     ulong TargetOwnerLeaseGeneration,
     ZLinkMessageMetadata Metadata,
-    ZLinkCanonicalApplicationPayload ApplicationPayload
+    ZLinkCanonicalApplicationPayload ApplicationPayload,
+    bool InstanceIntent = false
 );
 
 internal sealed record ZLinkRelocationLogicalTimer(
@@ -151,7 +152,23 @@ internal static class ZLinkRelocationEnvelopeCodec
         truncated = false;
         try
         {
-            var reader = new CanonicalReader(encoded.ToArray());
+            var bytes = encoded.ToArray();
+            if (
+                encoded.Length != 0
+                && encoded[0] == (byte)ServiceWireCodec.MeshRecordKind.InstanceSpotActivation
+            )
+            {
+                var record = ServiceWireCodec.DecodeFrozenRecord(
+                    bytes,
+                    FrozenWireContext(bytes.Length)
+                );
+                ValidateInstanceOperation(
+                    record,
+                    (ServiceWireCodec.FrozenRecordBodyCase13)record.Body
+                );
+                return true;
+            }
+            var reader = new CanonicalReader(bytes);
             ReadCanonicalFrozenRecord(ref reader);
             reader.RequireEnd("relocation frozen record");
             return true;
@@ -616,22 +633,17 @@ internal static class ZLinkRelocationEnvelopeCodec
         ReadOnlyMemory<byte> inventoryDigest
     )
     {
-        ServiceWirePilotCodec.RelocationEnvelopeV1 generated;
-        try
-        {
-            generated = ServiceWirePilotCodec.DecodeRelocationEnvelopeV1(encoded.ToArray());
-        }
-        catch (DecoderFallbackException error)
-        {
-            throw new InvalidDataException(
-                "The relocation envelope contains invalid UTF-8.",
-                error
-            );
-        }
-        var canonical = ServiceWirePilotCodec.EncodeRelocationEnvelopeV1(generated);
-        var (objectKind, objectId, objectGeneration, ownerGeneration) = ProjectObject(
-            generated.Object
-        );
+        var canonical = encoded.ToArray();
+        var generated = DecodeCanonicalLogicalStream(canonical);
+        var identity = ZLinkServiceWireCodec.FromCanonicalObject(generated.Object);
+        var objectKind = (ZLinkPlacementObjectKind)identity.Kind;
+        var objectId = identity.ObjectId;
+        var objectGeneration = identity.ObjectGeneration;
+        // Instance roots carry their owner generation through the Store inventory.
+        var ownerGeneration =
+            objectKind == ZLinkPlacementObjectKind.InstanceSpot
+                ? 1UL
+                : identity.ExpectedAuthorityOwnerGeneration;
         var authorityKey = objectKind switch
         {
             ZLinkPlacementObjectKind.Actor => ZLinkAuthorityKeyCodec.EncodeActor(objectId),
@@ -640,14 +652,23 @@ internal static class ZLinkRelocationEnvelopeCodec
             _ => throw new InvalidDataException("The relocation object kind is invalid."),
         };
         var participantIds = generated
-            .ApplicationStates.Select(static state => state.ParticipantId)
+            .ApplicationStates.Items.Select(static state => state.ParticipantId.Value)
             .ToArray();
         var jobs = participantIds.ToDictionary(
             static id => id,
             static _ => new List<ZLinkRelocationQueuedJob>()
         );
-        var bindings = generated.SessionBindings.ToDictionary(static binding =>
-            binding.ParticipantId
+        var bindings = generated.SessionBindings.Items.ToDictionary(
+            static binding => binding.ParticipantId.Value,
+            static binding => new ServiceWirePilotCodec.RelocationSessionBinding(
+                binding.ParticipantId.Value,
+                binding.SessionOwnerNodeRid.Value.ToArray(),
+                binding.SessionOwnerNodeGeneration.Value,
+                binding.SessionOwnerId.Value,
+                binding.SessionOwnerLeaseGeneration.Value,
+                binding.SessionRid.Value.ToArray(),
+                binding.BindingGeneration.Value
+            )
         );
         if (bindings.Keys.Any(id => !jobs.ContainsKey(id)))
             throw new InvalidDataException(
@@ -655,90 +676,121 @@ internal static class ZLinkRelocationEnvelopeCodec
             );
         var acceptedOrders = new HashSet<(ulong ParticipantId, ulong Order)>();
         var operations = new HashSet<CanonicalSavedWorkOperation>();
-        foreach (var work in generated.SavedWork)
+        var context = FrozenWireContext(canonical.Length);
+        foreach (var work in generated.SavedWork.Items)
         {
-            if (!acceptedOrders.Add((work.ParticipantId, work.Order)))
-                throw new InvalidDataException("The relocation saved-work order is invalid.");
-            var job = DecodeCanonicalSavedWork(work.Order, work.FrozenRecord, out var operation);
+            var participantId = work.ParticipantId.Value;
+            var order = work.Order.Value;
+            if (
+                !acceptedOrders.Add((participantId, order))
+                || !jobs.TryGetValue(participantId, out var participantJobs)
+            )
+                throw new InvalidDataException(
+                    "The relocation saved-work participant or order is invalid."
+                );
+            var frozen = ServiceWireCodec.EncodeFrozenRecord(work.Record, context);
+            var job = DecodeCanonicalSavedWork(
+                order,
+                frozen,
+                work.Record,
+                identity,
+                out var operation
+            );
             if (operation is { } exactOperation && !operations.Add(exactOperation))
                 throw new InvalidDataException(
                     "The relocation saved work contains a duplicate operation identity."
                 );
-            jobs[work.ParticipantId].Add(job);
+            participantJobs.Add(job);
         }
 
         var timers = participantIds.ToDictionary(
             static id => id,
             static _ => new List<CanonicalTimerProjection>()
         );
-        foreach (var timer in generated.TimerRegistrations)
+        foreach (var timer in generated.TimerRegistrations.Items)
         {
             if (
-                timer.PeriodMilliseconds > long.MaxValue
-                || timer.NextScheduledAtUnixMilliseconds > long.MaxValue
+                timer.PeriodMilliseconds.Value > long.MaxValue
+                || timer.NextScheduledAtUnixMilliseconds.Value > long.MaxValue
             )
                 throw new InvalidDataException("The relocation timer registration is invalid.");
-            timers[timer.ParticipantId]
-                .Add(
-                    new CanonicalTimerProjection(
-                        timer.Name,
-                        checked((long)timer.NextScheduledAtUnixMilliseconds),
-                        checked((long)timer.PeriodMilliseconds),
-                        timer.HandlerType,
-                        timer.OverrunPolicy,
-                        timer.MaxCatchUpTicks,
-                        timer.StopOnUnhandledException,
-                        timer.LastCompletedDeliveryIndex,
-                        timer.LastCompletedScheduledIndex,
-                        checked((long)timer.NextScheduledAtUnixMilliseconds)
-                    )
+            if (!timers.TryGetValue(timer.ParticipantId.Value, out var participantTimers))
+                throw new InvalidDataException(
+                    "The relocation timer participant is outside its inventory."
                 );
+            participantTimers.Add(
+                new CanonicalTimerProjection(
+                    timer.Name.Value,
+                    checked((long)timer.NextScheduledAtUnixMilliseconds.Value),
+                    checked((long)timer.PeriodMilliseconds.Value),
+                    timer.HandlerType.Value,
+                    (byte)timer.OverrunPolicy,
+                    timer.MaxCatchUpTicks.Value,
+                    timer.StopOnUnhandledException == ServiceWireCodec.Bool8.True,
+                    timer.LastCompletedDeliveryIndex.Value,
+                    timer.LastCompletedScheduledIndex.Value,
+                    checked((long)timer.NextScheduledAtUnixMilliseconds.Value)
+                )
+            );
         }
-        foreach (var pending in generated.PendingTimerTicks)
+        foreach (var pending in generated.PendingTimerTicks.Items)
         {
             if (
-                !acceptedOrders.Add((pending.ParticipantId, pending.Order))
-                || pending.ScheduledAtUnixMilliseconds > long.MaxValue
+                !acceptedOrders.Add((pending.ParticipantId.Value, pending.Order.Value))
+                || pending.ScheduledAtUnixMilliseconds.Value > long.MaxValue
             )
                 throw new InvalidDataException("The pending relocation timer tick is invalid.");
-            var timer = timers[pending.ParticipantId]
-                .Single(candidate =>
-                    string.Equals(candidate.TimerId, pending.TimerName, StringComparison.Ordinal)
+            if (
+                !timers.TryGetValue(pending.ParticipantId.Value, out var participantTimers)
+                || participantTimers.SingleOrDefault(candidate =>
+                    string.Equals(
+                        candidate.TimerId,
+                        pending.TimerName.Value,
+                        StringComparison.Ordinal
+                    )
+                )
+                    is not { } timer
+            )
+                throw new InvalidDataException(
+                    "The pending relocation timer registration is missing."
                 );
             timer.AppendPendingTick(
                 new ZLinkCanonicalPendingTimerTick(
-                    pending.Order,
-                    pending.DeliveryIndex,
-                    pending.ScheduledIndex,
-                    checked((long)pending.ScheduledAtUnixMilliseconds),
-                    pending.SkippedTicks
+                    pending.Order.Value,
+                    pending.DeliveryIndex.Value,
+                    pending.ScheduledIndex.Value,
+                    checked((long)pending.ScheduledAtUnixMilliseconds.Value),
+                    pending.SkippedTicks.Value
                 )
             );
         }
 
         var participants = generated
-            .ApplicationStates.Select(
+            .ApplicationStates.Items.Select(
                 (state, index) =>
                     new ZLinkRelocationParticipantEnvelope(
                         index == 0
                             ? authorityKey
                             : new ZLinkAuthorityKey(
-                                $"{authorityKey.Value}#participant:{state.ParticipantId}"
+                                $"{authorityKey.Value}#participant:{state.ParticipantId.Value}"
                             ),
                         objectKind,
                         objectGeneration,
                         ownerGeneration,
-                        state.Payload,
-                        jobs[state.ParticipantId],
-                        timers[state.ParticipantId]
+                        state.ApplicationState
+                            is ServiceWireCodec.RelocationApplicationStateCase1 withState
+                            ? withState.Payload.Value
+                            : ReadOnlyMemory<byte>.Empty,
+                        jobs[state.ParticipantId.Value],
+                        timers[state.ParticipantId.Value]
                             .Select(static timer => timer.ToRelocationTimer())
                             .ToArray(),
                         RecoveryPayload: ReadOnlyMemory<byte>.Empty,
                         CompletionPayload: ReadOnlyMemory<byte>.Empty
                     )
                     {
-                        CanonicalParticipantId = state.ParticipantId,
-                        SessionBinding = bindings.GetValueOrDefault(state.ParticipantId),
+                        CanonicalParticipantId = state.ParticipantId.Value,
+                        SessionBinding = bindings.GetValueOrDefault(state.ParticipantId.Value),
                     }
             )
             .ToArray();
@@ -750,56 +802,23 @@ internal static class ZLinkRelocationEnvelopeCodec
                 $"The relocation inventory digest must contain {System.Security.Cryptography.SHA256.HashSizeInBytes} bytes."
             );
         var result = new ZLinkRelocationEnvelope(
-            RelocationGuid(generated.RelocationHigh, generated.RelocationLow),
-            generated.ApplicationVersion == 0 ? 1UL : checked((ulong)generated.ApplicationVersion),
+            RelocationGuid(generated.Relocation.High.Value, generated.Relocation.Low.Value),
+            generated.ApplicationVersion.Value == 0
+                ? 1UL
+                : checked((ulong)generated.ApplicationVersion.Value),
             digest,
             participants
         )
         {
             CanonicalLogicalStream = canonical,
-            CanonicalRelocationHigh = generated.RelocationHigh,
-            CanonicalRelocationLow = generated.RelocationLow,
-            CanonicalApplicationVersion = generated.ApplicationVersion,
+            CanonicalRelocationHigh = generated.Relocation.High.Value,
+            CanonicalRelocationLow = generated.Relocation.Low.Value,
+            CanonicalApplicationVersion = generated.ApplicationVersion.Value,
             CanonicalSourceAuthorityOwnerGeneration = ownerGeneration,
         };
         ValidateEnvelope(result);
         return result;
     }
-
-    internal static byte[] EncodeCanonical(ReadOnlyMemory<byte> encoded)
-    {
-        var generated = ServiceWirePilotCodec.DecodeRelocationEnvelopeV1(encoded.ToArray());
-        return ServiceWirePilotCodec.EncodeRelocationEnvelopeV1(generated);
-    }
-
-    private static (
-        ZLinkPlacementObjectKind Kind,
-        string Id,
-        ulong Generation,
-        ulong OwnerGeneration
-    ) ProjectObject(ServiceWirePilotCodec.RelocationObjectIdentity value) =>
-        value switch
-        {
-            ServiceWirePilotCodec.RelocationActorIdentity actor => (
-                ZLinkPlacementObjectKind.Actor,
-                actor.ActorId,
-                actor.ObjectGeneration,
-                actor.ExpectedAuthorityOwnerGeneration
-            ),
-            ServiceWirePilotCodec.RelocationUserSpotIdentity spot => (
-                ZLinkPlacementObjectKind.UserSpot,
-                spot.SpotId,
-                spot.ObjectGeneration,
-                spot.ExpectedAuthorityOwnerGeneration
-            ),
-            ServiceWirePilotCodec.RelocationInstanceSpotIdentity spot => (
-                ZLinkPlacementObjectKind.InstanceSpot,
-                spot.SpotId,
-                spot.ObjectGeneration,
-                1
-            ),
-            _ => throw new InvalidDataException("The relocation object kind is invalid."),
-        };
 
     private static Guid RelocationGuid(ulong high, ulong low)
     {
@@ -807,6 +826,191 @@ internal static class ZLinkRelocationEnvelopeCodec
         BinaryPrimitives.WriteUInt64BigEndian(bytes, high);
         BinaryPrimitives.WriteUInt64BigEndian(bytes[8..], low);
         return new Guid(bytes, bigEndian: true);
+    }
+
+    internal static ServiceWireCodec.DecodeContext FrozenWireContext(int bytes) =>
+        new(null, null, null, bytes, bytes);
+
+    internal static byte[] EncodeCanonical(ReadOnlyMemory<byte> encoded)
+    {
+        var canonical = encoded.ToArray();
+        _ = DecodeCanonicalLogicalStream(canonical);
+        return canonical;
+    }
+
+    private static ServiceWireCodec.RelocationEnvelopeV1 DecodeCanonicalLogicalStream(
+        byte[] encoded
+    )
+    {
+        ServiceWireCodec.RelocationEnvelopeV1 envelope;
+        try
+        {
+            envelope = ServiceWireCodec.DecodeRelocationEnvelopeV1(
+                encoded,
+                FrozenWireContext(encoded.Length)
+            );
+        }
+        catch (DecoderFallbackException error)
+        {
+            throw new InvalidDataException(
+                "The relocation envelope contains invalid UTF-8.",
+                error
+            );
+        }
+        if (
+            envelope.ApplicationStates.Items.Count == 0
+            || (envelope.Relocation.High.Value == 0 && envelope.Relocation.Low.Value == 0)
+        )
+            throw new InvalidDataException(
+                "The relocation envelope identity or inventory is empty."
+            );
+        return envelope;
+    }
+
+    internal static ZLinkRelocationQueuedJob DecodeCanonicalSavedWork(
+        ulong order,
+        byte[] encoded,
+        ZLinkServiceWireCodec.RelocationObjectRecord identity
+    ) =>
+        DecodeCanonicalSavedWork(
+            order,
+            encoded,
+            encoded.Length != 0
+            && encoded[0] == (byte)ServiceWireCodec.MeshRecordKind.InstanceSpotActivation
+                ? ServiceWireCodec.DecodeFrozenRecord(encoded, FrozenWireContext(encoded.Length))
+                : null,
+            identity,
+            out _
+        );
+
+    private static ZLinkRelocationQueuedJob DecodeCanonicalSavedWork(
+        ulong order,
+        byte[] encoded,
+        ServiceWireCodec.FrozenRecord? wire,
+        ZLinkServiceWireCodec.RelocationObjectRecord identity,
+        out CanonicalSavedWorkOperation? operation
+    )
+    {
+        ZLinkCanonicalAcceptedRequest? projection;
+        if (wire is { Body: ServiceWireCodec.FrozenRecordBodyCase13 instance } instanceRecord)
+        {
+            ValidateInstanceOperation(instanceRecord, instance);
+            if (instance.Route is not ServiceWireCodec.InstanceRouteV1Case0 route)
+                throw new InvalidDataException(
+                    "Accepted Instance Spot work requires a Ready route."
+                );
+            if (
+                identity.Kind != (byte)ServiceWireCodec.StatefulObjectKind.InstanceSpot
+                || route.TargetSpotId.Value != identity.ObjectId
+                || route.Authority.ObjectGeneration.Value != identity.ObjectGeneration
+            )
+                throw new InvalidDataException(
+                    "The accepted Instance Spot work addresses another incarnation."
+                );
+            var (ownerId, lease, nodeRid, generation, sourceSpotId) = instanceRecord.Source switch
+            {
+                ServiceWireCodec.FrozenSourceIdentityCase0 node => (
+                    node.SourceOwnerId.Value,
+                    node.SourceOwnerLeaseGeneration.Value,
+                    node.SourceNodeRid.RoutingId.ToHex(),
+                    node.SourceNodeGeneration.Value,
+                    (string?)null
+                ),
+                ServiceWireCodec.FrozenSourceIdentityCase1 spot => (
+                    spot.SourceOwnerId.Value,
+                    spot.SourceOwnerLeaseGeneration.Value,
+                    spot.SourceNodeRid.RoutingId.ToHex(),
+                    spot.SourceNodeGeneration.Value,
+                    spot.SourceSpotId.Value
+                ),
+                ServiceWireCodec.FrozenSourceIdentityCase2 actor => (
+                    actor.SourceOwnerId.Value,
+                    actor.SourceOwnerLeaseGeneration.Value,
+                    actor.SourceNodeRid.RoutingId.ToHex(),
+                    actor.SourceNodeGeneration.Value,
+                    (string?)null
+                ),
+                ServiceWireCodec.FrozenSourceIdentityCase3 session => (
+                    session.SourceOwnerId.Value,
+                    session.SourceOwnerLeaseGeneration.Value,
+                    session.SourceNodeRid.RoutingId.ToHex(),
+                    session.SourceNodeGeneration.Value,
+                    (string?)null
+                ),
+                _ => throw new InvalidDataException(
+                    "The relocation saved work source kind is invalid."
+                ),
+            };
+            var high = instanceRecord.OperationId.High.Value;
+            var low = instanceRecord.OperationId.Low.Value;
+            operation =
+                high == 0 && low == 0
+                    ? null
+                    : new CanonicalSavedWorkOperation(
+                        ownerId,
+                        lease,
+                        nodeRid,
+                        generation,
+                        high,
+                        low
+                    );
+            projection = new ZLinkCanonicalAcceptedRequest(
+                new(ownerId, lease, nodeRid, generation),
+                sourceSpotId,
+                high,
+                low,
+                instanceRecord.ReplyRoute is ServiceWireCodec.FrozenReplyRouteCase4 reply
+                    ? reply.ReplyRouteId.Value
+                    : 0,
+                route.TargetSpotId.Value,
+                route.Authority.ObjectGeneration.Value,
+                route.TargetNodeRid.RoutingId.ToHex(),
+                route.TargetNodeGeneration.Value,
+                route.Authority.AuthorityOwnerGeneration.Value,
+                route.Authority.LeaseGeneration.Value,
+                instanceRecord.Metadata is { } metadata
+                    ? new ZLinkMessageMetadata(
+                        metadata.Entries.ToDictionary(
+                            static entry => entry.Key.Value,
+                            static entry => entry.Value.Value,
+                            StringComparer.Ordinal
+                        )
+                    )
+                    : ZLinkMessageMetadata.Empty,
+                new(
+                    instance.Payload.PacketName.Value,
+                    instance.Payload.ContentType.Value,
+                    instance.Payload.Payload.Value
+                ),
+                route.InstanceIntent == ServiceWireCodec.Bool8.True
+            );
+        }
+        else
+        {
+            var reader = new CanonicalReader(encoded);
+            projection = ReadCanonicalFrozenRecordProjection(ref reader, out operation);
+            reader.RequireEnd("relocation frozen record");
+        }
+        return new ZLinkRelocationQueuedJob(order, encoded)
+        {
+            RequestSource = projection?.Source,
+            CanonicalRequest = projection,
+        };
+    }
+
+    private static void ValidateInstanceOperation(
+        ServiceWireCodec.FrozenRecord wire,
+        ServiceWireCodec.FrozenRecordBodyCase13 instance
+    )
+    {
+        var hasId = wire.OperationId.High.Value != 0 || wire.OperationId.Low.Value != 0;
+        if (
+            instance.OperationKind == ServiceWireCodec.InstanceOperationKind.Send
+                ? wire.OperationKind != ServiceWireCodec.MeshOperationKind.None || hasId
+                : wire.OperationKind != ServiceWireCodec.MeshOperationKind.InstanceSpotRequest
+                    || !hasId
+        )
+            throw new InvalidDataException("The Instance activation record is invalid.");
     }
 
     private static void ReadCanonicalFrozenRecord(ref CanonicalReader reader)
@@ -914,28 +1118,7 @@ internal static class ZLinkRelocationEnvelopeCodec
                 throw new InvalidDataException("The relocation reply route is invalid.");
         }
         replyRoute.RequireEnd("relocation reply route");
-        ReadCanonicalFrozenRecordBody(ref reader, recordKind, operationKind, operationNonzero);
-    }
-
-    internal static ZLinkRelocationQueuedJob DecodeCanonicalSavedWork(
-        ulong order,
-        ReadOnlyMemory<byte> frozenRecord
-    ) => DecodeCanonicalSavedWork(order, frozenRecord, out _);
-
-    private static ZLinkRelocationQueuedJob DecodeCanonicalSavedWork(
-        ulong order,
-        ReadOnlyMemory<byte> frozenRecord,
-        out CanonicalSavedWorkOperation? operation
-    )
-    {
-        var reader = new CanonicalReader(frozenRecord);
-        var projection = ReadCanonicalFrozenRecordProjection(ref reader, out operation);
-        reader.RequireEnd("relocation frozen record");
-        return new(order, frozenRecord)
-        {
-            RequestSource = projection?.Source,
-            CanonicalRequest = projection,
-        };
+        ReadCanonicalFrozenRecordBody(ref reader, recordKind);
     }
 
     private static ZLinkCanonicalAcceptedRequest? ReadCanonicalFrozenRecordProjection(
@@ -1029,12 +1212,7 @@ internal static class ZLinkRelocationEnvelopeCodec
             )
         )
         {
-            ReadCanonicalFrozenRecordBody(
-                ref reader,
-                recordKind,
-                operationKind,
-                operationHigh != 0 || operationLow != 0
-            );
+            ReadCanonicalFrozenRecordBody(ref reader, recordKind);
             return null;
         }
         var targetSpotId = reader.ReadText8();
@@ -1075,12 +1253,7 @@ internal static class ZLinkRelocationEnvelopeCodec
         ulong OperationLow
     );
 
-    private static void ReadCanonicalFrozenRecordBody(
-        ref CanonicalReader reader,
-        byte recordKind,
-        uint operationKind,
-        bool operationNonzero
-    )
+    private static void ReadCanonicalFrozenRecordBody(ref CanonicalReader reader, byte recordKind)
     {
         switch (recordKind)
         {
@@ -1143,30 +1316,6 @@ internal static class ZLinkRelocationEnvelopeCodec
             case (byte)ServiceWireCodec.MeshRecordKind.RelocationControl:
                 ReadCanonicalRelocationControl(ref reader);
                 return;
-            case (byte)ServiceWireCodec.MeshRecordKind.InstanceSpotActivation:
-                ReadCanonicalInstanceRoute(ref reader);
-                var sourceGeneration = reader.ReadUInt64();
-                var instanceOperation = reader.ReadByte();
-                if (
-                    sourceGeneration == 0
-                    || instanceOperation
-                        is < (byte)ServiceWireCodec.InstanceOperationKind.Send
-                            or > (byte)ServiceWireCodec.InstanceOperationKind.Request
-                    || instanceOperation == (byte)ServiceWireCodec.InstanceOperationKind.Send
-                        && (
-                            operationKind != (uint)ServiceWireCodec.MeshOperationKind.None
-                            || operationNonzero
-                        )
-                    || instanceOperation == (byte)ServiceWireCodec.InstanceOperationKind.Request
-                        && (
-                            operationKind
-                                != (uint)ServiceWireCodec.MeshOperationKind.InstanceSpotRequest
-                            || !operationNonzero
-                        )
-                )
-                    throw new InvalidDataException("The Instance activation record is invalid.");
-                ReadCanonicalApplicationPayload(ref reader);
-                return;
             default:
                 throw new InvalidDataException("The relocation saved work record kind is invalid.");
         }
@@ -1214,14 +1363,6 @@ internal static class ZLinkRelocationEnvelopeCodec
                 is >= (uint)ServiceWireCodec.MeshOperationKind.NodeRequest
                     and <= (uint)ServiceWireCodec.MeshOperationKind.ActorCreate
                 && operationNonzero,
-            (byte)ServiceWireCodec.MeshRecordKind.InstanceSpotActivation => operationKind
-                is (uint)ServiceWireCodec.MeshOperationKind.None
-                    or (uint)ServiceWireCodec.MeshOperationKind.InstanceSpotRequest
-                && operationNonzero
-                    == (
-                        operationKind
-                        == (uint)ServiceWireCodec.MeshOperationKind.InstanceSpotRequest
-                    ),
             _ => false,
         };
 
@@ -1373,42 +1514,6 @@ internal static class ZLinkRelocationEnvelopeCodec
         _ = reader.ReadText8();
         if (reader.ReadUInt64() == 0 || reader.ReadUInt64() == 0 || reader.ReadUInt64() == 0)
             throw new InvalidDataException("The relocation Spot authority fence is invalid.");
-    }
-
-    private static void ReadCanonicalInstanceRoute(ref CanonicalReader reader)
-    {
-        var kind = reader.ReadByte();
-        if (kind is < 1 or > 2)
-            throw new InvalidDataException("The Instance relocation route version is invalid.");
-        var route = new CanonicalReader(reader.ReadBytes(reader.ReadUInt16()));
-        _ = route.ReadText8();
-        if (route.ReadUInt64() == 0)
-            throw new InvalidDataException("The Instance relocation node generation is invalid.");
-        _ = route.ReadText8();
-        if (kind == 1)
-        {
-            if (route.ReadUInt64() == 0)
-                throw new InvalidDataException(
-                    "The Instance relocation object generation is invalid."
-                );
-            _ = route.ReadText8();
-            if (route.ReadUInt64() == 0 || route.ReadUInt64() == 0)
-                throw new InvalidDataException(
-                    "The Instance relocation authority fence is invalid."
-                );
-            _ = route.ReadText16();
-            if (route.ReadByte() > 1)
-                throw new InvalidDataException("The Instance relocation intent is invalid.");
-        }
-        else
-        {
-            _ = route.ReadText8();
-            _ = route.ReadText8();
-            _ = route.ReadText8();
-            if (route.ReadUInt64() == 0)
-                throw new InvalidDataException("The Instance relocation deadline is invalid.");
-        }
-        route.RequireEnd("Instance relocation route");
     }
 
     private static void ReadCanonicalApplicationPayload(ref CanonicalReader reader)

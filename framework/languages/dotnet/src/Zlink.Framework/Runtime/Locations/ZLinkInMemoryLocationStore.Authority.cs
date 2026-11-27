@@ -833,7 +833,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
         var endedUserSpotId = active
             ? ZLinkAuthorityCleanup.RequireReclaimableAuthority(current)
             : null;
-        if (active && !ownerLive)
+        var requiresReleaseWait = active && !actorClosing;
+        if (requiresReleaseWait && !ownerLive)
             _ownerLeaseReleaseWait.Observe(owner);
         if (endedUserSpotId is not null && !discarded && creationTarget is { } spotTarget)
             members = EndedUserSpotMembers(
@@ -843,16 +844,16 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 spotTarget.TargetDescriptor,
                 now
             );
-        if (active)
+        if (requiresReleaseWait)
         {
             releaseWaitElapsed = _ownerLeaseReleaseWait.HasElapsed(owner, _ownerLeaseFencingMargin);
-            foreach (var (memberKey, member) in members)
+            foreach (var (_, member) in members)
                 releaseWaitElapsed &= _ownerLeaseReleaseWait.HasElapsed(
                     new ZLinkLocationOwnerToken(member.OwnerId, member.OwnerLeaseGeneration),
                     _ownerLeaseFencingMargin
                 );
         }
-        if (active && !releaseWaitElapsed)
+        if (!releaseWaitElapsed)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 "The Location owner lease release wait has not elapsed.",

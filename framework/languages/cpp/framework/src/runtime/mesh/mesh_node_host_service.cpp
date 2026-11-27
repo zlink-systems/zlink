@@ -89,8 +89,7 @@ location_write_intent_t mesh_new_claim_intent (
     return std::any_of (registrations.begin (), registrations.end (),
                         [&descriptor] (const auto &registration) {
                             return registration->mesh_name == descriptor.mesh_name
-                                   && registration->routing_id == descriptor.rid
-                                   && !registration->automatic_routing_id_prefix;
+                                   && registration->routing_id == descriptor.rid;
                         })
              ? location_write_intent_t::fixed_rid_new_claim
              : location_write_intent_t::new_claim;
@@ -2999,6 +2998,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                           decoded_header.flow_id
                             ? std::make_optional (std::string (*decoded_header.flow_id))
                             : std::nullopt;
+                        std::optional<flow_value_t> terminal_flow;
                         auto running = std::make_shared<task_t<zlink::message_t>> (
                           detail::spot_node_runtime_t (registration->spot_state)
                             .dispatch_instance_activation (
@@ -3011,24 +3011,30 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                 + std::to_string (request.operation.low),
                               services, *_serializers, std::move (accept_activation),
                               std::move (flow_id), decoded_header.flow_origin, terminal.get (),
-                              original));
+                              original, decoded_header.flow_id ? nullptr : &terminal_flow));
                         detail::observe_task_completion (
                           *running, [running, is_request = request.request,
                                      decoded_header = std::move (decoded_header), terminal,
-                                     done] (const result_t<zlink::message_t> &reply) {
+                                     terminal_flow = std::move (terminal_flow),
+                                     done] (const result_t<zlink::message_t> &reply) mutable {
                               if (!reply) {
                                   const auto failure =
                                     messaging::request_failure_mapper_t{}.target_failure_reply (
-                                      *reply.error ());
-                                  if (!failure) {
-                                      done ({105,
-                                             static_cast<std::uint32_t> (
-                                               protocol::framework_error_code::requestFailed),
-                                             std::nullopt, std::move (*terminal)});
-                                      return;
-                                  }
-                                  done ({failure->terminal_result, failure->failure_code,
-                                         std::nullopt, std::move (*terminal)});
+                                      reply.exception ());
+                                  const auto wire =
+                                    failure.value_or (messaging::request_wire_failure_t{
+                                      105, static_cast<std::uint32_t> (
+                                             protocol::framework_error_code::requestFailed)});
+                                  const auto *error = reply.error ();
+                                  auto handler_error =
+                                    error
+                                        && detail::error_origin (*error)
+                                             == detail::error_origin_t::application
+                                      ? reply.exception ()
+                                      : std::exception_ptr{};
+                                  done ({wire.terminal_result, wire.failure_code, std::nullopt,
+                                         std::move (*terminal), std::move (handler_error),
+                                         std::move (terminal_flow)});
                                   return;
                               }
                               std::optional<protocol::application_payload_t> response;
