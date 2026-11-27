@@ -1196,28 +1196,19 @@ class provider_location_repository_t::store_format_t
             if (applied (result))
                 co_return;
 
-            std::vector<store_key_t> absent;
+            current = co_await read (key);
+            if (std::holds_alternative<store_missing_t> (current))
+                co_return;
+            if (bytes != std::get<store_found_t> (current).value.bytes)
+                continue;
             for (const auto &mutation : request.mutations) {
                 if (const auto *put = std::get_if<store_put_t> (&mutation)) {
                     auto destination = co_await read (put->key);
-                    if (std::holds_alternative<store_missing_t> (destination))
-                        absent.push_back (put->key);
+                    if (std::holds_alternative<store_found_t> (destination))
+                        invalid_format ("A destination counter already exists for v11 capacity: "
+                                        + key.value);
                 }
             }
-            current = co_await read (key);
-            if (std::holds_alternative<store_missing_t> (current)) {
-                for (const auto &destination : absent) {
-                    auto observed = co_await read (destination);
-                    if (std::holds_alternative<store_missing_t> (observed))
-                        invalid_format ("Converted v11 capacity counter is missing: " + key.value);
-                }
-                co_return;
-            }
-            if (absent.size () + 1 != request.mutations.size ()
-                && bytes == std::get<store_found_t> (current).value.bytes)
-                invalid_format ("A destination counter already exists for v11 capacity: "
-                                + key.value);
-            (void) result.value ();
         }
     }
 
