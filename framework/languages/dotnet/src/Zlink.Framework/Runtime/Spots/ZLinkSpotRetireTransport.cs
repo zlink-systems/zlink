@@ -2565,6 +2565,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 )
             )
             {
+                // Diagnostics only: logs the pending completion reason; the stage decides.
                 _ = ZLinkRelocationCompletionStore.CompletionBlocker(
                     found.Snapshot,
                     services.GetService<ILogger<ZLinkFrameworkMaintenanceRuntime>>()
