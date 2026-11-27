@@ -4,7 +4,7 @@
   "senderLanguages": ["cpp", "dotnet", "java", "node"],
   "ownerLanguages": {
     "cpp": "expected-failure-before-owner-fix",
-    "dotnet": "expected-failure-before-owner-fix",
+    "dotnet": "enabled",
     "java": "expected-failure-before-owner-fix",
     "node": "enabled"
   },

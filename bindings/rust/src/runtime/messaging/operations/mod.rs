@@ -9,18 +9,11 @@
 mod reply_ops;
 mod send_ops;
 
-pub(crate) use reply_ops::{router_reply_op, submit_reply};
-pub(crate) use routed_async::{
-    dealer_request_op, router_request_op, submit_routed_request, submit_routed_request_sync,
-};
-pub(crate) use send_ops::{
-    dealer_send_op, routed_send_op, socket_publish_op, socket_send_op, stream_send_to_op,
-    submit_publish, submit_send, submit_send_blocking,
-};
-
 mod routed_async;
 
 pub(crate) fn topic_or_panic(value: &str, label: &str) -> smol_str::SmolStr {
     assert!(!value.as_bytes().contains(&0), "invalid {label}");
     smol_str::SmolStr::new(value)
 }
+
+mod contract_impl;

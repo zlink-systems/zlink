@@ -267,6 +267,8 @@ jobs:
         working-directory: framework/languages/cpp
         env:
           ZLINK_SINGLE_WORKER: ${{ inputs.single_worker }}
+          # The engine e2e and connector package tests run on schedule and nightly stress (#5865).
+          ZLINK_CPP_NIGHTLY: ${{ github.event_name == 'schedule' || inputs.single_worker }}
         run: bash ../../../scripts/ci/framework-cpp-test.sh
 
       # Nightly only (#4082): the etcd Location Store 4x4 cross-language
