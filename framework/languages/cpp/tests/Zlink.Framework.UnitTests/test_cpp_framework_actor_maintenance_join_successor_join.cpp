@@ -24,6 +24,11 @@ TEST (ActorMaintenanceJoin, NextRemoteJoinPreservesSuffixRequestReply)
     next_join_suffix (true, true);
 }
 
+TEST (ActorMaintenanceJoin, CapturedRequestCanDeferCrossNodeJoinWhileItsReplyIsPending)
+{
+    next_join_suffix (true, true, false, false, false, true);
+}
+
 TEST (ActorMaintenanceJoin, FailedRemoteJoinRestoresUnstartedSuffixOnce)
 {
     next_join_suffix (true, false, true);

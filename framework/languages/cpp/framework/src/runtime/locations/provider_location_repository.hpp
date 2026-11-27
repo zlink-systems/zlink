@@ -10,6 +10,7 @@
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/relocation_authority_payload.hpp"
+#include "runtime/locations/relocation_completion_store.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_store_limits.hpp"
 #include "runtime/execution/task_result.hpp"
@@ -63,6 +64,8 @@ inline constexpr char aborted[] = "aborted";
 
 class provider_location_repository_t final : public location_repository_t
 {
+    friend class relocation_completion::repository_t;
+    relocation_completion::repository_t _relocation_replies{*this};
     class provider_boundary_t final : public location_store_t
     {
       public:
@@ -157,6 +160,11 @@ class provider_location_repository_t final : public location_repository_t
     };
 
   public:
+    relocation_completion::repository_t *relocation_replies () noexcept override
+    {
+        return &_relocation_replies;
+    }
+
     explicit provider_location_repository_t (
       location_store_t &store,
       std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring = {}) :
@@ -597,9 +605,6 @@ class provider_location_repository_t final : public location_repository_t
                                   to_bytes (std::to_string (object_generation + 1)), std::nullopt},
                       store_put_t{authority_owner_counter_key,
                                   to_bytes (std::to_string (owner_generation + 1)), std::nullopt}};
-                } else if (const auto *completion =
-                             std::get_if<authority_completion_put_t> (&mutation)) {
-                    snapshot.aggregate = completion->aggregate;
                 } else {
                     const auto &replacement = std::get<authority_put_t> (mutation);
                     snapshot.payload = replacement.payload;
@@ -615,6 +620,10 @@ class provider_location_repository_t final : public location_repository_t
                 if (membership_failure)
                     co_return co_await authority_conflict (std::move (current), membership_failure);
             }
+            if (retarget
+                && !relocation_completion::append_accepted (write_request,
+                                                            retarget->relocation_replies))
+                co_return relocation_reply_batch_rejected_t{};
             check_deadline ();
             auto written = co_await write_async (
               std::move (write_request), nullptr, {}, "compare_exchange",
@@ -2030,7 +2039,8 @@ class provider_location_repository_t final : public location_repository_t
                     after.owner = target_owner;
                     after.allocation.target = target;
                     after.payload = participant.authority_payload;
-                    after.aggregate = authority_aggregate_codec::without_capture (before.aggregate);
+                    after.aggregate =
+                      aggregate_commit_authority (fence, participant.key, before.aggregate);
                     // `after.store_version` is never read back out of this
                     // struct (encode_authority no longer serializes it, and the
                     // committing-page replay branch above re-decodes with the
@@ -2189,6 +2199,8 @@ class provider_location_repository_t final : public location_repository_t
             record[location_record_fields::status] = aggregate_status::committed;
             final_request.mutations.push_back (
               store_put_t{row_key, to_bytes (record.dump ()), std::nullopt});
+            if (!relocation_completion::append_accepted (final_request, fence.relocation_replies))
+                co_return aggregate_commit_result_t::relocation_reply_batch_rejected;
             auto written = co_await write_async (std::move (final_request));
             if (std::holds_alternative<store_write_applied_t> (written))
                 co_return aggregate_commit_result_t::committed;

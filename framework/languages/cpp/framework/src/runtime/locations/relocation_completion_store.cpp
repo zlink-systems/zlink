@@ -2,339 +2,256 @@
 
 #include "runtime/locations/relocation_completion_store.hpp"
 
-#include "runtime/locations/authority_aggregate_relocation.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/base64.hpp"
-#include "runtime/locations/provider_relocation_repository.hpp"
-#include <service_wire_codec.hpp>
-#include <zlink/framework/detail/sha256.hpp>
-
-#include <array>
-#include <charconv>
-#include <set>
-#include <tuple>
+#include "runtime/locations/location_store_write.hpp"
+#include "runtime/locations/provider_location_repository.hpp"
 
 namespace zlink::framework::runtime::relocation_completion
 {
 namespace
 {
-namespace wire = protocol::generated::detail;
 namespace authority = authority_aggregate_codec;
-
 using json_t = authority::json_t;
 
-constexpr std::size_t chunk_bytes = protocol::relocationChunkBytes;
-constexpr std::array<std::string_view, 4> delivery_names{"pending", "terminalReceived",
-                                                         "alreadyTerminal", "sourceLeaseExpired"};
+constexpr std::chrono::hours active_retention{24};
+constexpr std::chrono::minutes terminal_retention{5};
+constexpr std::array<std::string_view, 5> states{"accepted", "pending", "terminalReceived",
+                                                 "alreadyTerminal", "sourceLeaseExpired"};
 
 [[noreturn]] void data_lost (const char *message)
 {
     throw framework_exception_t (framework_error_kind_t::data_lost, message);
 }
 
-void validate_entry (const entry_t &entry)
+bool valid_owner (std::string_view owner)
 {
-    const auto &key = entry.object_key;
-    const auto &source = entry.source;
-    if (!authority_key_codec_detail::authority_key_kind (key) || !detail::is_valid_utf8 (key)
-        || source.owner_id.empty () || !detail::is_valid_utf8 (source.owner_id)
-        || source.node_rid.empty () || source.node_rid.size () % 2 != 0
-        || !authority::lower_hex (source.node_rid) || source.lease_generation == 0
-        || source.node_generation == 0 || entry.operation_id.size () != detail::uuid_hex_length
-        || !authority::lower_hex (entry.operation_id)
-        || entry.operation_id.find_first_not_of ('0') == std::string::npos
-        || entry.reply_route_id == 0
-        || static_cast<std::size_t> (entry.delivery) >= delivery_names.size ())
-        data_lost ("Invalid relocation completion entry");
+    return !owner.empty () && detail::is_valid_utf8 (owner);
 }
 
-void validate (const record_t &record)
+std::string encode (const row_t &row)
 {
-    if (!detail::is_lowercase_uuid_text (record.relocation_id))
-        data_lost ("Invalid relocation completion identity");
-    std::set<std::tuple<const source_t &, std::string_view>> seen;
-    std::string_view previous;
-    for (const auto &entry : record.entries) {
-        validate_entry (entry);
-        if (entry.object_key < previous || !seen.emplace (entry.source, entry.operation_id).second)
-            data_lost ("Relocation completion entries are unordered or duplicated");
-        previous = entry.object_key;
-    }
+    const auto &source = row.source;
+    if (!detail::is_lowercase_uuid_text (row.relocation_id)
+        || !authority_key_codec_detail::authority_key_kind (row.object_key)
+        || !detail::is_valid_utf8 (row.object_key) || !valid_owner (source.owner_id)
+        || source.lease_generation == 0
+        || source.lease_generation > static_cast<std::uint64_t> (location_counter_max)
+        || source.node_rid.empty () || source.node_rid.size () > 510
+        || source.node_rid.size () % 2 != 0 || !authority::lower_hex (source.node_rid)
+        || source.node_generation == 0 || row.operation_id.size () != detail::uuid_hex_length
+        || !authority::lower_hex (row.operation_id)
+        || row.operation_id.find_first_not_of ('0') == std::string::npos || row.reply_route_id == 0
+        || !valid_owner (row.writer.owner_id) || row.writer.lease_generation <= 0
+        || (row.state == delivery_t::accepted) != row.reply.empty ())
+        data_lost ("Invalid relocation reply row");
+
+    json_t result{{"formatVersion", 1},
+                  {"objectKey", row.object_key},
+                  {"operationId", row.operation_id},
+                  {"relocationId", row.relocation_id}};
+    if (row.state != delivery_t::accepted)
+        result["reply"] = base64_encode (row.reply);
+    result["replyRouteId"] = std::to_string (row.reply_route_id);
+    result["source"] = {{"leaseGeneration", std::to_string (source.lease_generation)},
+                        {"nodeGeneration", std::to_string (source.node_generation)},
+                        {"nodeRid", source.node_rid},
+                        {"ownerId", source.owner_id}};
+    result["state"] = states.at (static_cast<std::size_t> (row.state));
+    result["writer"] = {{"leaseGeneration", std::to_string (row.writer.lease_generation)},
+                        {"ownerId", row.writer.owner_id}};
+    return result.dump ();
 }
 
-json_t entry_json (const entry_t &entry, delivery_t delivery, std::string reply)
+std::vector<std::byte> bytes (std::string_view text)
 {
-    // The field names are in RFC 8785 order.
-    return {{"delivery", delivery_names[static_cast<std::size_t> (delivery)]},
-            {"objectKey", entry.object_key},
-            {"operationId", entry.operation_id},
-            {"reply", std::move (reply)},
-            {"replyRouteId", std::to_string (entry.reply_route_id)},
-            {"source",
-             {{"leaseGeneration", std::to_string (entry.source.lease_generation)},
-              {"nodeGeneration", std::to_string (entry.source.node_generation)},
-              {"nodeRid", entry.source.node_rid},
-              {"ownerId", entry.source.owner_id}}}};
+    const auto octets = std::as_bytes (std::span (text));
+    return {octets.begin (), octets.end ()};
 }
 
-std::string record_suffix (const std::string &id)
-{
-    return "],\"formatVersion\":\"1\",\"relocationId\":\"" + id + "\"}";
-}
-
-constexpr std::string_view record_prefix = "{\"entries\":[";
-
-entry_t decode_entry (const json_t &item)
-{
-    const auto &source = item.at ("source");
-    const auto delivery = std::find (delivery_names.begin (), delivery_names.end (),
-                                     authority::text (item, "delivery"));
-    return {authority::text (item, "objectKey"),
-            {authority::text (source, "ownerId"), authority::number (source, "leaseGeneration"),
-             authority::text (source, "nodeRid"), authority::number (source, "nodeGeneration")},
-            authority::text (item, "operationId"),
-            authority::number (item, "replyRouteId"),
-            base64_decode (item.at ("reply").get_ref<const std::string &> ()),
-            static_cast<delivery_t> (delivery - delivery_names.begin ())};
-}
-
-std::span<const std::uint8_t> octets (std::span<const std::byte> bytes)
-{
-    return {reinterpret_cast<const std::uint8_t *> (bytes.data ()), bytes.size ()};
-}
-
-std::vector<std::byte> blob_bytes (const wire::result_t<std::vector<std::uint8_t>> &encoded)
-{
-    if (!encoded)
-        throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                     "Cannot encode a relocation completion blob");
-    const auto bytes = std::as_bytes (std::span (encoded.value));
-    return {bytes.begin (), bytes.end ()};
-}
-
-const authority::json_t &relocation_state (const authority_snapshot_t &snapshot)
-{
-    if (!snapshot.aggregate || !snapshot.aggregate->relocation)
-        data_lost ("Relocation completion authority is missing");
-    return snapshot.aggregate->encoded.at ("relocation");
-}
-
-const authority::json_t &progress (const authority::json_t &state)
-{
-    const auto completion = state.find ("completion");
-    if (completion == state.end ())
-        data_lost ("Relocation completion counts are missing");
-    // Authority decoding has already validated the structure and count bounds.
-    return *completion;
-}
-
-}
-
-std::size_t record_t::pending_deliveries () const
-{
-    return std::count_if (entries.begin (), entries.end (),
-                          [] (const auto &entry) { return entry.delivery == delivery_t::pending; });
-}
-
-std::string encode (const record_t &record)
-{
-    validate (record);
-    std::string bytes (record_prefix);
-    bool first = true;
-    for (const auto &entry : record.entries) {
-        if (!std::exchange (first, false))
-            bytes += ',';
-        bytes += entry_json (entry, entry.delivery, base64_encode (entry.reply)).dump ();
-    }
-    bytes += record_suffix (record.relocation_id);
-    return bytes;
-}
-
-record_t decode (std::string_view bytes)
+row_t decode (const store_key_t &stored_key, const store_value_t &value)
 {
     try {
-        auto json = json_t::parse (bytes);
-        const auto &entries = json.at ("entries");
-        if (authority::text (json, "formatVersion") != "1" || !entries.is_array ())
-            data_lost ("Invalid relocation completion format");
-        record_t record{authority::text (json, "relocationId"), {}};
-        record.entries.reserve (entries.size ());
-        for (const auto &item : entries)
-            record.entries.push_back (decode_entry (item));
-        if (encode (record) != bytes)
-            data_lost ("Relocation completion JSON is not canonical");
-        return record;
+        const std::string_view text{reinterpret_cast<const char *> (value.bytes.data ()),
+                                    value.bytes.size ()};
+        const auto data = json_t::parse (text);
+        const auto &source = data.at ("source");
+        const auto &writer = data.at ("writer");
+        const auto writer_generation = authority::number (writer, "leaseGeneration");
+        const auto state = std::ranges::find (states, authority::text (data, "state"));
+        if (data.at ("formatVersion") != 1 || state == states.end ()
+            || writer_generation > static_cast<std::uint64_t> (location_counter_max)
+            || !value.expires_at)
+            data_lost ("Invalid relocation reply row metadata");
+        row_t row{
+          authority::text (data, "relocationId"),
+          authority::text (data, "objectKey"),
+          {authority::text (source, "ownerId"), authority::number (source, "leaseGeneration"),
+           authority::text (source, "nodeRid"), authority::number (source, "nodeGeneration")},
+          authority::text (data, "operationId"),
+          authority::number (data, "replyRouteId"),
+          {authority::text (writer, "ownerId"), static_cast<std::int64_t> (writer_generation)},
+          static_cast<delivery_t> (state - states.begin ())};
+        if (row.state != delivery_t::accepted)
+            row.reply = base64_decode (authority::text (data, "reply"));
+        if (key (row).value != stored_key.value || encode (row) != text)
+            data_lost ("Relocation reply row key or encoding disagrees with value");
+        return row;
     }
-    catch (const json_t::exception &) {
-        data_lost ("Invalid relocation completion JSON");
+    catch (const nlohmann::json::exception &) {
+        data_lost ("Malformed relocation reply row");
     }
     catch (const std::invalid_argument &) {
-        data_lost ("Invalid relocation completion field");
+        data_lost ("Malformed relocation reply row fields");
+    }
+}
+}
+
+std::string prefix (std::string_view relocation_id)
+{
+    return "$zlink/relocation-reply/" + std::string (relocation_id) + "/";
+}
+
+store_key_t key (const row_t &row)
+{
+    const auto &source = row.source;
+    return {prefix (row.relocation_id) + source.owner_id + "."
+            + std::to_string (source.lease_generation) + "." + source.node_rid + "."
+            + std::to_string (source.node_generation) + "/" + row.operation_id};
+}
+
+store_put_t accepted (const row_t &row)
+{
+    return {key (row), bytes (encode (row)), active_retention};
+}
+
+bool append_accepted (store_write_request_t &batch, std::span<const store_put_t> rows)
+{
+    if (rows.empty ())
+        return true;
+    for (const auto &row : rows) {
+        batch.conditions.emplace_back (store_missing_condition_t{row.key});
+        batch.mutations.emplace_back (row);
+    }
+    try {
+        validate_location_write (batch, [] (const auto &key) {
+            if (key.empty () || key.size () > location_store_limits::key_bytes)
+                throw std::invalid_argument ("Invalid Location Store key");
+        });
+        return true;
+    }
+    catch (const std::invalid_argument &) {
+        return false;
     }
 }
 
-void require_fits (const record_t &record,
-                   std::span<const entry_t> remaining_failures,
-                   std::uint64_t limit)
+task_t<std::optional<row_t>> repository_t::record_result (row_t identity,
+                                                          std::vector<std::byte> reply,
+                                                          std::vector<std::byte> failure)
 {
-    validate (record);
-    std::uint64_t size = record_prefix.size () + record_suffix (record.relocation_id).size ();
-    bool first = true;
-    const auto account = [&] (const entry_t &entry) {
-        const auto reply_size = static_cast<std::uint64_t> (entry.reply.size ());
-        const auto groups = reply_size / 3 + (reply_size % 3 != 0);
-        const auto overhead =
-          entry_json (entry, delivery_t::source_lease_expired, {}).dump ().size ()
-          + !std::exchange (first, false);
-        if (overhead > limit - size || groups > (limit - size - overhead) / 4)
-            throw framework_exception_t (
-              framework_error_kind_t::internal_failure,
-              "Final relocation completion record exceeds the blob limit");
-        size += overhead + groups * 4;
-    };
-    if (size > limit)
-        throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                     "Final relocation completion record exceeds the blob limit");
-    for (const auto &entry : record.entries)
-        account (entry);
-    for (const auto &entry : remaining_failures) {
-        validate_entry (entry);
-        account (entry);
-    }
+    return update (std::move (identity), delivery_t::pending, std::move (reply),
+                   std::move (failure));
 }
 
-task_t<std::vector<std::byte>> store_t::read_blob (std::string reference,
-                                                   std::stop_token cancellation)
+task_t<bool> repository_t::confirm (row_t identity, delivery_t state)
 {
-    auto result = co_await _blobs.get_relocation (std::move (reference), cancellation);
-    auto *found = std::get_if<relocation_found_t> (&result);
-    if (!found)
-        data_lost ("Relocation completion blob is missing");
-    co_return std::move (found->payload);
+    if (state == delivery_t::source_lease_expired) {
+        if (co_await source_lease_live (identity.source))
+            co_return false;
+    }
+    const auto saved = co_await update (std::move (identity), state);
+    co_return !saved || saved->state >= delivery_t::terminal_received;
 }
 
-task_t<record_t> store_t::read (authority_snapshot_t snapshot, std::stop_token cancellation)
+task_t<bool> repository_t::source_lease_live (const source_t &source)
 {
-    const auto &state = relocation_state (snapshot);
-    const auto &completion = progress (state);
-    const auto &id = snapshot.aggregate->relocation->relocation_id;
-    if (completion.at ("reference").is_null ())
-        co_return record_t{id, {}};
-
-    const auto root = co_await read_blob (authority::text (completion, "reference"), cancellation);
-    const auto manifest = wire::decode_durable_relocation_manifest_v1 (octets (root));
-    if (!manifest
-        || detail::encode_hex (
-             std::span<const std::uint8_t> (manifest.value.body.inventoryDigestSha256.value))
-             != authority::text (state, "sourceInventorySha256"))
-        data_lost ("Invalid relocation completion manifest");
-
-    const auto &body = manifest.value.body;
-    std::string bytes;
-    detail::crc32c_accumulator_t checksum;
-    std::size_t order = 0;
-    for (const auto &entry : body.chunks.items) {
-        const auto stored = co_await read_blob (entry.reference.value, cancellation);
-        const auto chunk = wire::decode_durable_relocation_data_chunk_v1 (octets (stored));
-        if (!chunk || entry.order.value != order || chunk.value.body.order.value != order)
-            data_lost ("Invalid relocation completion chunk order");
-        const std::span<const std::uint8_t> data (chunk.value.body.data.value);
-        if (entry.length.value != data.size ()
-            || data.size () > body.totalLength.value - bytes.size ()
-            || detail::crc32c (data) != entry.checksumCrc32c.value)
-            data_lost ("Invalid relocation completion chunk");
-        ++order;
-        checksum.update (data);
-        bytes.append (reinterpret_cast<const char *> (data.data ()), data.size ());
-    }
-    if (bytes.size () != body.totalLength.value
-        || checksum.value () != body.totalChecksumCrc32c.value
-        || detail::sha256_hex (bytes) != authority::text (completion, "sha256"))
-        data_lost ("Relocation completion payload checksum differs");
-
-    auto record = decode (bytes);
-    if (record.relocation_id != id
-        || record.entries.size () != authority::number (completion, "completedResults")
-        || record.pending_deliveries () != authority::number (completion, "pendingDeliveries"))
-        data_lost ("Relocation completion payload disagrees with authority");
-    co_return record;
+    return _locations.owner_is_live_async (
+      {source.owner_id, static_cast<std::int64_t> (source.lease_generation)});
 }
 
-task_t<authority_compare_exchange_result_t>
-store_t::publish (authority_key_t key,
-                  authority_snapshot_t expected,
-                  record_t record,
-                  std::span<const entry_t> remaining_failures,
-                  std::stop_token cancellation)
+task_t<std::optional<row_t>> repository_t::update (row_t identity,
+                                                   delivery_t state,
+                                                   std::vector<std::byte> reply,
+                                                   std::vector<std::byte> failure)
 {
-    auto state = relocation_state (expected);
-    const auto &previous = progress (state);
-    const auto accepted = authority::number (previous, "acceptedRequests");
-    if (record.relocation_id != expected.aggregate->relocation->relocation_id
-        || record.entries.empty () || record.entries.size () > accepted
-        || remaining_failures.size () != accepted - record.entries.size ()
-        || record.entries.size () < authority::number (previous, "completedResults"))
-        data_lost ("Relocation completion identity or result count differs");
-    require_fits (record, remaining_failures);
+    const auto row_key = key (identity);
+    for (;;) {
+        const auto read = co_await _locations._store.read (row_key);
+        const auto *found = std::get_if<store_found_t> (&read);
+        if (!found)
+            co_return std::nullopt;
+        auto row = decode (row_key, found->value);
+        if (row.writer.owner_id != identity.writer.owner_id
+            || row.writer.lease_generation != identity.writer.lease_generation
+            || row.reply_route_id != identity.reply_route_id
+            || row.object_key != identity.object_key)
+            data_lost ("Relocation reply row fence disagrees with request");
+        if (row.state >= delivery_t::terminal_received
+            || (row.state == delivery_t::accepted && state != delivery_t::pending))
+            co_return std::move (row);
+        if (!co_await _locations.owner_is_live_async (row.writer))
+            co_return std::nullopt;
 
-    const auto bytes = encode (record);
-    const auto payload = octets (std::as_bytes (std::span (bytes)));
-    wire::relocation_manifest_v1_t manifest;
-    manifest.logicalFormatVersion.value = 1;
-    manifest.totalLength.value = payload.size ();
-    manifest.totalChecksumCrc32c.value = detail::crc32c (payload);
-    const auto &inventory = authority::text (state, "sourceInventorySha256");
-    for (std::size_t pos = 0; pos < inventory.size (); pos += 2) {
-        unsigned byte = 0;
-        std::from_chars (inventory.data () + pos, inventory.data () + pos + 2, byte, 16);
-        manifest.inventoryDigestSha256.value.push_back (static_cast<std::uint8_t> (byte));
-    }
-    for (std::size_t offset = 0; offset < payload.size (); offset += chunk_bytes) {
-        const auto data =
-          payload.subspan (offset, std::min (chunk_bytes, payload.size () - offset));
-        const auto order = static_cast<std::uint32_t> (manifest.chunks.items.size ());
-        const auto checksum = detail::crc32c (data);
-        auto chunk = blob_bytes (wire::encode_durable_relocation_data_chunk_v1 (
-          {{wire::u32_t{order}, wire::durable_blob_t{{data.begin (), data.end ()}}}}));
-        auto reference = co_await _blobs.put_verified_blob (
-          std::move (chunk), relocation_repository_t::default_retention, cancellation);
-        manifest.chunks.items.push_back (
-          {{order}, {std::move (reference)}, {data.size ()}, {checksum}});
-    }
-    auto root = blob_bytes (wire::encode_durable_relocation_manifest_v1 ({std::move (manifest)}));
-    const auto reference = co_await _blobs.put_verified_blob (
-      std::move (root), relocation_repository_t::default_retention, cancellation);
-
-    state["completion"] = {{"acceptedRequests", std::to_string (accepted)},
-                           {"completedResults", std::to_string (record.entries.size ())},
-                           {"pendingDeliveries", std::to_string (record.pending_deliveries ())},
-                           {"reference", reference},
-                           {"sha256", detail::sha256_hex (bytes)}};
-    authority_completion_put_t mutation{authority::replace (expected.aggregate, std::move (state))};
-    auto written = co_await await_result (_authorities.compare_exchange_authority (
-      key, expected.store_version, std::move (mutation), cancellation));
-    const auto *error = written.error ();
-    const bool needs_confirmation =
-      written ? std::holds_alternative<authority_conflict_t> (written.value ())
-              : error && detail::is_transient_error (error->kind ());
-    if (!needs_confirmation || cancellation.stop_requested ())
-        co_return written.value ();
-
-    auto current = co_await _authorities.read_authority (std::move (key), cancellation);
-    auto *observed = std::get_if<authority_snapshot_t> (&current);
-    if (observed && observed->same_incarnation (expected)
-        && observed->owner.lease_generation == expected.owner.lease_generation
-        && observed->aggregate && observed->aggregate->relocation
-        && observed->aggregate->relocation->relocation_id == record.relocation_id) {
-        const auto &state = relocation_state (*observed);
-        if (const auto completion = state.find ("completion");
-            completion != state.end () && completion->at ("reference") == reference) {
-            (void) co_await read (*observed, cancellation);
-            co_return authority_compare_exchange_result_t{
-              authority_stored_t{std::move (*observed)}};
+        const bool renew = row.state == state;
+        if (renew && *found->value.expires_at - found->value.store_now > active_retention / 2)
+            co_return std::move (row);
+        if (row.state == delivery_t::accepted)
+            row.reply = reply;
+        row.state = state;
+        auto encoded = encode (row);
+        // Every terminal state retains the same reply bytes. Reserve the
+        // longest state's spelling before choosing the one immutable reply.
+        constexpr auto terminal_state_growth = states.back ().size () - states[1].size ();
+        if (!renew && state == delivery_t::pending
+            && encoded.size () > location_store_limits::value_bytes - terminal_state_growth) {
+            row.reply = failure;
+            encoded = encode (row);
         }
+        if (encoded.size () > location_store_limits::value_bytes)
+            data_lost ("Relocation reply row exceeds the Location Store value limit");
+        const std::chrono::milliseconds retention =
+          state == delivery_t::pending ? std::chrono::milliseconds (active_retention)
+                                       : std::chrono::milliseconds (terminal_retention);
+        store_write_request_t write{{store_version_condition_t{row_key, found->value.version},
+                                     _locations.owner_condition (row.writer)},
+                                    {store_put_t{row_key, bytes (encoded), retention}}};
+        auto result = co_await await_result (_locations._store.write (std::move (write)));
+        if (result) {
+            if (std::holds_alternative<store_write_applied_t> (result.value ()))
+                co_return std::move (row);
+            if (std::holds_alternative<store_write_corrupt_t> (result.value ()))
+                data_lost ("Location Store reported a corrupt relocation reply write");
+            continue;
+        }
+        if (!detail::is_transient_error (result.error_kind ()))
+            (void) result.value ();
+        // Resolve the unknown outcome before the existing relay pump retries.
+        const auto observed = co_await _locations._store.read (row_key);
+        if (const auto *current = std::get_if<store_found_t> (&observed);
+            current && current->value.version.value != found->value.version.value)
+            continue;
+        (void) result.value ();
     }
-    co_return written.value ();
 }
 
-} // namespace zlink::framework::runtime::relocation_completion
+task_t<std::vector<row_t>> repository_t::pending (std::string relocation_id)
+{
+    store_scan_request_t request{prefix (relocation_id), {}, 1000};
+    std::vector<row_t> output;
+    do {
+        const auto result = co_await _locations._store.scan (request);
+        const auto *page = std::get_if<store_scan_page_t> (&result);
+        if (!page)
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Relocation reply scan expired");
+        for (const auto &item : page->items) {
+            auto row = decode (item.key, item.value);
+            if (row.state == delivery_t::pending)
+                output.push_back (std::move (row));
+        }
+        request.cursor = page->next_cursor;
+    } while (request.cursor);
+    co_return output;
+}
+
+}

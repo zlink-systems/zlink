@@ -275,37 +275,32 @@ int main ()
             catch (const std::exception &) {
             }
         }
-        const auto admission_root =
-          serializers.get<zlink::framework::detail::spot_actor_admission_route_reply_t> ()
-            .deserialize (
-              serializers.get<zlink::framework::detail::spot_actor_admission_route_reply_t> ()
-                .serialize (zlink::framework::detail::spot_actor_admission_route_reply_t{
-                  true, {1, 2}, "join-root", 0x12345678}));
-        if (admission_root.completion_root_reference != "join-root"
-            || admission_root.completion_root_checksum != 0x12345678) {
+        const auto &admission_serializer =
+          serializers.get<zlink::framework::detail::spot_actor_admission_route_reply_t> ();
+        const auto admission = admission_serializer.serialize ({true, {1, 2}});
+        const auto admission_shape = nlohmann::json::parse (admission.to_string ());
+        if (admission_shape.contains ("completionRootReference")
+            || admission_shape.contains ("completionRootChecksum")
+            || !admission_serializer.deserialize (admission).accepted)
             return 150;
-        }
         const auto serialized_commit =
           serializers.get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
             .serialize (zlink::framework::detail::spot_actor_commit_route_request_t{
               .transfer_id = "transfer-root",
-              .completion_root_reference = "join-root",
-              .completion_root_checksum = 0x12345678,
               .source_spot_id = "source-spot",
               .session_relocation_route = {3, 5, 8}});
         const auto commit_shape = nlohmann::json::parse (serialized_commit.to_string ());
         if (commit_shape.contains ("coreReserveMessageCount")
             || commit_shape.contains ("coreReserveByteCount")
-            || commit_shape.contains ("deferCompletion")
-            || commit_shape.contains ("completionOnly")) {
+            || commit_shape.contains ("deferCompletion") || commit_shape.contains ("completionOnly")
+            || commit_shape.contains ("completionRootReference")
+            || commit_shape.contains ("completionRootChecksum")) {
             return 153;
         }
         const auto commit_root =
           serializers.get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
             .deserialize (serialized_commit);
-        if (commit_root.completion_root_reference != "join-root"
-            || commit_root.completion_root_checksum != 0x12345678
-            || commit_root.source_spot_id != "source-spot"
+        if (commit_root.source_spot_id != "source-spot"
             || commit_root.session_relocation_route != std::vector<std::uint8_t> ({3, 5, 8})) {
             return 151;
         }

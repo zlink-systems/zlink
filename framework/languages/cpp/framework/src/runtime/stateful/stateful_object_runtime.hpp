@@ -535,8 +535,7 @@ class stateful_object_runtime_t
     task_t<stateful_error_t> finalize_relocation_cutover (
       std::uint64_t token,
       std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver =
-        std::nullopt,
-      relocation_ingress_batch_t *committed = nullptr);
+        std::nullopt);
     task_t<stateful_error_t>
     restore_relocation (frozen_object_state_t frozen,
                         object_ref_t target,

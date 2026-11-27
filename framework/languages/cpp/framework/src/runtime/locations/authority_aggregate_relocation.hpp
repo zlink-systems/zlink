@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
+#include <runtime/locations/location_repository.hpp>
+#include <zlink/framework/contracts/errors/error.hpp>
 #include <zlink/framework/detail/binary_text_codec.hpp>
 
 #include <nlohmann/json.hpp>
@@ -99,23 +101,6 @@ inline authority_relocation_fence_t read_fence (const json_t &value)
     return {rid, generation, text (value, "ownerId"), lease};
 }
 
-inline void validate_completion (const json_t &value)
-{
-    const auto accepted = number (value, "acceptedRequests");
-    const auto completed = number (value, "completedResults");
-    const auto pending = number (value, "pendingDeliveries");
-    if (pending > completed || completed > accepted || !value.contains ("reference")
-        || !value.contains ("sha256"))
-        invalid_record ();
-    if (completed == 0) {
-        if (!value.at ("reference").is_null () || !value.at ("sha256").is_null ())
-            invalid_record ();
-    } else {
-        (void) text (value, "reference");
-        validate_sha256 (value, "sha256");
-    }
-}
-
 inline std::shared_ptr<const authority_aggregate_t> read (json_t value)
 {
     if (!value.is_object ())
@@ -138,6 +123,15 @@ inline std::shared_ptr<const authority_aggregate_t> read (json_t value)
         return std::make_shared<authority_aggregate_t> (
           authority_aggregate_t{std::move (value), {}});
     const auto &state = *relocation;
+    if (!state.is_object ())
+        invalid_record ();
+    static constexpr std::array<std::string_view, 7> relocation_fields{
+      "relocationId",      "phase", "source", "target", "coordinator", "sourceInventorySha256",
+      "applicationVersion"};
+    for (auto field = state.begin (); field != state.end (); ++field)
+        if (std::ranges::find (relocation_fields, field.key ()) == relocation_fields.end ())
+            throw framework_exception_t (framework_error_kind_t::data_lost,
+                                         "Unknown Location Store authority relocation field");
     const auto &id = text (state, "relocationId");
     const auto &phase = text (state, "phase");
     static constexpr std::array<std::string_view, 9> phases{"preparing", "captured",   "prepared",
@@ -161,8 +155,6 @@ inline std::shared_ptr<const authority_aggregate_t> read (json_t value)
     }
     validate_sha256 (state, "sourceInventorySha256");
     (void) number (state, "applicationVersion");
-    if (const auto completion = state.find ("completion"); completion != state.end ())
-        validate_completion (*completion);
     authority_relocation_record_t record{id, phase, read_fence (state.at ("source")),
                                          read_fence (state.at ("coordinator")),
                                          text (state.at ("coordinator"), "expectedStoreVersion")};
@@ -205,3 +197,23 @@ without_capture (const std::shared_ptr<const authority_aggregate_t> &current)
 }
 
 } // namespace zlink::framework::runtime::authority_aggregate_codec
+
+namespace zlink::framework::runtime
+{
+inline std::shared_ptr<const authority_aggregate_t>
+aggregate_commit_authority (const aggregate_fence_t &fence,
+                            const authority_key_t &key,
+                            const std::shared_ptr<const authority_aggregate_t> &before)
+{
+    const auto &participants = fence.relocation_participants;
+    if (participants.empty ())
+        return authority_aggregate_codec::without_capture (before);
+    const auto found = std::lower_bound (
+      participants.begin (), participants.end (), key.value,
+      [] (const auto &entry, const auto &value) { return entry.first.value < value; });
+    if (found == participants.end () || found->first.value != key.value)
+        throw framework_exception_t (framework_error_kind_t::data_lost,
+                                     "Missing relocation commit participant");
+    return authority_aggregate_codec::replace (before, found->second->encoded.at ("relocation"));
+}
+}

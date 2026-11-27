@@ -28,7 +28,16 @@ TEST (AuthorityAggregateRelocation, SharedRecordsRoundTripAndMalformedRecordsFai
     for (const auto &item : golden.at ("cases")) {
         SCOPED_TRACE (item.at ("name").get<std::string> ());
         const auto &aggregate = item.at ("aggregate");
-        if (item.at ("expect") == "reject") {
+        if (aggregate.contains ("relocation")
+            && aggregate.at ("relocation").contains ("completion")) {
+            try {
+                (void) authority_aggregate_codec::read (aggregate);
+                ADD_FAILURE () << "Retired completion metadata was accepted";
+            }
+            catch (const framework_exception_t &failure) {
+                EXPECT_EQ (failure.kind (), framework_error_kind_t::data_lost);
+            }
+        } else if (item.at ("expect") == "reject") {
             EXPECT_THROW ((void) authority_aggregate_codec::read (aggregate),
                           std::invalid_argument);
         } else {
@@ -40,6 +49,24 @@ TEST (AuthorityAggregateRelocation, SharedRecordsRoundTripAndMalformedRecordsFai
                 EXPECT_EQ (rewritten->encoded.dump (), aggregate.dump ());
             }
         }
+    }
+}
+
+TEST (AuthorityAggregateRelocation, UnknownRelocationFieldIsDataLost)
+{
+    const auto golden = golden_records ();
+    const auto &cases = golden.at ("cases");
+    const auto prepared = std::ranges::find_if (
+      cases, [] (const auto &item) { return item.at ("name") == "relocation-only-prepared"; });
+    ASSERT_NE (prepared, cases.end ());
+    auto value = prepared->at ("aggregate");
+    value["relocation"]["unknown"] = "unknown";
+    try {
+        (void) authority_aggregate_codec::read (std::move (value));
+        ADD_FAILURE () << "Unknown relocation field was accepted";
+    }
+    catch (const framework_exception_t &failure) {
+        EXPECT_EQ (failure.kind (), framework_error_kind_t::data_lost);
     }
 }
 
@@ -137,6 +164,7 @@ TEST (AuthorityAggregateRelocation, ForeignCommittedRecordFencesItsTargetAttempt
     public_authority_store_adapter_t adapter (repository);
     const store_key_t key{std::string{"authority\0actor\0golden-actor", 28}};
     auto aggregate = committed->at ("aggregate");
+    aggregate["relocation"].erase ("completion");
     // The storage codec accepts a full-range record token. The repository's
     // live owner lease counter is bounded, so use a live counter value here.
     aggregate["relocation"]["target"]["ownerLeaseGeneration"] = "8";
@@ -308,13 +336,46 @@ class ActorAuthorityRelocation : public ::testing::Test
     }
 
     authority_publish_result_t
-    publish (const zlink::framework::runtime::protocol::relocation_prepare_t &attempt)
+    publish (const zlink::framework::runtime::protocol::relocation_prepare_t &attempt,
+             std::span<const store_put_t> accepted = {})
     {
         auto placed = actor;
         placed.node_id = "t";
         return authority->publish (actor, placed, target.owner, target, "direct-test", 0, {},
                                    payload_for (target), original.store_version, attempt.relocation,
-                                   source.owner, &attempt);
+                                   source.owner, &attempt, accepted);
+    }
+
+    std::vector<store_put_t>
+    accepted_rows (const zlink::framework::runtime::protocol::relocation_prepare_t &attempt,
+                   std::size_t count)
+    {
+        std::vector<store_put_t> rows;
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto id = static_cast<std::uint64_t> (index + 1);
+            auto operation = authority_aggregate_codec::wire_uuid (0, id);
+            std::erase (operation, '-');
+            rows.push_back (relocation_completion::accepted (
+              {authority_aggregate_codec::wire_uuid (attempt.relocation.high,
+                                                     attempt.relocation.low),
+               key.value,
+               {source.owner.owner_id, static_cast<std::uint64_t> (source.owner.lease_generation),
+                "73", 3},
+               operation,
+               id,
+               target.owner}));
+        }
+        return rows;
+    }
+
+    std::size_t
+    stored_rows (const zlink::framework::runtime::protocol::relocation_prepare_t &attempt)
+    {
+        const auto id =
+          authority_aggregate_codec::wire_uuid (attempt.relocation.high, attempt.relocation.low);
+        const auto scanned =
+          provider.scan ({relocation_completion::prefix (id), {}, 1000}).result ().value ();
+        return std::get<store_scan_page_t> (scanned).items.size ();
     }
 
     void capture_until (bool fail)
@@ -470,6 +531,9 @@ TEST_F (ActorAuthorityRelocation, PreparedTargetFenceControlsCommit)
     const auto committed = read ();
     ASSERT_TRUE (committed.aggregate && committed.aggregate->relocation);
     EXPECT_EQ (committed.aggregate->relocation->phase, "committed");
+    const auto &relocation = committed.aggregate->encoded.at ("relocation");
+    EXPECT_FALSE (relocation.contains ("completion"));
+    EXPECT_EQ (stored_rows (prepare), 0u);
     EXPECT_EQ (committed.owner.owner_id, target.owner.owner_id);
     EXPECT_EQ (committed.object_generation, original.object_generation);
     EXPECT_GT (committed.authority_owner_generation, original.authority_owner_generation);
@@ -539,8 +603,64 @@ TEST_F (ActorAuthorityRelocation, ForeignPreparedTargetCanCommit)
     ASSERT_TRUE (std::holds_alternative<authority_stored_t> (exchanged));
     auto context = wire ();
     context.application_version = 42;
-    EXPECT_EQ (publish (target_prepare (context)).status, authority_publish_status_t::published);
+    const auto prepare = target_prepare (context);
+    const auto rows = accepted_rows (prepare, 1);
+    EXPECT_EQ (publish (prepare, rows).status, authority_publish_status_t::published);
+    const auto committed = read ();
+    ASSERT_TRUE (committed.aggregate && committed.aggregate->relocation);
+    EXPECT_EQ (stored_rows (prepare), 1u);
+    const auto before_release =
+      std::get<store_found_t> (provider.read (rows.front ().key).result ().value ());
+    const auto &encoded = before_release.value.bytes;
+    const auto value = nlohmann::json::parse (
+      std::string_view{reinterpret_cast<const char *> (encoded.data ()), encoded.size ()});
+    EXPECT_EQ (value.at ("state"), "accepted");
+    EXPECT_EQ (value.at ("writer").at ("ownerId"), target.owner.owner_id);
+    EXPECT_FALSE (value.contains ("reply"));
+    auto placed = actor;
+    placed.node_id = "t";
+    placed.authority_owner_generation = committed.authority_owner_generation;
+    EXPECT_TRUE (authority->finish_relocation (placed, prepare));
+    EXPECT_FALSE (read ().aggregate);
+    EXPECT_EQ (stored_rows (prepare), 1u);
 }
+
+TEST_F (ActorAuthorityRelocation, FullCommitBatchRejectsBeforeOwnershipMoves)
+{
+    capture_until (false);
+    auto context = wire ();
+    const auto prepare = target_prepare (context);
+    context.prepare_target = [&] (const auto &,
+                                  const auto &) -> task_t<stateful_relocation_reason_t> {
+        EXPECT_TRUE (co_await authority->record_target_prepared (actor, prepare));
+        co_return stateful_relocation_reason_t::none;
+    };
+    context.send_cutover = [&] (const auto &) -> task_t<bool> {
+        const auto excessive = accepted_rows (prepare, location_store_limits::write_keys);
+        EXPECT_EQ (publish (prepare, excessive).status,
+                   authority_publish_status_t::reply_batch_rejected);
+        EXPECT_EQ (read ().owner.owner_id, source.owner.owner_id);
+        EXPECT_EQ (stored_rows (prepare), 0u);
+
+        auto too_large = accepted_rows (prepare, 4);
+        for (auto &item : too_large)
+            item.bytes.resize (location_store_limits::value_bytes);
+        EXPECT_EQ (publish (prepare, too_large).status,
+                   authority_publish_status_t::reply_batch_rejected);
+        EXPECT_EQ (read ().owner.owner_id, source.owner.owner_id);
+        EXPECT_EQ (stored_rows (prepare), 0u);
+
+        const auto rows = accepted_rows (prepare, 3);
+        EXPECT_EQ (publish (prepare, rows).status, authority_publish_status_t::published);
+        EXPECT_EQ (stored_rows (prepare), 3u);
+        co_return true;
+    };
+    context.restore_deadline = {};
+    const auto result =
+      runtime.relocate (actor, "t", target.owner, 1024, {}, context).result ().value ();
+    EXPECT_EQ (result.terminal, relocation_terminal_t::completed);
+}
+
 
 TEST (AuthorityAggregateRelocation, SpotWideCommitConsumesForeignCapture)
 {

@@ -50,7 +50,8 @@ authority_publish_result_t memory_authority_store_t::publish (
   std::string,
   zlink::framework::runtime::protocol::relocation_id_t,
   zlink::framework::location_owner_token_t,
-  const zlink::framework::runtime::protocol::relocation_prepare_t *)
+  const zlink::framework::runtime::protocol::relocation_prepare_t *,
+  std::span<const zlink::framework::store_put_t>)
 {
     std::lock_guard lock (mutex);
     log.push_back ("publish");

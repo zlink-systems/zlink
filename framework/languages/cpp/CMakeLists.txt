@@ -2924,8 +2924,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_relocation_completion PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  target_compile_definitions(test_cpp_framework_relocation_completion PRIVATE
-    ZLINK_RELOCATION_COMPLETION_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/relocation-completion-record-v1.json")
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_relocation_completion
     COMMAND test_cpp_framework_relocation_completion

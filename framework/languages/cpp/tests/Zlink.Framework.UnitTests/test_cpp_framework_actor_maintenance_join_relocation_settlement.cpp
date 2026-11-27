@@ -258,12 +258,13 @@ class join_settlement_authority_t final : public fw::runtime::stateful::authorit
                        std::string version,
                        fw::runtime::protocol::relocation_id_t relocation,
                        fw::location_owner_token_t source_owner,
-                       const fw::runtime::protocol::relocation_prepare_t *prepare) override
+                       const fw::runtime::protocol::relocation_prepare_t *prepare,
+                       std::span<const zlink::framework::store_put_t> replies) override
     {
         return _inner.publish (source, target, std::move (owner), std::move (placement),
                                std::move (relocation_reference), checksum, inventory,
                                std::move (payload), std::move (version), relocation,
-                               std::move (source_owner), prepare);
+                               std::move (source_owner), prepare, replies);
     }
     bool finish_relocation (const object &target,
                             const fw::runtime::protocol::relocation_prepare_t &prepare) override
@@ -274,35 +275,11 @@ class join_settlement_authority_t final : public fw::runtime::stateful::authorit
     {
         return _inner.read (type, key);
     }
-    published publish_completion (kind type,
-                                  const std::string &key,
-                                  const std::string &version,
-                                  std::uint64_t generation,
-                                  std::string relocation_reference,
-                                  std::uint32_t checksum) override
+    fw::runtime::relocation_completion::repository_t *relocation_replies () noexcept override
     {
-        return _inner.publish_completion (type, key, version, generation,
-                                          std::move (relocation_reference), checksum);
+        return _inner.relocation_replies ();
     }
-    published replace_completion (kind type,
-                                  const std::string &key,
-                                  std::uint64_t generation,
-                                  const std::string &previous,
-                                  std::uint32_t previous_checksum,
-                                  std::string relocation_reference,
-                                  std::uint32_t checksum) override
-    {
-        return _inner.replace_completion (type, key, generation, previous, previous_checksum,
-                                          std::move (relocation_reference), checksum);
-    }
-    bool release_completion (kind type,
-                             const std::string &key,
-                             std::uint64_t generation,
-                             const std::string &relocation_reference,
-                             std::uint32_t checksum) override
-    {
-        return _inner.release_completion (type, key, generation, relocation_reference, checksum);
-    }
+
 
   private:
     fw::runtime::stateful::public_authority_store_adapter_t _inner;

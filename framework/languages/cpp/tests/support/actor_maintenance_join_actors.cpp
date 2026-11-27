@@ -323,6 +323,12 @@ probe_t room_t::probe (actor_t &actor, fw::message_context_t &, const probe_t &r
         }
     }
     observations->changed.notify_all ();
+    if (request.value == 2 && _context.spot_id () == suffix_spot
+        && observations->suffix_request_join_target)
+        actor.context ()
+          .join_spot (fw::spot_id_t (*observations->suffix_request_join_target))
+          .timeout (wait_budget)
+          .defer ();
     return request.value == instance_probe ? probe_t{actor.instance} : request;
 }
 

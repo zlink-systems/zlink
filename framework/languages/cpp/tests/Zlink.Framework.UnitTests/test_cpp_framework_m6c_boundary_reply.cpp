@@ -242,7 +242,6 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
     test.require (restored.try_claim (relocated, turn_domain_t::application).first
                     == stateful_error_t::moving,
                   "late ingress before owner commit must remain gated");
-    relocation_ingress_batch_t committed;
     test.require (
       restored.commit_relocation_restore (relocated, identity) == stateful_error_t::none
         && objects
@@ -254,16 +253,18 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
                        no_follow
                          ? std::nullopt
                          : std::optional<std::uint64_t>{relocated.authority_owner_generation}));
-                 },
-                 &committed)
+                 })
                .result ()
                .value ()
              == stateful_error_t::none,
       "owner commit must release the target queue and source retained copy");
-    test.require (committed.participants.size () == 1, "source must return its committed prefix");
-    if (committed.participants.empty ())
+    test.require (boundary.second.participants.size () == 1,
+                  "source must seal its original boundary prefix");
+    if (boundary.second.participants.empty ())
         return;
-    ingress.release_relocated_payloads (actor, committed.participants.front ().records);
+    ingress.release_relocated_payloads (actor,
+                                        sealed.seal.participants.front ().pending_application);
+    ingress.release_relocated_payloads (actor, boundary.second.participants.front ().records);
     if (source_expired) {
         test.require (completed.load () == 0,
                       "source expiry must precede the original request terminal");

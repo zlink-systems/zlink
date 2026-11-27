@@ -636,15 +636,11 @@ TEST (FrameworkRelocationSealContract, committed_payload_release_keeps_later_fol
                    sealed.seal.token, [] (const auto &, const auto &) {}, source)
                  .first,
                stateful::stateful_error_t::none);
-    stateful::relocation_ingress_batch_t committed;
-    ASSERT_EQ (host->objects ()
-                 .finalize_relocation_cutover (sealed.seal.token, std::nullopt, &committed)
-                 .result ()
-                 .value (),
+    ASSERT_EQ (host->objects ().finalize_relocation_cutover (sealed.seal.token).result ().value (),
                stateful::stateful_error_t::none);
-    ASSERT_EQ (committed.participants.size (), 1u);
-    EXPECT_EQ (operations_of (committed.participants.front ().records),
-               (std::vector<std::uint64_t>{1}));
+    ASSERT_EQ (sealed.seal.participants.size (), 1u);
+    const auto &captured_requests = sealed.seal.participants.front ().pending_application;
+    EXPECT_EQ (operations_of (captured_requests), (std::vector<std::uint64_t>{1}));
     // This request belongs to the later Message Follow path, after the committed prefix.
     ASSERT_EQ (dispatch
                  .stage_relocated (spot, turn (2),
@@ -655,7 +651,7 @@ TEST (FrameworkRelocationSealContract, committed_payload_release_keeps_later_fol
                  .result ()
                  .value (),
                stateful::stateful_error_t::none);
-    dispatch.release_relocated_payloads (spot, committed.participants.front ().records);
+    dispatch.release_relocated_payloads (spot, captured_requests);
     auto forwarded = protocol::decode_frozen_record (turn (2).payload);
     const auto relay = stateful::maintenance_runtime_t::terminal_identity (
       {2119, 7}, 1, {"source", 3, {1}, 1, "committed-authority"}, 1, forwarded);
@@ -666,14 +662,9 @@ TEST (FrameworkRelocationSealContract, committed_payload_release_keeps_later_fol
     const auto captured = protocol::decode_frozen_record (turn (1).payload);
     const auto retired = stateful::maintenance_runtime_t::terminal_identity (
       {2119, 7}, 1, {"source", 3, {1}, 1, "committed-authority"}, 1, captured);
-    // Source payload release preserves the original request terminal (Location runtime §9.3).
-    EXPECT_TRUE (dispatch.complete_relocated_source_async (spot, 1, retired, captured.application)
-                   .result ()
-                   .value ());
-    EXPECT_EQ (committed_completions, 1);
     EXPECT_FALSE (dispatch.complete_relocated_source_async (spot, 1, retired, captured.application)
                     .result ()
                     .value ());
-    EXPECT_EQ (committed_completions, 1);
+    EXPECT_EQ (committed_completions, 0);
     host->close ();
 }

@@ -59,14 +59,16 @@ void memory_relocation_repository_t::erase_without_authority_change (const std::
     roots.erase (reference);
 }
 
-aggregate_publish_result_t
-memory_aggregate_authority_t::prepare (const std::vector<object_ref_t> &sources,
-                                       std::string target_node_id,
-                                       zlink::framework::location_owner_token_t target_owner,
-                                       std::string relocation_reference,
-                                       std::uint32_t checksum_crc32c,
-                                       inventory_digest_t inventory_digest,
-                                       relocation_authority_fence_t)
+aggregate_publish_result_t memory_aggregate_authority_t::prepare (
+  const std::vector<object_ref_t> &sources,
+  std::string target_node_id,
+  zlink::framework::location_owner_token_t target_owner,
+  std::string relocation_reference,
+  std::uint32_t checksum_crc32c,
+  inventory_digest_t inventory_digest,
+  relocation_authority_fence_t,
+  const zlink::framework::runtime::protocol::relocation_prepare_t *,
+  std::span<const zlink::framework::store_put_t>)
 {
     std::lock_guard lock (mutex);
     ++prepare_count;
@@ -147,7 +149,8 @@ settlement_authority_t::publish (const object_ref_t &,
                                  std::string,
                                  zlink::framework::runtime::protocol::relocation_id_t,
                                  zlink::framework::location_owner_token_t,
-                                 const zlink::framework::runtime::protocol::relocation_prepare_t *)
+                                 const zlink::framework::runtime::protocol::relocation_prepare_t *,
+                                 std::span<const zlink::framework::store_put_t>)
 {
     return {};
 }

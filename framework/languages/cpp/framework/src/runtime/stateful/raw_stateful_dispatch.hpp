@@ -308,7 +308,6 @@ enum class raw_relocation_replay_result_t
     not_registered,
     stale_fence,
     sequence_gap,
-    conflicting_duplicate,
     restore_failed,
     transport_failed,
     terminal_received,
@@ -330,21 +329,12 @@ struct raw_relocation_target_registration_t
     std::function<void (const protocol::relocation_data_t &)> rollback;
 };
 
-struct raw_relocation_terminal_source_registration_t
+enum class raw_relocation_delivery_t
 {
-    protocol::relocation_id_t relocation;
-    protocol::relocation_coordinator_fence_t coordinator;
-    protocol::wire_operation_id_t operation;
-    protocol::request_source_fence_t request_source;
-    std::vector<std::uint8_t> target_node_routing_id;
-    std::uint64_t target_node_generation = 0;
-    std::uint64_t target_attempt_generation = 0;
-    std::uint64_t participant_id = 0;
-    std::uint64_t sequence = 0;
-    std::uint64_t reply_route_id = 0;
-    std::function<bool (const protocol::reply_relay_t &,
-                        const std::optional<protocol::application_payload_t> &)>
-      complete;
+    ready,
+    retry,
+    source_lease_expired,
+    already_confirmed
 };
 
 struct raw_relocation_terminal_target_registration_t
@@ -354,6 +344,9 @@ struct raw_relocation_terminal_target_registration_t
     std::optional<protocol::application_payload_t> application_reply;
     std::function<bool (protocol::reply_relay_ack_status_t)> persist_ack;
     std::function<bool ()> persist_source_lease_expiry;
+    std::function<raw_relocation_delivery_t (protocol::reply_relay_t &,
+                                             std::optional<protocol::application_payload_t> &)>
+      prepare_delivery;
 };
 
 class raw_relocation_replay_coordinator_t
@@ -362,8 +355,7 @@ class raw_relocation_replay_coordinator_t
     using clock_t = std::chrono::steady_clock;
     explicit raw_relocation_replay_coordinator_t (
       mesh::raw_mesh_node_owner_t &transport,
-      std::chrono::milliseconds relay_retry_interval = std::chrono::seconds (1),
-      std::chrono::milliseconds terminal_tombstone_retention = std::chrono::hours (24));
+      std::chrono::milliseconds relay_retry_interval = std::chrono::seconds (1));
 
     /* Flow-capture provider (flow-correlation §4): gates whether replayed
      * reply payloads validate/materialize wire flow fields as flow values.
@@ -377,18 +369,12 @@ class raw_relocation_replay_coordinator_t
     bool unregister_target (const protocol::relocation_id_t &relocation,
                             std::uint64_t target_attempt_generation,
                             const protocol::relocation_object_t &object);
-    bool register_terminal_source (raw_relocation_terminal_source_registration_t registration);
-    bool owns_request_source (const protocol::request_source_fence_t &source) const;
-    task_t<void> unregister_terminal_sources (const protocol::relocation_id_t &relocation);
-    bool unregister_terminal_source (const protocol::relocation_id_t &,
-                                     const protocol::wire_operation_id_t &);
     bool register_terminal_target (raw_relocation_terminal_target_registration_t registration);
-    // True when a relay retry or a tombstone reap may be due at now. The
+    // True when a relay retry may be due at now. The
     // coordinator keeps an early bound of its next due instant (spec 08
     // section 4.2), so a rotation with nothing due enters no lane.
     bool due (clock_t::time_point now) const noexcept;
     task_t<std::size_t> retry_terminal_relays (clock_t::time_point now);
-    std::size_t reap_terminal_tombstones (clock_t::time_point now);
     std::optional<clock_t::time_point> next_activity () const;
     bool
     confirm_terminal_source_lease_expired (const protocol::relocation_id_t &relocation,
@@ -430,13 +416,11 @@ class raw_relocation_replay_coordinator_t
         protocol::wire_operation_id_t operation;
         bool operator< (const terminal_key_t &other) const noexcept;
     };
-    struct terminal_source_state_t
+    struct terminal_target_key_t
     {
-        raw_relocation_terminal_source_registration_t registration;
-        bool completing = false;
-        bool completed = false;
-        std::array<std::byte, 32> digest{};
-        clock_t::time_point completed_at{};
+        terminal_key_t request;
+        protocol::request_source_fence_t source;
+        bool operator< (const terminal_target_key_t &other) const noexcept;
     };
     struct terminal_target_state_t
     {
@@ -445,6 +429,8 @@ class raw_relocation_replay_coordinator_t
         clock_t::time_point next_retry{};
         bool acknowledging = false;
     };
+    using terminal_targets_t = std::map<terminal_target_key_t, terminal_target_state_t>;
+    void erase_terminal_target_on_lane (terminal_targets_t::iterator target);
 
     static key_t key (const protocol::relocation_id_t &relocation,
                       std::uint64_t target_attempt_generation,
@@ -471,12 +457,10 @@ class raw_relocation_replay_coordinator_t
     std::mutex _activity_wait_mutex;
     std::condition_variable _activity_changed;
     std::map<key_t, target_state_t> _targets;
-    std::map<terminal_key_t, terminal_source_state_t> _terminal_sources;
-    std::map<terminal_key_t, terminal_target_state_t> _terminal_targets;
+    terminal_targets_t _terminal_targets;
     std::size_t _terminal_retained_bytes = 0;
     std::chrono::milliseconds _relay_retry_interval;
-    std::chrono::milliseconds _terminal_tombstone_retention;
-    // Earliest instant a retry or reap can be due, written on the lane by the
+    // Earliest instant a retry can be due, written on the lane by the
     // scan; a lane turn that can make work due earlier resets it to due_now.
     static constexpr clock_t::rep due_now = std::numeric_limits<clock_t::rep>::min ();
     static constexpr clock_t::rep never_due = std::numeric_limits<clock_t::rep>::max ();

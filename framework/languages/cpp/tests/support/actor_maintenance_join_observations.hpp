@@ -116,6 +116,7 @@ struct observations_t
     bool fail_completion = false;
     bool transfer_suffix = false;
     bool suffix_request = false;
+    std::optional<std::string> suffix_request_join_target;
     std::function<fw::result_t<int> ()> suffix_reply;
     std::vector<std::string> handled_spots;
     std::vector<std::string> handled_nodes;

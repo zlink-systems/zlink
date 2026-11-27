@@ -658,10 +658,6 @@ class in_memory_location_repository_t : public location_repository_t
                 object_generation = _object_generation;
                 owner_generation = _authority_owner_generation;
                 payload = std::move (reincarnate->payload);
-            } else if (const auto *completion =
-                         std::get_if<authority_completion_put_t> (&mutation)) {
-                aggregate = completion->aggregate;
-                payload = found->second.payload;
             } else {
                 auto &put = std::get<authority_put_t> (mutation);
                 payload = std::move (put.payload);
@@ -1222,7 +1218,7 @@ class in_memory_location_repository_t : public location_repository_t
                       == authority_generation_transition_t::new_owner) {
                       snapshot.authority_owner_generation = ++next_owner_generation;
                       snapshot.aggregate =
-                        authority_aggregate_codec::without_capture (snapshot.aggregate);
+                        aggregate_commit_authority (fence, participant.key, snapshot.aggregate);
                       snapshot.owner = aggregate->second.request.target_owner;
                       const auto source_allocation = snapshot.allocation;
                       snapshot.allocation.target = target;

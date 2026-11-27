@@ -38,8 +38,6 @@ inline constexpr char boundSessionRid[] = "boundSessionRid";
 inline constexpr char codec[] = "codec";
 inline constexpr char completionOperationIdHigh[] = "completionOperationIdHigh";
 inline constexpr char completionOperationIdLow[] = "completionOperationIdLow";
-inline constexpr char completionRootChecksum[] = "completionRootChecksum";
-inline constexpr char completionRootReference[] = "completionRootReference";
 inline constexpr char contentType[] = "contentType";
 inline constexpr char coreFinalSequence[] = "coreFinalSequence";
 inline constexpr char coreMembershipEpoch[] = "coreMembershipEpoch";
@@ -233,18 +231,13 @@ void to_json (nlohmann::json &json, const spot_actor_admission_route_reply_t &va
     json = nlohmann::json{
       {packet_field::accepted, value.accepted},
       {packet_field::payload, zlink::framework::detail::base64_encode (
-                                std::as_bytes (std::span<const std::uint8_t> (value.payload)))},
-      {packet_field::completionRootReference, value.completion_root_reference},
-      {packet_field::completionRootChecksum, value.completion_root_checksum}};
+                                std::as_bytes (std::span<const std::uint8_t> (value.payload)))}};
 }
 
 void from_json (const nlohmann::json &json, spot_actor_admission_route_reply_t &value)
 {
     value.accepted = json.at (packet_field::accepted).get<bool> ();
     value.payload = decode_base64_field (json, packet_field::payload);
-    value.completion_root_reference = json.value (packet_field::completionRootReference, "");
-    value.completion_root_checksum =
-      json.value (packet_field::completionRootChecksum, std::uint32_t{0});
 }
 
 void to_json (nlohmann::json &json, const spot_actor_handoff_packet_t &value)
@@ -277,8 +270,6 @@ void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &val
       {packet_field::actorGeneration, value.actor_generation},
       {packet_field::actorAuthorityOwnerGeneration, value.actor_authority_owner_generation},
       {packet_field::expectedActorStoreVersion, value.expected_actor_store_version},
-      {packet_field::completionRootReference, value.completion_root_reference},
-      {packet_field::completionRootChecksum, value.completion_root_checksum},
       {packet_field::targetSpotId, value.target_spot_id},
       {packet_field::targetSpotGeneration, value.target_spot_generation},
       {packet_field::sourceMeshName, value.source_mesh_name},
@@ -314,9 +305,6 @@ void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &v
     value.actor_authority_owner_generation =
       json.value (packet_field::actorAuthorityOwnerGeneration, std::uint64_t{0});
     value.expected_actor_store_version = json.value (packet_field::expectedActorStoreVersion, "");
-    value.completion_root_reference = json.value (packet_field::completionRootReference, "");
-    value.completion_root_checksum =
-      json.value (packet_field::completionRootChecksum, std::uint32_t{0});
     value.target_spot_id = json.at (packet_field::targetSpotId).get<std::string> ();
     value.target_spot_generation =
       json.value (packet_field::targetSpotGeneration, std::uint64_t{0});

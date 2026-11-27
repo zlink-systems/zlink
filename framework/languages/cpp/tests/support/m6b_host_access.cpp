@@ -64,7 +64,8 @@ bool public_host_runtime_test_access_t::restore_saved (
   const protocol::relocation_prepare_t &prepare,
   std::vector<stateful::frozen_object_state_t> frozen,
   std::vector<stateful::object_ref_t> targets,
-  const stateful::relocation_restore_identity_t &identity)
+  const stateful::relocation_restore_identity_t &identity,
+  location_store_t &store)
 {
     auto pending = std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
       public_host_runtime_t::pending_relocation_assembly_t{
@@ -88,7 +89,12 @@ bool public_host_runtime_test_access_t::restore_saved (
                                           saved.owner.object_generation,
                                           saved.owner.authority_owner_generation});
     }
-    return host.restore_relocation_assembly (pending, staging).result ().value ();
+    if (!host.restore_relocation_assembly (pending, staging).result ().value ())
+        return false;
+    store_write_request_t batch;
+    return relocation_completion::append_accepted (batch, *staging->replies)
+           && std::holds_alternative<store_write_applied_t> (
+             store.write (std::move (batch)).result ().value ());
 }
 
 bool public_host_runtime_test_access_t::complete_saved (

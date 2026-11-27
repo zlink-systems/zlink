@@ -2400,13 +2400,32 @@ struct mesh_node_runtime_t::remote_actor_join_state_t
     std::optional<std::uint64_t> committed_actor_authority_owner_generation;
     std::vector<std::uint8_t> admission_payload;
     std::string admission_reply_content_type;
-    std::string completion_root_reference;
-    std::uint32_t completion_root_checksum = 0;
     session_relocation_seal_outcome_t session_seal;
     std::string relocation_content_type;
     std::chrono::steady_clock::time_point deadline;
     std::uint64_t deadline_unix_ms = 0;
 };
+
+task_t<std::chrono::milliseconds>
+mesh_node_runtime_t::await_actor_relocation_publication (const actor_ref_t &actor,
+                                                         std::chrono::milliseconds timeout)
+{
+    if (!_node || !_user_spot_store)
+        co_return timeout;
+    const auto deadline = std::chrono::steady_clock::now () + timeout;
+    const auto read = co_await runtime::observe_until (
+      _user_spot_store->read_authority (runtime::actor_authority_key (actor.actor_id ().value ())),
+      deadline);
+    const auto *current = std::get_if<authority_snapshot_t> (&read.value ());
+    if (current && current->object_generation == actor.object_generation ()
+        && current->allocation.target.node_rid.value () == actor.node_rid ().value ())
+        co_await _node->await_relocation_publication (*current, deadline);
+    const auto remaining = deadline - std::chrono::steady_clock::now ();
+    if (remaining <= std::chrono::steady_clock::duration::zero ())
+        throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                     "Actor Join deadline expired");
+    co_return std::chrono::ceil<std::chrono::milliseconds> (remaining);
+}
 
 task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_entry_spot (
   actor_ref_t actor,
@@ -2416,6 +2435,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_entry_
   std::optional<zlink::routing_id_t> bound_session_node_rid,
   std::optional<zlink::routing_id_t> bound_session_rid)
 {
+    timeout = co_await await_actor_relocation_publication (actor, timeout);
     spot_node_runtime_t spots (_state->spot_state);
     const auto source = spots.actor_spot (actor);
     if (target.rid != _node->status ().routing_id ()) {
@@ -2568,6 +2588,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
   std::string application_packet_name,
   std::string application_content_type)
 {
+    timeout = co_await await_actor_relocation_publication (actor, timeout);
     spot_node_runtime_t spot_runtime (_state->spot_state);
     const auto completion_source_spot = spot_runtime.actor_spot (actor);
     auto located = co_await resolver->resolve_spot_address ({}, target_spot);
@@ -2825,8 +2846,6 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
                             : detail::propagate_failure<actor_join_reply_t> (
                                 delivered, "remote Actor Join rejected completion callback failed");
     }
-    s->completion_root_reference = reply.value ().completion_root_reference;
-    s->completion_root_checksum = reply.value ().completion_root_checksum;
     s->admission_payload = reply.value ().payload;
     co_return co_await seal_remote_application_actor_join (std::move (s));
 }

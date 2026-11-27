@@ -196,7 +196,25 @@ void aggregate_page_read_keeps_source_version_until_commit (
     const auto prepared = repository.prepare_aggregate (aggregate).result ().value ();
     ASSERT_TRUE (std::holds_alternative<aggregate_prepared_t> (prepared))
       << "prepare result variant " << prepared.index ();
-    const auto fence = std::get<aggregate_prepared_t> (prepared).fence;
+    auto fence = std::get<aggregate_prepared_t> (prepared).fence;
+    const auto relocation_id =
+      authority_aggregate_codec::wire_uuid (relocation.high, relocation.low);
+    if (target_attempt != 0) {
+        const relocation_completion::source_t requester{
+          source.owner.owner_id, static_cast<std::uint64_t> (source.owner.lease_generation),
+          zlink::routing_id_t::from (std::string (source.node_rid.value ())).to_hex (), 1};
+        fence.relocation_replies = {
+          relocation_completion::accepted ({relocation_id, key.value, requester,
+                                            "00000000000000010000000000000001", 11, target.owner}),
+          relocation_completion::accepted ({relocation_id,
+                                            aggregate.participants.front ().key.value, requester,
+                                            "00000000000000010000000000000002", 12, target.owner})};
+    }
+    const auto read_replies = [&] {
+        const auto read =
+          store.scan ({relocation_completion::prefix (relocation_id), {}, 10}).result ().value ();
+        return std::get<store_scan_page_t> (read).items.size ();
+    };
     auto pending =
       observe_aggregate_page_commit (repository.commit_aggregate (fence), provider.page_written);
     scope_exit_t release_commit ([&] {
@@ -205,6 +223,7 @@ void aggregate_page_read_keeps_source_version_until_commit (
     });
     ASSERT_TRUE (provider.page_written.task ().result ().value ());
     EXPECT_FALSE (pending.await_ready ());
+    EXPECT_EQ (read_replies (), 0u);
     // Release the commit even if an observation fails, so the fixture owns no pending work.
     const auto read = repository.read_authority (key).result ().value ();
     const auto during = std::get<authority_snapshot_t> (read);
@@ -239,6 +258,7 @@ void aggregate_page_read_keeps_source_version_until_commit (
       << "A staged page must not report source_preserved";
     release_commit.run ();
     EXPECT_EQ (pending.result ().value (), aggregate_commit_result_t::committed);
+    EXPECT_EQ (read_replies (), fence.relocation_replies.size ());
     // Source settlement remains eligible to observe the terminal target owner.
     if (settlement.outcome == stateful::relocation_authority_t::unsettled)
         settlement = adapter.settle_source_relocation (source_fence, {participant}, false);

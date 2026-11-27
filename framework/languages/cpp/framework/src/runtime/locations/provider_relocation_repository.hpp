@@ -118,26 +118,6 @@ class provider_relocation_repository_t final : public relocation_repository_t
         }
     }
 
-    task_t<std::string> put_verified_blob (std::vector<std::byte> payload,
-                                           std::chrono::hours retention,
-                                           std::stop_token cancellation)
-    {
-        if (cancellation.stop_requested ())
-            throw std::system_error (std::make_error_code (std::errc::operation_canceled));
-        const auto reference = make_reference ();
-        const auto written = co_await put_blob (
-          reference, payload, std::chrono::duration_cast<std::chrono::milliseconds> (retention));
-        if (std::holds_alternative<blob_conflict_t> (written))
-            throw framework_exception_t (framework_error_kind_t::rejected,
-                                         "Completion blob reference is already in use");
-        auto read = co_await get_relocation (reference, cancellation);
-        const auto *found = std::get_if<relocation_found_t> (&read);
-        if (!found || found->payload != payload)
-            throw framework_exception_t (framework_error_kind_t::data_lost,
-                                         "Completion blob differs after Put");
-        co_return reference;
-    }
-
     task_t<relocation_read_result_t> get_relocation (std::string reference,
                                                      std::stop_token cancellation = {}) override
     {

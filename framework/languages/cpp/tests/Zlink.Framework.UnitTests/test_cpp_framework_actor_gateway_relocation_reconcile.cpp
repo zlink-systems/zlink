@@ -77,7 +77,8 @@ class fixed_reconcile_authority_store_t final
              std::string = {},
              zlink::framework::runtime::protocol::relocation_id_t = {},
              zlink::framework::location_owner_token_t = {},
-             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
+             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr,
+             std::span<const zlink::framework::store_put_t> = {}) override
     {
         return {};
     }
@@ -751,19 +752,20 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
 
         std::optional<stateful::authority_relocation_reference_t> record;
 
-        stateful::authority_publish_result_t publish (
-          const stateful::object_ref_t &,
-          const stateful::object_ref_t &,
-          location_owner_token_t,
-          object_creation_target_t,
-          std::string,
-          std::uint32_t,
-          stateful::inventory_digest_t,
-          std::vector<std::byte> = {},
-          std::string = {},
-          zlink::framework::runtime::protocol::relocation_id_t = {},
-          location_owner_token_t = {},
-          const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
+        stateful::authority_publish_result_t
+        publish (const stateful::object_ref_t &,
+                 const stateful::object_ref_t &,
+                 location_owner_token_t,
+                 object_creation_target_t,
+                 std::string,
+                 std::uint32_t,
+                 stateful::inventory_digest_t,
+                 std::vector<std::byte> = {},
+                 std::string = {},
+                 zlink::framework::runtime::protocol::relocation_id_t = {},
+                 location_owner_token_t = {},
+                 const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr,
+                 std::span<const zlink::framework::store_put_t> = {}) override
         {
             return {};
         }

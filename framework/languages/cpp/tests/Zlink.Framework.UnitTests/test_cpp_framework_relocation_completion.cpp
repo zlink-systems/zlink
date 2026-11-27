@@ -1,385 +1,197 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
-#include "runtime/locations/relocation_completion_store.hpp"
-#include "runtime/locations/base64.hpp"
-
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
-#include "runtime/locations/provider_relocation_repository.hpp"
+#include "runtime/locations/relocation_completion_store.hpp"
 #include "../support/opaque_store_record_fixture.hpp"
-
-#include <fstream>
-#include <zlink/framework/detail/sha256.hpp>
 
 namespace
 {
 using namespace zlink::framework::test::opaque_store;
 using namespace zlink::framework::runtime::relocation_completion;
 
-nlohmann::json golden ()
-{
-    std::ifstream fixture (ZLINK_RELOCATION_COMPLETION_GOLDEN_PATH);
-    return nlohmann::json::parse (fixture).at ("cases");
-}
-
-TEST (RelocationCompletion, SharedGolden)
-{
-    for (const auto &item : golden ()) {
-        SCOPED_TRACE (item.at ("name").get<std::string> ());
-        const auto raw = base64_decode (item.at ("bytesBase64").get<std::string> ());
-        const std::string_view encoded (reinterpret_cast<const char *> (raw.data ()), raw.size ());
-        if (item.at ("expect") == "reject") {
-            EXPECT_THROW ((void) decode (encoded), framework_exception_t);
-            continue;
-        }
-        const auto record = decode (encoded);
-        EXPECT_EQ (encode (record), encoded);
-        EXPECT_EQ (detail::encode_hex (std::span<const std::byte> (detail::sha256 (raw))),
-                   item.at ("sha256").get<std::string> ());
-        EXPECT_EQ (std::to_string (record.entries.size ()),
-                   item.at ("completedResults").get<std::string> ());
-        EXPECT_EQ (std::to_string (record.pending_deliveries ()),
-                   item.at ("pendingDeliveries").get<std::string> ());
-    }
-}
-
-record_t golden_record ()
-{
-    const auto raw = base64_decode (golden ().front ().at ("bytesBase64").get<std::string> ());
-    return decode ({reinterpret_cast<const char *> (raw.data ()), raw.size ()});
-}
-
-TEST (RelocationCompletion, FinalSizeIncludesLongestDeliveryAndRemainingFailureReplies)
-{
-    auto record = golden_record ();
-    auto remaining = record.entries.back ();
-    record.entries.pop_back ();
-    remaining.reply = bytes ("failure reply");
-    const auto failures = std::span{&remaining, 1};
-    auto final = record;
-    final.entries.push_back (remaining);
-    for (auto &entry : final.entries)
-        entry.delivery = delivery_t::source_lease_expired;
-    const auto bound = encode (final).size ();
-    EXPECT_NO_THROW (require_fits (record, failures, bound));
-    EXPECT_THROW (require_fits (record, failures, bound - 1), framework_exception_t);
-}
-
-const store_key_t authority_row{std::string{"authority\0actor\0actor-1", 23}};
-
-class location_fixture_t final : public location_store_t
+class observed_store_t final : public location_store_t
 {
   public:
-    enum class failure_t
-    {
-        none,
-        before_write,
-        after_write,
-        applied_then_conflict,
-        replaced_then_conflict,
-        corrupt
-    };
-    unsigned attempts = 0;
-    unsigned authority_reads = 0;
-    unsigned replay_conflicts = 0;
-    failure_t failure = failure_t::none;
-    std::vector<std::string> *events = nullptr;
+    bool lose_next_write = false;
+    unsigned reply_writes = 0;
+    unsigned reply_reads = 0;
+    std::chrono::system_clock::time_point clock{};
 
     task_t<store_read_result_t> read (store_key_t key) override
     {
-        if (key.value == authority_row.value) {
-            ++authority_reads;
-            if (authority_reads == 2 && failure == failure_t::applied_then_conflict)
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Reconciliation read failed");
+        auto result = co_await _store.read (key);
+        if (!is_reply (key))
+            co_return result;
+        ++reply_reads;
+        if (auto *found = std::get_if<store_found_t> (&result)) {
+            if (_expires <= clock)
+                co_return store_missing_t{clock};
+            found->value.store_now = clock;
+            found->value.expires_at = _expires;
         }
-        co_return co_await store.read (std::move (key));
+        co_return result;
     }
 
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
-        ++attempts;
-        if (events)
-            events->push_back ("cas");
-        if (failure == failure_t::before_write)
-            throw framework_exception_t (framework_error_kind_t::unavailable, "CAS response lost");
-        if (failure == failure_t::corrupt)
-            co_return store_write_corrupt_t{};
-        if (attempts == 1 && failure == failure_t::replaced_then_conflict) {
-            const auto current = co_await store.read (authority_row);
-            const auto &row = std::get<store_found_t> (current).value;
-            store_write_request_t replacement{
-              {}, {store_put_t{authority_row, row.bytes, std::nullopt}}};
-            const auto replaced = co_await store.write (std::move (replacement));
-            if (!std::holds_alternative<store_write_applied_t> (replaced))
-                throw std::logic_error ("Concurrent authority write did not apply");
-            throw framework_exception_t (framework_error_kind_t::unavailable, "CAS response lost");
+        std::optional<std::chrono::milliseconds> ttl;
+        for (const auto &mutation : request.mutations)
+            if (const auto *put = std::get_if<store_put_t> (&mutation); put && is_reply (put->key))
+                ttl = put->retention;
+        auto result = co_await _store.write (std::move (request));
+        if (ttl && std::holds_alternative<store_write_applied_t> (result)) {
+            ++reply_writes;
+            _expires = clock + *ttl;
+            if (std::exchange (lose_next_write, false))
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Lost row CAS response");
         }
-        auto result = co_await store.write (std::move (request));
-        if (failure == failure_t::after_write
-            || (attempts == 1 && failure == failure_t::applied_then_conflict))
-            throw framework_exception_t (framework_error_kind_t::unavailable, "CAS response lost");
-        if (attempts > 1 && std::holds_alternative<store_write_conflict_t> (result))
-            ++replay_conflicts;
         co_return result;
     }
 
     task_t<store_scan_result_t> scan (store_scan_request_t request) override
     {
-        return store.scan (std::move (request));
+        if (request.prefix.starts_with ("$zlink/relocation-reply/") && _expires <= clock)
+            co_return store_scan_page_t{{}, {}, clock};
+        co_return co_await _store.scan (std::move (request));
     }
 
   private:
-    in_memory_location_store_t store;
+    static bool is_reply (const store_key_t &key)
+    {
+        return key.value.starts_with ("$zlink/relocation-reply/");
+    }
+
+    std::chrono::system_clock::time_point _expires{};
+    in_memory_location_store_t _store;
 };
 
-class blob_fixture_t final : public relocation_store_t
-{
-  public:
-    unsigned puts = 0;
-    unsigned reads = 0;
-    unsigned fail_put = 0;
-    unsigned fail_read = 0;
-    unsigned corrupt_read = 0;
-    std::vector<std::string> events;
-
-    task_t<blob_put_result_t> put (blob_reference_t reference,
-                                   std::span<const std::byte> payload,
-                                   std::chrono::milliseconds retention) override
-    {
-        events.push_back ("put");
-        if (++puts == fail_put)
-            throw framework_exception_t (framework_error_kind_t::unavailable, "Put failed");
-        return store.put (std::move (reference), payload, retention);
-    }
-
-    task_t<blob_read_result_t> read (blob_reference_t reference) override
-    {
-        events.push_back ("read");
-        if (++reads == fail_read)
-            throw framework_exception_t (framework_error_kind_t::unavailable, "Read failed");
-        if (reads == corrupt_read)
-            return task_t<blob_read_result_t> (
-              result_t<blob_read_result_t>::success (blob_found_t{bytes ("corrupt"), {}, {}}));
-        return store.read (std::move (reference));
-    }
-
-    task_t<blob_renew_result_t> renew (blob_reference_t reference,
-                                       std::chrono::milliseconds retention) override
-    {
-        return store.renew (std::move (reference), retention);
-    }
-
-    task_t<void> erase (blob_reference_t reference) override
-    {
-        return store.erase (std::move (reference));
-    }
-
-  private:
-    in_memory_relocation_store_t store;
-};
-
-class RelocationCompletionStore : public ::testing::Test
+class RelocationReplyRow : public ::testing::Test
 {
   protected:
-    location_fixture_t location;
-    provider_location_repository_t authorities{location};
-    blob_fixture_t blob;
-    provider_relocation_repository_t blobs{blob};
-    store_t store{authorities, blobs};
-    const authority_key_t key = actor_authority_key ("actor-1");
-    record_t record = golden_record ();
-    authority_snapshot_t original;
+    observed_store_t store;
+    provider_location_repository_t locations{store};
+    repository_t replies{locations};
+    row_t row;
 
     void SetUp () override
     {
-        const auto owner = std::get<owner_lease_claimed_t> (
-                             authorities.claim_owner_lease ("owner-target", 30s).result ().value ())
-                             .token;
-        const auto fence =
-          nlohmann::ordered_json{{"nodeRid", "ab"},
-                                 {"nodeGeneration", "4"},
-                                 {"ownerId", owner.owner_id},
-                                 {"ownerLeaseGeneration", std::to_string (owner.lease_generation)}};
-        auto coordinator = fence;
-        coordinator["expectedStoreVersion"] = "source-version";
-        auto target = fence;
-        target["attemptGeneration"] = "1";
-        const nlohmann::ordered_json aggregate = {
-          {"relocation",
-           {{"relocationId", record.relocation_id},
-            {"phase", "committed"},
-            {"source", fence},
-            {"coordinator", coordinator},
-            {"target", target},
-            {"sourceInventorySha256", std::string (64, 'a')},
-            {"applicationVersion", "1"},
-            {"completion",
-             {{"acceptedRequests", "3"},
-              {"completedResults", "0"},
-              {"pendingDeliveries", "0"},
-              {"reference", nullptr},
-              {"sha256", nullptr}}}}}};
-        const nlohmann::ordered_json row = {
-          {"recordVersion", 1},
-          {"payload", "AQI="},
-          {"objectGeneration", "1"},
-          {"authorityOwnerGeneration", "2"},
-          {"ownerId", owner.owner_id},
-          {"ownerLeaseGeneration", std::to_string (owner.lease_generation)},
-          {"allocation",
-           {{"state", "active"},
-            {"objectKind", "actor"},
-            {"stableType", "Game.Actor"},
-            {"descriptor", {{"meshName", "mesh"}, {"routingIdHex", "ab"}}},
-            {"descriptorLifecycleGeneration", "4"},
-            {"capacity", {{"actors", 1}, {"spots", 0}, {"spotType", nullptr}}}}},
-          {"pendingCreation", nullptr},
-          {"aggregate", aggregate}};
+        const auto lease = [&] (std::string id) {
+            return std::get<owner_lease_claimed_t> (
+                     locations.claim_owner_lease (std::move (id), 30s).result ().value ())
+              .token;
+        };
+        const auto source = lease ("requester");
+        row = {"00000000-0000-0001-0000-000000000002",
+               actor_authority_key ("actor").value,
+               {source.owner_id, static_cast<std::uint64_t> (source.lease_generation), "73", 3},
+               "00000000000000010000000000000002",
+               17,
+               lease ("target")};
+        store_write_request_t batch;
+        const auto put = accepted (row);
+        ASSERT_TRUE (append_accepted (batch, std::span (&put, 1)));
         ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
-          location.write ({{}, {store_put_t{authority_row, bytes (row.dump ()), std::nullopt}}})
-            .result ()
-            .value ()));
-        original = current ();
-        location.attempts = 0;
-        location.authority_reads = 0;
-        location.events = &blob.events;
+          store.write (std::move (batch)).result ().value ()));
     }
 
-    authority_snapshot_t current ()
+    row_t record (std::vector<std::byte> reply = bytes ("result"))
     {
-        return std::get<authority_snapshot_t> (authorities.read_authority (key).result ().value ());
+        return replies.record_result (row, std::move (reply), bytes ("failure"))
+          .result ()
+          .value ()
+          .value ();
     }
 
-    result_t<authority_compare_exchange_result_t> publish ()
+    store_value_t read ()
     {
-        return store.publish (key, original, record, {}).result ();
+        return std::get<store_found_t> (store.read (key (row)).result ().value ()).value;
     }
 };
 
-TEST_F (RelocationCompletionStore, VerifiesChunkAndManifestBeforeSingleCas)
+TEST_F (RelocationReplyRow, LostResultCASIsConfirmedByRereading)
 {
-    const auto result = publish ();
-    ASSERT_TRUE (result) << (result.error () ? result.error ()->what () : "");
-    ASSERT_TRUE (std::holds_alternative<authority_stored_t> (result.value ()));
-    EXPECT_EQ (blob.events, (std::vector<std::string>{"put", "read", "put", "read", "cas"}));
-    EXPECT_EQ (location.attempts, 1u);
-    const auto observed = current ();
-    EXPECT_EQ (observed.payload, original.payload);
-    EXPECT_TRUE (observed.same_incarnation (original));
-    const auto read = store.read (observed).result ();
-    ASSERT_TRUE (read);
-    EXPECT_EQ (encode (read.value ()), encode (record));
+    EXPECT_EQ (key (row).value, "$zlink/relocation-reply/"
+                                "00000000-0000-0001-0000-000000000002/requester."
+                                  + std::to_string (row.source.lease_generation)
+                                  + ".73.3/00000000000000010000000000000002");
+    EXPECT_TRUE (replies.pending (row.relocation_id).result ().value ().empty ());
+    store.lose_next_write = true;
+    const auto reads = store.reply_reads;
+    const auto stored = record ();
+    EXPECT_GT (store.reply_reads, reads + 1);
+    EXPECT_EQ (stored.state, delivery_t::pending);
+    EXPECT_EQ (record (bytes ("different result")).reply, stored.reply);
+    EXPECT_EQ (store.reply_writes, 2u);
+    const auto snapshot = replies.pending (row.relocation_id).result ().value ();
+    ASSERT_EQ (snapshot.size (), 1u);
+    EXPECT_EQ (snapshot.front ().reply, stored.reply);
 }
 
-TEST_F (RelocationCompletionStore, PutOrReadBackFailureLeavesAuthorityUnchanged)
+TEST_F (RelocationReplyRow, AuthenticatedAckKeepsFirstTerminalAndExpiresInFiveMinutes)
 {
-    for (const auto &fault :
-         {&blob_fixture_t::fail_put, &blob_fixture_t::fail_read, &blob_fixture_t::corrupt_read}) {
-        for (unsigned stage : {1u, 2u}) {
-            blob.puts = blob.reads = 0;
-            blob.*fault = stage;
-            EXPECT_FALSE (publish ());
-            EXPECT_EQ (current ().store_version, original.store_version);
-            EXPECT_EQ (location.attempts, 0u);
-            EXPECT_LE (blob.puts, stage);
-            blob.*fault = 0;
-        }
-    }
+    record ();
+    store.lose_next_write = true;
+    EXPECT_TRUE (replies.confirm (row, delivery_t::terminal_received).result ().value ());
+    EXPECT_TRUE (replies.confirm (row, delivery_t::already_terminal).result ().value ());
+    EXPECT_EQ (record ().state, delivery_t::terminal_received);
+    EXPECT_EQ (store.reply_writes, 3u);
+    EXPECT_EQ (*read ().expires_at - store.clock, 5min);
+    store.clock += 5min - 1ms;
+    EXPECT_TRUE (std::holds_alternative<store_found_t> (store.read (key (row)).result ().value ()));
+    store.clock += 1ms;
+    EXPECT_TRUE (
+      std::holds_alternative<store_missing_t> (store.read (key (row)).result ().value ()));
 }
 
-TEST_F (RelocationCompletionStore, StaleAuthorityRemainsConflictAfterReferenceCheck)
+TEST_F (RelocationReplyRow, SourceLeaseExpiryRequiresExactFence)
 {
-    ASSERT_TRUE (std::holds_alternative<authority_stored_t> (publish ().value ()));
-    const auto committed = current ();
-    location.authority_reads = 0;
-    ASSERT_TRUE (std::holds_alternative<authority_conflict_t> (publish ().value ()));
-    EXPECT_EQ (location.authority_reads, 2u);
-    EXPECT_EQ (current ().store_version, committed.store_version);
-    EXPECT_EQ (location.attempts, 1u);
+    record ();
+    EXPECT_FALSE (replies.confirm (row, delivery_t::source_lease_expired).result ().value ());
+    locations
+      .release_owner_lease (
+        {row.source.owner_id, static_cast<std::int64_t> (row.source.lease_generation)})
+      .result ()
+      .value ();
+    const auto replacement = std::get<owner_lease_claimed_t> (
+      locations.claim_owner_lease (row.source.owner_id, 30s).result ().value ());
+    EXPECT_NE (static_cast<std::uint64_t> (replacement.token.lease_generation),
+               row.source.lease_generation);
+    EXPECT_TRUE (replies.confirm (row, delivery_t::source_lease_expired).result ().value ());
+    EXPECT_EQ (record ().state, delivery_t::source_lease_expired);
 }
 
-TEST_F (RelocationCompletionStore, LostResponseConfirmsAppliedReference)
+TEST_F (RelocationReplyRow, WriterLeaseExpiryPreventsResultAndAcknowledgement)
 {
-    location.failure = location_fixture_t::failure_t::after_write;
-    const auto result = publish ();
-    ASSERT_TRUE (result);
-    EXPECT_TRUE (std::holds_alternative<authority_stored_t> (result.value ()));
-    EXPECT_EQ (location.attempts, 1u);
-    EXPECT_EQ (location.authority_reads, 2u);
+    record ();
+    locations.release_owner_lease (row.writer).result ().value ();
+    const auto replacement = std::get<owner_lease_claimed_t> (
+      locations.claim_owner_lease (row.writer.owner_id, 30s).result ().value ());
+    EXPECT_NE (replacement.token.lease_generation, row.writer.lease_generation);
+    EXPECT_FALSE (
+      replies.record_result (row, bytes ("result"), bytes ("failure")).result ().value ());
+    EXPECT_TRUE (replies.confirm (row, delivery_t::terminal_received).result ().value ());
+    EXPECT_EQ (store.reply_writes, 2u);
 }
 
-TEST_F (RelocationCompletionStore, LostResponseWithoutApplyFails)
+TEST_F (RelocationReplyRow, PendingRenewsAtTwelveHoursOfStoreTime)
 {
-    location.failure = location_fixture_t::failure_t::before_write;
-    const auto result = publish ();
-    ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (), framework_error_kind_t::unavailable);
-    EXPECT_EQ (location.attempts, 2u);
-    EXPECT_EQ (location.authority_reads, 4u);
-    EXPECT_EQ (current ().store_version, original.store_version);
+    record ();
+    store.clock += 12h - 1ms;
+    EXPECT_EQ (record ().reply, bytes ("result"));
+    EXPECT_EQ (store.reply_writes, 2u);
+    store.clock += 1ms;
+    EXPECT_EQ (record ().reply, bytes ("result"));
+    EXPECT_EQ (store.reply_writes, 3u);
+    EXPECT_EQ (*read ().expires_at - store.clock, 24h);
 }
 
-TEST_F (RelocationCompletionStore, LostResponseThenReplayConflictConfirmsAppliedReference)
+TEST_F (RelocationReplyRow, OversizedResultStoresFailure)
 {
-    location.failure = location_fixture_t::failure_t::applied_then_conflict;
-    const auto result = publish ();
-    ASSERT_TRUE (result);
-    ASSERT_TRUE (std::holds_alternative<authority_stored_t> (result.value ()));
-    EXPECT_EQ (location.attempts, 2u);
-    EXPECT_EQ (location.replay_conflicts, 1u);
-    EXPECT_EQ (location.authority_reads, 5u);
-    EXPECT_EQ (blob.reads, 4u);
+    const auto saved = record (std::vector<std::byte> (location_store_limits::value_bytes));
+    EXPECT_EQ (saved.reply, bytes ("failure"));
+    EXPECT_EQ (store.reply_writes, 2u);
 }
 
-TEST_F (RelocationCompletionStore, LostResponseThenReplayConflictRejectsOtherWrite)
-{
-    location.failure = location_fixture_t::failure_t::replaced_then_conflict;
-    const auto result = publish ();
-    ASSERT_TRUE (result);
-    const auto *conflict = std::get_if<authority_conflict_t> (&result.value ());
-    ASSERT_NE (conflict, nullptr);
-    const auto &observed = std::get<authority_snapshot_t> (conflict->current);
-    EXPECT_NE (observed.store_version, original.store_version);
-    const auto completion = store.read (observed).result ();
-    ASSERT_TRUE (completion);
-    EXPECT_TRUE (completion.value ().entries.empty ());
-    EXPECT_EQ (location.attempts, 2u);
-    EXPECT_EQ (location.replay_conflicts, 1u);
-    EXPECT_EQ (location.authority_reads, 5u);
-    EXPECT_EQ (blob.reads, 2u);
-}
-
-TEST_F (RelocationCompletionStore, CorruptWriteKeepsOriginalError)
-{
-    location.failure = location_fixture_t::failure_t::corrupt;
-    const auto result = publish ();
-    ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (), framework_error_kind_t::internal_failure);
-    EXPECT_EQ (location.attempts, 1u);
-    EXPECT_EQ (location.authority_reads, 1u);
-    EXPECT_EQ (blob.reads, 2u);
-    EXPECT_EQ (current ().store_version, original.store_version);
-}
-
-TEST_F (RelocationCompletionStore, RejectsInconsistentCounts)
-{
-    const auto entry = record.entries.back ();
-    record.entries.pop_back ();
-    EXPECT_FALSE (publish ());
-    EXPECT_EQ (blob.puts, 0u);
-    EXPECT_EQ (location.attempts, 0u);
-
-    record.entries.push_back (entry);
-    const auto published = publish ();
-    ASSERT_TRUE (published);
-    auto observed = std::get<authority_stored_t> (published.value ()).snapshot;
-    auto relocation = observed.aggregate->encoded.at ("relocation");
-    relocation["completion"]["pendingDeliveries"] = "0";
-    observed.aggregate =
-      authority_aggregate_codec::replace (observed.aggregate, std::move (relocation));
-    const auto read = store.read (observed).result ();
-    ASSERT_FALSE (read);
-    EXPECT_EQ (read.error_kind (), framework_error_kind_t::data_lost);
-}
 }

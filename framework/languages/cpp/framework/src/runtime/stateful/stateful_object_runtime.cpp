@@ -2001,8 +2001,7 @@ stateful_object_runtime_t::abort_relocation_before_cutover (std::uint64_t token)
 
 task_t<stateful_error_t> stateful_object_runtime_t::finalize_relocation_cutover (
   std::uint64_t token,
-  std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver,
-  relocation_ingress_batch_t *committed)
+  std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver)
 {
     std::function<task_t<void> (bool)> finish;
     const auto result = co_await _lane.run_task ([&, this] () -> stateful_error_t {
@@ -2018,38 +2017,10 @@ task_t<stateful_error_t> stateful_object_runtime_t::finalize_relocation_cutover 
                 return stateful_error_t::conflict;
             }
         }
-        relocation_ingress_batch_t released;
-        if (committed) {
-            released.token = token;
-            released.participants.resize (seal->second.sources.size ());
-            // Allocate the output before moving any of the source's originals.
-            for (std::size_t index = 0; index != released.participants.size (); ++index) {
-                auto &participant = released.participants[index];
-                participant.owner = seal->second.sources[index];
-                const auto saved = index < seal->second.frozen.size ()
-                                     ? seal->second.frozen[index].pending_application.size ()
-                                     : 0;
-                participant.records.reserve (saved
-                                             + seal->second.boundary_application[index].size ());
-            }
-            for (std::size_t index = 0; index != released.participants.size (); ++index) {
-                auto &records = released.participants[index].records;
-                if (index < seal->second.frozen.size ()) {
-                    auto &saved = seal->second.frozen[index].pending_application;
-                    records.insert (records.end (), std::make_move_iterator (saved.begin ()),
-                                    std::make_move_iterator (saved.end ()));
-                }
-                auto &boundary = seal->second.boundary_application[index];
-                records.insert (records.end (), std::make_move_iterator (boundary.begin ()),
-                                std::make_move_iterator (boundary.end ()));
-            }
-        }
         if (deliver)
             seal->second.deliver = std::move (*deliver);
         finish = std::move (seal->second.binding->finish);
         finalize_relocation_source_on_lane (seal->second);
-        if (committed)
-            *committed = std::move (released);
         return stateful_error_t::none;
     });
     if (finish)
@@ -2340,16 +2311,24 @@ stateful_error_t stateful_object_runtime_t::commit_relocation_restore_aggregate 
     const auto preflight = _lane.run_sync ([&, this] {
         if (targets.size () < 2)
             return stateful_error_t::invalid;
+        std::size_t already_ready = 0;
         for (const auto &target : targets) {
             stateful_error_t error = stateful_error_t::none;
             auto *record = find_record_locked (target, error);
             if (!record)
                 return error;
+            if (record->state == object_state_t::ready && !record->restore_identity) {
+                ++already_ready;
+                continue;
+            }
             if (record->state != object_state_t::recovering
                 || record->restore_identity
                      != std::optional<relocation_restore_identity_t>{identity})
                 return stateful_error_t::conflict;
         }
+        if (already_ready != 0)
+            return already_ready == targets.size () ? stateful_error_t::already_exists
+                                                    : stateful_error_t::conflict;
         commit = _relocation_state_commit;
         return stateful_error_t::none;
     });

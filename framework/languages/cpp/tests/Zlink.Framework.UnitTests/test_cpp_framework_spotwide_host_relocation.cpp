@@ -562,15 +562,11 @@ TEST (SpotWideHostRelocation, GetOrCreateReturnsExistingRelocationTarget)
     ASSERT_NE (current, nullptr);
     ASSERT_EQ (current->allocation.state, fw::placement_allocation_state_t::active);
     ASSERT_EQ (current->allocation.target.node_rid.value (), target_rid);
-    const auto relocation =
-      fw::runtime::stateful::authority_relocation_payload_codec_t::decode (*current);
-    ASSERT_TRUE (relocation);
-    const auto ready =
-      fw::runtime::decode_direct_user_spot_authority_payload (relocation->application_payload);
+    EXPECT_FALSE (fw::runtime::stateful::authority_relocation_payload_codec_t::decode (*current));
+    const auto ready = fw::runtime::decode_direct_user_spot_authority_payload (current->payload);
     ASSERT_TRUE (ready);
     ASSERT_EQ (ready->state, fw::runtime::user_spot_authority_state_t::ready);
-    ASSERT_EQ (ready->node_rid.value (), source_rid);
-    ASSERT_NE (ready->node_rid.value (), current->allocation.target.node_rid.value ());
+    ASSERT_EQ (ready->node_rid.value (), current->allocation.target.node_rid.value ());
     const auto calls_after_relocation = factory_calls.load ();
     ASSERT_EQ (calls_after_relocation, 2u);
     auto target_services = target.app.advanced ().services ().build_provider ();

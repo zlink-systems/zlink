@@ -1018,6 +1018,11 @@ encode_session_relocation_sealed (const session_relocation_sealed_t &record);
 session_relocation_sealed_t decode_session_relocation_sealed (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_reply_relay (const reply_relay_t &record);
 reply_relay_t decode_reply_relay (std::span<const std::uint8_t> bytes);
+std::vector<std::byte>
+encode_relocation_completion_reply (const reply_relay_t &relay,
+                                    const std::optional<application_payload_t> &reply);
+std::pair<reply_relay_t, std::optional<application_payload_t>>
+decode_relocation_completion_reply (std::span<const std::byte> bytes, bool capture_flow);
 std::vector<std::uint8_t> encode_reply_relay_ack (const reply_relay_ack_t &record);
 reply_relay_ack_t decode_reply_relay_ack (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_relocation_control (const relocation_control_t &record);

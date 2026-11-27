@@ -7,8 +7,6 @@
 #include "../support/request_admission_fixture.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "metric_test_reader.hpp"
-#include "runtime/backend/raw_binding_adapter.hpp"
-#include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/timers/async_delay.hpp"
 
 #include <iostream>
@@ -31,7 +29,6 @@ void test_relocation_request_source_registration (test_context_t &test,
 {
     namespace framework = zlink::framework;
     namespace protocol = framework::runtime::protocol;
-    namespace mesh = framework::runtime::mesh;
     metric_test::provider_t provider;
     auto monitoring = zlink::framework::test::runtime_failure_monitoring ();
     stateful_object_runtime_t objects;
@@ -60,13 +57,6 @@ void test_relocation_request_source_registration (test_context_t &test,
         }
         participants = {spot, actor, peer};
     }
-    mesh::raw_mesh_node_options_t options;
-    options.descriptor = {
-      "mesh", {'s'}, 1, 1, "tcp://127.0.0.1:0", {}, mesh::service_node_state_t::preparing};
-    options.runtime_failures = std::make_shared<framework::runtime::runtime_failure_collector_t> ();
-    mesh::raw_mesh_node_owner_t transport (options);
-    raw_stateful_dispatch_t dispatch (objects, transport);
-    raw_relocation_replay_coordinator_t replies (transport);
     auto authority = std::make_shared<settlement_authority_t> ();
     authority->observed_authority = relocation_authority_t::source_preserved;
     authority->preserved_authority = relocation_authority_t::source_preserved;
@@ -74,7 +64,6 @@ void test_relocation_request_source_registration (test_context_t &test,
     maintenance_runtime_t relocation (objects, authority, roots, {}, {},
                                       std::make_shared<memory_aggregate_authority_t> (
                                         std::make_shared<memory_authority_store_t> ()));
-    relocation.attach_relocation_wire (replies, [&] { return &dispatch; });
     protocol::frozen_application_record_t request;
     request.kind = protocol::frozen_record_kind_t::actor_request;
     request.source_kind = protocol::frozen_source_kind_t::node;
@@ -93,6 +82,7 @@ void test_relocation_request_source_registration (test_context_t &test,
     };
     if (!boundary && !aggregate)
         accept ();
+    std::vector<protocol::wire_operation_id_t> accepted;
     eligible_relocation_unit_t::canonical_wire_context_t wire{
       .relocation = {0x1786, 2},
       .target_attempt_generation = 1,
@@ -108,45 +98,29 @@ void test_relocation_request_source_registration (test_context_t &test,
                         participant.pending_application.push_back ({1, {}, 0, request});
             return true;
         },
-      .prepare_target = [&] (const auto &, const auto &) -> framework::task_t<relocation_reason_t> {
+      .prepare_target = [&] (const std::vector<frozen_object_state_t> &frozen,
+                             const auto &) -> framework::task_t<relocation_reason_t> {
           if (boundary)
               accept ();
+          for (const auto &participant : frozen)
+              for (const auto &turn : participant.pending_application) {
+                  if (turn.frozen_record)
+                      accepted.push_back (turn.frozen_record->operation);
+                  else if (turn.application_record)
+                      accepted.push_back (turn.application_record->operation);
+              }
           co_return relocation_reason_t::none;
       },
       .send_state_chunk = [] (const auto &) -> framework::task_t<bool> { co_return true; },
-      .send_relocation_data = [] (const auto &, const auto &) -> framework::task_t<bool> {
+      .send_relocation_data = [&] (const std::vector<protocol::relocation_data_t> &records,
+                                   const auto &) -> framework::task_t<bool> {
+          for (const auto &data : records)
+              accepted.push_back (data.record.operation);
           co_return true;
       },
-      .send_cutover =
-        [&] (const protocol::relocation_cutover_t &cutover) -> framework::task_t<bool> {
-          // An incorrect participant fence distinguishes a retained source from
-          // an absent registration, without attempting an application reply.
-          const protocol::reply_relay_t relay{request.operation,
-                                              77,
-                                              cutover.relocation,
-                                              1,
-                                              cutover.coordinator,
-                                              aggregate ? 1u : 2u,
-                                              boundary ? 0x1786u : 0x1771u,
-                                              0,
-                                              protocol::framework_error_code::none};
-          auto message = mesh::service_mailbox_record_t::from_parts (
-            "source", mesh::service_mailbox_domain_t::infrastructure,
-            framework::detail::backend::materialize_binding_parts (
-              {protocol::encode_reply_relay (relay)}),
-            {'t'}, std::nullopt, 1);
-          const auto observed = await_task (replies.process (message));
-          std::cerr << "request-registry boundary=" << boundary << " aggregate=" << aggregate
-                    << " at-cutover=" << static_cast<int> (observed) << '\n';
-          test.require (observed == raw_relocation_replay_result_t::stale_fence,
-                        "both saved and boundary requests must be registered before cutover");
-          auto matching = relay;
-          matching.participant_id = aggregate ? 2 : 1;
-          message.replace_parts (framework::detail::backend::materialize_binding_parts (
-            {protocol::encode_reply_relay (matching)}));
-          test.require (await_task (replies.process (message))
-                          == raw_relocation_replay_result_t::persistence_failed,
-                        "matching identity must reach the original pending request owner");
+      .send_cutover = [&] (const protocol::relocation_cutover_t &) -> framework::task_t<bool> {
+          test.require (accepted == std::vector<protocol::wire_operation_id_t>{request.operation},
+                        "one original request must reach the target before cutover");
           co_return true;
       },
       .abort_target_before_cutover = [] { return true; },
@@ -166,10 +140,6 @@ void test_relocation_request_source_registration (test_context_t &test,
     test.require (objects.enqueue (actor, turn_domain_t::application, {2, {0x42}})
                     == stateful_error_t::none,
                   "source Preserve must resume the original application queue");
-    const auto retained = replies.unregister_terminal_source (wire.relocation, request.operation);
-    std::cerr << "request-registry boundary=" << boundary << " aggregate=" << aggregate
-              << " after-preserve=" << retained << '\n';
-    test.require (!retained, "source Preserve must return the request registration lifetime");
     int terminals = 0;
     for (const auto &metric : provider.collect ()) {
         if (metric.instrument_descriptor.name_ != "zlink.relocation.completed")

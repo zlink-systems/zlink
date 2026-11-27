@@ -1,18 +1,25 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
-#include <runtime/locations/location_repository.hpp>
-#include <service_wire_constants.hpp>
+#include "runtime/locations/location_repository_values.hpp"
+#include <zlink/framework/contracts/locations/stores.hpp>
+
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace zlink::framework::runtime
 {
-class provider_relocation_repository_t;
+class provider_location_repository_t;
 
 namespace relocation_completion
 {
-
 enum class delivery_t : std::uint8_t
 {
+    accepted,
     pending,
     terminal_received,
     already_terminal,
@@ -25,62 +32,44 @@ struct source_t
     std::uint64_t lease_generation = 0;
     std::string node_rid;
     std::uint64_t node_generation = 0;
-
-    auto operator<=> (const source_t &) const = default;
 };
 
-struct entry_t
+struct row_t
 {
+    std::string relocation_id;
     std::string object_key;
     source_t source;
     std::string operation_id;
     std::uint64_t reply_route_id = 0;
+    location_owner_token_t writer;
+    delivery_t state = delivery_t::accepted;
     std::vector<std::byte> reply;
-    delivery_t delivery = delivery_t::pending;
 };
 
-struct record_t
-{
-    std::string relocation_id;
-    std::vector<entry_t> entries;
+std::string prefix (std::string_view relocation_id);
+store_key_t key (const row_t &row);
+store_put_t accepted (const row_t &row);
+bool append_accepted (store_write_request_t &batch, std::span<const store_put_t> rows);
 
-    std::size_t pending_deliveries () const;
-};
-
-std::string encode (const record_t &record);
-record_t decode (std::string_view bytes);
-
-// Supply the serialized InternalFailure replies for the accepted requests
-// that have yet to complete. The same check also serves precommit admission.
-void require_fits (const record_t &record,
-                   std::span<const entry_t> remaining_failures,
-                   std::uint64_t limit = protocol::relocationLogicalBytes);
-
-class store_t final
+class repository_t final
 {
   public:
-    store_t (location_repository_t &authorities, provider_relocation_repository_t &blobs) :
-        _authorities (authorities), _blobs (blobs)
-    {
-    }
+    explicit repository_t (provider_location_repository_t &locations) : _locations (locations) {}
 
-    task_t<record_t> read (authority_snapshot_t authority, std::stop_token cancellation = {});
-
-    // The coordinator supplies the full replacement in canonical object and
-    // acceptance order, together with the reservations for unfinished requests.
-    task_t<authority_compare_exchange_result_t>
-    publish (authority_key_t key,
-             authority_snapshot_t expected,
-             record_t record,
-             std::span<const entry_t> remaining_failures,
-             std::stop_token cancellation = {});
+    // A missing row or ended writer lease retires local delivery work.
+    task_t<std::optional<row_t>>
+    record_result (row_t identity, std::vector<std::byte> reply, std::vector<std::byte> failure);
+    task_t<bool> confirm (row_t identity, delivery_t state);
+    task_t<bool> source_lease_live (const source_t &source);
+    task_t<std::vector<row_t>> pending (std::string relocation_id);
 
   private:
-    task_t<std::vector<std::byte>> read_blob (std::string reference, std::stop_token cancellation);
+    task_t<std::optional<row_t>> update (row_t identity,
+                                         delivery_t state,
+                                         std::vector<std::byte> reply = {},
+                                         std::vector<std::byte> failure = {});
 
-    location_repository_t &_authorities;
-    provider_relocation_repository_t &_blobs;
+    provider_location_repository_t &_locations;
 };
-
-} // namespace relocation_completion
-} // namespace zlink::framework::runtime
+}
+}

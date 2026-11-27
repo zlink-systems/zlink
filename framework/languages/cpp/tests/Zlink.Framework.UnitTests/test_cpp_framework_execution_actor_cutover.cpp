@@ -280,12 +280,13 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                  std::string version,
                  runtime::protocol::relocation_id_t relocation,
                  location_owner_token_t source_owner,
-                 const runtime::protocol::relocation_prepare_t *prepare) override
+                 const runtime::protocol::relocation_prepare_t *prepare,
+                 std::span<const zlink::framework::store_put_t> replies) override
         {
             return delegate.publish (source, target, std::move (owner), std::move (placement),
                                      std::move (reference), checksum, digest, std::move (payload),
                                      std::move (version), relocation, std::move (source_owner),
-                                     prepare);
+                                     prepare, replies);
         }
         bool finish_relocation (const stateful::object_ref_t &target,
                                 const runtime::protocol::relocation_prepare_t &prepare) override
