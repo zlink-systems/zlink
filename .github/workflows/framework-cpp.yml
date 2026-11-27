@@ -40,6 +40,13 @@ on:
 #      - "scripts/local-package/cpp/**"
 #      - "scripts/local-package/sync-version.py"
   workflow_dispatch:
+    inputs:
+      queue_checks_only:
+        # PR verification dispatch (ci-rules, 2026-11-27): Linux queue checks only, no Windows job.
+        description: Run the checks used to admit a pull request (Linux only).
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       skip_tests:
@@ -148,6 +155,12 @@ jobs:
           set -euo pipefail
           mkdir -p "${APT_CACHE_DIR}"
           sudo install -d -o _apt -g root -m 0755 "${APT_CACHE_DIR}/partial"
+          # This job installs Ubuntu archive packages only. The hosted image's
+          # packages.microsoft.com source intermittently answers 403, and apt-get
+          # update then fails the job before any build step runs.
+          if [[ "${RUNNER_ENVIRONMENT}" == github-hosted ]]; then
+            { grep -l -r packages.microsoft.com /etc/apt/sources.list.d/ || true; } | xargs -r sudo rm -f
+          fi
           # Self-hosted WSL runners share one dpkg lock; wait for it instead of failing.
           sudo apt-get -o DPkg::Lock::Timeout=600 update
           # Core is built separately with system OpenSSL.

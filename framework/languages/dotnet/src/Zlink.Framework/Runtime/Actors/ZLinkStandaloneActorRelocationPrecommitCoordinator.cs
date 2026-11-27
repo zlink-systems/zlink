@@ -395,18 +395,25 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         CancellationToken cancellationToken
     )
     {
+        var prepared = captured.Relocation is { Phase: ServiceWireCodec.RelocationPhase.Prepared };
         var result = await store
             .CompareExchangeAuthorityAsync(
                 key,
                 captured.StoreVersion,
                 new ZLinkAuthorityMutation.Put(
-                    steadyAuthorityPayload,
+                    prepared ? captured.Payload : steadyAuthorityPayload,
                     ZLinkAuthorityGenerationTransition.Preserve,
                     null,
                     null
                 )
                 {
-                    ClearRelocation = true,
+                    ClearRelocation = !prepared,
+                    Relocation = prepared
+                        ? captured.Relocation! with
+                        {
+                            Phase = ServiceWireCodec.RelocationPhase.Aborted,
+                        }
+                        : null,
                 },
                 cancellationToken
             )

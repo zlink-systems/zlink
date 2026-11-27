@@ -72,6 +72,7 @@
         <Compile Include="Support/PerCallAllocationTests.cs"/>
         <Compile Include="Runtime/PrestartCallTests.cs"/>
         <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
+        <Compile Include="Runtime/InstanceSpotReadyFollowTests.cs"/>
         <Compile Include="Runtime/InstanceIntentAuthorityFollowTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
@@ -244,6 +245,8 @@
         <Compile Include="Runtime/ActorRouteCacheConfirmationTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeQueryTests.cs"/>
         <Compile Include="Runtime/InstanceSpotActivationJournalTests.cs"/>
+        <Compile Include="Runtime/InstanceSpotRelocationReplayTests.cs"/>
+        <Compile Include="Runtime/InstanceSpotRelocationCallerTests.cs"/>
         <Compile Include="Runtime/SameTargetInstanceActivationTests.cs"/>
         <Compile Include="Runtime/InstanceSpotSendDeadlineTests.cs"/>
         <Compile Include="Runtime/SpotStoreFailureKindTests.cs"/>

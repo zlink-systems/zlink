@@ -271,7 +271,7 @@ an Actor use the same header, so an Actor receives one header format whatever th
 
 ## 3. Command Space
 
-Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `55..255` are
+Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `56..255` are
 reserved and never reused for another meaning. A previous command name in parentheses
 is diagnostic compatibility text, not a command that is decoded or sent.
 
@@ -322,6 +322,7 @@ is diagnostic compatibility text, not a command that is decoded or sent.
 | 52 | `relocationState` | infrastructure | none | — | Direct source-memory-to-target payload chunk transfer (base/final stage) |
 | 53 | `relocationFailed` | infrastructure | none | — | Explicit reply to a matching `relocationPrepare` reporting assembly or preparation failure |
 | 54 | `boundSessionClose` | infrastructure | none | — | Requests the Session owner to close the current binding's physical connection |
+| 55 | `instanceSpotFollow` | application | required | `metadata` | A Ready Instance Spot one-way forwarded by Message Follow (operation ID 0, no reply route). [Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner) |
 
 The table's Layer, Application payload, and Permitted flags columns reproduce
 the schema declarations. **Only application-layer commands enter an

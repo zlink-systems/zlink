@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/http/http_host_service.hpp"
+#include "runtime/http/http_startup_test_probe.hpp"
 #include <zlink/framework.hpp>
 
 #include <boost/asio/io_context.hpp>
@@ -11,8 +12,10 @@
 #include <chrono>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -260,6 +263,134 @@ TEST (HttpStartup, ShutdownDuringFailedRunTeardownSharesTerminalResult)
     EXPECT_EQ (app.shutdown (1s).result ().value (), terminal);
 }
 
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+using runtime::http_startup_event_t;
+
+struct http_startup_probe_scope_t
+{
+    explicit http_startup_probe_scope_t (std::function<void (http_startup_event_t)> observe)
+    {
+        runtime::http_startup_test_probe = std::move (observe);
+    }
+
+    ~http_startup_probe_scope_t () { runtime::http_startup_test_probe = {}; }
+};
+
+TEST (HttpStartup, ShutdownBeforeStartupFailureJoinsWorkerBeforeReturning)
+{
+    asio::io_context io;
+    tcp::acceptor occupied (io, {asio::ip::address_v4::loopback (), 0});
+    const auto endpoint = occupied.local_endpoint ();
+    auto app = app_t::create ();
+    app.add_zlink_framework ().http ().listen (http_uri (endpoint));
+
+    std::promise<void> before_bind;
+    std::promise<void> bind_release;
+    std::promise<void> before_seal;
+    std::promise<void> seal_release;
+    std::promise<void> rolled_back;
+    std::mutex events_mutex;
+    std::vector<std::string> events;
+    const auto record = [&] (const char *event) {
+        const std::lock_guard lock (events_mutex);
+        events.emplace_back (event);
+    };
+    const http_startup_probe_scope_t probe ([&] (http_startup_event_t event) {
+        switch (event) {
+            case http_startup_event_t::before_bind:
+                record ("listener published");
+                before_bind.set_value ();
+                bind_release.get_future ().wait ();
+                break;
+            case http_startup_event_t::before_seal_listener:
+                record ("worker acquired listener");
+                before_seal.set_value ();
+                seal_release.get_future ().wait ();
+                break;
+            case http_startup_event_t::after_seal_listener:
+                record ("worker finished listener call");
+                break;
+            case http_startup_event_t::listener_destroyed:
+                record ("listener destroyed");
+                break;
+            case http_startup_event_t::rollback_complete:
+                record ("rollback complete");
+                rolled_back.set_value ();
+                break;
+            case http_startup_event_t::shutdown_worker_joined:
+                record ("worker joined");
+                break;
+            case http_startup_event_t::accept_started:
+                ADD_FAILURE () << "A listener with a failed bind started accepting";
+                break;
+        }
+    });
+
+    auto running = std::async (std::launch::async, [&] {
+        const int result = app.run (0, nullptr);
+        record ("run returned");
+        return result;
+    });
+    const auto bind_status = before_bind.get_future ().wait_for (3s);
+    if (bind_status != std::future_status::ready) {
+        bind_release.set_value ();
+        seal_release.set_value ();
+        (void) running.get ();
+        FAIL () << "Startup did not publish the listener before bind";
+    }
+
+    auto shutdown = app.shutdown (1s);
+    const auto seal_status = before_seal.get_future ().wait_for (3s);
+    EXPECT_FALSE (shutdown.await_ready ());
+    bind_release.set_value ();
+    const auto rollback_status = rolled_back.get_future ().wait_for (3s);
+    const std::vector<std::string> through_rollback{
+      "listener published", "worker acquired listener", "rollback complete"};
+    {
+        const std::lock_guard lock (events_mutex);
+        EXPECT_EQ (events, through_rollback);
+    }
+    seal_release.set_value ();
+    EXPECT_EQ (running.get (), 1);
+    EXPECT_EQ (seal_status, std::future_status::ready);
+    EXPECT_EQ (rollback_status, std::future_status::ready);
+    EXPECT_EQ (events,
+               (std::vector<std::string>{"listener published", "worker acquired listener",
+                                         "rollback complete", "worker finished listener call",
+                                         "listener destroyed", "worker joined", "run returned"}));
+    RecordProperty ("lifecycle_order", ::testing::PrintToString (events));
+    ASSERT_TRUE (shutdown.await_ready ());
+    EXPECT_EQ (app.shutdown (1s).result ().value (), shutdown.result ().value ());
+
+    occupied.close ();
+    tcp::acceptor reclaimed (io);
+    reclaimed.open (endpoint.protocol ());
+    boost::system::error_code error;
+    reclaimed.bind (endpoint, error);
+    EXPECT_FALSE (error) << error.message ();
+}
+
+TEST (HttpStartup, SealBeforeStartPreventsAcceptLoop)
+{
+    http_options_snapshot_t options;
+    options.endpoints = {{"http://127.0.0.1:0", {}}};
+    health_builder_t health;
+    service_provider_t services;
+    runtime::http_host_service_t host (options, health, 1,
+                                       std::make_shared<runtime::listener_status_registry_t> ());
+    bool accept_started = false;
+    const http_startup_probe_scope_t probe ([&] (http_startup_event_t event) {
+        if (event == http_startup_event_t::accept_started)
+            accept_started = true;
+    });
+
+    host.seal_application_dispatch ();
+    ASSERT_TRUE (host.start (services).result ().has_value ());
+    EXPECT_FALSE (accept_started);
+    EXPECT_FALSE (health.report ().ready ());
+}
+
+#else
 class startup_barrier_service_t final : public hosted_service_t
 {
   public:
@@ -287,11 +418,17 @@ TEST (HttpStartup, ShutdownBeforeStartupFailureJoinsWorkerBeforeReturning)
     app.add_hosted_service (std::move (service));
     app.add_zlink_framework ().http ().listen (http_uri (occupied.local_endpoint ()));
     auto running = std::async (std::launch::async, [&] { return app.run (0, nullptr); });
-    EXPECT_EQ (entered.wait_for (3s), std::future_status::ready);
+    if (entered.wait_for (3s) != std::future_status::ready) {
+        barrier->release.set_value ();
+        (void) running.get ();
+        FAIL () << "Startup did not reach the barrier";
+    }
     auto shutdown = app.shutdown (1s);
+    EXPECT_FALSE (shutdown.await_ready ());
     barrier->release.set_value ();
     EXPECT_EQ (running.get (), 1);
     EXPECT_TRUE (shutdown.await_ready ());
     EXPECT_EQ (app.shutdown (1s).result ().value (), shutdown.result ().value ());
 }
+#endif
 } // namespace

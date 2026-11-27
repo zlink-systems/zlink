@@ -84,7 +84,7 @@ Core `zlink.dll`과 서드파티 DLL이 실행 파일 옆에 함께 복사된다
 Redis가 `127.0.0.1:6379`에서 실행 중이어야 한다. Spot·Actor·Location 단계는 이를 Location Store로 사용한다.
 아래 블록은 Redis를 Docker로 실행하고 Server와 Client를 시작한 뒤 두 process의 `/ops/ready`가
 HTTP 200을 반환할 때까지 기다린다. Actor 요청은 두 host가 `Serving` 상태에 도달한 뒤 보낸다.
-비어 있는 Redis에서 두 host는 `Serving`까지 약 20초가 걸린다. 고정 routing id를 쓰므로 fencing margin의
+비어 있는 Redis에서 Server는 `Serving`까지 약 20초가 걸린다. 고정 routing id를 쓰므로 fencing margin의
 세 배(기본 15초)를 기다린 뒤 그 id를 claim하고, 다음 lease 갱신 때 descriptor를 게시하기 때문이다.
 handler와 filter의 로그는 **stderr**로 기록된다.
 
@@ -336,16 +336,16 @@ channel을 거치지 않는 경로다. 받는 쪽은 `mesh.add_route_request_han
 
 ```console
 $ curl http://127.0.0.1:5180/ops/nodes/game-server-1/status
-{"calledBy":"game-client-1","channelName":"","meshName":"game","uptime":"10s"}
+{"calledBy":"game-388cbafe-f139-4e61-9c0a-361168e3e822","channelName":"","meshName":"game","uptime":"10s"}
 
 $ curl -i http://127.0.0.1:5180/ops/nodes/no-such-node/status
 HTTP/1.1 404 Not Found
 {"correlationId":"http-6","error":"not_found","message":"MeshNode request target was not found"}
 ```
 
-`channelName`이 비어 있는 것이 요점이다. channel이 관여하지 않았다는 뜻이다. `calledBy`는
-부른 쪽 node의 routing id이고, `uptime`은 답한 process 하나의 것이다. channel 호출과 달리
-후보를 고르지 않으므로, 없는 node를 적으면 그대로 실패한다.
+`channelName`이 비어 있으면 node 직접 호출이다. `calledBy`는 부른 쪽 node의 routing id이고,
+`uptime`은 답한 process 하나의 것이다. Framework는 Client를 실행할 때마다 새 RID를 만든다.
+직접 호출에서 존재하지 않는 node를 지정하면 `not_found`를 반환한다.
 
 이 호출에는 등록 조건이 더 있다. 받는 node는 `set_routing_id`로 id를 고정해야 하고
 (고정하지 않으면 생성된 id라 부르는 쪽이 적을 수 없다), 부르는 쪽이
@@ -515,7 +515,7 @@ Content-Length: 0
     `NotFound`(404)다.**
 
     request 경로와 달리 RouteMesh channel의 one-way send는
-    `framework/src/runtime/host/app.cpp`의 `one_way_native_submit_result`를 지나는데, #498이
+    `framework/src/runtime/host/app_actor_gateway.cpp`의 `one_way_native_submit_result`를 지나는데, #498이
     고친 자리는 `channel_outbound_exchange.cpp`의 두 곳이라 이 경로가 빠졌다. 위 404는 그것을
     실행해 확인한 값이다.
 

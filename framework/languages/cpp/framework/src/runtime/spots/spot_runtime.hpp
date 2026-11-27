@@ -420,6 +420,11 @@ class spot_node_builder_state_t
     std::set<std::pair<std::uint64_t, std::uint64_t>> committed_join_locations;
     std::set<std::pair<std::uint64_t, std::uint64_t>> delivered_join_completions;
     std::set<std::pair<std::uint64_t, std::uint64_t>> delivering_join_completions;
+    // The node lane owns each delivery through its native ready and claim cleanup.
+    std::set<std::shared_ptr<task_completion_source_t<void>>> pending_join_delivery_work;
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+    std::function<void ()> join_delivery_drain_wait_probe;
+#endif
     std::shared_ptr<runtime::stateful::relocation_store_port_t> relocation_store;
     std::shared_ptr<runtime::stateful::authority_relocation_port_t> relocation_authority;
     /* Address → (type, id) lookup for instance-identity public surfaces
@@ -2036,7 +2041,8 @@ class spot_node_runtime_t
       std::optional<std::string> flow_id = std::nullopt,
       std::optional<flow_origin_t> flow_origin = std::nullopt,
       std::function<void ()> *accepted_turn_terminal = nullptr,
-      std::shared_ptr<const instance_spot_retained_message_t> retained_message = {});
+      std::shared_ptr<const instance_spot_retained_message_t> retained_message = {},
+      std::optional<runtime::flow_value_t> *terminal_flow = nullptr);
     std::optional<spot_info_t> find_spot (spot_id_t spot_id) const;
     bool matches_instance_activation (const std::string &spot_id,
                                       const std::string &stable_type,
@@ -2376,10 +2382,6 @@ class spot_node_runtime_t
     actor_application_queue (std::string_view actor_id) const;
     task_t<bool> notify_actor_application_ready (
       std::string actor_id, std::function<std::optional<runtime::serial_prefix_work_t> ()> take);
-    task_t<void> accept_actor_application_ready (
-      std::string actor_id,
-      std::shared_ptr<runtime::serial_execution_queue_t> queue,
-      std::function<std::optional<runtime::serial_prefix_work_t> ()> take);
     task_t<void> seal_actor_application_suffix (const actor_ref_t &actor_ref,
                                                 std::function<void ()> seal);
     task_t<std::vector<std::shared_ptr<runtime::serial_application_record_t>>>
@@ -2738,6 +2740,11 @@ class spot_node_runtime_t
                                              std::string transfer_id,
                                              bool reuse_active_actor_queue,
                                              std::function<bool ()> stop_requested);
+    static task_t<void> accept_actor_application_ready (
+      spot_node_runtime_t owner,
+      std::string actor_id,
+      std::shared_ptr<runtime::serial_execution_queue_t> queue,
+      std::function<std::optional<runtime::serial_prefix_work_t> ()> take);
     void deliver_actor_join_completion_async (
       actor_ref_t actor_ref,
       actor_join_completion_t completion,
