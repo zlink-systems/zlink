@@ -340,6 +340,10 @@ export class RawServiceMeshRuntime {
         lifecycleGeneration: expected.lifecycleGeneration
       })
     );
+    this.topology.discardEndedAdmissionFromPreviousLifecycle(
+      expected.nodeRoutingId,
+      expected.lifecycleGeneration
+    );
     this.notifyPeerRouteChanged(expected.nodeRoutingId);
   }
 
@@ -350,17 +354,7 @@ export class RawServiceMeshRuntime {
     lifecycleGeneration?: bigint
   ): void {
     this.requireStarted().connectToRoutingId(nodeRoutingId, endpoint);
-    this.expectedPeers.set(
-      nodeRoutingId,
-      Object.assign(this.expectedPeers.get(nodeRoutingId) ?? {}, {
-        meshName: this.topology.localDescriptor().meshName,
-        nodeRoutingId,
-        endpoint,
-        securityIdentity,
-        lifecycleGeneration
-      })
-    );
-    this.notifyPeerRouteChanged(nodeRoutingId);
+    this.expectPeerByRoutingId(endpoint, nodeRoutingId, securityIdentity, lifecycleGeneration);
   }
 
   expectPeerByRoutingId(
@@ -379,10 +373,12 @@ export class RawServiceMeshRuntime {
         lifecycleGeneration
       })
     );
+    this.topology.discardEndedAdmissionFromPreviousLifecycle(nodeRoutingId, lifecycleGeneration);
     this.notifyPeerRouteChanged(nodeRoutingId);
   }
 
   forgetPeerExpectation(nodeRoutingId: string, lifecycleGeneration: bigint): void {
+    this.topology.forgetEndedAdmission(nodeRoutingId, undefined, lifecycleGeneration);
     if (this.expectedPeers.get(nodeRoutingId)?.lifecycleGeneration !== lifecycleGeneration) return;
     this.expectedPeers.delete(nodeRoutingId);
     this.notifyPeerRouteChanged(nodeRoutingId);
@@ -395,6 +391,7 @@ export class RawServiceMeshRuntime {
   }
 
   disconnectPeer(endpoint: string, nodeRoutingId: string, lifecycleGeneration?: bigint): void {
+    this.topology.forgetEndedAdmission(nodeRoutingId, endpoint, lifecycleGeneration);
     const current = this.topology.peer(nodeRoutingId);
     const expected = this.expectedPeers.get(nodeRoutingId);
     if (
@@ -438,6 +435,7 @@ export class RawServiceMeshRuntime {
       if (!isAlreadyDisconnectedError(error)) throw error;
     } finally {
       this.endpointOnlyPeers.delete(endpoint);
+      this.topology.forgetEndedAdmissionsAtEndpoint(endpoint, intentRid, intentLifecycle);
       const removed = new Set<string>();
       for (const [nodeRoutingId, expected] of this.expectedPeers) {
         if (
@@ -1294,33 +1292,34 @@ export class RawServiceMeshRuntime {
     nowMs: number,
     applicationJobOwner: ApplicationIngressRecordOwner
   ): RawServicePumpResult | Promise<RawServicePumpResult> {
-    const peer = this.topology.admittedPeer(received.sourceRid);
-    const currentSource =
-      peer?.liveness !== undefined && peer.liveness.connectionId === received.routeGeneration;
-    if (received.parts.length === 0) return currentSource ? 'protocolError' : 'dropped';
+    let header: ReturnType<typeof decodeHeader>;
     try {
-      const header = decodeHeader(received.parts[0]!);
-      if (header.command === M6aServiceWireCommand.hello && this.peerAdmissionSealed?.() === true) {
+      header = decodeHeader(received.parts[0] ?? Buffer.alloc(0));
+    } catch (error) {
+      if (
+        error instanceof ServiceWireProtocolError &&
+        this.topology.claimIngress(received.sourceRid, received.routeGeneration, false) ===
+          undefined
+      ) {
         return 'dropped';
       }
-      if (
-        header.command === M6aServiceWireCommand.hello ||
-        header.command === M6aServiceWireCommand.admit
-      ) {
-        return this.finishPendingProtocolReceive(this.processAdmission(received, header, nowMs));
-      }
-      if (header.command === M6aServiceWireCommand.reject) {
-        if (this.selectedRoutes.get(received.sourceRid) !== received.routeGeneration)
-          return 'dropped';
-        if (received.parts.length !== 1) return 'protocolError';
-        decodeReject(received.parts[0]!);
-        if (peer !== undefined) this.removePeer(peer);
-        this.preparePeerAnnouncement(received.sourceRid);
-        this.progressPeerAdmission(nowMs);
-        return 'infrastructure';
-      }
-      if (!currentSource) return 'dropped';
-      this.liveness.recordReceived(peer.liveness, nowMs);
+      return this.receiveProtocolFailure(error);
+    }
+    if (
+      header.command === M6aServiceWireCommand.hello ||
+      header.command === M6aServiceWireCommand.admit ||
+      header.command === M6aServiceWireCommand.reject
+    ) {
+      return this.finishPendingProtocolReceive(this.processHandshake(received, header, nowMs));
+    }
+    const peer = this.topology.claimIngress(
+      received.sourceRid,
+      received.routeGeneration,
+      isApplicationWireCommand(header.command)
+    );
+    if (peer === undefined) return 'dropped';
+    try {
+      if (peer.liveness !== undefined) this.liveness.recordReceived(peer.liveness, nowMs);
       if (header.command === M6aServiceWireCommand.update) {
         return this.finishPendingProtocolReceive(this.processAdmission(received, header, nowMs));
       }
@@ -1351,7 +1350,6 @@ export class RawServiceMeshRuntime {
       if (stateful !== undefined) return stateful;
       return this.processApplicationReceived(received, header, applicationJobOwner);
     } catch (error) {
-      if (!currentSource && error instanceof ServiceWireProtocolError) return 'dropped';
       return this.receiveProtocolFailure(error);
     }
   }
@@ -1377,6 +1375,36 @@ export class RawServiceMeshRuntime {
   private receiveProtocolFailure(error: unknown): RawServicePumpResult {
     if (error instanceof ServiceWireProtocolError) return 'protocolError';
     throw error;
+  }
+
+  private async processHandshake(
+    received: ZLinkRawReceivedRecord,
+    header: ReturnType<typeof decodeHeader>,
+    nowMs: number
+  ): Promise<RawServicePumpResult> {
+    // The receive turn may have observed Core just before this route was selected.
+    const { changes, selected } = this.applySelectedRouteSnapshot();
+    const { sourceRid, routeGeneration } = received;
+    const hello = header.command === M6aServiceWireCommand.hello;
+    // On a newly observed route our HELLO precedes the ADMIT that releases the
+    // peer's application sends. The peer responds to our HELLO on the same route.
+    if (changes !== 0 && hello) await this.announceSelectedRoutes(selected);
+    try {
+      if (this.closed || this.selectedRoutes.get(sourceRid) !== routeGeneration) return 'dropped';
+      if (hello && this.peerAdmissionSealed?.() === true) return 'dropped';
+      if (header.command !== M6aServiceWireCommand.reject)
+        return await this.processAdmission(received, header, nowMs);
+      if (received.parts.length !== 1) return 'protocolError';
+      decodeReject(received.parts[0]!);
+      const peer = this.topology.admittedPeer(sourceRid);
+      if (peer !== undefined) this.removePeer(peer);
+      this.preparePeerAnnouncement(sourceRid);
+      this.progressPeerAdmission(nowMs);
+      return 'infrastructure';
+    } finally {
+      // A received ADMIT can finish the exchange before a first HELLO is needed.
+      if (changes !== 0 && !hello) await this.announceSelectedRoutes(selected);
+    }
   }
 
   private async processAdmission(
@@ -1695,8 +1723,14 @@ export class RawServiceMeshRuntime {
    * handshake of every newly selected route. Returns the number of changes.
    */
   async observeSelectedRoutes(): Promise<number> {
+    const { changes, selected } = this.applySelectedRouteSnapshot();
+    await this.announceSelectedRoutes(selected);
+    return changes;
+  }
+
+  private applySelectedRouteSnapshot(): { changes: number; selected: string[] } {
     const router = this.router;
-    if (router === undefined || this.closed) return 0;
+    if (router === undefined || this.closed) return { changes: 0, selected: [] };
     const observed = new Map<string, bigint>();
     for (const route of router.routesSnapshot()) {
       observed.set(route.routingId, route.routeGeneration);
@@ -1708,7 +1742,7 @@ export class RawServiceMeshRuntime {
       changes++;
       const peer = this.topology.peer(nodeRoutingId);
       if (peer?.liveness?.connectionId === generation) {
-        this.removePeer(peer);
+        this.removePeer(peer, undefined, generation);
       }
     }
     const selected: string[] = [];
@@ -1718,11 +1752,14 @@ export class RawServiceMeshRuntime {
       selected.push(nodeRoutingId);
     }
     this.selectedRoutes = observed;
+    return { changes, selected };
+  }
+
+  private async announceSelectedRoutes(selected: readonly string[]): Promise<void> {
     for (const nodeRoutingId of selected) this.notifyPeerRouteChanged(nodeRoutingId);
     // Selected routes begin admission before waiting for the management cadence.
     for (const nodeRoutingId of selected) await this.announcePeer(nodeRoutingId);
     this.progressPeerAdmission(performance.now());
-    return changes;
   }
 
   close(): void {
@@ -1743,6 +1780,7 @@ export class RawServiceMeshRuntime {
         this.receivePermit = undefined;
         for (const send of this.controlSends.values()) delete send.next;
         this.controlSends.clear();
+        this.topology.clearEndedAdmissions();
         this.mailbox.close();
         this.releaseOperations();
         this.serviceIngress = undefined;
@@ -2079,8 +2117,22 @@ export class RawServiceMeshRuntime {
     this.endpointOnlyPeers.delete(endpoint);
   }
 
-  private removePeer(peer: AdmittedServicePeer, disconnectPhysical?: () => void): void {
-    this.topology.disconnect(peer.descriptor.nodeRoutingId, peer.connectionId);
+  private removePeer(
+    peer: AdmittedServicePeer,
+    disconnectPhysical?: () => void,
+    endedGeneration?: bigint
+  ): void {
+    const { nodeRoutingId } = peer.descriptor;
+    this.topology.disconnect(
+      nodeRoutingId,
+      peer.connectionId,
+      endedGeneration === undefined
+        ? undefined
+        : {
+            generation: endedGeneration,
+            expectedLifecycle: this.expectedPeers.get(nodeRoutingId)?.lifecycleGeneration
+          }
+    );
     this.liveness.disconnect(
       peer.descriptor.nodeRoutingId,
       peer.liveness?.connectionId ?? peer.connectionId
@@ -2275,6 +2327,19 @@ function isApplicationEnvelopeCommand(command: number): boolean {
     command === M6aServiceWireCommand.nodeRequest ||
     command === M6aServiceWireCommand.channelSend ||
     command === M6aServiceWireCommand.channelRequest
+  );
+}
+
+function isApplicationWireCommand(command: number): boolean {
+  return (
+    isApplicationEnvelopeCommand(command) ||
+    command === ServiceWireCommand.spotSend ||
+    command === ServiceWireCommand.spotRequest ||
+    command === ServiceWireCommand.logicalMulticast ||
+    command === ServiceWireCommand.actorSend ||
+    command === ServiceWireCommand.actorRequest ||
+    command === ServiceWireCommand.boundSessionSend ||
+    command === ServiceWireCommand.instanceSpot
   );
 }
 

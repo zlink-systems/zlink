@@ -4,6 +4,7 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Objects;
 
 /** Strict canonical reader/preserver for service-wire relocation controls. */
@@ -46,9 +47,17 @@ final class ZLinkCanonicalRelocationControlCodec {
             case ServiceWireConstants.COMMAND_RELOCATION_READY ->
                     ServiceWirePilotCodec.encodeRelocationReady30(
                             ServiceWirePilotCodec.decodeRelocationReady30(bytes));
-            case ServiceWireConstants.COMMAND_RELOCATION_DATA ->
-                    ServiceWirePilotCodec.encodeRelocationData31(
-                            ServiceWirePilotCodec.decodeRelocationData31(bytes));
+            case ServiceWireConstants.COMMAND_RELOCATION_DATA -> {
+                var context = ZLinkServiceM6BWireCodec.generatedContext();
+                var data =
+                        (ServiceWireCodec.RelocationDataCommand)
+                                ServiceWireCodec.decodeCommand(List.of(bytes), context);
+                if (data.senderRole() != ServiceWireCodec.RelocationRole.SOURCE) {
+                    throw invalid("data sender role");
+                }
+                ZLinkServiceFrozenRecordCodec.validateInstanceOperation(data.recordValue());
+                yield ServiceWireCodec.encodeCommand(data, context);
+            }
             case ServiceWireConstants.COMMAND_RELOCATION_CUTOVER ->
                     ServiceWirePilotCodec.encodeRelocationCutover34(
                             ServiceWirePilotCodec.decodeRelocationCutover34(bytes));
@@ -56,7 +65,7 @@ final class ZLinkCanonicalRelocationControlCodec {
                 var context = ZLinkServiceM6BWireCodec.generatedContext();
                 var prepare =
                         (ServiceWireCodec.RelocationPrepareCommand)
-                                ServiceWireCodec.decodeCommand(java.util.List.of(bytes), context);
+                                ServiceWireCodec.decodeCommand(List.of(bytes), context);
                 if (prepare.initiatorRole() != ServiceWireCodec.RelocationRole.SOURCE) {
                     throw invalid("prepare initiator role");
                 }

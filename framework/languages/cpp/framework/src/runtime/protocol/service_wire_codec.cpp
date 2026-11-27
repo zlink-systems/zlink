@@ -1068,6 +1068,31 @@ message_follow_route_t decode_message_follow_route (std::span<const std::uint8_t
 
 } // namespace
 
+std::vector<std::uint8_t> encode_actor_destroy (const actor_destroy_command_t &command)
+{
+    const auto &actor = command.actor;
+    return encode_actor_destroy_27 (
+      {command.correlation,
+       {actor.actor_id, actor.object_generation, actor.target_node_routing_id,
+        actor.target_node_generation, actor.authority_owner_generation,
+        actor.owner_lease_generation}});
+}
+
+actor_destroy_command_t decode_actor_destroy (std::span<const std::uint8_t> bytes)
+{
+    try {
+        auto command = decode_actor_destroy_27 ({bytes.begin (), bytes.end ()});
+        auto &actor = command.actor;
+        return {command.correlation,
+                {std::move (actor.id), actor.generation, std::move (actor.target_node_rid),
+                 actor.target_node_generation, actor.expected_authority_owner_generation,
+                 actor.expected_owner_lease_generation}};
+    }
+    catch (const std::invalid_argument &) {
+        throw service_wire_error_t ("invalid Actor destroy command");
+    }
+}
+
 std::vector<std::uint8_t> encode_message_follow (const message_follow_notice_t &notice)
 {
     if (notice.hop_count == 0 || notice.hop_count > messageFollowHopCount

@@ -1,3 +1,4 @@
+const { relocationInventoryStore } = require('./fixtures/relocation-authority-store');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate: turn } = require('node:timers/promises');
@@ -110,6 +111,7 @@ for (const [scenario, name] of [
       }
     };
     const store = {
+      ...relocationInventoryStore(),
       async readAuthority() {
         if (outsideJoin) joinRead.resolve();
         return current;

@@ -676,65 +676,31 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             return await terminal.Task.ConfigureAwait(false);
     }
 
-    public async ValueTask<bool> DestroyActorRemoteAsync(
+    public async ValueTask SendActorDestroyAsync(
         ZLinkBackendActorRef actor,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration,
-        TimeSpan timeout,
         CancellationToken cancellationToken
     )
     {
         EnsureStarted();
-        var terminal = new TaskCompletionSource<bool>();
-        var correlationId = _node.AllocateOperationId();
-        var submit = _completions.RegisterBeforeSubmit(
-            correlationId,
-            (record, parts) =>
-            {
-                ZLinkMessageParts.DisposeAll(parts);
-                if (
-                    record.TerminalResult == (int)RequestResult.Ok
-                    && record.ActorDestroyCompletion is { } completion
-                )
-                {
-                    terminal.TrySetResult(completion.Destroyed);
-                    return;
-                }
-                var destroyKind = MapLifecycleFailure(record.TerminalResult, record.FailureErrno);
-                terminal.TrySetException(
-                    new ZLinkFrameworkException(
-                        destroyKind,
-                        $"Remote Actor destroy failed for '{actor.ActorId}'.",
-                        RetryAdviceFor(destroyKind)
-                    )
-                    {
-                        FrameworkFailureCode = record.FailureErrno,
-                    }
-                );
-            },
-            id =>
-                _node.DestroyActorRemote(
+        try
+        {
+            await _node
+                .SendActorDestroyAsync(
                     ToNativeActor(actor),
                     targetNodeGeneration,
                     authorityOwnerGeneration,
                     ownerLeaseGeneration,
-                    id,
-                    timeout
+                    cancellationToken
                 )
-        );
-        if (submit != SubmitResult.Ok)
-            throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
-        await using (
-            _completions
-                .RegisterCancellation(
-                    correlationId,
-                    cancellationToken,
-                    () => terminal.TrySetCanceled(cancellationToken)
-                )
-                .ConfigureAwait(false)
-        )
-            return await terminal.Task.ConfigureAwait(false);
+                .ConfigureAwait(false);
+        }
+        catch (ZlinkSubmitException failure)
+        {
+            throw ZLinkSubmitFailureMapper.CreateException(failure, "Remote Actor destroy");
+        }
     }
 
     public async ValueTask<UserSpotCloseCompletion> CloseUserSpotAsync(
@@ -1723,7 +1689,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     }
 
     //  Single source of truth for the fine failure-code table lives in
-    //  ZLinkRequestFailureMapper so the join/create/destroy/close classification
+    //  ZLinkRequestFailureMapper so the join/create/close classification
     //  here and the remote request-reply classification there cannot drift
     //  (spec 32-framework-error-model).
     private static ZLinkFrameworkErrorKind? MapFineFailureCode(int failureErrno) =>

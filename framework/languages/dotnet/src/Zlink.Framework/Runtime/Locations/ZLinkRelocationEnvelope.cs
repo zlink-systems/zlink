@@ -659,21 +659,12 @@ internal static class ZLinkRelocationEnvelopeCodec
         {
             if (!acceptedOrders.Add((work.ParticipantId, work.Order)))
                 throw new InvalidDataException("The relocation saved-work order is invalid.");
-            var reader = new CanonicalReader(work.FrozenRecord);
-            var projection = ReadCanonicalFrozenRecordProjection(ref reader, out var operation);
-            reader.RequireEnd("relocation frozen record");
+            var job = DecodeCanonicalSavedWork(work.Order, work.FrozenRecord, out var operation);
             if (operation is { } exactOperation && !operations.Add(exactOperation))
                 throw new InvalidDataException(
                     "The relocation saved work contains a duplicate operation identity."
                 );
-            jobs[work.ParticipantId]
-                .Add(
-                    new ZLinkRelocationQueuedJob(work.Order, work.FrozenRecord)
-                    {
-                        RequestSource = projection?.Source,
-                        CanonicalRequest = projection,
-                    }
-                );
+            jobs[work.ParticipantId].Add(job);
         }
 
         var timers = participantIds.ToDictionary(
@@ -924,6 +915,27 @@ internal static class ZLinkRelocationEnvelopeCodec
         }
         replyRoute.RequireEnd("relocation reply route");
         ReadCanonicalFrozenRecordBody(ref reader, recordKind, operationKind, operationNonzero);
+    }
+
+    internal static ZLinkRelocationQueuedJob DecodeCanonicalSavedWork(
+        ulong order,
+        ReadOnlyMemory<byte> frozenRecord
+    ) => DecodeCanonicalSavedWork(order, frozenRecord, out _);
+
+    private static ZLinkRelocationQueuedJob DecodeCanonicalSavedWork(
+        ulong order,
+        ReadOnlyMemory<byte> frozenRecord,
+        out CanonicalSavedWorkOperation? operation
+    )
+    {
+        var reader = new CanonicalReader(frozenRecord);
+        var projection = ReadCanonicalFrozenRecordProjection(ref reader, out operation);
+        reader.RequireEnd("relocation frozen record");
+        return new(order, frozenRecord)
+        {
+            RequestSource = projection?.Source,
+            CanonicalRequest = projection,
+        };
     }
 
     private static ZLinkCanonicalAcceptedRequest? ReadCanonicalFrozenRecordProjection(
