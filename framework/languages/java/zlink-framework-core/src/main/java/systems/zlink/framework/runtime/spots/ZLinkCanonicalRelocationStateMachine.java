@@ -89,7 +89,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private final Map<Fence, TerminalTarget> terminalTargets = new HashMap<>();
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
     private Runnable sourceQuiescenceChanged = () -> {};
-    private final java.util.function.BooleanSupplier targetAdmissionSealed;
+    private final java.util.function.BooleanSupplier shutdownAdmissionSealed;
 
     record AttemptCounts(int sources, int targets, int terminalTargets) {}
 
@@ -142,7 +142,7 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkLocationRepository locations,
             ZLinkAggregateRelocationCoordinator coordinator,
             ZLinkSpotRetireControl.TargetEndpoint target,
-            java.util.function.BooleanSupplier targetAdmissionSealed) {
+            java.util.function.BooleanSupplier shutdownAdmissionSealed) {
         this(
                 node,
                 meshName,
@@ -152,7 +152,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 target,
                 ZLinkCanonicalRelocationStateMachine::scheduleAt,
                 ZLinkRelocationPayloadTransfer.Options.defaults(),
-                targetAdmissionSealed);
+                shutdownAdmissionSealed);
     }
 
     ZLinkCanonicalRelocationStateMachine(
@@ -248,7 +248,7 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkSpotRetireControl.TargetEndpoint target,
             RetentionScheduler retentionScheduler,
             ZLinkRelocationPayloadTransfer.Options transferOptions,
-            java.util.function.BooleanSupplier targetAdmissionSealed) {
+            java.util.function.BooleanSupplier shutdownAdmissionSealed) {
         this(
                 node,
                 meshName,
@@ -260,7 +260,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 transferOptions,
                 System::nanoTime,
                 ZLinkCanonicalRelocationStateMachine::scheduleAfter,
-                targetAdmissionSealed);
+                shutdownAdmissionSealed);
     }
 
     ZLinkCanonicalRelocationStateMachine(
@@ -272,7 +272,7 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkSpotRetireControl.TargetEndpoint target,
             RetentionScheduler retentionScheduler,
             ZLinkRelocationPayloadTransfer.Options transferOptions,
-            java.util.function.BooleanSupplier targetAdmissionSealed,
+            java.util.function.BooleanSupplier shutdownAdmissionSealed,
             ZLinkDispatchErrorReporter dispatchErrors) {
         this(
                 node,
@@ -285,7 +285,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 transferOptions,
                 System::nanoTime,
                 ZLinkCanonicalRelocationStateMachine::scheduleAfter,
-                targetAdmissionSealed,
+                shutdownAdmissionSealed,
                 dispatchErrors);
     }
 
@@ -327,7 +327,7 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkRelocationPayloadTransfer.Options transferOptions,
             LongSupplier monotonicNanos,
             DelayScheduler delayScheduler,
-            java.util.function.BooleanSupplier targetAdmissionSealed) {
+            java.util.function.BooleanSupplier shutdownAdmissionSealed) {
         this(
                 node,
                 meshName,
@@ -339,7 +339,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 transferOptions,
                 monotonicNanos,
                 delayScheduler,
-                targetAdmissionSealed,
+                shutdownAdmissionSealed,
                 null);
     }
 
@@ -354,10 +354,10 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkRelocationPayloadTransfer.Options transferOptions,
             LongSupplier monotonicNanos,
             DelayScheduler delayScheduler,
-            java.util.function.BooleanSupplier targetAdmissionSealed,
+            java.util.function.BooleanSupplier shutdownAdmissionSealed,
             ZLinkDispatchErrorReporter dispatchErrors) {
-        this.targetAdmissionSealed =
-                Objects.requireNonNull(targetAdmissionSealed, "targetAdmissionSealed");
+        this.shutdownAdmissionSealed =
+                Objects.requireNonNull(shutdownAdmissionSealed, "shutdownAdmissionSealed");
         this.node = Objects.requireNonNull(node, "node");
         this.meshName = requireText(meshName, "meshName");
         this.entrySpotId = entrySpotId;
@@ -501,11 +501,11 @@ final class ZLinkCanonicalRelocationStateMachine
 
     /**
      * Settles the source side of one relocation attempt from the Location Store authority (spec 28
-     * §4.4, spec 01 §10). Before {@code preserveAt} the source only reads the primary authority
-     * record; from {@code preserveAt} it runs the {@code Preserve} fence — an expected-StoreVersion
-     * CAS that keeps the source owner. The source attempt, its payload and the boundary batch stay
-     * retained until one of the outcomes is definitive. A transport reconnect observed while
-     * waiting resends the whole boundary batch and the cutover.
+     * §4.4, spec 01 §10). Until shutdown admission is sealed or {@code preserveAt} is reached, the
+     * source only reads the primary authority record. Then it runs the {@code Preserve} fence, an
+     * expected-StoreVersion CAS that keeps the source owner. The source attempt, its payload and
+     * the boundary batch stay retained until one of the outcomes is definitive. A transport
+     * reconnect observed while waiting resends the whole boundary batch and the cutover.
      */
     @Override
     public CompletionStage<Settlement> settle(
@@ -569,7 +569,10 @@ final class ZLinkCanonicalRelocationStateMachine
         var prepare = attempt.prepare();
         String key = primary(attempt.request().participants()).authorityKey();
         String expected = attempt.sourceStoreVersion();
-        boolean fence = !Instant.now().isBefore(preserveAt);
+        // Host relocation §14 starts Preserve when shutdown seals admission.
+        // Settlement Store requests keep their independent cancellation scope.
+        boolean fence =
+                shutdownAdmissionSealed.getAsBoolean() || !Instant.now().isBefore(preserveAt);
         CompletionStage<Optional<AuthoritySettlement>> step =
                 locations
                         .read(key, OPEN)
@@ -840,7 +843,7 @@ final class ZLinkCanonicalRelocationStateMachine
                                         existing, null);
                             TargetAttempt created = new TargetAttempt(prepare);
                             MeshNodeState state = node.status().state();
-                            if (targetAdmissionSealed.getAsBoolean()
+                            if (shutdownAdmissionSealed.getAsBoolean()
                                     || state == MeshNodeState.DRAINING
                                     || state == MeshNodeState.STOPPED
                                     || state == MeshNodeState.ERROR)
