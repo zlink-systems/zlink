@@ -240,6 +240,9 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
 
 set(ZLINK_FRAMEWORK_CPP_M6B_RUNTIME_SOURCES
   framework/src/runtime/stateful/public_host_runtime.cpp
+  framework/src/runtime/stateful/public_host_runtime_authority.cpp
+  framework/src/runtime/stateful/public_host_runtime_messaging.cpp
+  framework/src/runtime/stateful/public_host_runtime_relocation.cpp
   framework/src/runtime/stateful/raw_stateful_dispatch.cpp
   framework/src/runtime/stateful/stateful_object_runtime.cpp
   framework/src/runtime/stateful/stream_session_registry.cpp)
