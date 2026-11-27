@@ -37,12 +37,16 @@ public final class Scenarios {
                             before.zoneId().equals("zone-3") && before.nodeId().equals("zoneA"),
                             "Cross origin mismatch");
                     var step = client.moveRejected(11, 1);
-                    require(step.reason().equals("step-too-large"), "Expected step-too-large rejection");
+                    require(
+                            step.reason().equals("step-too-large"),
+                            "Expected step-too-large rejection");
                     require(client.state().equals(before), "Step rejection changed state");
                     client.move(2, 1);
                     var after = client.move(10, 2);
                     var stale = client.moveRejected(10, 2);
-                    require(stale.reason().equals("stale-sequence") && stale.retryAfterMs() == 0, "Expected stale movement rejection");
+                    require(
+                            stale.reason().equals("stale-sequence") && stale.retryAfterMs() == 0,
+                            "Expected stale movement rejection");
                     require(client.state().equals(after), "Stale movement changed state");
                     require(
                             after.zoneId().equals("zone-4")
@@ -52,16 +56,23 @@ public final class Scenarios {
                             "Cross destination mismatch");
                     sameActor(session, client.sessionInfo());
                     require(session.equals(client.sessionInfo()), "Cross changed Session");
-                    var packet = client.packetRejected(
-                            new EnterZone(new Position(307), 3, 0));
-                    require(packet.retryAfterMs() == 0, "Internal packet rejection has a retry delay");
+                    var packet = client.packetRejected(new EnterZone(new Position(307), 3, 0));
+                    require(
+                            packet.retryAfterMs() == 0,
+                            "Internal packet rejection has a retry delay");
                     require(client.state().equals(after), "Session rejection changed state");
                     var edge = create(nodes, clients, "edge-" + UUID.randomUUID());
                     var edgeBefore = edge.join(Rules.ZONE_WIDTH * (double) Rules.ZONE_COUNT - 1);
                     var outside = edge.moveRejected(1, 1);
-                    require(outside.reason().equals("outside-world"), "Expected outside-world rejection");
-                    require(edge.state().equals(edgeBefore), "World boundary rejection changed state");
-                    require(client.move(1, 3).nodeId().equals("zoneB"), "Movement did not continue");
+                    require(
+                            outside.reason().equals("outside-world"),
+                            "Expected outside-world rejection");
+                    require(
+                            edge.state().equals(edgeBefore),
+                            "World boundary rejection changed state");
+                    require(
+                            client.move(1, 3).nodeId().equals("zoneB"),
+                            "Movement did not continue");
                     sameActor(session, client.sessionInfo());
                     require(
                             client.dungeon("dungeon-" + UUID.randomUUID())
@@ -76,54 +87,72 @@ public final class Scenarios {
                     require(
                             observed.nodeId().equals("zoneB") && origin.nodeId().equals("zoneA"),
                             "Border origin mismatch");
-                    var appeared = observer.next(PlayerAppeared.class, v -> v.playerId().equals(client.playerId));
-                    require(
-                            appeared.position().x() == 299,
-                            "Border appearance mismatch");
+                    var appeared =
+                            observer.next(
+                                    PlayerAppeared.class,
+                                    v -> v.playerId().equals(client.playerId));
+                    require(appeared.position().x() == 299, "Border appearance mismatch");
                     var state = client.move(-1, 1);
-                    var moved = observer.next(
-                            PlayerMoved.class,
-                            v -> v.playerId().equals(client.playerId) && v.sequence() == 1);
+                    var moved =
+                            observer.next(
+                                    PlayerMoved.class,
+                                    v -> v.playerId().equals(client.playerId) && v.sequence() == 1);
                     require(moved.position().x() == 298, "Border movement mismatch");
                     client.move(2, 2);
-                    var left = observer.next(
-                            PlayerLeft.class,
-                            v -> v.playerId().equals(client.playerId)
-                                    && v.reason() == PlayerLeftReason.LEFT_ZONE);
+                    var left =
+                            observer.next(
+                                    PlayerLeft.class,
+                                    v ->
+                                            v.playerId().equals(client.playerId)
+                                                    && v.reason() == PlayerLeftReason.LEFT_ZONE);
                     require(left.reason() == PlayerLeftReason.LEFT_ZONE, "Zone departure mismatch");
-                    var entered = observer.next(
-                            PlayerAppeared.class,
-                            v -> v.playerId().equals(client.playerId) && v.position().x() == 300);
+                    var entered =
+                            observer.next(
+                                    PlayerAppeared.class,
+                                    v ->
+                                            v.playerId().equals(client.playerId)
+                                                    && v.position().x() == 300);
                     require(entered.position().x() == 300, "Target Zone appearance mismatch");
                     client.move(1, 3);
-                    var continued = observer.next(
-                            PlayerMoved.class,
-                            v -> v.playerId().equals(client.playerId) && v.sequence() == 3);
+                    var continued =
+                            observer.next(
+                                    PlayerMoved.class,
+                                    v -> v.playerId().equals(client.playerId) && v.sequence() == 3);
                     require(continued.position().x() == 301, "Target Zone movement mismatch");
-                    var adjacentObserver = create(nodes, clients, "border-inner-observer-" + UUID.randomUUID());
+                    var adjacentObserver =
+                            create(nodes, clients, "border-inner-observer-" + UUID.randomUUID());
                     var adjacent = adjacentObserver.join(299);
-                    require(adjacent.nodeId().equals("zoneA"),
+                    require(
+                            adjacent.nodeId().equals("zoneA"),
                             "The out-of-range observer did not start in the adjacent Zone");
                     client.move(-1, 4);
-                    var reentered = adjacentObserver.next(
-                            PlayerMoved.class,
-                            v -> v.playerId().equals(client.playerId) && v.sequence() == 4);
-                    require(reentered.position().x() == 300,
+                    var reentered =
+                            adjacentObserver.next(
+                                    PlayerMoved.class,
+                                    v -> v.playerId().equals(client.playerId) && v.sequence() == 4);
+                    require(
+                            reentered.position().x() == 300,
                             "The adjacent Zone did not observe the player re-entering the border band");
                     client.move(10, 5);
-                    var outOfRange = adjacentObserver.next(
-                            PlayerLeft.class,
-                            v -> v.playerId().equals(client.playerId)
-                                    && v.reason() == PlayerLeftReason.OUT_OF_RANGE);
-                    require(outOfRange.reason() == PlayerLeftReason.OUT_OF_RANGE,
+                    var outOfRange =
+                            adjacentObserver.next(
+                                    PlayerLeft.class,
+                                    v ->
+                                            v.playerId().equals(client.playerId)
+                                                    && v.reason() == PlayerLeftReason.OUT_OF_RANGE);
+                    require(
+                            outOfRange.reason() == PlayerLeftReason.OUT_OF_RANGE,
                             "The adjacent Zone did not observe PlayerLeft(out-of-range) after inward movement");
                     client.close();
                     clients.remove(client);
-                    var disconnected = observer.next(
-                            PlayerLeft.class,
-                            v -> v.playerId().equals(client.playerId)
-                                    && v.reason() == PlayerLeftReason.DISCONNECTED);
-                    require(disconnected.reason() == PlayerLeftReason.DISCONNECTED,
+                    var disconnected =
+                            observer.next(
+                                    PlayerLeft.class,
+                                    v ->
+                                            v.playerId().equals(client.playerId)
+                                                    && v.reason() == PlayerLeftReason.DISCONNECTED);
+                    require(
+                            disconnected.reason() == PlayerLeftReason.DISCONNECTED,
                             "Disconnect visibility mismatch");
                     require(observer.disconnects.get() == 0, "Observer disconnected");
                 }
@@ -190,9 +219,7 @@ public final class Scenarios {
                                 "Replacement admission failed");
                         var identity = fresh.sessionInfo();
                         require(
-                                fresh.move(1, 1)
-                                        .nodeId()
-                                        .equals(before.nodeId()),
+                                fresh.move(1, 1).nodeId().equals(before.nodeId()),
                                 "Replacement movement failed");
                         sameActor(identity, fresh.sessionInfo());
                         require(fresh.disconnects.get() == 0, "Replacement client disconnected");

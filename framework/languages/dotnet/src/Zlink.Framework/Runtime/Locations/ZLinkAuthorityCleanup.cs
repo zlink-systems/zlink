@@ -23,7 +23,7 @@ internal static class ZLinkAuthorityCleanup
         var current = found.Snapshot;
         if (current.Allocation.State != ZLinkPlacementAllocationState.Active)
             return false;
-        var spotId = RequireSteadyReady(current);
+        var spotId = RequireReclaimableAuthority(current);
         if (owner.OwnerId != discarded.OwnerId)
             return false;
         if (spotId is not null)
@@ -93,7 +93,10 @@ internal static class ZLinkAuthorityCleanup
     )
     {
         ZLinkCreationAuthorityRecovery? creationTarget = null;
-        if (current.Allocation.State == ZLinkPlacementAllocationState.Active)
+        if (
+            current.Allocation.State == ZLinkPlacementAllocationState.Active
+            && !ZLinkActorAuthorityPayloadCodec.IsClosing(current)
+        )
         {
             if (await selectTarget().ConfigureAwait(false) is not { } target)
                 return;
@@ -139,6 +142,9 @@ internal static class ZLinkAuthorityCleanup
             ZLinkRetryAdvice.RetryAfterStateChange
         );
     }
+
+    internal static string? RequireReclaimableAuthority(ZLinkAuthoritySnapshot snapshot) =>
+        ZLinkActorAuthorityPayloadCodec.IsClosing(snapshot) ? null : RequireSteadyReady(snapshot);
 
     internal static string? RequireSteadyReady(ZLinkAuthoritySnapshot snapshot)
     {

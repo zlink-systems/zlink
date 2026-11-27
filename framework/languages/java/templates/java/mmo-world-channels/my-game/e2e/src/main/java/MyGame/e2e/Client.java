@@ -68,7 +68,8 @@ public final class Client implements AutoCloseable {
                         message -> {
                             var payload = message.payload();
                             history.add(payload);
-                            if (payload instanceof ChannelView channelView) channelViews.add(channelView);
+                            if (payload instanceof ChannelView channelView)
+                                channelViews.add(channelView);
                             queue.add(payload);
                             return CompletableFuture.completedFuture(null);
                         }));

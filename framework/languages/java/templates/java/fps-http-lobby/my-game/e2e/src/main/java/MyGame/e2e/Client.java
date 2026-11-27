@@ -99,6 +99,16 @@ public final class Client implements AutoCloseable {
         connector.send(message).submit().toCompletableFuture().join();
     }
 
+    RoomView view() throws Exception {
+        return view(room -> true);
+    }
+
+    RoomView view(Predicate<RoomView> predicate) throws Exception {
+        clear();
+        send(new RoomViewRequest());
+        return next(RoomView.class, predicate);
+    }
+
     Object sendAndAwait(Object message, Predicate<Object> predicate) throws Exception {
         if (message != null) send(message);
         return next(Object.class, predicate);
@@ -114,7 +124,8 @@ public final class Client implements AutoCloseable {
             for (int i = 0; i < pending.size(); i++)
                 if (type.isInstance(pending.get(i)) && predicate.test(type.cast(pending.get(i))))
                     return type.cast(pending.remove(i));
-            Object event = queue.poll(Math.max(0, expires - System.nanoTime()), TimeUnit.NANOSECONDS);
+            Object event =
+                    queue.poll(Math.max(0, expires - System.nanoTime()), TimeUnit.NANOSECONDS);
             if (event == null)
                 throw new IllegalStateException(
                         "Timed out waiting for " + type.getSimpleName() + ", received=" + history);

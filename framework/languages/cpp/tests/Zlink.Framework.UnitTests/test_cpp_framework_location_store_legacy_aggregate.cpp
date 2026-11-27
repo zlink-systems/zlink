@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 #include <thread>
+#include <tuple>
 
 namespace
 {
@@ -177,6 +178,68 @@ json_t legacy_authority ()
               {"descriptorLifecycleGeneration", "1"},
               {"capacity", {{"actors", 1}, {"spots", 0}}}}},
             {"pendingCreation", nullptr}};
+}
+
+TEST_F (LegacyAggregateConversion, NormalizesMainCppMarkerAndReturnsPreparedPending)
+{
+    const auto seed = [&] (std::string id, std::string_view state, std::string_view actor) {
+        const auto suffix = id + ":1";
+        const store_key_t root{"zlink:v11:aggregate:" + suffix};
+        const store_key_t payload{"zlink:v11:aggregate-inventory:" + suffix
+                                  + ":participant:0:authorityPayload"};
+        const auto key = actor_authority_key (actor);
+        const store_key_t row{std::string ("authority") + '\0' + "actor" + '\0'
+                              + std::string (actor)};
+        auto record = legacy_authority ();
+        record["visibleStoreVersion"] = "source-version";
+        record["aggregate"] = {
+          {"aggregateId", id},
+          {"aggregateGeneration", "1"},
+          {"index", 0},
+          {"expectedStoreVersion", "source-version"},
+          {"ownerTransition", "newOwner"},
+          {"targetAuthorityOwnerGeneration", "4"},
+          {"authorityPayloadSha256", aggregate_inventory::digest_hex (bytes ("new"))},
+          {"membershipMutationSha256", aggregate_inventory::digest_hex (bytes ("[]"))}};
+        put (row, record.dump ());
+        put (payload, "new");
+        put (root,
+             json_t{{"aggregateId", id},
+                    {"aggregateGeneration", "1"},
+                    {"state", state},
+                    {"targetDescriptor", {{"meshName", "mesh"}, {"routingIdHex", "746172676574"}}},
+                    {"targetDescriptorLifecycleGeneration", "1"},
+                    {"targetOwner", {{"ownerId", "target-owner"}, {"ownerLeaseGeneration", "1"}}},
+                    {"capacity", {{"actors", 1}, {"spots", 0}}}}
+               .dump ());
+        return std::tuple{key, root, payload};
+    };
+    const auto [moved, committed, committed_payload] =
+      seed ("00000000-0000-4000-8000-0000000000a1", "committed", "moved");
+    const auto [retained, prepared, prepared_payload] =
+      seed ("00000000-0000-4000-8000-0000000000a2", "prepared", "retained");
+    put (legacy_capacity_key,
+         R"({"actorsActive":1,"actorsPending":1,"spotsActive":0,"spotsPending":0,"spotTypes":{}})");
+
+    ASSERT_NO_THROW (start ());
+    ASSERT_TRUE (std::holds_alternative<store_found_t> (read (format_key)));
+    for (const auto &key : {committed, committed_payload, prepared, prepared_payload})
+        EXPECT_TRUE (std::holds_alternative<store_missing_t> (read (key))) << key.value;
+    const auto moved_snapshot =
+      std::get<authority_snapshot_t> (repository.read_authority (moved).result ().value ());
+    EXPECT_EQ (moved_snapshot.payload, bytes ("new"));
+    EXPECT_EQ (moved_snapshot.owner.owner_id, "target-owner");
+    EXPECT_EQ (moved_snapshot.authority_owner_generation, 4u);
+    const auto retained_snapshot =
+      std::get<authority_snapshot_t> (repository.read_authority (retained).result ().value ());
+    EXPECT_EQ (retained_snapshot.payload, bytes ("old"));
+    EXPECT_EQ (retained_snapshot.owner.owner_id, "source-owner");
+    EXPECT_EQ (retained_snapshot.authority_owner_generation, 3u);
+    mesh_node_descriptor_t target;
+    target.mesh_name = "mesh";
+    target.rid = zlink::routing_id_t::from ("target");
+    EXPECT_EQ (capacity_count (store, capacity_key (target)), 1u);
+    EXPECT_EQ (capacity_count (store, capacity_key (target, "actors", "pending")), 0u);
 }
 
 TEST_F (LegacyAggregateConversion, SettlesJavaBinaryAndNodeJsonWithSharedAuthorityEnvelope)

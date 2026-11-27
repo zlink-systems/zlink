@@ -759,7 +759,8 @@ internal sealed partial class ZLinkProviderLocationRepository
     )
     {
         var active = current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active;
-        if (active && creationTarget is null && !discarded)
+        var actorClosing = ZLinkActorAuthorityPayloadCodec.IsClosing(current.Snapshot);
+        if (active && creationTarget is null && !discarded && !actorClosing)
             return StaleAuthorityReclaimResult.NotReclaimable;
 
         // Relocation authority retains its own recovery protocol.
@@ -807,7 +808,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             ? DecodeDescriptor<ZLinkMeshNodeDescriptor>(descriptorFound.Value.Bytes).Descriptor
             : null;
         ZLinkStoreCondition.Version? targetDescriptorCondition = null;
-        if (active && !discarded && creationTarget is { } target)
+        if (active && !discarded && !actorClosing && creationTarget is { } target)
         {
             var targetKey = MeshKey(target.TargetDescriptor.MeshName, target.TargetDescriptor.Rid);
             var targetDescriptor = sourceDescriptor;
@@ -837,7 +838,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
         IReadOnlyList<StoredAuthority> members = [];
         var endedUserSpotId = active
-            ? ZLinkAuthorityCleanup.RequireSteadyReady(current.Snapshot)
+            ? ZLinkAuthorityCleanup.RequireReclaimableAuthority(current.Snapshot)
             : null;
         if (active && !ownerLive)
             _ownerLeaseReleaseWait.Observe(currentOwner);
@@ -1478,7 +1479,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                             Sha256(participant.AuthorityPayload),
                             Sha256(participant.MembershipMutation),
                             0,
-                            requestFingerprint
+                            requestFingerprint,
+                            participant.AcceptedRequests
                         )
                 )
                 .ToArray();
@@ -1969,7 +1971,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                                     {
                                         Payload = participant.AuthorityPayload.ToArray(),
                                         Aggregate = aggregate.Header.ApplyRelocation(
-                                            authority.Meta.Aggregate
+                                            authority.Meta.Aggregate,
+                                            participant.AcceptedRequests
                                         ),
                                         AuthorityOwnerGeneration = nextGeneration,
                                         OwnerId = changesOwner
@@ -2208,7 +2211,8 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (
             aggregate.Header.ClearRelocation && authority.Snapshot.Relocation is not null
             || aggregate.Header.Relocation is { } relocation
-                && authority.Snapshot.Relocation != relocation
+                && authority.Snapshot.Relocation
+                    != relocation.WithAcceptedRequests(participant.AcceptedRequests)
         )
             return false;
         if (!changesOwner)
@@ -3643,6 +3647,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 StringComparison.Ordinal
             )
             && meta.Record.OwnerTransition == expected.OwnerTransition
+            && meta.Record.AcceptedRequests == expected.AcceptedRequests
             && CryptographicOperations.FixedTimeEquals(
                 meta.Record.AuthorityPayloadSha256,
                 expected.AuthorityPayloadSha256
@@ -4109,6 +4114,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     StringComparison.Ordinal
                 )
                 || actual.Metadata.OwnerTransition != expected.OwnerTransition
+                || actual.Metadata.AcceptedRequests != expected.AcceptedRequests
                 || !CryptographicOperations.FixedTimeEquals(
                     actual.Payload.Span,
                     expected.AuthorityPayload.Span
@@ -4136,7 +4142,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                     participant.Metadata.ExpectedStoreVersion,
                     participant.Metadata.OwnerTransition,
                     participant.Payload,
-                    ReadOnlyMemory<byte>.Empty
+                    ReadOnlyMemory<byte>.Empty,
+                    participant.Metadata.AcceptedRequests
                 ))
                 .ToArray(),
             aggregate.Header.InventoryDigest,
@@ -4175,18 +4182,26 @@ internal sealed partial class ZLinkProviderLocationRepository
         using var stream = new MemoryStream();
         WriteAggregateFingerprintHeader(stream, AggregateRequestRecordKind);
         WriteInventoryInt32(stream, request.Participants.Count);
-        foreach (
-            var participant in request.Participants.OrderBy(
+        var participants = request
+            .Participants.OrderBy(
                 static participant => participant.Key.Value,
                 StringComparer.Ordinal
             )
-        )
+            .ToArray();
+        foreach (var participant in participants)
         {
             WriteInventoryString(stream, participant.Key.Value);
             WriteInventoryString(stream, participant.ExpectedStoreVersion);
             stream.WriteByte((byte)participant.OwnerTransition);
             WriteInventoryHash(stream, Sha256(participant.AuthorityPayload));
             WriteInventoryHash(stream, Sha256(participant.MembershipMutation));
+        }
+        foreach (var participant in participants)
+        {
+            if (participant.AcceptedRequests is not { } acceptedRequests)
+                continue;
+            WriteInventoryString(stream, participant.Key.Value);
+            WriteInventoryUInt64(stream, acceptedRequests);
         }
         hash.AppendData(stream.GetBuffer().AsSpan(0, checked((int)stream.Length)));
         return hash.GetHashAndReset();
@@ -4617,7 +4632,10 @@ internal sealed partial class ZLinkProviderLocationRepository
                     meta = meta with
                     {
                         Payload = participant.Payload.ToArray(),
-                        Aggregate = aggregate.Record.Header.ApplyRelocation(meta.Aggregate),
+                        Aggregate = aggregate.Record.Header.ApplyRelocation(
+                            meta.Aggregate,
+                            participant.Metadata.AcceptedRequests
+                        ),
                         AuthorityOwnerGeneration = changesOwner
                             ? targetAuthorityOwnerGeneration
                             : meta.AuthorityOwnerGeneration,
@@ -5268,9 +5286,12 @@ internal sealed partial class ZLinkProviderLocationRepository
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool ClearRelocation { get; init; }
 
-        internal JsonElement? ApplyRelocation(JsonElement? aggregate) =>
+        internal JsonElement? ApplyRelocation(JsonElement? aggregate, ulong? acceptedRequests) =>
             ClearRelocation || Relocation is not null
-                ? ZLinkAuthorityAggregateCodec.Replace(aggregate, Relocation)
+                ? ZLinkAuthorityAggregateCodec.Replace(
+                    aggregate,
+                    Relocation?.WithAcceptedRequests(acceptedRequests)
+                )
                 : aggregate;
     }
 
@@ -5432,7 +5453,9 @@ internal sealed partial class ZLinkProviderLocationRepository
         byte[] AuthorityPayloadSha256,
         byte[] MembershipMutationSha256,
         ulong TargetAuthorityOwnerGeneration,
-        byte[] RequestFingerprint
+        byte[] RequestFingerprint,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+            ulong? AcceptedRequests = null
     );
 
     private sealed record StoredAggregateParticipant(

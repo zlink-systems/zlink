@@ -95,6 +95,10 @@ import {
   encodeBoundSessionReplacedHeader,
   encodeBoundSessionSendHeader,
   encodeInstanceSpotActivationHeader,
+  freezeReadyInstanceSpot,
+  type ServiceReadyInstanceRecord,
+  type ServiceWireFrozenRecord,
+  type ServiceWireOperationId,
   encodeInstanceSpotHeader,
   encodeLogicalMulticastHeader,
   encodeMessageFollowHeader,
@@ -152,9 +156,14 @@ export interface ServiceSpotMessageFollowSeal {
   readonly serial: bigint;
 }
 
+type ServiceSpotMessageFollowWire =
+  | Extract<ServiceStatefulWireRecord, { kind: 'spotSend' | 'spotRequest' }>
+  | ServiceReadyInstanceRecord;
+
 interface ServiceSpotMessageFollowRecord {
   readonly ingress: RawServiceIngressRecord;
-  readonly wire: Extract<ServiceStatefulWireRecord, { readonly kind: 'spotSend' | 'spotRequest' }>;
+  readonly wire: ServiceSpotMessageFollowWire;
+  readonly localReply?: NonNullable<ServiceStatefulMailboxData['reply']>;
   readonly bytes: number;
 }
 
@@ -164,9 +173,10 @@ interface ServiceSpotMessageFollowState {
   readonly source: ServiceDirectSpotRouteFence;
   readonly queued: Array<ServiceSpotMessageFollowRecord | undefined>;
   queuedHead: number;
+  frozenCount: number;
   queuedCount: number;
   queuedBytes: number;
-  target?: ServiceDirectSpotRouteFence;
+  target?: ServiceDirectSpotRouteFence & { readonly ownerId?: string };
   suppressionFence?: MessageFollowSuppressionFence;
   expiresAtMs?: number;
   draining: boolean;
@@ -249,6 +259,9 @@ export type ServiceRelocationActorIngressRouter = (
 export interface ServiceSpotTargetAdmission {
   readonly activation: import('../spots/spot-activation-state').ZLinkSpotActivation;
   readonly confirmed: Promise<boolean>;
+  readonly preparePermit?: (
+    signal: AbortSignal
+  ) => Promise<import('../application-jobs/contracts').ApplicationJobPermitPort>;
 }
 
 export type ServiceRelocationRequest =
@@ -490,6 +503,7 @@ export interface ServiceUserSpotOperationHandler {
     record: ServiceUserSpotCloseRecord,
     signal: AbortSignal
   ): Promise<ServiceUserSpotOperationResult>;
+  destroyActor?(fence: ServiceActorRouteFence): void;
   createActor?(
     record: ServiceActorCreateRecord,
     signal: AbortSignal
@@ -534,7 +548,10 @@ export class ServiceStatefulRuntime {
   private relocationRequestAdmission?: ServiceRelocationRequestAdmissionResolver;
   private actorMessageFollowResolver?: (fence: ServiceActorRouteFence) => boolean;
 
-  readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult, bigint>;
+  readonly operations: ServiceTerminalOperationRegistry<
+    ServiceStatefulResult,
+    ServiceWireOperationId
+  >;
   private readonly sessionDeliveries = new Map<string, ServiceSessionDelivery>();
   /**
    * A local Actor owner can replace its own session binding before the
@@ -562,7 +579,7 @@ export class ServiceStatefulRuntime {
   private nextSpotId = 1n;
   private nextSessionSequence = 1n;
   private nextInstanceOperation = 1n;
-  private nextUserSpotOperation = 1n;
+  private nextObjectOperationCorrelation = 1n;
   private instanceAuthority?: ServiceInstanceActivationAuthority;
   private asyncInstanceAuthority?: ServiceAsyncInstanceActivationAuthority;
   private instanceApplicationLifecycle?: ServiceInstanceApplicationLifecycle;
@@ -605,7 +622,7 @@ export class ServiceStatefulRuntime {
     private readonly requests?: RequestRuntime
   ) {
     this.operations = new ServiceTerminalOperationRegistry(
-      requests?.operations<ServiceStatefulResult, bigint>() ??
+      requests?.operations<ServiceStatefulResult, ServiceWireOperationId>() ??
         new OperationRegistry(undefined, onPendingOperationsChanged, (reason) =>
           requestTerminalError('Request', reason)
         ),
@@ -975,7 +992,7 @@ export class ServiceStatefulRuntime {
     request: Omit<ServiceUserSpotCreateRecord, 'kind' | 'correlation' | 'operation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
-    const correlation = this.nextUserSpotOperation++;
+    const correlation = this.nextObjectOperationCorrelation++;
     const operation = {
       high: this.nodeGeneration,
       low: correlation
@@ -1001,7 +1018,7 @@ export class ServiceStatefulRuntime {
     request: Omit<ServiceUserSpotCloseRecord, 'kind' | 'correlation' | 'operation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
-    const correlation = this.nextUserSpotOperation++;
+    const correlation = this.nextObjectOperationCorrelation++;
     const operation = {
       high: this.nodeGeneration,
       low: correlation
@@ -1027,7 +1044,7 @@ export class ServiceStatefulRuntime {
     request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
-    const correlation = this.nextUserSpotOperation++;
+    const correlation = this.nextObjectOperationCorrelation++;
     return this.requestUserSpotOperation(
       targetNodeRid,
       encodeActorCreateHeader({
@@ -1441,11 +1458,45 @@ export class ServiceStatefulRuntime {
       source: freezeDirectSpotRoute(source),
       queued: [],
       queuedHead: 0,
+      frozenCount: 0,
       queuedCount: 0,
       queuedBytes: 0,
       draining: false
     });
     return seal;
+  }
+
+  async freezeSpotRelocationIngress(
+    seal: ServiceSpotMessageFollowSeal
+  ): Promise<readonly ServiceWireFrozenRecord[]> {
+    const state = this.exactSpotMessageFollow(seal);
+    if (state === undefined || state.target !== undefined) {
+      throw new Error('Spot relocation ingress seal is stale.');
+    }
+    if (state.objectKind !== 'instanceSpot') return [];
+    const end = state.queued.length;
+    const records: ServiceWireFrozenRecord[] = [];
+    // Snapshot the range before resolving requester authority. Ingress admitted
+    // during that lookup belongs to the following range, in arrival order.
+    for (let index = state.frozenCount; index < end; index++) {
+      const { ingress, wire } = state.queued[index]!;
+      if (wire.kind !== 'instanceSpot') continue;
+      const pendingSource = this.acceptRequestSource(ingress);
+      if (pendingSource !== undefined) await pendingSource;
+      const source = ingress.requestSource;
+      if (source === undefined) throw requestSourceUnavailable(ingress.sourceRoutingId);
+      const metadata = (ingress.flags & M6bServiceWireFlag.metadata) !== 0;
+      records.push(
+        freezeReadyInstanceSpot(
+          source,
+          wire,
+          ingress.parts[metadata ? 2 : 1]!,
+          metadata ? ingress.parts[1] : undefined
+        )
+      );
+    }
+    state.frozenCount = end;
+    return records;
   }
 
   abortSpotMessageFollowIngress(seal: ServiceSpotMessageFollowSeal): boolean {
@@ -1470,7 +1521,7 @@ export class ServiceStatefulRuntime {
 
   async commitSpotMessageFollowIngress(
     seal: ServiceSpotMessageFollowSeal,
-    target: ServiceDirectSpotRouteFence | null,
+    target: (ServiceDirectSpotRouteFence & { readonly ownerId?: string }) | null,
     durationMs: number
   ): Promise<boolean> {
     const state = this.exactSpotMessageFollow(seal);
@@ -1499,7 +1550,12 @@ export class ServiceStatefulRuntime {
       this.failExpiredSpotMessageFollow(state);
       return true;
     }
-    state.target = freezeDirectSpotRoute(target);
+    for (let index = 0; index < state.frozenCount; index++) {
+      if (state.queued[index]?.wire.kind === 'instanceSpot') {
+        this.releaseSpotMessageFollowRecord(state, index);
+      }
+    }
+    state.target = { ...freezeDirectSpotRoute(target), ownerId: target.ownerId };
     state.suppressionFence = spotMessageFollowSuppressionFence(
       state.objectKind,
       state.source,
@@ -1711,11 +1767,11 @@ export class ServiceStatefulRuntime {
     requestOperation?: PendingOperation<unknown>,
     receiver?: import('./operation-registry').OperationObserver<unknown, unknown>
   ): ServiceStatefulPendingOperation {
-    const operationLow = this.nextMessageFollowOperation++;
+    const operation = { high: this.nodeGeneration, low: this.nextMessageFollowOperation++ };
     const pending =
       (requestOperation as PendingOperation<ServiceStatefulResult> | undefined) ??
-      this.operations.register(timeoutMs, 'registry', operationLow);
-    this.operations.setContext(pending.id, operationLow);
+      this.operations.register(timeoutMs);
+    this.operations.setContext(pending.id, operation);
     const route = routeFence ?? this.tryActorFence(target);
     if (route === undefined) {
       const result = internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorRouteNotFound);
@@ -1734,7 +1790,7 @@ export class ServiceStatefulRuntime {
             ...boundSession,
             sequence: this.nextSessionSequence++
           },
-      { high: this.nodeGeneration, low: operationLow }
+      operation
     );
     this.submitRequest(
       pending,
@@ -1755,11 +1811,8 @@ export class ServiceStatefulRuntime {
     replyRouteId: bigint,
     result: ServiceStatefulResult
   ): 'terminalReceived' | 'alreadyTerminal' | undefined {
-    if (
-      operation.high !== this.nodeGeneration ||
-      this.operations.context(replyRouteId) !== operation.low
-    )
-      return undefined;
+    const original = this.operations.context(replyRouteId);
+    if (original?.high !== operation.high || original.low !== operation.low) return undefined;
     return this.operations.reply(replyRouteId, result, RELOCATION_REPLY_RETENTION_MS)
       ? 'terminalReceived'
       : 'alreadyTerminal';
@@ -1854,6 +1907,8 @@ export class ServiceStatefulRuntime {
     const pending =
       (requestOperation as PendingOperation<ServiceStatefulResult> | undefined) ??
       this.operations.register(timeoutMs);
+    const operation = { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id };
+    this.operations.setContext(pending.id, operation);
     this.submitRequest(
       pending,
       route.targetNodeRid,
@@ -1866,7 +1921,7 @@ export class ServiceStatefulRuntime {
             this.nodeRid,
             sourceSpotId,
             'request',
-            { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id },
+            operation,
             pending.id,
             metadataFrame !== undefined,
             instanceIntent
@@ -1966,29 +2021,26 @@ export class ServiceStatefulRuntime {
 
   destroyActor(actor: ServiceActorRef, timeoutMs: number): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
-    const local = actor.nodeRid === this.nodeRid;
-    if (local) {
-      queueMicrotask(() => {
-        try {
-          this.registry.destroyActor(actor);
-          pending.reply({ terminalResult: RequestResult.Ok, failureCode: 0 });
-        } catch (error) {
-          pending.reply(failure(error));
-        }
-      });
-      return pending;
-    }
-    const route = this.actorFence(actor);
-    const header = encodeActorDestroyHeader(pending.id, route);
-    this.submitRequest(
-      pending,
-      actor.nodeRid,
-      route.targetNodeGeneration,
-      [header],
-      timeoutMs,
-      'actorDestroy'
-    );
+    queueMicrotask(() => {
+      try {
+        this.registry.destroyActor(actor);
+        pending.reply({ terminalResult: RequestResult.Ok, failureCode: 0 });
+      } catch (error) {
+        pending.reply(failure(error));
+      }
+    });
     return pending;
+  }
+
+  async sendActorDestroy(route: ServiceActorRouteFence): Promise<void> {
+    const { actor, targetNodeGeneration } = route;
+    const header = encodeActorDestroyHeader(this.nextObjectOperationCorrelation++, route);
+    if (!(await this.raw.sendApplication(actor.nodeRid, [header], targetNodeGeneration))) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+        `Actor '${actor.actorId}' owner route is unavailable.`
+      );
+    }
   }
 
   joinActor(
@@ -2512,6 +2564,12 @@ export class ServiceStatefulRuntime {
   private async ingress(
     record: RawServiceIngressRecord
   ): Promise<RawServicePumpResult | undefined> {
+    if (
+      record.command === M6bServiceWireCommand.actorDestroy &&
+      record.requestSequence !== undefined
+    ) {
+      return 'dropped';
+    }
     let decoded: ServiceStatefulWireRecord;
     let canonicalActorJoin: ActorJoin28 | undefined;
     try {
@@ -2553,10 +2611,11 @@ export class ServiceStatefulRuntime {
           decoded.kind === 'actorSend' ||
           decoded.kind === 'actorRequest') &&
         (record.flags & M6bServiceWireFlag.metadata) !== 0;
-      const userSpotInfrastructure =
+      const singleFrameInfrastructure =
         decoded.kind === 'userSpotCreate' ||
         decoded.kind === 'userSpotClose' ||
         decoded.kind === 'actorCreate' ||
+        decoded.kind === 'actorDestroy' ||
         decoded.kind === 'messageFollow' ||
         decoded.kind === 'boundSessionReplaced' ||
         decoded.kind === 'boundSessionClose';
@@ -2567,7 +2626,7 @@ export class ServiceStatefulRuntime {
           decoded.kind !== 'actorJoin' &&
           record.parts.length !== ((record.flags & M6bServiceWireFlag.metadata) !== 0 ? 3 : 2)) ||
         (decoded.kind === 'instanceSpot' && record.parts.length !== (instanceMetadata ? 3 : 2)) ||
-        (userSpotInfrastructure && record.parts.length !== 1)
+        (singleFrameInfrastructure && record.parts.length !== 1)
       ) {
         return 'protocolError';
       }
@@ -2833,7 +2892,13 @@ export class ServiceStatefulRuntime {
       case 'actorLookup':
         return this.replyLookup(ingress, record);
       case 'actorDestroy':
-        return this.replyDestroy(ingress, record);
+        if (
+          record.actor.actor.nodeRid === this.nodeRid &&
+          record.actor.targetNodeGeneration === this.nodeGeneration
+        ) {
+          this.userSpotOperationHandler?.destroyActor?.(record.actor);
+        }
+        return 'infrastructure';
       case 'actorJoin':
         // Canonical command-28 is a request/reply control.  A one-way ingress
         // cannot carry its typed terminal, so report it as a protocol error
@@ -2873,6 +2938,10 @@ export class ServiceStatefulRuntime {
     metadataFrame?: Buffer,
     localReply?: NonNullable<ServiceStatefulMailboxData['reply']>
   ): RawServicePumpResult {
+    if (record.activation === 'ready') {
+      const followed = this.holdOrRelaySpotMessage(ingress, record, localReply);
+      if (followed !== undefined) return followed;
+    }
     if (record.activation === 'missing' && this.asyncInstanceAuthority !== undefined) {
       const ownedIngress = shareIngressOwnership(ingress);
       void this.continueMissingInstanceActivation(
@@ -3993,21 +4062,6 @@ export class ServiceStatefulRuntime {
     return 'infrastructure';
   }
 
-  private replyDestroy(
-    ingress: RawServiceIngressRecord,
-    record: Extract<ServiceStatefulWireRecord, { readonly kind: 'actorDestroy' }>
-  ): RawServicePumpResult {
-    try {
-      this.validateActorFence(record.actor);
-      this.registry.destroyActor(record.actor.actor);
-      this.replyWire(ingress, record.correlation, RequestResult.Ok, 0);
-    } catch (error) {
-      const result = failure(error);
-      this.replyWire(ingress, record.correlation, result.terminalResult, result.failureCode);
-    }
-    return 'infrastructure';
-  }
-
   private async replySessionBind(
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'boundSessionBind' }>
@@ -5096,7 +5150,6 @@ export class ServiceStatefulRuntime {
       | 'spotRequest'
       | 'actorRequest'
       | 'actorLookup'
-      | 'actorDestroy'
       | 'actorJoin'
       | 'streamBind'
       | 'streamUnbind'
@@ -5309,7 +5362,6 @@ export class ServiceStatefulRuntime {
       | 'spotRequest'
       | 'actorRequest'
       | 'actorLookup'
-      | 'actorDestroy'
       | 'actorJoin'
       | 'streamBind'
       | 'streamUnbind'
@@ -5345,15 +5397,6 @@ export class ServiceStatefulRuntime {
               kindData: lookupKindData(found)
             }
       );
-      return;
-    }
-    if (decoded.kind === 'actorDestroy') {
-      try {
-        this.registry.destroyActor(decoded.actor.actor);
-        pending.reply({ terminalResult: RequestResult.Ok, failureCode: 0 });
-      } catch (error) {
-        pending.reply(failure(error));
-      }
       return;
     }
     const localReply: ServiceStatefulMailboxData['reply'] = (
@@ -5559,7 +5602,6 @@ export class ServiceStatefulRuntime {
       | 'spotRequest'
       | 'actorRequest'
       | 'actorLookup'
-      | 'actorDestroy'
       | 'actorJoin'
       | 'streamBind'
       | 'streamUnbind'
@@ -6070,24 +6112,34 @@ export class ServiceStatefulRuntime {
 
   private holdOrRelaySpotMessage(
     ingress: RawServiceIngressRecord,
-    wire: Extract<ServiceStatefulWireRecord, { readonly kind: 'spotSend' | 'spotRequest' }>
+    wire: ServiceSpotMessageFollowWire,
+    localReply?: ServiceSpotMessageFollowRecord['localReply']
   ): RawServicePumpResult | undefined {
-    const state = this.spotMessageFollow.get(spotKey(wire.target.spot));
-    if (state === undefined || !sameDirectSpotRouteIdentity(state.source, wire.target)) {
+    const target =
+      wire.kind === 'instanceSpot' ? instanceRouteAsDirectRoute(wire.route) : wire.target;
+    const state = this.spotMessageFollow.get(spotKey(target.spot));
+    if (state === undefined || !sameDirectSpotRouteIdentity(state.source, target)) {
       return undefined;
+    }
+    if (wire.kind === 'instanceSpot') {
+      if (state.objectKind !== 'instanceSpot') return undefined;
+      this.validateInstanceIngress(ingress, wire);
     }
     if (state.expiresAtMs !== undefined && state.expiresAtMs <= performance.now()) {
       this.failExpiredSpotMessageFollow(state);
       return undefined;
     }
     const bytes = ingress.parts.reduce((sum, part) => sum + part.byteLength, 0);
+    const retained = shareIngressOwnership(ingress);
     state.queued.push({
-      ingress: shareIngressOwnership(ingress),
+      ingress: wire.kind === 'instanceSpot' ? { ...retained, onAdmitted: undefined } : retained,
       wire,
+      localReply,
       bytes
     });
     state.queuedCount += 1;
     state.queuedBytes += bytes;
+    if (wire.kind === 'instanceSpot') ingress.onAdmitted?.();
     if (state.target !== undefined) void this.drainSpotMessageFollow(state);
     return 'application';
   }
@@ -6096,6 +6148,16 @@ export class ServiceStatefulRuntime {
     retained: ServiceSpotMessageFollowRecord
   ): RawServicePumpResult {
     const { ingress, wire } = retained;
+    if (wire.kind === 'instanceSpot') {
+      const metadata = (ingress.flags & M6bServiceWireFlag.metadata) !== 0;
+      return this.enqueueInstanceSpot(
+        ingress,
+        wire,
+        ingress.parts[metadata ? 2 : 1]!,
+        metadata ? ingress.parts[1] : undefined,
+        retained.localReply
+      );
+    }
     this.validateDirectSpotFence(wire.target);
     return this.enqueueApplicationFrame(
       ingress,
@@ -6127,20 +6189,46 @@ export class ServiceStatefulRuntime {
             (current.ingress.parts[0]![SERVICE_WIRE_FLAGS_OFFSET]! &
               M6bServiceWireFlag.metadata) !==
             0;
+          const { wire } = current;
+          const correlation = statefulCorrelation(wire);
+          const metadataFrame = metadata ? current.ingress.parts[1] : undefined;
+          const header =
+            wire.kind === 'instanceSpot'
+              ? encodeInstanceSpotHeader(
+                  {
+                    targetNodeRid: state.target.targetNodeRid,
+                    targetNodeGeneration: state.target.targetNodeGeneration,
+                    targetSpotId: state.target.spot.spotId,
+                    objectGeneration: state.target.spot.generation,
+                    ownerId: state.target.ownerId!,
+                    authorityOwnerGeneration: state.target.authorityOwnerGeneration,
+                    leaseGeneration: state.target.ownerLeaseGeneration,
+                    storeVersion: state.target.storeVersion
+                  },
+                  this.nodeGeneration,
+                  this.nodeRid,
+                  wire.sourceSpotId,
+                  wire.operationKind,
+                  wire.operation,
+                  wire.replyRouteId,
+                  metadata,
+                  wire.instanceIntent
+                )
+              : encodeSpotHeader(
+                  wire.kind,
+                  wire.sourceSpotId,
+                  state.target,
+                  correlation,
+                  wire.operation,
+                  wire.messageFollowHopCount + 1,
+                  metadataFrame
+                );
           const parts = [
-            encodeSpotHeader(
-              current.wire.kind,
-              current.wire.sourceSpotId,
-              state.target,
-              current.wire.correlation,
-              current.wire.operation,
-              current.wire.messageFollowHopCount + 1,
-              metadata ? current.ingress.parts[1] : undefined
-            ),
-            ...(metadata ? [current.ingress.parts[1]!] : []),
+            header,
+            ...(metadataFrame === undefined ? [] : [metadataFrame]),
             current.ingress.parts[metadata ? 2 : 1]!
           ];
-          if (current.wire.kind === 'spotSend') {
+          if (correlation === undefined) {
             if (!(await this.raw.sendService(state.target.targetNodeRid, parts))) continue;
           } else {
             try {
@@ -6157,12 +6245,24 @@ export class ServiceStatefulRuntime {
                 'spot message follow'
               );
               pending.complete(reply);
-              this.raw.replyService(current.ingress, reply);
+              if (current.localReply === undefined) {
+                this.raw.replyService(current.ingress, reply);
+              } else {
+                const terminal = decodeStatefulReply(
+                  reply[0]!,
+                  correlation,
+                  'instanceSpotRequest',
+                  reply.length >= 2
+                );
+                current.localReply(
+                  terminal.terminalResult,
+                  terminal.failureCode,
+                  reply.length < 2 ? undefined : decodeApplicationPayload(reply[1])
+                );
+              }
             } catch (error) {
               const result = failure(error);
-              this.replyWire(
-                current.ingress,
-                current.wire.correlation!,
+              (current.localReply ?? this.replyPort(current.ingress, correlation))(
                 result.terminalResult,
                 result.failureCode
               );
@@ -6172,7 +6272,6 @@ export class ServiceStatefulRuntime {
         } finally {
           if (this.peekSpotMessageFollow(state) === current) {
             this.takeSpotMessageFollow(state);
-            state.queuedBytes -= current.bytes;
           }
         }
       }
@@ -6219,13 +6318,10 @@ export class ServiceStatefulRuntime {
     this.removeSpotMessageFollow(state);
     while (state.queuedCount > 0) {
       const current = this.peekSpotMessageFollow(state)!;
-      if (current.wire.kind === 'spotRequest') {
-        const result = failure(
-          new ServiceStaleGenerationError('spot', current.wire.target.spot.spotId)
-        );
-        this.replyWire(
-          current.ingress,
-          current.wire.correlation!,
+      const correlation = statefulCorrelation(current.wire);
+      if (correlation !== undefined) {
+        const result = failure(new ServiceStaleGenerationError('spot', state.source.spot.spotId));
+        (current.localReply ?? this.replyPort(current.ingress, correlation))(
           result.terminalResult,
           result.failureCode
         );
@@ -6262,10 +6358,7 @@ export class ServiceStatefulRuntime {
   private takeSpotMessageFollow(state: ServiceSpotMessageFollowState): void {
     const current = this.peekSpotMessageFollow(state);
     if (current === undefined) return;
-    current.ingress.applicationJobOwner?.close();
-    state.queued[state.queuedHead] = undefined;
-    state.queuedHead += 1;
-    state.queuedCount -= 1;
+    this.releaseSpotMessageFollowRecord(state, state.queuedHead++);
     if (state.queuedCount === 0) {
       state.queued.length = 0;
       state.queuedHead = 0;
@@ -6273,6 +6366,17 @@ export class ServiceStatefulRuntime {
       state.queued.splice(0, state.queuedHead);
       state.queuedHead = 0;
     }
+  }
+
+  private releaseSpotMessageFollowRecord(
+    state: ServiceSpotMessageFollowState,
+    index: number
+  ): void {
+    const record = state.queued[index]!;
+    record.ingress.applicationJobOwner?.close();
+    state.queued[index] = undefined;
+    state.queuedCount -= 1;
+    state.queuedBytes -= record.bytes;
   }
 
   private actorFence(actor: ServiceActorRef): ServiceActorRouteFence {
@@ -6784,6 +6888,7 @@ function requireApplicationJobOwner(
 }
 
 function statefulCorrelation(record: ServiceStatefulWireRecord): bigint | undefined {
+  if (record.kind === 'actorDestroy') return undefined;
   if ('correlation' in record) return record.correlation;
   return record.kind === 'instanceSpot' && record.operationKind === 'request'
     ? record.replyRouteId

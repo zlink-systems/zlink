@@ -1915,6 +1915,12 @@ Store에 남는다. 이를 대상으로 삼지 않는 규칙은 §4.1이 정한�
 [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)이 정한다. 두 정리 경로는
 서로 독립적이며 서로 다른 lifetime으로 동작한다.
 
+**Host 종료가 실행 중 discard 정리를 기다린 뒤 새로 확정된 discard는 local 정리만 하고 정상으로 끝난다.**
+종료는 transport를 닫기 전에 그때까지 수락한 discard 정리를 기다린다. 그 뒤 lease 상실·outage 기한 같은
+판정이 discard를 새로 확정하면, 그 정리는 transport나 completion table이 닫힌 것을 오류로 보고하지 않고
+"이미 종료 중"인 terminal로 처리한다. Local object 제거와 registry 정리는 끝까지 수행한다. 종료하는 host의
+peer는 그 host의 연결 종료로 결과를 관찰하므로 보낼 것이 남지 않는다. 이 경우를 위한 별도 상태나 순서는 두지 않는다.
+
 Owner lease는 종료 lifecycle이 보유한 동일 token으로 해제한다. 다른 lifecycle의 lease를
 다시 읽어 해제하지 않는다. Store 정리의 시간 범위와 `ForceStopped` 반환 경계는
 [Host shutdown §14](05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁)를 따른다.

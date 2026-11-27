@@ -5,9 +5,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import MyGame.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
+
+import org.junit.jupiter.api.Test;
+
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import org.junit.jupiter.api.Test;
 
 final class DomainTest {
     private static final String SHOOTER = "p1", TARGET = "p2", OTHER_MODE = "squad";
@@ -43,16 +45,13 @@ final class DomainTest {
     }
 
     private static RoomState positioned(
-            ManualClock clock,
-            double shooterX,
-            double shooterY,
-            double targetX,
-            double targetY) {
+            ManualClock clock, double shooterX, double shooterY, double targetX, double targetY) {
         var state = room(clock);
         var snapshot = state.snapshot();
-        var players = List.of(
-                position(snapshot.players().get(0), shooterX, shooterY),
-                position(snapshot.players().get(1), targetX, targetY));
+        var players =
+                List.of(
+                        position(snapshot.players().get(0), shooterX, shooterY),
+                        position(snapshot.players().get(1), targetX, targetY));
         state.restore(new RoomState.Snapshot(snapshot.phase(), snapshot.winner(), players));
         return state;
     }
@@ -77,7 +76,9 @@ final class DomainTest {
     }
 
     private static void rejectedWithoutStateChange(
-            RoomState room, ActionRejected expected, java.util.function.Supplier<ActionRejected> action) {
+            RoomState room,
+            ActionRejected expected,
+            java.util.function.Supplier<ActionRejected> action) {
         var before = room.snapshot();
         assertEquals(expected, action.get());
         assertEquals(before, room.snapshot());
@@ -103,35 +104,32 @@ final class DomainTest {
         rejectedWithoutStateChange(
                 state,
                 new ActionRejected(Rules.INTEGER_OUT_OF_RANGE),
-                () -> state.move(
-                        SHOOTER,
-                        new MoveRequest(0, 0, Rules.MAX_SAFE_INTEGER + 1)));
+                () -> state.move(SHOOTER, new MoveRequest(0, 0, Rules.MAX_SAFE_INTEGER + 1)));
 
         assertNull(state.shoot(SHOOTER, new ShootRequest(TARGET, Rules.MAX_SAFE_INTEGER)));
         assertEquals(Rules.MAX_SAFE_INTEGER, player(state, SHOOTER).lastSequence());
         rejectedWithoutStateChange(
                 state,
                 new ActionRejected(Rules.INTEGER_OUT_OF_RANGE),
-                () -> state.shoot(
-                        SHOOTER,
-                        new ShootRequest(TARGET, Rules.MAX_SAFE_INTEGER + 1)));
+                () -> state.shoot(SHOOTER, new ShootRequest(TARGET, Rules.MAX_SAFE_INTEGER + 1)));
 
         var snapshot = state.snapshot();
         var shooter = snapshot.players().getFirst();
         var invalidSequence = Rules.MAX_SAFE_INTEGER + 1;
-        state.restore(new RoomState.Snapshot(
-                snapshot.phase(),
-                snapshot.winner(),
-                List.of(
-                        new RoomState.CombatantSnapshot(
-                                shooter.playerId(),
-                                shooter.x(),
-                                shooter.y(),
-                                shooter.hp(),
-                                invalidSequence,
-                                shooter.moveBudgetRemainingMs(),
-                                shooter.fireCooldownRemainingMs()),
-                        snapshot.players().get(1))));
+        state.restore(
+                new RoomState.Snapshot(
+                        snapshot.phase(),
+                        snapshot.winner(),
+                        List.of(
+                                new RoomState.CombatantSnapshot(
+                                        shooter.playerId(),
+                                        shooter.x(),
+                                        shooter.y(),
+                                        shooter.hp(),
+                                        invalidSequence,
+                                        shooter.moveBudgetRemainingMs(),
+                                        shooter.fireCooldownRemainingMs()),
+                                snapshot.players().get(1))));
         rejectedWithoutStateChange(
                 state,
                 new ActionRejected(Rules.INTEGER_OUT_OF_RANGE),
@@ -148,11 +146,12 @@ final class DomainTest {
                 new ActionRejected(Rules.STEP_TOO_LARGE),
                 () -> state.move(SHOOTER, new MoveRequest(Rules.MAX_STEP + 0.001, 0, 2)));
 
-        var edges = List.of(
-                new double[] {2, 50, -2, 0, 0, 50},
-                new double[] {98, 50, 2, 0, 100, 50},
-                new double[] {50, 2, 0, -2, 50, 0},
-                new double[] {50, 98, 0, 2, 50, 100});
+        var edges =
+                List.of(
+                        new double[] {2, 50, -2, 0, 0, 50},
+                        new double[] {98, 50, 2, 0, 100, 50},
+                        new double[] {50, 2, 0, -2, 50, 0},
+                        new double[] {50, 98, 0, 2, 50, 100});
         for (var edge : edges) {
             var edgeRoom = positioned(new ManualClock(0), edge[0], edge[1], 70, 10);
             assertNull(edgeRoom.move(SHOOTER, new MoveRequest(edge[2], edge[3], 1)));
@@ -160,50 +159,46 @@ final class DomainTest {
             assertEquals(edge[5], player(edgeRoom, SHOOTER).y());
         }
 
-        var outsideCases = List.of(
-                new double[] {0, 50, -0.01, 0},
-                new double[] {100, 50, 0.01, 0},
-                new double[] {50, 0, 0, -0.01},
-                new double[] {50, 100, 0, 0.01});
+        var outsideCases =
+                List.of(
+                        new double[] {0, 50, -0.01, 0},
+                        new double[] {100, 50, 0.01, 0},
+                        new double[] {50, 0, 0, -0.01},
+                        new double[] {50, 100, 0, 0.01});
         for (var outside : outsideCases) {
             var outsideRoom = positioned(new ManualClock(0), outside[0], outside[1], 70, 10);
             rejectedWithoutStateChange(
                     outsideRoom,
                     new ActionRejected(Rules.OUTSIDE_MAP),
-                    () -> outsideRoom.move(
-                            SHOOTER,
-                            new MoveRequest(outside[2], outside[3], 1)));
+                    () -> outsideRoom.move(SHOOTER, new MoveRequest(outside[2], outside[3], 1)));
         }
     }
 
     @Test
     void movementRejectsWallEndpointContactAndCrossing() {
         for (var endpointY : new double[] {Rules.WALL_MIN_Y, Rules.WALL_MAX_Y}) {
-            var state = positioned(
-                    new ManualClock(0),
-                    Rules.WALL_X - Rules.MAX_STEP,
-                    endpointY,
-                    70,
-                    10);
+            var state =
+                    positioned(
+                            new ManualClock(0), Rules.WALL_X - Rules.MAX_STEP, endpointY, 70, 10);
             rejectedWithoutStateChange(
                     state,
                     new ActionRejected(Rules.MOVE_BLOCKED_BY_WALL),
                     () -> state.move(SHOOTER, new MoveRequest(Rules.MAX_STEP, 0, 1)));
         }
 
-        var crossing = positioned(
-                new ManualClock(0), Rules.WALL_X - 1, WALL_CENTER_Y, 70, 10);
+        var crossing = positioned(new ManualClock(0), Rules.WALL_X - 1, WALL_CENTER_Y, 70, 10);
         rejectedWithoutStateChange(
                 crossing,
                 new ActionRejected(Rules.MOVE_BLOCKED_BY_WALL),
                 () -> crossing.move(SHOOTER, new MoveRequest(Rules.MAX_STEP, 0, 1)));
 
-        var clearLane = positioned(
-                new ManualClock(0),
-                Rules.WALL_X - Rules.MAX_STEP,
-                Rules.WALL_MIN_Y - 1,
-                70,
-                10);
+        var clearLane =
+                positioned(
+                        new ManualClock(0),
+                        Rules.WALL_X - Rules.MAX_STEP,
+                        Rules.WALL_MIN_Y - 1,
+                        70,
+                        10);
         assertNull(clearLane.move(SHOOTER, new MoveRequest(Rules.MAX_STEP, 0, 1)));
     }
 
@@ -232,7 +227,8 @@ final class DomainTest {
 
     @Test
     void finiteMovementIsRequiredAndInvalidInputDoesNotChangeState() {
-        for (var value : new double[] {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY}) {
+        for (var value :
+                new double[] {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY}) {
             var state = room(new ManualClock(0));
             rejectedWithoutStateChange(
                     state,
@@ -269,12 +265,9 @@ final class DomainTest {
         assertNull(rangeBoundary.shoot(SHOOTER, new ShootRequest(TARGET, 1)));
 
         for (var wallY : new double[] {Rules.WALL_MIN_Y, WALL_CENTER_Y, Rules.WALL_MAX_Y}) {
-            var blocked = positioned(
-                    new ManualClock(0),
-                    Rules.WALL_X - 2,
-                    wallY,
-                    Rules.WALL_X + 2,
-                    wallY);
+            var blocked =
+                    positioned(
+                            new ManualClock(0), Rules.WALL_X - 2, wallY, Rules.WALL_X + 2, wallY);
             rejectedWithoutStateChange(
                     blocked,
                     new ActionRejected(Rules.BLOCKED_BY_WALL),
@@ -293,7 +286,8 @@ final class DomainTest {
     }
 
     @Test
-    void snapshotStoresRemainingMillisecondsAndRestoresAgainstAnotherClockOrigin() throws Exception {
+    void snapshotStoresRemainingMillisecondsAndRestoresAgainstAnotherClockOrigin()
+            throws Exception {
         var sourceClock = new ManualClock(5_000_000_000_000L);
         var source = room(sourceClock);
         assertNull(source.move(SHOOTER, new MoveRequest(Rules.MAX_STEP, 0, 1)));

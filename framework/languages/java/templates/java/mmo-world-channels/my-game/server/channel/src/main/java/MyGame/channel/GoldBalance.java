@@ -8,13 +8,15 @@ import java.util.function.LongSupplier;
 public final class GoldBalance {
     public record Snapshot(long gold, long cooldownRemainingMs) {}
 
-    public record Decision(boolean accepted, long gold, long earnedAtNanos, ActionRejected rejection) {
+    public record Decision(
+            boolean accepted, long gold, long earnedAtNanos, ActionRejected rejection) {
         static Decision accepted(long gold, long earnedAtNanos) {
             return new Decision(true, gold, earnedAtNanos, null);
         }
 
         static Decision rejected(String reason, long retryAfterMs) {
-            return new Decision(false, 0, 0, new ActionRejected(reason, Math.toIntExact(retryAfterMs)));
+            return new Decision(
+                    false, 0, 0, new ActionRejected(reason, Math.toIntExact(retryAfterMs)));
         }
     }
 
@@ -45,8 +47,7 @@ public final class GoldBalance {
             long remainingNanos = EARN_INTERVAL_NANOS - (now - lastEarnAtNanos);
             if (remainingNanos > 0)
                 return Decision.rejected(
-                        Rejection.EARN_TOO_SOON,
-                        (remainingNanos + 999_999L) / 1_000_000L);
+                        Rejection.EARN_TOO_SOON, (remainingNanos + 999_999L) / 1_000_000L);
         }
         if (gold > GameRules.MAX_INTEGER - GameRules.EARN_AMOUNT)
             return Decision.rejected(Rejection.GOLD_LIMIT, 0);
@@ -54,7 +55,8 @@ public final class GoldBalance {
     }
 
     public void commit(Decision decision) {
-        if (!decision.accepted()) throw new IllegalArgumentException("Cannot commit a rejected earn");
+        if (!decision.accepted())
+            throw new IllegalArgumentException("Cannot commit a rejected earn");
         gold = decision.gold();
         lastEarnAtNanos = decision.earnedAtNanos();
         hasEarned = true;
@@ -63,7 +65,8 @@ public final class GoldBalance {
     public Snapshot capture() {
         long remainingMs = 0;
         if (hasEarned) {
-            long remainingNanos = EARN_INTERVAL_NANOS - (monotonicNanos.getAsLong() - lastEarnAtNanos);
+            long remainingNanos =
+                    EARN_INTERVAL_NANOS - (monotonicNanos.getAsLong() - lastEarnAtNanos);
             if (remainingNanos > 0) remainingMs = (remainingNanos + 999_999L) / 1_000_000L;
         }
         return new Snapshot(gold, remainingMs);

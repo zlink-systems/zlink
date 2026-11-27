@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue.RelocatedOwnerException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
@@ -9,6 +10,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatch
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceRouteFence;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkSpotCloseReason;
@@ -21,9 +23,11 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
-final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstanceSpotContext> {
+final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstanceSpotContext>
+        implements ZLinkSpotRelocationUnit.Source {
     private final ZLinkInstanceSpot spot;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private boolean resourcesClosed;
@@ -41,6 +45,37 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             DefaultInstanceSpotContext context) {
         super(host, handlerInvoker, spot, backendSpot, context);
         this.spot = spot;
+    }
+
+    @Override
+    public ZLinkInstanceSpotActivation activation() {
+        return this;
+    }
+
+    @Override
+    public ZLinkUserSpotRelocationBarrier relocationBarrier(ZLinkActorSessionCoordinator actors) {
+        return context.relocationBarrier();
+    }
+
+    @Override
+    public boolean matchesAuthorityFence(ZLinkAuthoritySnapshot snapshot) {
+        return authorityFenceMatches(
+                snapshot.ownerId(),
+                snapshot.ownerLeaseGeneration(),
+                snapshot.authorityOwnerGeneration());
+    }
+
+    @Override
+    public CompletionStage<Void> cleanupRelocationSource(
+            ZLinkSpotLifecycle spots,
+            ZLinkUserSpotRelocationBarrier barrier,
+            long generation,
+            Instant deadline) {
+        return host.discardInstanceSpotActivation(this);
+    }
+
+    ZLinkInstanceSpot spot() {
+        return spot;
     }
 
     private <T> T inStateLane(Supplier<T> work) {
@@ -293,9 +328,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             if (host.flowCaptureEnabled()) {
                 try {
                     observed = ZLinkSpotRuntime.parsePacket(received.parts(), true);
-                    if (observed.header() != null) {
-                        flow = ZLinkSpotFlowFrame.fromEnvelopeHeader(observed.header());
-                    }
+                    flow = ZLinkSpotFlowFrame.fromEnvelopeHeader(observed.header());
                 } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
                     failRouteInvalidFlow(received, invalidEnvelope);
                     accepted.complete(null);
@@ -394,7 +427,14 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                         (ignored, failure) -> {
                             if (failure != null) result.completeExceptionally(failure);
                         })
-                .thenCompose(ignored -> result);
+                .thenCompose(ignored -> result)
+                .exceptionallyCompose(
+                        failure -> {
+                            Throwable cause = unwrapCompletion(failure);
+                            return cause instanceof RelocatedOwnerException
+                                    ? CompletableFuture.completedFuture(false)
+                                    : CompletableFuture.failedFuture(cause);
+                        });
     }
 
     private CompletionStage<Boolean> closeOnLifecycle(
@@ -425,8 +465,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             return CompletableFuture.completedFuture(false);
         }
         long ownerGeneration = expectedAuthorityOwnerGeneration();
-        var coordinatorOwner =
-                new java.util.concurrent.atomic.AtomicReference<ZLinkSpotCloseCoordinator>();
+        var coordinatorOwner = new AtomicReference<ZLinkSpotCloseCoordinator>();
         ZLinkSpotCloseCoordinator coordinator =
                 closeCoordinator(
                         () ->
@@ -563,7 +602,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             return CompletableFuture.failedFuture(failure);
         }
         ZLinkFlowContext.State flow = captureFlow ? inboundFlow : null;
-        if (captureFlow && flow == null && packet.header() != null) {
+        if (captureFlow && flow == null) {
             flow = ZLinkSpotFlowFrame.fromEnvelopeHeader(packet.header());
         }
         ZLinkFlowContext.State dispatchFlow = flow;

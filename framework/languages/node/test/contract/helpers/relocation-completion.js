@@ -5,7 +5,7 @@ const {
 const golden = require('../../../../../runtime/protocol/golden/relocation-completion-record-v1.json');
 const example = JSON.parse(Buffer.from(golden.cases[0].bytesBase64, 'base64'));
 const entry = example.entries[0];
-function completionFixture(accepted = 1n, key = { value: entry.objectKey }) {
+function completionFixture(accepted = 1n, key = { value: entry.objectKey }, snapshot = {}) {
   const blobs = new Map();
   const expiries = new Map();
   const events = [];
@@ -24,6 +24,7 @@ function completionFixture(accepted = 1n, key = { value: entry.objectKey }) {
     authorityOwnerGeneration: 4n,
     ownerId: 'target',
     ownerLeaseGeneration: 1n,
+    ...snapshot,
     relocation: {
       relocationId: example.relocationId,
       phase: 'activated',
@@ -32,6 +33,7 @@ function completionFixture(accepted = 1n, key = { value: entry.objectKey }) {
       coordinator: { ...fence, expectedStoreVersion: 'source-version' },
       sourceInventorySha256: 'ab'.repeat(32),
       applicationVersion: 1n,
+      ...snapshot.relocation,
       completion: {
         acceptedRequests: accepted,
         completedResults: 0n,
@@ -41,6 +43,7 @@ function completionFixture(accepted = 1n, key = { value: entry.objectKey }) {
       }
     }
   };
+  const initial = authority;
   let clock = 100;
   const store = {
     async put(reference, bytes, retention) {
@@ -84,9 +87,9 @@ function completionFixture(accepted = 1n, key = { value: entry.objectKey }) {
         kind: 'snapshot',
         storeVersion: { value: String(Number(version.value) + 1) }
       };
-      assert.equal(authority.payload.toString(), 'application');
-      assert.equal(authority.objectGeneration, 3n);
-      assert.equal(authority.authorityOwnerGeneration, 4n);
+      assert.deepEqual(authority.payload, initial.payload);
+      assert.equal(authority.objectGeneration, initial.objectGeneration);
+      assert.equal(authority.authorityOwnerGeneration, initial.authorityOwnerGeneration);
       return { ...authority, kind: 'stored' };
     }
   };

@@ -788,6 +788,25 @@ async function messageFollow() {
 
 async function main() {
   switch (mode) {
+    case 'login-admission-server':
+      return require('./login_admission.cjs').serve({
+        endpoint: require_('stream-endpoint'),
+        nestjs,
+        NestFactory,
+        Module,
+        writeReady,
+        waitForServing: (runtime) => waitForFrameworkServing(runtime, framework)
+      });
+    case 'login-admission-connector':
+      return require('./login_admission.cjs').connect(
+        require_('stream-endpoint'),
+        require(path.join(nodeRoot, 'packages/stream-connector/dist'))
+      );
+    case 'login-admission-wire':
+      return require('./login_admission.cjs').probe(
+        require_('stream-endpoint'),
+        require(path.join(nodeRoot, 'packages/stream-wire/dist'))
+      );
     case 'channel-server':
       return channelServer();
     case 'channel-client':

@@ -1,5 +1,17 @@
 # MyGame development guide
 
+Run one scenario with `./run-e2e.sh --scenario connect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
+## Template reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+## Local execution
+
+Start the local deployment with `./run-server.sh` or `.\run-server.cmd`. From another terminal run `./run-e2e.sh` or `.\run-e2e.cmd`. The e2e runner attaches when the server is ready and otherwise starts an isolated Docker deployment. The isolated `connect` also checks the Session drain. Use `--isolated` or `-Isolated` to force isolation. Stop the local server with Ctrl+C.
+
+Node stdout, stderr, message flow and scenario failure details are under `.logs/run-<id>/`. Follow the paths printed by both commands when diagnosing an attached run.
+
 ## Rules for AI
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
@@ -37,6 +49,10 @@ This Kotlin starter (Kotlin 2.3.21 on a Java 25 toolchain) provides one Session 
 `zlink.structure.json` describes initial composition, not runtime placement. This starter declares no application channels or Spots. When adding them, extend the checker to compare their names and types with registration constants.
 
 ## Development from samples
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use a nullable Kotlin type such as `String?` in a DTO. A Java record used from Kotlin declares nullability with `@Nullable`. To allow omission in a Kotlin DTO, declare a primary-constructor default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
 
 Download and run a structure from [ZLink Start](https://zlink.systems/start) before introducing its features here. The sample collection contains nine structures in five server languages. Keep the sample separate and transfer only the registrations, application state, and tests required by your feature.
 
@@ -93,7 +109,7 @@ Use OS-assigned ports, unique Redis key prefixes, and unique Compose projects. C
 
 ## Debugging settings
 
-`configure` in `Hosting.kt` enables dispatch diagnostics at `Normal` and writes Framework message flow to node stderr. Node stdout and stderr are stored separately as `session-stdout.log` and `session-stderr.log` under `.logs/run-<id>/session-<id>/`. Do not add a second flow listener.
+`configure` in `Hosting.kt` enables dispatch diagnostics at `Normal` and the runner saves Framework message flow to `session-message-flow.log`. Node stdout and stderr are stored separately as `session-stdout.log` and `session-stderr.log` under `.logs/run-<id>/session-<id>/`. Do not add a second flow listener.
 
 Read the first exception and the preceding flow/correlation records. A connection-only run may contain no application message-flow events because it dispatches no game packets. Startup failures before dispatch must retain their exception and stack.
 

@@ -64,8 +64,10 @@ public final class GameSession implements ZLinkSession {
                             result -> {
                                 ActorRef actor =
                                         switch (result) {
-                                            case ZLinkActorCreateResult.Created created -> created.actor();
-                                            case ZLinkActorCreateResult.Existing existing -> existing.actor();
+                                            case ZLinkActorCreateResult.Created created ->
+                                                    created.actor();
+                                            case ZLinkActorCreateResult.Existing existing ->
+                                                    existing.actor();
                                             case ZLinkActorCreateResult.Rejected rejected ->
                                                     throw new IllegalStateException(
                                                             "Actor creation rejected: " + rejected);

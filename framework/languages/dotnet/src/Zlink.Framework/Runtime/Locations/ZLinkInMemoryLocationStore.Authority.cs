@@ -787,10 +787,11 @@ internal sealed partial class ZLinkInMemoryLocationStore
         bool discarded = false
     )
     {
+        var actorClosing = ZLinkActorAuthorityPayloadCodec.IsClosing(current);
         if (
             (
                 current.Allocation.State == ZLinkPlacementAllocationState.Active
-                    ? creationTarget is null && !discarded
+                    ? creationTarget is null && !discarded && !actorClosing
                     : current.ReservedCreation is null
             ) || IsAuthorityInPreparedAggregate(key)
         )
@@ -812,7 +813,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
         {
             if (ownerLive)
                 return false;
-            if (!discarded && creationTarget is { } target)
+            if (!discarded && !actorClosing && creationTarget is { } target)
                 ZLinkAuthorityCleanup.RequireDisabledCreationPolicy(
                     key,
                     current.Allocation,
@@ -829,7 +830,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
         )
             return false;
         List<KeyValuePair<string, ZLinkAuthoritySnapshot>> members = [];
-        var endedUserSpotId = active ? ZLinkAuthorityCleanup.RequireSteadyReady(current) : null;
+        var endedUserSpotId = active
+            ? ZLinkAuthorityCleanup.RequireReclaimableAuthority(current)
+            : null;
         if (active && !ownerLive)
             _ownerLeaseReleaseWait.Observe(owner);
         if (endedUserSpotId is not null && !discarded && creationTarget is { } spotTarget)
@@ -1151,7 +1154,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 {
                     StoreVersion = Next(ref _authorityRevision).ToString(),
                     Payload = participant.AuthorityPayload.ToArray(),
-                    Relocation = aggregate.Request.ApplyRelocation(current.Relocation),
+                    Relocation = aggregate.Request.ApplyRelocation(current.Relocation, participant),
                     AuthorityOwnerGeneration = changesOwner
                         ? aggregate.TargetAuthorityOwnerGenerations[participant.Key]
                         : current.AuthorityOwnerGeneration,
@@ -1587,6 +1590,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 || !leftParticipant.AuthorityPayload.Span.SequenceEqual(
                     rightParticipant.AuthorityPayload.Span
                 )
+                || leftParticipant.AcceptedRequests != rightParticipant.AcceptedRequests
                 || !leftParticipant.MembershipMutation.Span.SequenceEqual(
                     rightParticipant.MembershipMutation.Span
                 )

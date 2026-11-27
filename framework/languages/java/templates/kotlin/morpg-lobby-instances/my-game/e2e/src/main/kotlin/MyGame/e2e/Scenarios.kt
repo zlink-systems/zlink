@@ -7,12 +7,61 @@ private fun equal(expected: Any?, actual: Any?) {
     check(expected == actual) { "Expected $expected, got $actual" }
 }
 
+private suspend fun verifyDungeonLeave(
+    create: suspend (String) -> Client,
+    enter: suspend (Client, Client) -> DungeonView,
+) {
+    val first = create("leave-leader")
+    val last = create("leave-member")
+    val otherLeader = create("leave-other-leader")
+    val otherMember = create("leave-other-member")
+    val freshLeader = create("leave-fresh-leader")
+    val freshMember = create("leave-fresh-member")
+
+    val original = enter(first, last)
+    val other = enter(otherLeader, otherMember)
+    check(original.nodeId != other.nodeId) { "Each instance must hold one Dungeon" }
+    val firstLeft = first.leaveDungeon()
+    sameState(original, last.view())
+    val lastLeft = last.leaveDungeon()
+    check(
+        firstLeft.dungeonId == original.dungeonId &&
+            lastLeft.dungeonId == original.dungeonId &&
+            firstLeft.objectGeneration == lastLeft.objectGeneration &&
+            firstLeft.remainingPlayers == 1 &&
+            lastLeft.remainingPlayers == 0
+    ) {
+        "Expected the Dungeon to report one remaining player and then zero"
+    }
+    val fresh = enter(freshLeader, freshMember)
+    check(fresh.nodeId == original.nodeId && fresh.dungeonId != original.dungeonId) {
+        "Last departure did not release the original Dungeon slot"
+    }
+    leaveDungeon(freshLeader, freshMember, fresh)
+    leaveDungeon(otherLeader, otherMember, other)
+}
+
+private suspend fun leaveDungeon(leader: Client, member: Client, dungeon: DungeonView) {
+    val leaderLeft = leader.leaveDungeon()
+    val memberLeft = member.leaveDungeon()
+    check(
+        leaderLeft.dungeonId == dungeon.dungeonId &&
+            leaderLeft.dungeonId == memberLeft.dungeonId &&
+            leaderLeft.objectGeneration == memberLeft.objectGeneration &&
+            leaderLeft.remainingPlayers == 1 &&
+            memberLeft.remainingPlayers == 0
+    ) {
+        "Dungeon departure identified a different Spot"
+    }
+}
+
 private fun sameState(a: DungeonView, b: DungeonView) {
     equal(a.dungeonId, b.dungeonId)
     equal(a.partyId, b.partyId)
     equal(a.members, b.members)
     equal(a.stage, b.stage)
-    equal(a.phase, b.phase); equal(a.runId, b.runId)
+    equal(a.phase, b.phase)
+    equal(a.runId, b.runId)
 }
 
 private suspend fun enter(a: Client, b: Client): DungeonView {
@@ -22,9 +71,11 @@ private suspend fun enter(a: Client, b: Client): DungeonView {
     b.next<LobbyView>()
     a.clear()
     b.clear()
-    a.send(JoinPartyRequest(Names.newPartyId())); equal(ActionRejected(Rules.INVALID_PARTY), a.next<ActionRejected>())
+    a.send(JoinPartyRequest(Names.newPartyId()))
+    equal(ActionRejected(Rules.INVALID_PARTY), a.next<ActionRejected>())
     a.send(CreatePartyRequest())
-    val created = a.next<PartyView>(); val party = created.partyId
+    val created = a.next<PartyView>()
+    val party = created.partyId
     check(Regex("party-[0-9a-f]{32}").matches(party))
     equal(PartyView(party, listOf(a.playerId), listOf(false)), created)
     a.clear()
@@ -34,10 +85,14 @@ private suspend fun enter(a: Client, b: Client): DungeonView {
     equal(PartyView(party, listOf(a.playerId, b.playerId), listOf(false, false)), joined)
     a.send(EnterDungeonRequest())
     equal(ActionRejected(Rules.NOT_READY), a.next<ActionRejected>())
-    a.send(ViewRequest()); equal(joined, a.next<PartyView>())
-    b.send(EnterDungeonRequest()); equal(ActionRejected(Rules.NOT_LEADER), b.next<ActionRejected>())
-    b.send(ViewRequest()); equal(joined, b.next<PartyView>())
-    b.send(JoinDungeon("dungeon-forged", "run-forged")); equal(ActionRejected(Rules.PACKET_NOT_ALLOWED), b.next<ActionRejected>())
+    a.send(ViewRequest())
+    equal(joined, a.next<PartyView>())
+    b.send(EnterDungeonRequest())
+    equal(ActionRejected(Rules.NOT_LEADER), b.next<ActionRejected>())
+    b.send(ViewRequest())
+    equal(joined, b.next<PartyView>())
+    b.send(JoinDungeon("dungeon-forged", "run-forged"))
+    equal(ActionRejected(Rules.PACKET_NOT_ALLOWED), b.next<ActionRejected>())
     a.clear()
     b.clear()
     a.send(ReadyRequest())
@@ -77,15 +132,17 @@ private suspend fun advance(a: Client, b: Client, stage: Long): DungeonView {
 }
 
 private suspend fun complete(a: Client, b: Client) {
-    val done = advance(a, b, Rules.FINAL_STAGE.toLong()); equal(RunPhase.Completed, done.phase)
-    a.send(AdvanceRequest()); equal(ActionRejected(Rules.RUN_NOT_ACTIVE), a.next<ActionRejected>())
+    val done = advance(a, b, Rules.FINAL_STAGE.toLong())
+    equal(RunPhase.Completed, done.phase)
+    a.send(AdvanceRequest())
+    equal(ActionRejected(Rules.RUN_NOT_ACTIVE), a.next<ActionRejected>())
     sameState(done, a.view())
 }
 
-suspend fun scenario(scenario: Scenario, nodes: Nodes) {
+suspend fun scenario(scenario: Scenario, target: ScenarioTarget) {
     val id = UUID.randomUUID().toString()
     val clients = mutableListOf<Client>()
-    fun client(player: String) = Client(nodes.endpoint, player).also { clients.add(it) }
+    fun client(player: String) = Client(target.endpoint, player).also { clients.add(it) }
     withCleanup(
         cleanup = {
             var failure: Exception? = null
@@ -99,6 +156,10 @@ suspend fun scenario(scenario: Scenario, nodes: Nodes) {
             failure?.let { throw it }
         }
     ) {
+        if (scenario == Scenario.DUNGEON_LEAVE) {
+            verifyDungeonLeave({ client("$id-$it") }, ::enter)
+            return@withCleanup
+        }
         val a = client("$id-p1")
         val b = client("$id-p2")
         val initial = enter(a, b)
@@ -108,16 +169,26 @@ suspend fun scenario(scenario: Scenario, nodes: Nodes) {
         equal(b.playerId, sb.actorId)
         val before = advance(a, b, 1L)
         a.send(EnterDungeonRequest())
-        val activeParty = a.next<PartyView> { it.partyId == initial.partyId && it.runId == initial.runId && it.phase == RunPhase.Active }
+        val activeParty =
+            a.next<PartyView> {
+                it.partyId == initial.partyId &&
+                    it.runId == initial.runId &&
+                    it.phase == RunPhase.Active
+            }
         equal(initial.members, activeParty.members)
         equal(initial.nodeId, before.nodeId)
         equal(sa, a.sessionInfo())
         equal(sb, b.sessionInfo())
         when (scenario) {
+            Scenario.DUNGEON_LEAVE -> error("Dungeon leave is handled before party setup")
             Scenario.PARTY -> {
-                val separate = enter(client("$id-second1"), client("$id-second2"))
+                val separateA = client("$id-second1")
+                val separateB = client("$id-second2")
+                val separate = enter(separateA, separateB)
                 check(separate.dungeonId != initial.dungeonId && separate.runId != initial.runId)
-                advance(a, b, 2L); complete(a, b)
+                leaveDungeon(separateA, separateB, separate)
+                advance(a, b, 2L)
+                complete(a, b)
             }
             Scenario.RECONNECT -> {
                 b.close()
@@ -133,22 +204,25 @@ suspend fun scenario(scenario: Scenario, nodes: Nodes) {
                 check(sb.sessionId != identity.sessionId) { "Reconnect reused Session" }
                 advance(a, again, 2L)
                 complete(a, again)
+                leaveDungeon(a, again, initial)
                 equal(0, again.disconnects)
             }
             Scenario.UPDATE -> {
-                nodes.drain(before.nodeId)
+                requireNotNull(target.deployment).drain(before.nodeId)
                 equal(sa, a.sessionInfo())
                 equal(sb, b.sessionInfo())
                 val after = a.view()
                 equal(after, b.view())
                 sameState(before, after)
                 check(before.nodeId != after.nodeId) { "Dungeon did not relocate" }
-                nodes.replace(before.nodeId)
-                val freshA = client("$id-new1"); val freshB = client("$id-new2")
+                requireNotNull(target.deployment).replace(before.nodeId)
+                val freshA = client("$id-new1")
+                val freshB = client("$id-new2")
                 val fresh = enter(freshA, freshB)
                 advance(freshA, freshB, 1L)
                 equal(before.nodeId, fresh.nodeId)
                 check(fresh.dungeonId != initial.dungeonId && fresh.runId != initial.runId)
+                leaveDungeon(freshA, freshB, fresh)
                 advance(a, b, 2L)
                 complete(a, b)
                 equal(sa, a.sessionInfo())
@@ -156,6 +230,9 @@ suspend fun scenario(scenario: Scenario, nodes: Nodes) {
             }
         }
         equal(0, a.disconnects)
-        if (scenario != Scenario.RECONNECT) equal(0, b.disconnects)
+        if (scenario != Scenario.RECONNECT) {
+            leaveDungeon(a, b, initial)
+            equal(0, b.disconnects)
+        }
     }
 }

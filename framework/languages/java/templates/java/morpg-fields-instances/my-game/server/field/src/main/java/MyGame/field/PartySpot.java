@@ -28,7 +28,8 @@ public final class PartySpot implements ZLinkSpot<Player> {
 
     public void configure() {}
 
-    public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(String actorId, ZLinkMessage request) {
+    public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
+            String actorId, ZLinkMessage request) {
         return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject());
     }
 
@@ -41,17 +42,17 @@ public final class PartySpot implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<PartyCommandResult> command(PartyCommand command) {
-        var rejection = command.join()
-                ? state.join(command.actorId())
-                : command.enter()
-                        ? state.enter(command.actorId())
-                        : state.members.contains(command.actorId())
-                                ? null
-                                : new ActionRejected(Rejection.INVALID_PARTY);
+        var rejection =
+                command.join()
+                        ? state.join(command.actorId())
+                        : command.enter()
+                                ? state.enter(command.actorId())
+                                : state.members.contains(command.actorId())
+                                        ? null
+                                        : new ActionRejected(Rejection.INVALID_PARTY);
         if (rejection != null)
             return CompletableFuture.completedFuture(new PartyCommandResult(null, rejection));
-        if (!command.enter() || state.phase == RunPhase.Active)
-            return finishCommand(command);
+        if (!command.enter() || state.phase == RunPhase.Active) return finishCommand(command);
 
         String runId = state.runId;
         String dungeonId = Rules.dungeonId(runId);
@@ -87,27 +88,38 @@ public final class PartySpot implements ZLinkSpot<Player> {
                             CompletionStage<Void> sent = CompletableFuture.completedFuture(null);
                             for (var id : state.members) {
                                 if (state.entered.contains(id)) continue;
-                                sent = sent.thenCompose(
-                                        ignored -> actors.sendToActor(id, new JoinDungeon(dungeonId, runId)).submit());
+                                sent =
+                                        sent.thenCompose(
+                                                ignored ->
+                                                        actors.sendToActor(
+                                                                        id,
+                                                                        new JoinDungeon(
+                                                                                dungeonId, runId))
+                                                                .submit());
                             }
                             return sent.thenCompose(ignored -> finishCommand(command));
                         });
     }
 
-    public CompletionStage<PartyCommandResult> progress(String runId, String actorId, boolean completed) {
-        var rejection = actorId != null
-                ? state.arrived(runId, actorId)
-                : completed ? state.completed(runId) : state.started(runId);
+    public CompletionStage<PartyCommandResult> progress(
+            String runId, String actorId, boolean completed) {
+        var rejection =
+                actorId != null
+                        ? state.arrived(runId, actorId)
+                        : completed ? state.completed(runId) : state.started(runId);
         if (rejection != null)
             return CompletableFuture.completedFuture(new PartyCommandResult(null, rejection));
-        return broadcast().thenApply(ignored -> new PartyCommandResult(state.view(context.spotId()), null));
+        return broadcast()
+                .thenApply(ignored -> new PartyCommandResult(state.view(context.spotId()), null));
     }
 
     private CompletionStage<PartyCommandResult> finishCommand(PartyCommand command) {
-        CompletionStage<Void> sent = command.join() || command.enter()
-                ? broadcast()
-                : CompletableFuture.completedFuture(null);
-        return sent.thenApply(ignored -> new PartyCommandResult(state.view(context.spotId()), null));
+        CompletionStage<Void> sent =
+                command.join() || command.enter()
+                        ? broadcast()
+                        : CompletableFuture.completedFuture(null);
+        return sent.thenApply(
+                ignored -> new PartyCommandResult(state.view(context.spotId()), null));
     }
 
     private CompletionStage<Void> broadcast() {

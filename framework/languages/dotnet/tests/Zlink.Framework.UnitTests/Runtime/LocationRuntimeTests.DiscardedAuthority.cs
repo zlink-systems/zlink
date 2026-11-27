@@ -1,16 +1,526 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
+using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.UnitTests.Runtime;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed partial class LocationRuntimeTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GenerationShutdown_Waits_For_Discarded_Actor_Destroy(bool force)
+    {
+        const string actorId = "shutdown-discard";
+        var time = new ControllableTimeProvider();
+        var store = new OutageLeaseStore(new ZLinkInMemoryLocationStore(time));
+        await using var host = await DiscardedAuthorityHost.Start(store, time);
+        var runtime = host.Runtime;
+        var locations = host.Locations;
+        await host
+            .Provider.GetRequiredService<IZLinkActorManager>()
+            .GetOrCreate(actorId, "outage-actor")
+            .InMesh("discarded-authority")
+            .Async();
+        Assert.True(runtime.TryGetActorState(actorId, out var actor));
+        var nativeActor = Assert.IsType<ZLinkBackendActorRef>(actor.NativeActorRef);
+        var node = Assert.IsAssignableFrom<IZLinkBackendLocalActorAuthorityReader>(
+            runtime.GetSpotNodeRuntime("discarded-authority").Node
+        );
+        Assert.True(node.TryGetLocalActorAuthority(nativeActor, out _, out _));
+
+        var errors = new ConcurrentQueue<Exception>();
+        runtime.ErrorSink.UnhandledCallbackException += errors.Enqueue;
+        var shutdownToken = runtime.ShutdownToken;
+        var closing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var closingRegistration = shutdownToken.Register(() => closing.TrySetResult());
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var discard = locations.DiscardExecutionsAsync!;
+        var actorDestroyedWhileOpen = false;
+        locations.DiscardExecutionsAsync = async executions =>
+        {
+            entered.TrySetResult();
+            await release.Task;
+            await discard(executions);
+            actorDestroyedWhileOpen =
+                !shutdownToken.IsCancellationRequested
+                && !node.TryGetLocalActorAuthority(nativeActor, out _, out _);
+        };
+
+        Task stopping;
+        Task discarding;
+        bool closedWhileHeld;
+        bool stoppedWhileHeld;
+        try
+        {
+            store.Stale = true;
+            Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            discarding = runtime.DiscardLocationExecutionAsync(actor).AsTask();
+            stopping = (
+                force
+                    ? runtime.ForceStopAsync(CancellationToken.None)
+                    : runtime.StopAsync(CancellationToken.None)
+            ).AsTask();
+            // Component shutdown signals its token before starting SpotNode disposal.
+            await Task.WhenAny(closing.Task, stopping, Task.Delay(TimeSpan.FromSeconds(1)));
+            closedWhileHeld = shutdownToken.IsCancellationRequested;
+            stoppedWhileHeld = stopping.IsCompleted;
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        var failure = await Record.ExceptionAsync(() =>
+            Task.WhenAll(discarding, stopping).WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.False(
+            closedWhileHeld,
+            "Generation started closing transport while discard was held."
+        );
+        Assert.False(stoppedWhileHeld, "Generation stopped while discard was held.");
+        Assert.Null(failure);
+        Assert.True(actorDestroyedWhileOpen, "Discard did not destroy the Actor before shutdown.");
+        Assert.Empty(errors);
+    }
+
+#if DEBUG
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GenerationShutdown_Completes_Actor_Discard_After_Drain_Snapshot(bool force)
+    {
+        const string actorId = "late-shutdown-discard";
+        var timeout = TimeSpan.FromSeconds(5);
+        using var flow = Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH")
+            is { } path
+            ? new TestHostMessageFlowListener($"{path}.late-discard-{force}.log")
+            : null;
+        var time = new ControllableTimeProvider();
+        var store = new OutageLeaseStore(new ZLinkInMemoryLocationStore(time));
+        await using var host = await DiscardedAuthorityHost.Start(
+            store,
+            time,
+            spots: false,
+            trace: flow is not null
+        );
+        var runtime = host.Runtime;
+        var locations = host.Locations;
+        await host
+            .Provider.GetRequiredService<IZLinkActorManager>()
+            .GetOrCreate(actorId, "outage-actor")
+            .InMesh("discarded-authority")
+            .Async();
+
+        ZLinkStateLane? registryLane = null;
+        ZLinkStateLane.WorkObserver.Value = (_, lane) => registryLane = lane;
+        Assert.True(runtime.TryGetActorState(actorId, out var actor));
+        ZLinkStateLane.WorkObserver.Value = null;
+        Assert.NotNull(registryLane);
+        Assert.NotNull(actor.NativeActorRef);
+
+        var errors = new ConcurrentQueue<Exception>();
+        runtime.ErrorSink.UnhandledCallbackException += errors.Enqueue;
+        // ForceStop disposes the sink before resetting the registry. Capture its generation
+        // reporter so this test can still observe any late discard failure.
+        var report = runtime.ErrorSink.CaptureRuntimeTaskReporter();
+        var reported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        locations.DiscardExecutionFailed = error =>
+        {
+            report("location-discard", error);
+            reported.TrySetResult();
+        };
+        var releaseDiscard = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var resetting = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseReset = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var discard = locations.DiscardExecutionsAsync!;
+        locations.DiscardExecutionsAsync = async executions =>
+        {
+            Assert.Contains(actor, executions);
+            await releaseDiscard.Task.WaitAsync(timeout);
+            await discard(executions);
+        };
+
+        var shutdownToken = runtime.ShutdownToken;
+        Task? discarding = null;
+        var stopping = Task.Run(async () =>
+        {
+            ZLinkStateLane.WorkObserver.Value = (stage, lane) =>
+            {
+                if (stage == "discard-drain-snapshot")
+                {
+                    store.Stale = true;
+                    Assert.False(
+                        locations
+                            .RenewOwnerLeaseOnceAsync()
+                            .AsTask()
+                            .WaitAsync(timeout)
+                            .GetAwaiter()
+                            .GetResult()
+                    );
+                    Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
+                    discarding = runtime.DiscardLocationExecutionAsync(actor).AsTask();
+                }
+                else if (discarding is not null && ReferenceEquals(lane, registryLane))
+                {
+                    resetting.TrySetResult();
+                    releaseReset.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                }
+            };
+            try
+            {
+                if (force)
+                    await runtime.ForceStopAsync(CancellationToken.None);
+                else
+                    await runtime.StopAsync(CancellationToken.None);
+            }
+            finally
+            {
+                ZLinkStateLane.WorkObserver.Value = null;
+            }
+        });
+
+        Exception? discardFailure;
+        bool actorRemained;
+        try
+        {
+            await resetting.Task.WaitAsync(timeout);
+            Assert.Equal(force, shutdownToken.IsCancellationRequested);
+            releaseDiscard.TrySetResult();
+            discardFailure = await Record.ExceptionAsync(() => discarding!.WaitAsync(timeout));
+            actorRemained = runtime.TryGetActorState(actorId, out _);
+        }
+        finally
+        {
+            releaseDiscard.TrySetResult();
+            releaseReset.TrySetResult();
+        }
+
+        var shutdownFailure = await Record.ExceptionAsync(() => stopping.WaitAsync(timeout));
+        var locationFailure = await Record.ExceptionAsync(() => locations.StopAsync().AsTask());
+        if (discardFailure is not null)
+            await reported.Task.WaitAsync(timeout);
+        Assert.True(
+            !actorRemained && errors.IsEmpty,
+            $"Actor remained before registry reset: {actorRemained}. Error sink: {string.Join(Environment.NewLine, errors)}"
+        );
+        Assert.Null(discardFailure);
+        Assert.Null(locationFailure);
+        Assert.False(runtime.TryGetActorState(actorId, out _));
+        Assert.Null(shutdownFailure);
+    }
+#endif
+
+#if DEBUG
+    [Fact]
+    public async Task GenerationShutdown_Completes_Spot_Discard_With_Queued_Request_After_Drain_Snapshot()
+    {
+        var timeout = TimeSpan.FromSeconds(5);
+        using var flow = Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH")
+            is { } path
+            ? new TestHostMessageFlowListener($"{path}.late-spot-discard.log")
+            : null;
+        var time = new ControllableTimeProvider();
+        var repository = new ZLinkInMemoryLocationStore(time);
+        var store = new OutageLeaseStore(repository);
+        await using var host = await DiscardedAuthorityHost.Start(
+            store,
+            time,
+            trace: flow is not null
+        );
+        await using var peer = await DiscardedAuthorityHost.Start(
+            repository,
+            time,
+            spots: false,
+            trace: flow is not null
+        );
+        var runtime = host.Runtime;
+        var nodeRuntime = runtime.GetSpotNodeRuntime("discarded-authority");
+        var node = Assert.IsType<ZLinkBackendSpotNodeWrapper>(nodeRuntime.Node);
+        var spot = await CreateDiscardRequestSpotAsync(host);
+        var queued = await QueueDiscardRequestAsync(spot, node, peer, timeout);
+
+        var submissions = 0;
+        node.NativeNode.NativeTerminalReplySubmitOverride = (_, _) =>
+        {
+            Interlocked.Increment(ref submissions);
+            return null;
+        };
+        var errors = new ConcurrentQueue<Exception>();
+        runtime.ErrorSink.UnhandledCallbackException += errors.Enqueue;
+        var report = runtime.ErrorSink.CaptureRuntimeTaskReporter();
+        host.Locations.DiscardExecutionFailed = error => report("location-discard", error);
+
+        var releaseIngress = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var ingressHeld = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var ingress = spot
+            ._serial.RunIngressAsync(async () =>
+            {
+                ingressHeld.TrySetResult();
+                await releaseIngress.Task.WaitAsync(timeout);
+            })
+            .AsTask();
+
+        ZLinkStateLane? registryLane = null;
+        ZLinkStateLane.WorkObserver.Value = (_, lane) => registryLane = lane;
+        _ = runtime.TryGetActorState("unused", out _);
+        ZLinkStateLane.WorkObserver.Value = null;
+        Assert.NotNull(registryLane);
+
+        var resetting = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseReset = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var shutdown = runtime.ShutdownToken;
+        var forceStop = runtime.ForceStopToken;
+        Task? discarding = null;
+        await ingressHeld.Task.WaitAsync(timeout);
+        var stopping = Task.Run(async () =>
+        {
+            ZLinkStateLane.WorkObserver.Value = (stage, lane) =>
+            {
+                if (stage == "discard-drain-snapshot")
+                {
+                    Assert.False(shutdown.IsCancellationRequested);
+                    store.Stale = true;
+                    Assert.False(
+                        host.Locations.RenewOwnerLeaseOnceAsync()
+                            .AsTask()
+                            .WaitAsync(timeout)
+                            .GetAwaiter()
+                            .GetResult()
+                    );
+                    Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
+                    discarding = runtime.DiscardLocationExecutionAsync(spot).AsTask();
+                    Assert.True(SpinWait.SpinUntil(() => nodeRuntime.Spots.Count == 0, timeout));
+                }
+                else if (discarding is not null && ReferenceEquals(lane, registryLane))
+                {
+                    resetting.TrySetResult();
+                    releaseReset.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                }
+            };
+            try
+            {
+                await runtime.ForceStopAsync(CancellationToken.None);
+            }
+            finally
+            {
+                ZLinkStateLane.WorkObserver.Value = null;
+            }
+        });
+        try
+        {
+            await resetting.Task.WaitAsync(timeout);
+            Assert.True(forceStop.IsCancellationRequested);
+            Assert.True(shutdown.IsCancellationRequested);
+            await node.ForceStopAsync(CancellationToken.None).AsTask().WaitAsync(timeout);
+            Assert.False(discarding!.IsCompleted);
+            Assert.Same(queued, Assert.Single(node.Pump.RegisterSpot(spot.SpotId).Routes));
+            releaseIngress.TrySetResult();
+            await ingress.WaitAsync(timeout);
+            await discarding.WaitAsync(timeout);
+        }
+        finally
+        {
+            releaseIngress.TrySetResult();
+            releaseReset.TrySetResult();
+            await stopping.WaitAsync(timeout);
+        }
+
+        Assert.Empty(nodeRuntime.Spots);
+        Assert.Equal(0, spot.PendingLocalResourceReleases);
+        AssertDiscardRequestFramesReleased(queued);
+        Assert.Equal(0, submissions);
+        Assert.Empty(errors);
+    }
+#endif
+
+    [Fact]
+    public async Task Spot_Discard_Reports_Reply_Submission_Failure_During_A_Running_Generation()
+    {
+        var timeout = TimeSpan.FromSeconds(5);
+        using var flow = Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH")
+            is { } path
+            ? new TestHostMessageFlowListener($"{path}.running-spot-discard.log")
+            : null;
+        var time = new ControllableTimeProvider();
+        var repository = new ZLinkInMemoryLocationStore(time);
+        var store = new OutageLeaseStore(repository);
+        await using var host = await DiscardedAuthorityHost.Start(
+            store,
+            time,
+            trace: flow is not null
+        );
+        await using var peer = await DiscardedAuthorityHost.Start(
+            repository,
+            time,
+            spots: false,
+            trace: flow is not null
+        );
+        var runtime = host.Runtime;
+        var nodeRuntime = runtime.GetSpotNodeRuntime("discarded-authority");
+        var node = Assert.IsType<ZLinkBackendSpotNodeWrapper>(nodeRuntime.Node);
+        var spot = await CreateDiscardRequestSpotAsync(host);
+        var queued = await QueueDiscardRequestAsync(spot, node, peer, timeout);
+
+        var submissions = 0;
+        node.NativeNode.NativeTerminalReplySubmitOverride = (_, _) =>
+        {
+            Interlocked.Increment(ref submissions);
+            return SubmitResult.Terminated;
+        };
+        var reported = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        runtime.ErrorSink.UnhandledCallbackException += error => reported.TrySetResult(error);
+
+        store.Stale = true;
+        Assert.False(await host.Locations.RenewOwnerLeaseOnceAsync());
+        Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
+        Assert.True(runtime.IsStarted);
+        Assert.False(runtime.ShutdownToken.IsCancellationRequested);
+        await runtime.DiscardLocationExecutionAsync(spot);
+        var error = Assert.IsType<ZlinkSubmitException>(await reported.Task.WaitAsync(timeout));
+        Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated, error.Result);
+        Assert.Equal(1, submissions);
+        Assert.Empty(nodeRuntime.Spots);
+        AssertDiscardRequestFramesReleased(queued);
+    }
+
+    private static async Task<ZLinkSpotActivation> CreateDiscardRequestSpotAsync(
+        DiscardedAuthorityHost host
+    )
+    {
+        await host
+            .Provider.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate("discard-request-spot", "outage-execution")
+            .InMesh("discarded-authority")
+            .Async();
+        return Assert.Single(host.Runtime.GetSpotNodeRuntime("discarded-authority").Spots);
+    }
+
+    private static async Task<ZLinkBackendRouteReceived> QueueDiscardRequestAsync(
+        ZLinkSpotActivation spot,
+        ZLinkBackendSpotNodeWrapper node,
+        DiscardedAuthorityHost peer,
+        TimeSpan timeout
+    )
+    {
+        var queued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dispatch = node.Pump.RegisterSpot(spot.SpotId);
+        node.Pump.SetDispatchHandler(
+            spot.SpotId,
+            _ =>
+            {
+                if (!dispatch.Routes.IsEmpty)
+                    queued.TrySetResult();
+                return (ValueTask.CompletedTask, null);
+            }
+        );
+        var request = peer
+            .Provider.GetRequiredService<IZLinkSpotClient>()
+            .RequestToSpot(spot.SpotId, new DiscardRequest("discard"))
+            .Timeout(timeout)
+            .Async<DiscardRequest>()
+            .AsTask();
+        var first = await Task.WhenAny(queued.Task, request).WaitAsync(timeout);
+        if (ReferenceEquals(first, request))
+            await request;
+        _ = request.ContinueWith(
+            static task => _ = task.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+        var route = Assert.Single(dispatch.Routes);
+        Assert.True(route.CanReply);
+        Assert.Equal(
+            peer.Runtime.GetSpotNodeRuntime("discarded-authority").Node.RoutingId,
+            route.SourceNodeRid
+        );
+        return route;
+    }
+
+    private sealed record DiscardRequest(string Value);
+
+    private static void AssertDiscardRequestFramesReleased(ZLinkBackendRouteReceived route)
+    {
+        Assert.NotEmpty(route.Parts);
+        foreach (var part in route.Parts)
+            Assert.Throws<ObjectDisposedException>(() => part.Size);
+    }
+
+    [Fact]
+    public async Task Actor_Discard_Fails_When_Transport_Is_Closed_During_A_Running_Generation()
+    {
+        const string actorId = "running-discard";
+        var time = new ControllableTimeProvider();
+        var store = new OutageLeaseStore(new ZLinkInMemoryLocationStore(time));
+        await using var host = await DiscardedAuthorityHost.Start(store, time, spots: false);
+        var runtime = host.Runtime;
+        await host
+            .Provider.GetRequiredService<IZLinkActorManager>()
+            .GetOrCreate(actorId, "outage-actor")
+            .InMesh("discarded-authority")
+            .Async();
+        Assert.True(runtime.TryGetActorState(actorId, out var actor));
+        Assert.NotNull(actor.NativeActorRef);
+
+        var reported = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        runtime.ErrorSink.UnhandledCallbackException += error => reported.TrySetResult(error);
+        await runtime
+            .GetSpotNodeRuntime("discarded-authority")
+            .Node.ForceStopAsync(CancellationToken.None);
+        Assert.True(runtime.IsStarted);
+        Assert.False(runtime.ShutdownToken.IsCancellationRequested);
+        var discardFailure = await Record.ExceptionAsync(() =>
+            runtime.DiscardLocationExecutionAsync(actor).AsTask()
+        );
+        var sinkError = await reported.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var shutdownFailure = await Record.ExceptionAsync(() =>
+            runtime.ForceStopAsync(CancellationToken.None).AsTask()
+        );
+        var locationFailure = await Record.ExceptionAsync(() =>
+            host.Locations.StopAsync().AsTask()
+        );
+
+        var error = Assert.IsType<ZLinkFrameworkException>(discardFailure);
+        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, error.Kind);
+        Assert.Same(
+            error,
+            Assert.Single(Assert.IsType<AggregateException>(sinkError).InnerExceptions)
+        );
+        Assert.NotNull(shutdownFailure);
+        Assert.NotNull(locationFailure);
+    }
+
     [Theory]
     [InlineData(false, true)]
     [InlineData(true, false)]
@@ -762,7 +1272,8 @@ public sealed partial class LocationRuntimeTests
         internal static async Task<DiscardedAuthorityHost> Start(
             IZLinkLocationRepository store,
             ControllableTimeProvider time,
-            bool spots = true
+            bool spots = true,
+            bool trace = false
         )
         {
             var services = new ServiceCollection().AddSingleton(new OutageExecutionProbe());
@@ -773,6 +1284,8 @@ public sealed partial class LocationRuntimeTests
                 builder.UseTestLocationStore();
                 builder.AddRelocationStore(new InMemoryRelocationStore());
                 builder.UseTestTimeProvider(time);
+                if (trace)
+                    builder.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
                 options = builder.ConfigureLocations();
                 options.StoreOutageRetention = true;
                 var server = builder

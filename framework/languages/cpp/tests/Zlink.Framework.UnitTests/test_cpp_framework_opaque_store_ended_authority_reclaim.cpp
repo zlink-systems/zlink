@@ -947,11 +947,10 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
       scenario == "memberOnlyAggregatePrepared" || scenario == "memberOnlyAggregateReplaced";
     const bool aggregate_race = scenario == "memberAggregatePrepared" || member_only_race;
     const bool separate_aggregate_spot = scenario == "aggregate" || member_only_race;
-    // The provider batch has four shared authority, lock, lease and descriptor keys,
-    // plus the active Actor, Spot and typed Spot counters. Each member adds two keys.
-    // One more member exceeds the Store's 2,048 unique-key limit (§4).
+    // The provider batch shares four authority, owner and descriptor keys and
+    // three active counters. Each member adds its authority key.
     const auto shared_keys = use_provider ? 7u : 5u;
-    const auto fitting_members = (location_store_limits::write_keys - shared_keys) / 2u;
+    const auto fitting_members = location_store_limits::write_keys - shared_keys;
     const std::size_t members_wanted = scenario == "batchFits"    ? fitting_members
                                        : scenario == "batchBound" ? fitting_members + 1u
                                                                   : 1u;
@@ -1158,8 +1157,7 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
             target_descriptor.mesh_name = target.mesh_name;
             target_descriptor.rid =
               zlink::routing_id_t::from (std::string (target.node_rid.value ()));
-            // No allocation has used this target. Missing capacity is zero pending usage
-            // (provider read_capacity_async), before either new reservation is created.
+            // No allocation has used this target, so its capacity counter is absent.
             ASSERT_TRUE (std::holds_alternative<store_missing_t> (
               opaque.inner.read (capacity_key (target_descriptor)).result ().value ()));
         }
@@ -1192,7 +1190,7 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
     }
     std::optional<aggregate_prepare_result_t> raced_aggregate;
     std::optional<store_found_t> source_capacity_before_aggregate;
-    std::vector<std::pair<store_key_t, store_found_t>> aggregate_sources;
+    std::vector<std::pair<authority_key_t, authority_snapshot_t>> aggregate_sources;
     if (aggregate_race) {
         mesh_node_descriptor_t descriptor;
         descriptor.mesh_name = source.mesh_name;
@@ -1202,12 +1200,6 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
           std::get<store_found_t> (opaque.inner.read (opaque.before_read_key).result ().value ());
         const auto member = std::get<authority_snapshot_t> (
           repository.read_authority (actor_authority_key ("member-a")).result ().value ());
-        // Canonical authority preimages are public Store identity (§3.4).
-        for (const auto &key :
-             {store_key_t{std::string ("authority") + '\0' + "actor" + '\0' + "member-a"},
-              store_key_t{std::string ("authority") + '\0' + "spot" + '\0' + "member-spot"}})
-            aggregate_sources.emplace_back (
-              key, std::get<store_found_t> (opaque.inner.read (key).result ().value ()));
         aggregate_prepare_request_t aggregate;
         aggregate.aggregate_id.value[0] = std::byte{3};
         aggregate.aggregate_generation = 1;
@@ -1233,39 +1225,24 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
         aggregate.capacity_bundle = {
           1, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}};
         if (scenario == "memberOnlyAggregateReplaced") {
-            // Persisted committed aggregate locks may remain until a later prepare replaces
-            // them. Build canonical records through prepare, release its pending capacity,
-            // then seed that terminal Store snapshot without changing either authority.
             const auto prepared = repository.prepare_aggregate (aggregate).result ().value ();
             const auto *fence = std::get_if<aggregate_prepared_t> (&prepared);
             ASSERT_NE (fence, nullptr);
-            std::vector<store_scan_item_t> terminal_records;
-            for (const auto prefix : {"zlink:v11:aggregate:", "zlink:v11:aggregate-lock:"}) {
-                const auto page = std::get<store_scan_page_t> (
-                  opaque.inner.scan ({prefix, std::nullopt, location_page_item_limit})
-                    .result ()
-                    .value ());
-                ASSERT_FALSE (page.next_cursor);
-                terminal_records.insert (terminal_records.end (), page.items.begin (),
-                                         page.items.end ());
-            }
-            ASSERT_EQ (terminal_records.size (), 3u);
             ASSERT_EQ (repository.abort_aggregate (fence->fence).result ().value (),
                        aggregate_abort_result_t::aborted);
-            for (const auto &record : terminal_records) {
-                auto terminal =
-                  nlohmann::json::parse (record.value.bytes.begin (), record.value.bytes.end ());
-                terminal[location_record_fields::status] = aggregate_status::committed;
-                ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
-                  opaque.inner
-                    .write ({{}, {store_put_t{record.key, bytes (terminal.dump ()), std::nullopt}}})
-                    .result ()
-                    .value ()));
-            }
             aggregate.aggregate_id.value[0] = std::byte{4};
+            for (auto &participant : aggregate.participants)
+                participant.expected_store_version =
+                  std::get<authority_snapshot_t> (
+                    repository.read_authority (participant.key).result ().value ())
+                    .store_version;
         }
-        // Reclaim has checked both locks before submitting its release batch.
-        // Preparing on a separate live target must preserve both source participants.
+        for (const auto &key :
+             {actor_authority_key ("member-a"), spot_authority_key ("member-spot")})
+            aggregate_sources.emplace_back (
+              key,
+              std::get<authority_snapshot_t> (repository.read_authority (key).result ().value ()));
+        // Publish the aggregate marker after reclaim has captured the authority versions.
         opaque.before_write = [&, aggregate] () -> task_t<void> {
             raced_aggregate = co_await repository.prepare_aggregate (aggregate);
         };
@@ -1281,13 +1258,12 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
         if (!result)
             EXPECT_EQ (result.error_kind (), framework_error_kind_t::unavailable);
         for (const auto &[key, previous] : aggregate_sources) {
-            const auto read = opaque.inner.read (key).result ().value ();
-            const auto *unchanged = std::get_if<store_found_t> (&read);
-            EXPECT_NE (unchanged, nullptr);
-            if (unchanged) {
-                EXPECT_EQ (unchanged->value.version.value, previous.value.version.value);
-                EXPECT_EQ (unchanged->value.bytes, previous.value.bytes);
-            }
+            const auto read = repository.read_authority (key).result ().value ();
+            const auto *unchanged = std::get_if<authority_snapshot_t> (&read);
+            ASSERT_NE (unchanged, nullptr);
+            EXPECT_EQ (unchanged->store_version, previous.store_version);
+            EXPECT_EQ (unchanged->payload, previous.payload);
+            EXPECT_EQ (unchanged->authority_owner_generation, previous.authority_owner_generation);
         }
         const auto capacity =
           std::get<store_found_t> (opaque.inner.read (opaque.before_read_key).result ().value ());

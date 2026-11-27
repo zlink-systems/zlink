@@ -27,12 +27,14 @@ data class TableState(
     var inHand: Boolean = false,
     var turnSeat: Int = Rules.NO_SEAT,
     var pot: Long = 0L,
+    var reservation: RoomReservation? = null,
 )
 
 class Table(
     override val context: ZLinkSpotContext,
     private val config: NodeConfig,
     private val clients: ZLinkActorClient,
+    private val playerData: PlayerData,
 ) : ZLinkSuspendingSpot<Player>() {
     private var randomIndex: (Int) -> Int = SecureRandom()::nextInt
 
@@ -41,7 +43,7 @@ class Table(
         config: NodeConfig,
         clients: ZLinkActorClient,
         randomIndex: (Int) -> Int,
-    ) : this(context, config, clients) {
+    ) : this(context, config, clients, inertProxy(PlayerData::class.java)) {
         this.randomIndex = randomIndex
     }
 
@@ -72,30 +74,105 @@ class Table(
         val pot: Long,
         val winners: List<Int>,
         val hands: List<RevealedHand>,
-        val winnerBalances: List<Long>,
+        val balances: List<Long>,
     )
+
+    override fun configure() {
+        context.handlers().addHandler(PrepareTable::class.java)
+        context.handlers().addHandler(CommitTable::class.java)
+        context.handlers().addHandler(WithdrawTable::class.java)
+    }
+
+    internal fun prepare(request: PrepareRoom): RoomPrepared {
+        val reservation = state.reservation
+        val ok =
+            request.assignmentId == context.spotId() &&
+                request.members.size == 2 &&
+                request.members.distinct() == request.members &&
+                state.seats.isEmpty() &&
+                (reservation == null ||
+                    (reservation.phase == RoomPhase.PREPARED &&
+                        reservation.members == request.members))
+        if (ok && reservation == null) {
+            state.reservation = RoomReservation(request.assignmentId, request.members)
+        }
+        return RoomPrepared(request.assignmentId, ok)
+    }
+
+    internal suspend fun commit(message: CommitRoom) {
+        val reservation = state.reservation ?: return
+        if (
+            reservation.assignmentId != message.assignmentId ||
+                reservation.phase != RoomPhase.PREPARED
+        )
+            return
+        state.reservation = reservation.copy(phase = RoomPhase.COMMITTED, balances = emptyMap())
+        for (member in reservation.members) check(
+            admit(member, reservation.balances.getValue(member))
+        )
+        for (member in reservation.members) send(member, message)
+    }
+
+    internal fun withdraw(message: WithdrawRoom) {
+        if (message.assignmentId != context.spotId()) return
+        val reservation = state.reservation
+        if (reservation?.phase == RoomPhase.COMMITTED) return
+        if (reservation != null) {
+            state.reservation = reservation.copy(phase = RoomPhase.WITHDRAWN)
+        }
+        context.close()
+    }
+
+    internal fun committedView(playerId: String, assignmentId: String): TableView? {
+        val reservation = state.reservation ?: return null
+        if (
+            reservation.assignmentId != assignmentId ||
+                reservation.phase != RoomPhase.COMMITTED ||
+                playerId !in reservation.members
+        )
+            return null
+        return tableView(playerId)
+    }
 
     override suspend fun onActorJoinSuspending(
         actorId: String,
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
-        val join = request.decode<JoinTableRequest>()
-        require(join.playerId == actorId && join.tableId == context.spotId())
-        return if (admit(actorId)) ZLinkSpotActorJoinResult.accept()
+        state.reservation?.let { reservation ->
+            val admission = request.decode<RoomAdmission>()
+            if (
+                reservation.phase != RoomPhase.PREPARED ||
+                    admission.assignmentId != reservation.assignmentId ||
+                    actorId !in reservation.members
+            )
+                return ZLinkSpotActorJoinResult.reject()
+            state.reservation =
+                reservation.copy(balances = reservation.balances + (actorId to admission.chips))
+            return ZLinkSpotActorJoinResult.accept()
+        }
+        val join = request.decode<TableAdmission>()
+        require(join.tableId == context.spotId())
+        return if (admit(actorId, join.chips)) ZLinkSpotActorJoinResult.accept()
         else ZLinkSpotActorJoinResult.reject()
     }
 
-    override suspend fun onJoinedActorSuspending(actor: Player) = broadcastViews()
+    override suspend fun onJoinedActorSuspending(actor: Player) {
+        if (state.reservation == null) broadcastViews()
+    }
+
+    override suspend fun onDisconnectActorSuspending(actor: Player) = actor.disconnected()
 
     // Seats the player at admission; a seated player is admitted again without a new seat.
-    internal fun admit(actorId: String): Boolean {
+    internal fun admit(actorId: String, chips: Long): Boolean {
         if (state.seats.any { it.playerId == actorId }) return true
         if (state.seats.size == Rules.SEATS) return false
-        state.seats.add(Seat(actorId))
+        state.seats.add(Seat(actorId, chips))
         return true
     }
 
-    override suspend fun onLeaveActorSuspending(actor: Player) {}
+    override suspend fun onLeaveActorSuspending(actor: Player) {
+        if (state.reservation?.phase == RoomPhase.WITHDRAWN) context.close()
+    }
 
     private fun tableView(playerId: String, seats: List<SeatView> = seatViews()) =
         TableView(
@@ -110,6 +187,10 @@ class Table(
         )
 
     suspend fun current(actor: Player) {
+        if (state.reservation?.let { it.phase != RoomPhase.COMMITTED } == true) {
+            reject(actor, Rules.NOT_SEATED)
+            return
+        }
         val playerId = actor.context().actorId()
         reply(actor, tableView(playerId))
         if (state.seats.any { it.playerId == playerId })
@@ -206,11 +287,7 @@ class Table(
             it != currentSeat && state.seats[it].cards.isNotEmpty() && !state.seats[it].acted
         } ?: Rules.NO_SEAT
 
-    private fun createSettlement(
-        bettor: Int,
-        betAmount: Long,
-        pot: Long,
-    ): SettlementPlan? {
+    private fun createSettlement(bettor: Int, betAmount: Long, pot: Long): SettlementPlan? {
         val hands =
             state.seats.mapIndexedNotNull { i, seat ->
                 if (seat.cards.isEmpty()) null else RevealedHand(i, seat.playerId, seat.cards)
@@ -225,20 +302,27 @@ class Table(
 
         val share = pot / winners.size
         val remainder = pot % winners.size
-        val winnerBalances = mutableListOf<Long>()
-        for (index in winners.indices) {
-            val winner = winners[index]
-            var balance =
-                state.seats[winner].chips - if (winner == bettor) betAmount else 0L
+        val balances =
+            state.seats
+                .mapIndexed { index, seat -> seat.chips - if (index == bettor) betAmount else 0L }
+                .toMutableList()
+        for ((index, winner) in winners.withIndex()) {
+            var balance = balances[winner]
             balance = Rules.tryAddContractIntegers(balance, share) ?: return null
             if (index == 0 && remainder != 0L)
                 balance = Rules.tryAddContractIntegers(balance, remainder) ?: return null
-            winnerBalances.add(balance)
+            balances[winner] = balance
         }
-        return SettlementPlan(pot, winners, hands, winnerBalances)
+        return SettlementPlan(pot, winners, hands, balances)
     }
 
     private suspend fun settle(plan: SettlementPlan) {
+        // The last bet has consumed the final turn. Publish the calculated balances after commit.
+        playerData.commitRound(
+            context.spotId(),
+            state.handNumber,
+            state.seats.map { it.playerId }.zip(plan.balances).toMap(),
+        )
         val result = applySettlement(plan)
         state.seats.forEach { send(it.playerId, result) }
         broadcastViews()
@@ -251,9 +335,9 @@ class Table(
         state.inHand = false
         state.turnSeat = Rules.NO_SEAT
         state.pot = 0L
-        state.seats.forEach { it.cards = emptyList() }
-        plan.winners.forEachIndexed { index, winner ->
-            state.seats[winner].chips = plan.winnerBalances[index]
+        state.seats.forEachIndexed { index, seat ->
+            seat.cards = emptyList()
+            seat.chips = plan.balances[index]
         }
         return HandResult(state.handNumber, plan.pot, plan.winners, plan.hands, seatViews())
     }
@@ -378,6 +462,7 @@ class Actions {
         dispatch: ZLinkMessageContext,
         message: HandResult,
     ) {
+        actor.state.chips = message.seats.single { it.playerId == actor.context.actorId() }.chips
         actor.context().boundSession().kotlin().send(message).await()
     }
 }

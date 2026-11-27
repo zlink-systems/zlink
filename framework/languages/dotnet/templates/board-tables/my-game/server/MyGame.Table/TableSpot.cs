@@ -11,15 +11,25 @@ public sealed class TableSpot(
     IZLinkSpotContext context,
     NodeSettings settings,
     IZLinkActorClient actors,
+    IPlayerRecords players,
     Func<int, int>? randomIndex = null
 ) : IZLinkSpot<PlayerActor>
 {
     public IZLinkSpotContext Context { get; } = context;
     private TableState state = new();
-    private readonly Func<int, int> randomIndexSource = randomIndex ?? RandomNumberGenerator.GetInt32;
+    private readonly Func<int, int> randomIndexSource =
+        randomIndex ?? RandomNumberGenerator.GetInt32;
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<TableFindMatchHandler, PlayerActor>(nameof(FindMatch));
+        Context.Handlers.AddActorPacket<TableCancelMatchHandler, PlayerActor>(nameof(CancelMatch));
+        Context.Handlers.AddActorPacket<TableMatchAssignedHandler, PlayerActor>(
+            nameof(MatchAssigned)
+        );
+        Context.Handlers.AddActorPacket<TableMatchCancelledHandler, PlayerActor>(
+            nameof(MatchCancelled)
+        );
         Context.Handlers.AddActorPacket<ReconnectHandler, PlayerActor>(nameof(JoinTableRequest));
         Context.Handlers.AddActorPacket<ViewHandler, PlayerActor>(nameof(TableViewRequest));
         Context.Handlers.AddActorPacket<StartHandler, PlayerActor>(nameof(StartHandRequest));
@@ -29,15 +39,72 @@ public sealed class TableSpot(
         Context.Handlers.AddActorPacket<HandResultDelivery, PlayerActor>(nameof(HandResult));
     }
 
+    public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
+        ZLinkMessage request,
+        CancellationToken ct
+    )
+    {
+        if (request.IsEmpty)
+            return ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
+
+        var room = request.Decode<PrepareRoom>();
+        if (
+            room.AssignmentId != Context.SpotId
+            || room.Members.Length != GameNames.MinimumPlayers
+            || room.Members.Distinct(StringComparer.Ordinal).Count() != room.Members.Length
+        )
+            return ValueTask.FromResult(ZLinkSpotCreateResponse.Reject());
+
+        state.Room = new MatchedRoom(room.AssignmentId, room.Members);
+        return ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
+    }
+
+    public ValueTask CommitAsync(string assignmentId, CancellationToken ct)
+    {
+        if (
+            state.Room is not { Phase: RoomPhase.Prepared } room
+            || room.AssignmentId != assignmentId
+        )
+            return ValueTask.CompletedTask;
+
+        state.Room = room with { Phase = RoomPhase.Committed };
+        return BroadcastAsync(ct);
+    }
+
+    public void Withdraw(string assignmentId)
+    {
+        if (state.Room is { Phase: RoomPhase.Prepared } room && room.AssignmentId == assignmentId)
+        {
+            state.Room = room with { Phase = RoomPhase.Withdrawn };
+            state.Seats.Clear();
+        }
+    }
+
+    public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken ct) =>
+        actor.DisconnectAsync(ct);
+
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
         CancellationToken cancellationToken
     )
     {
-        var join = request.Decode<JoinTableRequest>();
-        if (join.PlayerId != actorId || join.TableId != Context.SpotId)
-            throw new InvalidDataException("Table admission identity mismatch.");
+        long chips;
+        if (state.Room is { } room)
+        {
+            var admission = request.Decode<RoomAdmission>();
+            if (!room.Admits(actorId, admission))
+                return ValueTask.FromResult(ZLinkSpotActorJoinResult.Reject());
+            chips = admission.Chips;
+        }
+        else
+        {
+            var admission = request.Decode<TableAdmission>();
+            if (admission.Join.PlayerId != actorId || admission.Join.TableId != Context.SpotId)
+                throw new InvalidDataException("Table admission identity mismatch.");
+            chips = admission.Chips;
+        }
+
         if (Find(actorId) is null)
         {
             if (state.Seats.Count == GameNames.SeatCount)
@@ -45,14 +112,21 @@ public sealed class TableSpot(
             var seat = Enumerable
                 .Range(0, GameNames.SeatCount)
                 .First(index => state.Seats.All(player => player.Seat != index));
-            state.Seats.Add(new PlayerSeat { Seat = seat, PlayerId = actorId });
+            state.Seats.Add(
+                new PlayerSeat
+                {
+                    Seat = seat,
+                    PlayerId = actorId,
+                    Chips = chips,
+                }
+            );
             state.Seats.Sort((left, right) => left.Seat.CompareTo(right.Seat));
         }
         return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
     }
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken) =>
-        BroadcastAsync(cancellationToken);
+        state.Room is null ? BroadcastAsync(cancellationToken) : ValueTask.CompletedTask;
 
     public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
@@ -73,7 +147,7 @@ public sealed class TableSpot(
     public async ValueTask ViewAsync(PlayerActor actor, CancellationToken ct)
     {
         var seat = Find(actor.Context.ActorId);
-        if (seat is null)
+        if (seat is null || state.Room is { Phase: not RoomPhase.Committed })
         {
             await RejectAsync(actor, Rejection.NotSeated);
             return;
@@ -109,7 +183,8 @@ public sealed class TableSpot(
     public async ValueTask StartAsync(PlayerActor actor, CancellationToken ct)
     {
         var reason =
-            Find(actor.Context.ActorId) is null ? Rejection.NotSeated
+            Find(actor.Context.ActorId) is null || state.Room is { Phase: not RoomPhase.Committed }
+                ? Rejection.NotSeated
             : state.InHand ? Rejection.HandInProgress
             : state.Seats.Count < GameNames.MinimumPlayers ? Rejection.NotEnoughPlayers
             : !GameNames.TryAddContractIntegers(state.HandNumber, 1, out _)
@@ -187,21 +262,30 @@ public sealed class TableSpot(
             return;
         }
 
-        player!.Chips -= bet.Amount;
-        state.Pot = nextPot;
-        player.Acted = true;
-        state.TurnSeat = nextPlayer?.Seat ?? GameNames.NoSeat;
-        await BroadcastAsync(ct);
         if (settlement is null)
+        {
+            player!.Chips -= bet.Amount;
+            state.Pot = nextPot;
+            player.Acted = true;
+            state.TurnSeat = nextPlayer!.Seat;
+            await BroadcastAsync(ct);
             return;
+        }
 
+        await players.CommitRoundAsync(
+            new CommitRound(Context.SpotId, state.HandNumber, settlement.Balances),
+            ct
+        );
+
+        player!.Acted = true;
         state.InHand = false;
         state.TurnSeat = GameNames.NoSeat;
         state.Pot = 0;
-        foreach (var seat in state.Seats)
-            seat.Cards = [];
-        for (var index = 0; index < settlement.WinnerSeats.Length; index++)
-            settlement.WinnerSeats[index].Chips = settlement.WinnerBalances[index];
+        for (var index = 0; index < state.Seats.Count; index++)
+        {
+            state.Seats[index].Cards = [];
+            state.Seats[index].Chips = settlement.Balances[index].Chips;
+        }
         var result = new HandResult(
             state.HandNumber,
             nextPot,
@@ -254,9 +338,20 @@ public sealed class TableSpot(
 
         plan = new SettlementPlan(
             winners,
-            hands.Select(seat => new RevealedHand(seat.Seat, seat.PlayerId, seat.Cards.ToArray()))
+            hands
+                .Select(seat => new RevealedHand(seat.Seat, seat.PlayerId, seat.Cards.ToArray()))
                 .ToArray(),
-            winnerBalances
+            state
+                .Seats.Select(seat =>
+                {
+                    var winner = Array.IndexOf(winners, seat);
+                    var balance =
+                        winner >= 0
+                            ? winnerBalances[winner]
+                            : seat.Chips - (seat == bettor ? betAmount : 0);
+                    return new PlayerRecord(seat.PlayerId, balance);
+                })
+                .ToArray()
         );
         return true;
     }
@@ -264,7 +359,7 @@ public sealed class TableSpot(
     private sealed record SettlementPlan(
         PlayerSeat[] WinnerSeats,
         RevealedHand[] Hands,
-        long[] WinnerBalances
+        PlayerRecord[] Balances
     );
 
     public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(state);
@@ -286,6 +381,7 @@ public sealed class PlayerSeat
 
 public sealed class TableState
 {
+    public MatchedRoom? Room { get; set; }
     public List<PlayerSeat> Seats { get; set; } = [];
     public List<int> Deck { get; set; } = [];
     public long HandNumber { get; set; }

@@ -546,24 +546,6 @@ final class ZLinkActorSessionCoordinator {
         return new ActorRoute(joinedSpotId, actorRef, remote);
     }
 
-    CompletionStage<Void> sendBoundSession(
-            ZLinkBackendActorRef actorRef,
-            byte[] frameBytes,
-            Supplier<CompletionStage<Void>> fallback) {
-        ZLinkActorRuntime runtime = requireActors();
-        return runtime.localActor(actorRef.actorId())
-                .map(
-                        actor ->
-                                runtime.sendBoundSessionFrame(actor, frameBytes)
-                                        .thenCompose(
-                                                sent ->
-                                                        sent
-                                                                ? CompletableFuture.completedFuture(
-                                                                        null)
-                                                                : fallback.get()))
-                .orElseGet(fallback);
-    }
-
     private static <T> CompletionStage<Void> invokeLocalDispatch(
             Function<LocalDispatch, CompletionStage<Optional<T>>> dispatch,
             LocalDispatch local,

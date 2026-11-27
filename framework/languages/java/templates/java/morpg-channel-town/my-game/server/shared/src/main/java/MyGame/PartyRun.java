@@ -26,16 +26,14 @@ public final class PartyRun {
     }
 
     public String started(String id) {
-        if (!Objects.equals(runId, id)
-                || (phase != RunPhase.Entering && phase != RunPhase.Active))
+        if (!Objects.equals(runId, id) || (phase != RunPhase.Entering && phase != RunPhase.Active))
             return Rules.RUN_MISMATCH;
         phase = RunPhase.Active;
         return null;
     }
 
     public String completed(String id) {
-        if (!Objects.equals(runId, id)
-                || (phase != RunPhase.Active && phase != RunPhase.Completed))
+        if (!Objects.equals(runId, id) || (phase != RunPhase.Active && phase != RunPhase.Completed))
             return Rules.RUN_MISMATCH;
         phase = RunPhase.Completed;
         return null;

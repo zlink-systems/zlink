@@ -9,6 +9,18 @@ import {
   decodeActorSendCommand,
   decodeMetadataFrame,
   decodeInstanceRouteV1,
+  decodeFrozenRecord,
+  encodeFrozenRecord,
+  decodeApplicationPayloadEnvelopeV1,
+  decodeRelocationDataCommand,
+  encodeRelocationDataCommand,
+  enumWireMeshRecordKind,
+  encodeMetadataFrame,
+  enumWireFrozenSourceKind,
+  enumWireMeshOperationKind,
+  type FrozenRecord,
+  type RelocationDataCommand,
+  type RelocationObjectIdentity as CanonicalRelocationObjectIdentity,
   decodeSpotRequestCommand,
   decodeSpotSendCommand,
   encodeActorRequestCommand,
@@ -24,7 +36,6 @@ import {
   decodeActorJoin28,
   decodeActorCreate49 as decodeGeneratedActorCreate49,
   decodeRelocationCutover34 as decodeGeneratedRelocationCutover34,
-  decodeRelocationData31 as decodeGeneratedRelocationData31,
   decodeRelocationFailed53 as decodeGeneratedRelocationFailed53,
   decodeRelocationPrepare40 as decodeGeneratedRelocationPrepare40,
   decodeRelocationReady30 as decodeGeneratedRelocationReady30,
@@ -38,7 +49,6 @@ import {
   decodeUserSpotCreate47 as decodeGeneratedUserSpotCreate47,
   encodeActorCreate49 as encodeGeneratedActorCreate49,
   encodeRelocationCutover34 as encodeGeneratedRelocationCutover34,
-  encodeRelocationData31 as encodeGeneratedRelocationData31,
   encodeRelocationFailed53 as encodeGeneratedRelocationFailed53,
   encodeRelocationPrepare40 as encodeGeneratedRelocationPrepare40,
   encodeRelocationReady30 as encodeGeneratedRelocationReady30,
@@ -245,6 +255,8 @@ export interface ServiceWireFrozenRecord {
         readonly ownerLeaseGeneration: bigint;
       };
   readonly applicationPayload?: NonNullable<ServiceMaintenanceReplyRelay['payload']>;
+  readonly instanceSpot?: ServiceReadyInstanceRecord;
+  readonly metadataFrame?: Buffer;
   readonly canonicalBytes: Buffer;
 }
 
@@ -826,15 +838,54 @@ function fromGeneratedRelocationFailed(
   };
 }
 
+function toCanonicalRelocationObject(
+  value: ServiceWireRelocationObject
+): CanonicalRelocationObjectIdentity {
+  switch (value.kind) {
+    case 'actor':
+      return {
+        objectKind: 'actor',
+        actor: { actorId: value.actorId, objectGeneration: value.objectGeneration },
+        expectedAuthorityOwnerGeneration: value.expectedAuthorityOwnerGeneration
+      };
+    case 'userSpot':
+      return {
+        objectKind: 'userSpot',
+        spot: { spotId: value.spotId, objectGeneration: value.objectGeneration },
+        expectedAuthorityOwnerGeneration: value.expectedAuthorityOwnerGeneration
+      };
+    case 'instanceSpot':
+      return {
+        objectKind: 'instanceSpot',
+        instanceType: value.stableType,
+        spotId: value.spotId,
+        objectGeneration: value.objectGeneration
+      };
+  }
+}
+
+function fromCanonicalRelocationObject(
+  value: CanonicalRelocationObjectIdentity
+): ServiceWireRelocationObject {
+  switch (value.objectKind) {
+    case 'actor':
+      return fromGeneratedRelocationObject({ ...value, ...value.actor });
+    case 'userSpot':
+      return fromGeneratedRelocationObject({ ...value, ...value.spot });
+    case 'instanceSpot':
+      return fromGeneratedRelocationObject(value);
+  }
+}
+
 function fromGeneratedRelocationData(
-  value: ReturnType<typeof decodeGeneratedRelocationData31>
+  value: RelocationDataCommand
 ): ServiceMaintenanceRelocationData {
   return {
     kind: 'data',
     ...fromGeneratedRelocationBase(value),
     senderRole: value.senderRole,
-    object: fromGeneratedRelocationObject(value.object),
-    frozenRecord: decodeServiceWireFrozenRecord(value.record)
+    object: fromCanonicalRelocationObject(value.object),
+    frozenRecord: decodeServiceWireFrozenRecord(canonicalFrozenRecordBytes(value.record))
   };
 }
 
@@ -1181,7 +1232,7 @@ export interface ServiceStatefulReply {
   readonly tail?: ServiceStatefulReplyTail;
 }
 
-const STATEFUL_MESSAGE_CONTEXT: ServiceWireDecoderContext = {
+export const STATEFUL_MESSAGE_CONTEXT: ServiceWireDecoderContext = {
   effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 0xffff_fdf6,
   effectiveCompleteMessageBytes: 0xffff_ffff
 };
@@ -1402,6 +1453,42 @@ export function decodeSessionRelocationRoute(frame: Uint8Array): ServiceSessionR
   return fromGeneratedSessionRelocationRoute(decodeGeneratedSessionRelocationRoute44(frame));
 }
 
+export type ServiceReadyInstanceRecord = Extract<
+  ServiceStatefulWireRecord,
+  { kind: 'instanceSpot'; activation: 'ready' }
+>;
+
+function toGeneratedReadyInstanceRoute(
+  route: ServiceInstanceRouteFence,
+  instanceIntent: boolean
+): Extract<InstanceRouteV1, { routeKind: 'ready' }> {
+  return {
+    routeKind: 'ready',
+    targetNodeRid: toGeneratedRoutingId(route.targetNodeRid, 'targetNodeRid'),
+    targetNodeGeneration: route.targetNodeGeneration,
+    targetSpotId: route.targetSpotId,
+    authority: {
+      objectGeneration: route.objectGeneration,
+      ownerId: route.ownerId,
+      authorityOwnerGeneration: route.authorityOwnerGeneration,
+      leaseGeneration: route.leaseGeneration,
+      storeVersion: route.storeVersion
+    },
+    instanceIntent: instanceIntent ? 'true' : 'false'
+  };
+}
+
+function fromGeneratedReadyInstanceRoute(
+  route: Extract<InstanceRouteV1, { routeKind: 'ready' }>
+): ServiceInstanceRouteFence {
+  return {
+    targetNodeRid: fromGeneratedRoutingId(route.targetNodeRid, 'targetNodeRid'),
+    targetNodeGeneration: route.targetNodeGeneration,
+    targetSpotId: route.targetSpotId,
+    ...route.authority
+  };
+}
+
 export function encodeInstanceSpotHeader(
   route: ServiceInstanceRouteFence,
   sourceNodeGeneration: bigint,
@@ -1414,20 +1501,7 @@ export function encodeInstanceSpotHeader(
   instanceIntent = false
 ): Buffer {
   const encodedRoute = encodeInstanceRouteV1(
-    {
-      routeKind: 'ready',
-      targetNodeRid: toGeneratedRoutingId(route.targetNodeRid, 'targetNodeRid'),
-      targetNodeGeneration: route.targetNodeGeneration,
-      targetSpotId: route.targetSpotId,
-      authority: {
-        objectGeneration: route.objectGeneration,
-        ownerId: route.ownerId,
-        authorityOwnerGeneration: route.authorityOwnerGeneration,
-        leaseGeneration: route.leaseGeneration,
-        storeVersion: route.storeVersion
-      },
-      instanceIntent: instanceIntent ? 'true' : 'false'
-    },
+    toGeneratedReadyInstanceRoute(route, instanceIntent),
     STATEFUL_MESSAGE_CONTEXT
   );
   if (
@@ -1794,7 +1868,7 @@ export function decodeStatefulHeader(
       };
       const route =
         generatedRoute.routeKind === 'ready'
-          ? { ...commonTarget, ...generatedRoute.authority }
+          ? fromGeneratedReadyInstanceRoute(generatedRoute)
           : undefined;
       const target =
         generatedRoute.routeKind === 'coldActivation'
@@ -1946,12 +2020,17 @@ export function encodeMaintenanceRelocationControl(
       );
     case 'data':
       return Buffer.from(
-        encodeGeneratedRelocationData31({
-          ...toGeneratedRelocationBase(value),
-          senderRole: value.senderRole,
-          object: toGeneratedRelocationObject(value.object),
-          record: encodeServiceWireFrozenRecord(value.frozenRecord)
-        })
+        encodeRelocationDataCommand(
+          {
+            ...toGeneratedRelocationBase(value),
+            command: 'relocationData',
+            flags: 0,
+            senderRole: value.senderRole,
+            object: toCanonicalRelocationObject(value.object),
+            record: readCanonicalFrozenRecord(encodeServiceWireFrozenRecord(value.frozenRecord))
+          },
+          STATEFUL_MESSAGE_CONTEXT
+        )[0]!
       );
     case 'cutover':
       return Buffer.from(
@@ -1988,7 +2067,9 @@ export function decodeMaintenanceRelocationControl(
     case M6bServiceWireCommand.relocationFailed:
       return fromGeneratedRelocationFailed(decodeGeneratedRelocationFailed53(frame));
     case M6bServiceWireCommand.relocationData:
-      return fromGeneratedRelocationData(decodeGeneratedRelocationData31(frame));
+      return fromGeneratedRelocationData(
+        decodeRelocationDataCommand([frame], STATEFUL_MESSAGE_CONTEXT)
+      );
     case M6bServiceWireCommand.relocationCutover:
       return fromGeneratedRelocationCutover(decodeGeneratedRelocationCutover34(frame));
     case M6bServiceWireCommand.relocationState:
@@ -2046,7 +2127,6 @@ export function decodeStatefulReply(
     | 'spotRequest'
     | 'actorRequest'
     | 'actorLookup'
-    | 'actorDestroy'
     | 'actorJoin'
     | 'streamBind'
     | 'streamUnbind'
@@ -2688,7 +2768,141 @@ class Reader {
   }
 }
 
+export function readCanonicalFrozenRecord(bytes: Uint8Array): FrozenRecord {
+  return decodeFrozenRecord(bytes, STATEFUL_MESSAGE_CONTEXT);
+}
+
+export function canonicalFrozenRecordBytes(record: FrozenRecord): Buffer {
+  return Buffer.from(encodeFrozenRecord(record, STATEFUL_MESSAGE_CONTEXT));
+}
+
+export function freezeReadyInstanceSpot(
+  source: ServiceWireRequestSourceFence,
+  record: ServiceReadyInstanceRecord,
+  payloadFrame: Uint8Array,
+  metadataFrame?: Uint8Array
+): ServiceWireFrozenRecord {
+  const sourceIdentity = {
+    sourceNodeRid: toGeneratedRoutingId(source.nodeRid, 'sourceNodeRid'),
+    sourceNodeGeneration: source.nodeGeneration,
+    sourceOwnerId: source.ownerId,
+    sourceOwnerLeaseGeneration: source.leaseGeneration
+  };
+  const request = record.operationKind === 'request';
+  const operationKind = request ? 'instanceSpotRequest' : 'none';
+  const bytes = canonicalFrozenRecordBytes({
+    recordKind: 'instanceSpotActivation',
+    source:
+      record.sourceSpotId === undefined
+        ? { sourceKind: 'node', ...sourceIdentity }
+        : { sourceKind: 'spot', ...sourceIdentity, sourceSpotId: record.sourceSpotId },
+    hasMetadata: metadataFrame === undefined ? 'false' : 'true',
+    ...(metadataFrame === undefined
+      ? {}
+      : {
+          metadata: decodeMetadataFrame(metadataFrame, STATEFUL_MESSAGE_CONTEXT)
+        }),
+    operationId: record.operation,
+    operationKind,
+    replyRoute: request
+      ? { originalOperationKind: 'instanceSpotRequest', replyRouteId: record.replyRouteId! }
+      : { originalOperationKind: 'none' },
+    body: {
+      recordKind: 'instanceSpotActivation',
+      route: toGeneratedReadyInstanceRoute(record.route, record.instanceIntent),
+      sourceNodeGeneration: record.sourceNodeGeneration,
+      operationKind: record.operationKind,
+      payload: decodeApplicationPayloadEnvelopeV1(payloadFrame, STATEFUL_MESSAGE_CONTEXT)
+    }
+  });
+  return decodeServiceWireFrozenRecord(bytes);
+}
+
+const INSTANCE_RECORD_KIND = enumWireMeshRecordKind('instanceSpotActivation');
+
+function decodeFrozenInstanceSpot(bytes: Uint8Array): ServiceWireFrozenRecord {
+  const {
+    body,
+    source: identity,
+    operationId,
+    operationKind,
+    replyRoute,
+    metadata
+  } = readCanonicalFrozenRecord(bytes);
+  if (body.recordKind !== 'instanceSpotActivation') fail('Invalid frozen Instance Spot body.');
+  const source = {
+    nodeRid: fromGeneratedRoutingId(identity.sourceNodeRid, 'sourceNodeRid'),
+    nodeGeneration: identity.sourceNodeGeneration,
+    ownerId: identity.sourceOwnerId,
+    leaseGeneration: identity.sourceOwnerLeaseGeneration
+  };
+  const sourceSpotId = identity.sourceKind === 'spot' ? identity.sourceSpotId : undefined;
+  const replyRouteId = 'replyRouteId' in replyRoute ? replyRoute.replyRouteId : undefined;
+  const request = body.operationKind === 'request';
+  const zero = operationId.high === 0n && operationId.low === 0n;
+  if (
+    operationKind !== (request ? 'instanceSpotRequest' : 'none') ||
+    request === zero ||
+    request !== (replyRouteId !== undefined) ||
+    body.sourceNodeGeneration !== source.nodeGeneration
+  ) {
+    fail('Frozen Instance Spot operation identity or source generation is invalid.');
+  }
+  const instanceSpot: ServiceReadyInstanceRecord | undefined =
+    body.route.routeKind === 'ready'
+      ? {
+          kind: 'instanceSpot',
+          activation: 'ready',
+          instanceIntent: body.route.instanceIntent === 'true',
+          route: fromGeneratedReadyInstanceRoute(body.route),
+          sourceNodeGeneration: body.sourceNodeGeneration,
+          sourceNodeRid: source.nodeRid,
+          sourceSpotId,
+          operationKind: body.operationKind,
+          operation: operationId,
+          replyRouteId
+        }
+      : undefined;
+  return {
+    recordKind: INSTANCE_RECORD_KIND,
+    sourceKind: enumWireFrozenSourceKind(identity.sourceKind),
+    source,
+    sourceSpotId,
+    ...('sourceActor' in identity
+      ? {
+          sourceActor: {
+            actorId: identity.sourceActor.actorId,
+            generation: identity.sourceActor.objectGeneration
+          }
+        }
+      : {}),
+    ...(identity.sourceKind === 'boundSession'
+      ? {
+          sourceSessionRid: fromGeneratedRoutingId(identity.sourceSessionRid, 'sourceSessionRid'),
+          sourceBindingGeneration: identity.sourceBindingGeneration,
+          sourceSessionSequence: identity.sourceSessionSequence
+        }
+      : {}),
+    hasMetadata: metadata !== undefined,
+    metadataFrame:
+      metadata === undefined
+        ? undefined
+        : Buffer.from(encodeMetadataFrame(metadata, STATEFUL_MESSAGE_CONTEXT)),
+    operationId,
+    operationKind: enumWireMeshOperationKind(operationKind),
+    replyRouteId,
+    instanceSpot,
+    applicationPayload: {
+      packetName: body.payload.packetName,
+      contentType: body.payload.contentType,
+      bytes: body.payload.payload
+    },
+    canonicalBytes: Buffer.from(bytes)
+  };
+}
+
 export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFrozenRecord {
+  if (bytes[0] === INSTANCE_RECORD_KIND) return decodeFrozenInstanceSpot(bytes);
   const reader = new FrozenReader(bytes);
   const record = decodeServiceWireFrozenRecordFrom(reader);
   reader.end('frozen record');
@@ -2697,7 +2911,7 @@ export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFro
 
 function decodeServiceWireFrozenRecordFrom(reader: FrozenReader): ServiceWireFrozenRecord {
   const recordKind = reader.u8('recordKind');
-  if (recordKind < 1 || recordKind > 14) fail('Invalid frozen record kind.');
+  if (recordKind < 1 || recordKind >= INSTANCE_RECORD_KIND) fail('Invalid frozen record kind.');
   const sourceKind = reader.u8('sourceKind');
   if (sourceKind < 1 || sourceKind > 4) fail('Invalid frozen source kind.');
   const sourceReader = reader.body16('frozen source');
@@ -2731,12 +2945,7 @@ function decodeServiceWireFrozenRecordFrom(reader: FrozenReader): ServiceWireFro
   }
   const hasMetadata = reader.bool8('hasMetadata');
   if (hasMetadata) {
-    if (!(
-      (recordKind >= 1 && recordKind <= 7) ||
-      recordKind === 9 ||
-      recordKind === 10 ||
-      recordKind === 14
-    )) {
+    if (!((recordKind >= 1 && recordKind <= 7) || recordKind === 9 || recordKind === 10)) {
       fail('Metadata is forbidden for this frozen record kind.');
     }
     reader.metadata();
@@ -2752,13 +2961,7 @@ function decodeServiceWireFrozenRecordFrom(reader: FrozenReader): ServiceWireFro
   const replyRouteId = requiresReply ? replyReader.nonZeroU64('replyRouteId') : undefined;
   replyReader.end('frozen reply route');
   const body = reader.frozenBody(recordKind);
-  validateFrozenOperationMatrix(
-    recordKind,
-    operationKind,
-    operationId,
-    replyRouteId,
-    body.instanceOperationKind
-  );
+  validateFrozenOperationMatrix(recordKind, operationKind, operationId, replyRouteId);
   return {
     recordKind,
     sourceKind,
@@ -2864,8 +3067,7 @@ function validateFrozenOperationMatrix(
   recordKind: number,
   operationKind: number,
   operationId: ServiceWireOperationId,
-  replyRouteId: bigint | undefined,
-  instanceOperationKind: number | undefined
+  replyRouteId: bigint | undefined
 ): void {
   const zero = operationId.high === 0n && operationId.low === 0n;
   let valid = false;
@@ -2878,10 +3080,6 @@ function validateFrozenOperationMatrix(
   else if (recordKind === 8) {
     valid = (operationKind === 0 && zero) || ([6, 7, 8].includes(operationKind) && !zero);
   } else if (recordKind === 11) valid = operationKind >= 1 && operationKind <= 15 && !zero;
-  else if (recordKind === 14 && instanceOperationKind !== undefined) {
-    valid =
-      instanceOperationKind === 1 ? operationKind === 0 && zero : operationKind === 12 && !zero;
-  }
   if (!valid) fail('Frozen record kind, operation kind, and operation ID do not match.');
   if (operationRequiresReply(operationKind) !== (replyRouteId !== undefined)) {
     fail('Frozen reply route does not match the operation kind.');
@@ -3001,7 +3199,6 @@ class FrozenReader {
   }
 
   frozenBody(recordKind: number): {
-    readonly instanceOperationKind?: number;
     readonly target?: ServiceWireFrozenRecord['target'];
     readonly applicationPayload?: NonNullable<ServiceMaintenanceReplyRelay['payload']>;
   } {
@@ -3040,14 +3237,6 @@ class FrozenReader {
       if (relocation.high === 0n && relocation.low === 0n) fail('Relocation ID must not be zero.');
       this.relocationObject();
       validateReplyTerminal(this.u32('terminalResult'), this.u32('failureCode'), false);
-    } else if (recordKind === 14) {
-      this.instanceRoute();
-      this.nonZeroU64('instanceSourceNodeGeneration');
-      const operationKind = this.u8('instanceOperationKind');
-      if (operationKind < 1 || operationKind > 2)
-        fail('Invalid Instance activation operation kind.');
-      const applicationPayload = this.applicationPayload();
-      return { instanceOperationKind: operationKind, applicationPayload };
     }
     return {};
   }
@@ -3128,13 +3317,6 @@ class FrozenReader {
       if (kind === 5) body.nonZeroU64('bindingGeneration');
     }
     body.end('send-ready destination');
-  }
-
-  private instanceRoute(): void {
-    const start = this.offset;
-    this.u8('instanceRouteKind');
-    this.body16('Instance route');
-    decodeCanonicalInstanceRoute(this.bytes.subarray(start, this.offset));
   }
 
   private relocationObject(): void {

@@ -227,12 +227,15 @@ test('Nest Actor decorators dispatch selected methods through public Actor clien
   const calls = [];
   let roomId;
   let joinedRoom;
+  let joinedEntry;
   class Player {
     constructor(context) {
       this.context = context;
     }
     async onJoinCompleted(completion) {
-      if (completion.status === 'accepted' && this.context.spotId === roomId) joinedRoom();
+      if (completion.status !== 'accepted') return;
+      if (this.context.spotId === roomId) joinedRoom();
+      else joinedEntry?.();
     }
   }
   class PlayerFactory {
@@ -307,7 +310,8 @@ test('Nest Actor decorators dispatch selected methods through public Actor clien
     async selectedSend() {
       calls.push('room-send');
     }
-    async selectedRequest() {
+    async selectedRequest(_spot, actor, _context, request) {
+      if (request.leave) actor.context.joinEntrySpot().defer();
       return { marker: this.dependency.marker, room: true };
     }
   }
@@ -328,7 +332,11 @@ test('Nest Actor decorators dispatch selected methods through public Actor clien
   class Request {}
   class SecondRequest {}
   class RoomNotice {}
-  class RoomRequest {}
+  class RoomRequest {
+    constructor(leave = false) {
+      this.leave = leave;
+    }
+  }
   framework.ZLinkPacket('nest.audit.notice')(Notice);
   framework.ZLinkPacket('nest.audit.request')(Request);
   framework.ZLinkPacket('nest.audit.second')(SecondRequest);
@@ -396,6 +404,11 @@ test('Nest Actor decorators dispatch selected methods through public Actor clien
       room: true
     });
     assert.equal(calls.includes('room-send'), true);
+    const rejoined = new Promise((resolve) => {
+      joinedEntry = resolve;
+    });
+    await client.requestToActor('nest-audit-player', new RoomRequest(true)).submit();
+    await rejoined;
     assert.equal(await app.get(nestjs.ZLINK_ACTOR_MANAGER).destroy(created.actor), true);
   } finally {
     await app.close();

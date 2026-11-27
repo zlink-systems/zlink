@@ -5,5 +5,5 @@
   "meshEndpoint": "tcp://127.0.0.1:0",
   "streamEndpoint": null,
   "httpEndpoint": "http://127.0.0.1:0",
-  "sessionEndpoint": "tcp://127.0.0.1:CHANGE_ME"
+  "sessionEndpoint": "ws://127.0.0.1:CHANGE_ME"
 }

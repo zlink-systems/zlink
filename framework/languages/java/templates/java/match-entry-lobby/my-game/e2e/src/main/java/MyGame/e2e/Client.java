@@ -123,8 +123,9 @@ public final class Client implements AutoCloseable {
     Object nextActionResult(Predicate<RoomView> updated) throws Exception {
         return next(
                 Object.class,
-                value -> value instanceof ActionRejected
-                        || (value instanceof RoomView view && updated.test(view)));
+                value ->
+                        value instanceof ActionRejected
+                                || (value instanceof RoomView view && updated.test(view)));
     }
 
     void clear() throws Exception {

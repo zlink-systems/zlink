@@ -60,6 +60,11 @@ internal sealed class ZLinkBackendSocketPoller
             ? ZLinkBackendSocketReadiness.None
             : MapReadiness(_events[0].Revents);
 
+    public void Wake() => _source.Wake();
+
+    public ValueTask WaitForWakeAsync(CancellationToken cancellationToken) =>
+        _source.WaitForWakeAsync(cancellationToken);
+
     public ValueTask ResumeAsync() => _source.ResumeAsync();
 
     public ValueTask DisposeAsync() => _source.DisposeAsync();

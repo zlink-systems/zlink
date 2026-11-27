@@ -7,53 +7,53 @@ import kotlinx.coroutines.runBlocking
 
 fun main(args: Array<String>) = runBlocking {
     val root = Path.of("").toAbsolutePath().normalize()
-    if (args.contentEquals(arrayOf("--check-structure"))) {
-        checkStructure(root)
-        return@runBlocking
-    }
+    checkStructure(root)
+    if (args.contentEquals(arrayOf("--check-structure"))) return@runBlocking
     DomainChecks.run()
     if (args.contentEquals(arrayOf("--check-domain"))) return@runBlocking
-    checkStructure(root)
-    require(args.isEmpty() || (args.size == 2 && args[0] == "--scenario"))
-    val selected = if (args.isEmpty()) Names.SCENARIOS else args[1].split(',')
-    require(
-        selected.isNotEmpty() &&
-            selected.distinct() == selected &&
-            selected.all { it in Names.SCENARIOS }
-    )
-    var passed = 0
-    var cleanupFailure: Exception? = null
-    val nodes = Nodes(root)
-    val scenarios = Scenarios(nodes, selected)
+    val attach = args.firstOrNull() == "--attach"
+    val options = args.drop(if (attach) 1 else 0)
+    require(options.isEmpty() || (options.size == 2 && options[0] == "--scenario")) {
+        "Use --scenario a,b"
+    }
+    val requested =
+        if (options.isEmpty()) Names.SCENARIOS else options[1].split(',').map { it.trim() }
+    require(requested.distinct() == requested && requested.all { it in Names.SCENARIOS }) {
+        "Invalid scenarios: $requested"
+    }
+    val server =
+        if (attach)
+            checkNotNull(runningServer(root)) { "The running server stopped before attachment" }
+        else null
+    val isolated = mapOf("update" to "replaces a play node")
+    if (server != null) {
+        println("Using the running server: ${server.streams.values.joinToString()}")
+    }
+    val selected =
+        (Names.SCENARIOS.filter { it in requested }).filter { id ->
+            val reason = if (server != null) isolated[id] else null
+            if (reason != null) println("Skipping $id: requires an isolated server ($reason)")
+            reason == null
+        }
+    val results = ScenarioResults(root, selected)
+    suspend fun run(target: ScenarioTarget) {
+        val fixture = Scenarios(target, selected)
+        withCleanup(cleanup = { fixture.close() }) {
+            for (id in selected) results.run(id) { fixture.run(id) }
+        }
+    }
     try {
-        println("Logs: ${nodes.logs}")
-        nodes.start()
-        for (id in Names.SCENARIOS.filter { it in selected }) {
-            try {
-                scenarios.run(id)
-                passed++
-                println("✓ $id")
-            } catch (failure: Exception) {
-                println("✗ $id")
-                failure.printStackTrace(System.err)
+        if (server != null) {
+            run(ScenarioTarget(server))
+        } else {
+            Nodes(root, logDirectory = results.logs).use { nodes ->
+                println("Logs: ${nodes.logs}")
+                nodes.start()
+                run(nodes.target())
             }
         }
     } catch (failure: Exception) {
-        failure.printStackTrace(System.err)
-    } finally {
-        try {
-            scenarios.close()
-        } catch (failure: Exception) {
-            failure.printStackTrace(System.err)
-            cleanupFailure = failure
-        }
-        try {
-            nodes.close()
-        } catch (failure: Exception) {
-            failure.printStackTrace(System.err)
-            cleanupFailure = failure
-        }
+        results.abort(failure)
     }
-    println("Scenarios: $passed/${selected.size} passed")
-    exitProcess(if (passed == selected.size && cleanupFailure == null) 0 else 1)
+    exitProcess(if (results.finish()) 0 else 1)
 }

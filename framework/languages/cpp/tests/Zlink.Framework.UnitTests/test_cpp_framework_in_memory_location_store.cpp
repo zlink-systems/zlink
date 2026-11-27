@@ -317,6 +317,106 @@ TEST (ZLinkFrameworkInMemoryLocationStore, ActorCanJoinRelocatedSingleSpot)
     ASSERT_NE (nullptr, std::get_if<authority_stored_t> (&joined));
 }
 
+TEST (ZLinkFrameworkInMemoryLocationStore, SpotWideSourceCaptureSealsInventoryAtRelocationKey)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    using namespace zlink::framework::runtime::stateful;
+    in_memory_location_repository_t store;
+    const auto owner_a = claim_owner (store, "owner-a");
+    const auto owner_b = claim_owner (store, "owner-b");
+    publish_mesh_node (store, "node-a", owner_a);
+    publish_mesh_node (store, "node-b", owner_b);
+    const object_creation_target_t target_a{"play", node_rid_t::from_string ("node-a"), 1, owner_a};
+    const auto create = [&] (placement_object_kind_t kind, std::string id, std::string type,
+                             std::vector<std::byte> payload) {
+        object_reserve_request_t request{
+          .key = {kind, std::move (id)},
+          .intent = {.stable_type = std::move (type)},
+          .target = target_a,
+          .creating_payload = payload,
+          .capacity_bundle = {.actor_slots = kind == placement_object_kind_t::actor ? 1u : 0u,
+                              .spot_slots = kind == placement_object_kind_t::user_spot ? 1u : 0u}};
+        if (kind == placement_object_kind_t::user_spot)
+            request.capacity_bundle.spot_type =
+              spot_type_capacity_delta_t{kind, request.intent.stable_type, 1};
+        const auto reservation = store.reserve (request).result ().value ();
+        const auto committed =
+          store
+            .commit (
+              {request.key, std::get<object_reserved_t> (reservation).fence, std::move (payload)})
+            .result ()
+            .value ();
+        return std::get<object_committed_t> (committed).ready;
+    };
+    const auto spot =
+      create (placement_object_kind_t::user_spot, "room-1", "room",
+              encode_user_spot_authority_payload (
+                {.stable_type = "room",
+                 .spot_id = "room-1",
+                 .owner_id = owner_a.owner_id,
+                 .owner_lease_generation = static_cast<std::uint64_t> (owner_a.lease_generation),
+                 .mesh_name = "play",
+                 .node_rid = target_a.node_rid,
+                 .node_generation = 1}));
+    const auto member =
+      create (placement_object_kind_t::actor, "member-1", "player",
+              encode_actor_authority_payload (
+                {.stable_type = "player",
+                 .actor_id = "member-1",
+                 .current_spot_id = "room-1",
+                 .current_spot_generation = spot.object_generation,
+                 .current_spot_kind = actor_authority_spot_kind_t::user,
+                 .owner_id = owner_a.owner_id,
+                 .owner_lease_generation = static_cast<std::uint64_t> (owner_a.lease_generation),
+                 .mesh_name = "play",
+                 .node_rid = target_a.node_rid,
+                 .node_generation = 1}));
+    const std::vector<object_ref_t> participants{
+      {object_kind_t::user_spot, "room-1", spot.object_generation, spot.authority_owner_generation,
+       "play", "node-a"},
+      {object_kind_t::actor, "member-1", member.object_generation,
+       member.authority_owner_generation, "play", "node-a"}};
+    relocation_authority_fence_t fence;
+    fence.kind = object_kind_t::user_spot;
+    fence.key = "room-1";
+    fence.expected_store_version = spot.store_version;
+    fence.source_owner = owner_a;
+    fence.target_owner = owner_b;
+    fence.relocation = {0x4718, 0x5728};
+    const auto source_rid = target_a.node_rid.value ();
+    for (const auto value : source_rid)
+        fence.source_node_routing_id.push_back (static_cast<std::uint8_t> (value));
+    fence.source_node_generation = target_a.node_lifecycle_generation;
+
+    // §8.3 (#5656): a SpotWide capture seals its source inventory at (relocationId, 1).
+    public_authority_store_adapter_t relocation (store);
+    ASSERT_TRUE (
+      relocation.begin_source_capture (participants, fence, "node-b", 1, 1).result ().value ());
+    aggregate_fence_t sealed{{}, aggregate_inventory::sealed_inventory_generation, {}};
+    for (std::size_t index = 0; index != 8; ++index) {
+        sealed.aggregate_id.value[index] =
+          static_cast<std::byte> (fence.relocation.high >> ((7 - index) * 8));
+        sealed.aggregate_id.value[index + 8] =
+          static_cast<std::byte> (fence.relocation.low >> ((7 - index) * 8));
+    }
+    const auto record = std::get<authority_snapshot_t> (
+      store.read_authority (spot_authority_key ("room-1")).result ().value ());
+    ASSERT_TRUE (record.aggregate && record.aggregate->relocation);
+    const auto digest =
+      record.aggregate->encoded.at ("relocation").at ("sourceInventorySha256").get<std::string> ();
+    const auto inventory = store.read_relocation_inventory (sealed, digest).result ().value ();
+    ASSERT_TRUE (inventory);
+    ASSERT_EQ (inventory->size (), 2u);
+    EXPECT_EQ (inventory->at (0).expected_store_version, member.store_version);
+    EXPECT_EQ (inventory->at (1).expected_store_version, spot.store_version);
+    EXPECT_FALSE (
+      store.read_relocation_inventory (sealed, std::string (64, '0')).result ().value ());
+    EXPECT_FALSE (store.seal_relocation_inventory (sealed, std::string (64, '0'), *inventory)
+                    .result ()
+                    .value ());
+}
+
 TEST (ZLinkFrameworkInMemoryLocationStore, DescriptorFencesCapabilityProfileAndPendingCapacity)
 {
     using namespace zlink::framework;
@@ -755,6 +855,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
       AggregateInventoryUsesBoundedLeafPagesWithoutTotalCountCap)
 {
     using namespace zlink::framework;
+    using zlink::framework::aggregate_participant_t;
     using namespace zlink::framework::runtime::aggregate_inventory;
     std::vector<aggregate_participant_t> participants;
     participants.reserve (2049);
@@ -767,115 +868,81 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     }
 
     const auto tree = build_tree (participants);
-    ASSERT_TRUE (tree);
-    EXPECT_EQ (tree->participant_count, 2049u);
-    EXPECT_EQ (tree->pages.size (), 3u);
-    for (std::size_t index = 0; index < tree->pages.size (); ++index) {
-        EXPECT_LE (tree->pages[index].participants.size (), page_item_limit);
-        EXPECT_LE (tree->pages[index].encoded.size (), page_byte_limit);
-        const auto decoded = decode_page (tree->pages[index].encoded, index);
-        ASSERT_TRUE (decoded);
-        EXPECT_EQ (decoded->size (), tree->pages[index].participants.size ());
-        EXPECT_FALSE (decode_page (tree->pages[index].encoded, index + 1));
+    ASSERT_EQ (tree.root.at ("totalCount"), 2049u);
+    ASSERT_EQ (tree.root.at ("topLevel"), 1u);
+    ASSERT_EQ (tree.pages.size (), 4u);
+    const auto &parent = tree.pages.back ();
+    ASSERT_EQ (parent.body.at ("children").size (), 3u);
+    for (std::size_t index = 0; index < 3; ++index) {
+        const auto &page = tree.pages[index];
+        EXPECT_EQ (page.body.at ("index"), index);
+        EXPECT_EQ (page.body.at ("startIndex"), page_item_limit * index);
+        EXPECT_EQ (page.body.at ("entries").size (), index == 2 ? 1u : page_item_limit);
+        EXPECT_LE (page.body.dump ().size (), page_byte_limit);
+        EXPECT_EQ (page.reference.at ("sha256"),
+                   zlink::framework::detail::sha256_hex (page.body.dump ()));
+        EXPECT_EQ (parent.body.at ("children").at (index), page.reference);
     }
-    EXPECT_EQ (tree->root, tree_root (tree->pages, 2049));
+    EXPECT_EQ (tree.root.at ("topPages").at (0), parent.reference);
 }
-
-TEST (ZLinkFrameworkInMemoryLocationStore, AggregateInventorySplitsOnEncodedByteLimit)
-{
-    using namespace zlink::framework;
-    using namespace zlink::framework::runtime::aggregate_inventory;
-
-    aggregate_participant_t participant;
-    participant.key.value = "inventory-\"escaped\\key";
-    participant.expected_store_version = "1";
-    participant.authority_payload.resize (page_byte_limit / 3, std::byte{0x01});
-    const auto tree = build_tree ({participant, participant});
-    ASSERT_TRUE (tree);
-    ASSERT_EQ (tree->pages.size (), 2u);
-    for (const auto &page : tree->pages) {
-        EXPECT_LE (page.encoded.size (), page_byte_limit);
-        const auto decoded = decode_page (page.encoded);
-        ASSERT_TRUE (decoded);
-        EXPECT_EQ (decoded->at (0).authority_payload, participant.authority_payload);
-    }
-
-    participant.authority_payload.resize (page_byte_limit);
-    EXPECT_FALSE (build_tree ({participant}));
-}
-
 
 TEST (ZLinkFrameworkInMemoryLocationStore, AggregateInventoryPreservesPageBytesAtByteBoundary)
 {
-    using namespace zlink::framework;
+    using zlink::framework::aggregate_participant_t;
     using namespace zlink::framework::runtime::aggregate_inventory;
-    constexpr std::size_t page_count = 3;
     std::vector<aggregate_participant_t> participants;
-    for (std::size_t index = 0; index < page_count; ++index) {
+    for (std::size_t index = 0; index < 400; ++index) {
         aggregate_participant_t participant;
-        participant.key.value = std::to_string (index) + ":inventory-actor";
-        participant.expected_store_version = std::to_string (index + 1);
-        participant.authority_payload.assign (page_byte_limit / 4, std::byte{0x01});
+        participant.key.value = "inventory-\"escaped\\key-" + std::to_string (1000 + index);
+        participant.expected_store_version.assign (3000, 'v');
         participants.push_back (std::move (participant));
     }
-    const auto tree = build_tree (participants);
-    ASSERT_TRUE (tree);
-    ASSERT_EQ (tree->pages.size (), page_count);
-    for (std::size_t index = 0; index < page_count; ++index) {
-        const auto expected = encode_page (index, {participants[index]});
-        EXPECT_EQ (tree->pages[index].encoded, expected);
-        EXPECT_EQ (tree->pages[index].digest, runtime::sha256 (expected));
-        EXPECT_EQ (tree->pages[index].participants.size (), 1u);
+    const auto split = build_tree (participants);
+    ASSERT_EQ (split.pages.size (), 3u);
+    const auto &first = split.pages.front ().body;
+    const auto count = first.at ("entryCount").get<std::size_t> ();
+    participants.resize (count);
+    auto remaining = page_byte_limit - first.dump ().size ();
+    for (auto &participant : participants) {
+        const auto extra = std::min (remaining, 4096u - participant.expected_store_version.size ());
+        participant.expected_store_version.append (extra, 'v');
+        remaining -= extra;
     }
-    EXPECT_EQ (tree->root, tree_root (tree->pages, participants.size ()));
-    participants.front ().authority_payload.assign (page_byte_limit, std::byte{0x01});
-    EXPECT_FALSE (build_tree (participants));
+    ASSERT_EQ (remaining, 0u);
+
+    const auto exact = build_tree (participants);
+    ASSERT_EQ (exact.pages.size (), 1u);
+    EXPECT_EQ (exact.pages.front ().body.dump ().size (), page_byte_limit);
+    participants.back ().expected_store_version.push_back ('v');
+    const auto overflow = build_tree (participants);
+    ASSERT_EQ (overflow.pages.size (), 3u);
+    EXPECT_EQ (overflow.pages.front ().body.at ("entryCount"), count - 1);
+    EXPECT_EQ (overflow.pages[1].body.at ("entryCount"), 1u);
 }
 
-TEST (ZLinkFrameworkInMemoryLocationStore, AggregateInventoryKeepsMaximalPagesForLargePayloads)
+TEST (ZLinkFrameworkInMemoryLocationStore, AggregateInventoryHashesLargeRawPayloads)
 {
-    using namespace zlink::framework;
+    using zlink::framework::aggregate_participant_t;
     using namespace zlink::framework::runtime::aggregate_inventory;
-    constexpr std::size_t participant_count = page_item_limit / 2;
-    constexpr std::size_t raw_page_count = 2;
-    const auto payload_bytes = page_byte_limit * raw_page_count / participant_count;
     std::vector<aggregate_participant_t> participants;
-    for (std::size_t index = 0; index < participant_count; ++index) {
+    for (std::size_t index = 0; index < 4; ++index) {
         aggregate_participant_t participant;
-        participant.key.value = std::to_string (index) + ":\"inventory-actor";
+        participant.key.value = "inventory-actor-" + std::to_string (index);
         participant.expected_store_version = std::to_string (index + 1);
-        participant.authority_payload.assign (payload_bytes / 2, std::byte{0x01});
-        participant.membership_mutation.assign (payload_bytes / 2, std::byte{0x02});
+        participant.authority_payload.assign (page_byte_limit, std::byte{0x01});
+        participant.membership_mutation.assign (page_byte_limit, std::byte{0x02});
         participants.push_back (std::move (participant));
     }
-    const auto tree = build_tree (participants);
-    ASSERT_TRUE (tree);
-    EXPECT_EQ (tree->participant_count, participants.size ());
-    std::size_t offset = 0;
-    for (std::size_t index = 0; index < tree->pages.size (); ++index) {
-        const auto &page = tree->pages[index];
-        EXPECT_LE (page.encoded.size (), page_byte_limit);
-        const auto first = participants.begin () + static_cast<std::ptrdiff_t> (offset);
-        const std::vector<aggregate_participant_t> expected (
-          first, first + static_cast<std::ptrdiff_t> (page.participants.size ()));
-        EXPECT_EQ (page.encoded, encode_page (index, expected));
-        EXPECT_EQ (page.digest, runtime::sha256 (page.encoded));
-        offset += page.participants.size ();
-        if (offset < participants.size () && page.participants.size () < page_item_limit) {
-            auto larger = page.participants;
-            larger.push_back (participants[offset]);
-            std::size_t raw_bytes = 0;
-            for (const auto &participant : larger) {
-                raw_bytes +=
-                  participant.key.value.size () + participant.expected_store_version.size ()
-                  + participant.authority_payload.size () + participant.membership_mutation.size ();
-            }
-            EXPECT_LE (raw_bytes, page_byte_limit);
-            EXPECT_GT (encode_page (index, larger).size (), page_byte_limit);
-        }
-    }
-    EXPECT_EQ (offset, participants.size ());
-    EXPECT_EQ (tree->root, tree_root (tree->pages, participants.size ()));
+    const auto original = build_tree (participants);
+    ASSERT_EQ (original.pages.size (), 1u);
+    EXPECT_EQ (original.pages.front ().body.at ("entryCount"), participants.size ());
+    EXPECT_LT (original.pages.front ().body.dump ().size (), page_byte_limit);
+    participants.back ().authority_payload.back () = std::byte{0x03};
+    const auto changed = build_tree (participants);
+    ASSERT_EQ (changed.pages.size (), 1u);
+    EXPECT_EQ (original.pages.front ().body.dump ().size (),
+               changed.pages.front ().body.dump ().size ());
+    EXPECT_NE (original.root.at ("digestSha256"), changed.root.at ("digestSha256"));
 }
 
 TEST (ZLinkFrameworkInMemoryLocationStore, MaintainsOwnerLeasesAndUsesPollingWithoutStampHint)

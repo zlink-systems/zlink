@@ -16,6 +16,14 @@ internal sealed class Program
     private static async Task Main(string[] args)
     {
         var options = TestHostOptions.Parse(args);
+        if (options.Mode == "login-admission-connector")
+        {
+            await LoginAdmission.ConnectAsync(
+                options.StreamEndpoint
+                    ?? throw new InvalidOperationException("Missing --stream-endpoint.")
+            );
+            return;
+        }
         var readyFilePath = options.ReadyFilePath;
 
         Console.SetOut(

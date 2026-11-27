@@ -507,6 +507,8 @@ public sealed partial class LocationRuntimeTests
                 )
                 .AsTask();
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var mailbox = actor._dispatchMailbox._queue;
+            var runningItem = Assert.IsType<ZLinkSerialWorkItem>(mailbox._active);
             var calls = 0;
             var pending = actor
                 .ExecuteDispatchAsync(
@@ -557,7 +559,8 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
             Assert.False(pending.IsCompleted);
             Assert.Equal(0, calls);
-            var mailbox = actor._dispatchMailbox._queue;
+            // A SpotWide dispatch can return its turn before the shared gate releases its reservation.
+            await runningItem.Completion.WaitAsync(TimeSpan.FromSeconds(5));
             var pendingCount = mailbox.ApplicationPendingCount;
             var rejectedCalls = 0;
             var rejected = actor
@@ -1761,7 +1764,11 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(0, discarded);
             Assert.False(pending.IsCompleted);
             time.Advance(TimeSpan.FromTicks(1));
-            Assert.True(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+            var outageAtT = locations.GetHealthSnapshot().StoreOutage;
+            Assert.NotNull(outageAtT);
+            Assert.Equal(episode.ObservedAt, outageAtT.ObservedAt);
+            Assert.Equal(episode.LeaseOperationStartedAt, outageAtT.LeaseOperationStartedAt);
+            Assert.True(outageAtT.Discarded);
             renewal.Arm();
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
@@ -1778,7 +1785,6 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
             Assert.Equal(factoryCalls, probe.FactoryCalls);
-            Assert.True(locations.GetHealthSnapshot().StoreOutage!.Discarded);
         }
         finally
         {

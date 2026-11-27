@@ -106,6 +106,7 @@ class provider_location_repository_t::store_format_t
     enum class legacy_writer_t
     {
         cpp,
+        cpp_inline,
         java,
         dotnet,
         node
@@ -137,8 +138,7 @@ class provider_location_repository_t::store_format_t
     {
         if (state == "staging" || state == aggregate_status::preparing || state == 0)
             return legacy_state_t::staging;
-        if (state == aggregate_status::prepared || state == aggregate_status::committing
-            || state == 1)
+        if (state == aggregate_status::prepared || state == "committing" || state == 1)
             return legacy_state_t::prepared;
         if (state == aggregate_status::committed || state == 2)
             return legacy_state_t::committed;
@@ -358,6 +358,14 @@ class provider_location_repository_t::store_format_t
             root.id = compact_uuid (root.header.at ("aggregateId").get<std::string> ());
             root.generation = legacy_generation (root.header.at ("aggregateGeneration"));
             root.identity = root.id + ":" + std::to_string (root.generation);
+        } else if (record.contains ("targetDescriptor")
+                   && record.at ("targetDescriptor").contains ("routingIdHex")) {
+            root.writer = legacy_writer_t::cpp_inline;
+            root.id = record.at ("aggregateId").get<std::string> ();
+            if (!detail::is_lowercase_uuid_text (root.id))
+                invalid_format ("Invalid C++ v11 aggregate ID");
+            root.generation = legacy_generation (record.at ("aggregateGeneration"));
+            root.identity = aggregate_inventory::key_suffix (root.id, root.generation);
         } else if (record.contains ("targetDescriptor")) {
             root.writer = legacy_writer_t::node;
             const auto separator = suffix.rfind (':');
@@ -394,7 +402,9 @@ class provider_location_repository_t::store_format_t
         } else {
             const auto rid =
               zlink::routing_id_t::from_hex (descriptor.at ("routingIdHex").get<std::string> ());
-            root.capacity_rid = foreign_rid_display (rid);
+            root.capacity_rid = root.writer == legacy_writer_t::cpp_inline
+                                  ? raw_rid (rid)
+                                  : foreign_rid_display (rid);
             root.rid_hex = rid.to_hex ();
         }
         root.lifecycle = legacy_generation (
@@ -402,7 +412,9 @@ class provider_location_repository_t::store_format_t
           std::numeric_limits<std::uint64_t>::max ());
         const auto &owner = header.at ("targetOwner");
         root.owner = {owner.at ("ownerId").get<std::string> (),
-                      static_cast<std::int64_t> (legacy_generation (owner.at ("leaseGeneration")))};
+                      static_cast<std::int64_t> (legacy_generation (owner.at (
+                        root.writer == legacy_writer_t::cpp_inline ? "ownerLeaseGeneration"
+                                                                   : "leaseGeneration")))};
         root.bundle = legacy_bundle (header.at (cpp ? "capacityBundle" : "capacity"));
         return root;
     }
@@ -657,6 +669,100 @@ class provider_location_repository_t::store_format_t
         co_return participants;
     }
 
+    struct aggregate_commit_entry_t
+    {
+        std::string authority_key;
+        std::vector<std::byte> before;
+        std::vector<std::byte> after;
+    };
+
+    struct aggregate_lock_t
+    {
+        aggregate_id_t aggregate_id;
+        std::uint64_t aggregate_generation = 0;
+        std::string authority_key;
+        std::string expected_store_version;
+        std::string status;
+        std::optional<std::size_t> page_index;
+        std::optional<std::size_t> entry_index;
+    };
+
+    static constexpr std::size_t aggregate_commit_page_item_limit = 512;
+    static constexpr std::size_t aggregate_commit_page_byte_limit =
+      aggregate_inventory::page_byte_limit;
+    static std::optional<std::vector<aggregate_commit_entry_t>>
+    decode_aggregate_commit_page (const std::vector<std::byte> &bytes,
+                                  std::optional<std::size_t> expected_page_index = std::nullopt)
+    {
+        if (bytes.empty () || bytes.size () > aggregate_commit_page_byte_limit)
+            return std::nullopt;
+        try {
+            const auto record = parse_json (bytes);
+            if (record.value (location_record_fields::version, 0) != 1
+                || !record.at ("pageIndex").is_number_unsigned ()
+                || (expected_page_index
+                    && record.at ("pageIndex").get<std::size_t> () != *expected_page_index)
+                || !record.at (location_record_fields::entries).is_array ()
+                || record.at (location_record_fields::entries).empty ()
+                || record.at (location_record_fields::entries).size ()
+                     > aggregate_commit_page_item_limit)
+                return std::nullopt;
+            std::vector<aggregate_commit_entry_t> result;
+            result.reserve (record.at (location_record_fields::entries).size ());
+            for (const auto &entry : record.at (location_record_fields::entries))
+                result.push_back (
+                  {entry.at (location_record_fields::authorityKey).get<std::string> (),
+                   unhex (entry.at ("before").get<std::string> ()),
+                   unhex (entry.at ("after").get<std::string> ())});
+            return result;
+        }
+        catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    static std::optional<aggregate_lock_t>
+    decode_aggregate_lock (const std::vector<std::byte> &bytes)
+    {
+        try {
+            const auto record = parse_json (bytes);
+            aggregate_lock_t result;
+            result.aggregate_id.value =
+              unhex_array<16> (record.at (location_record_fields::aggregateId).get<std::string> ());
+            result.aggregate_generation =
+              record.at (location_record_fields::aggregateGeneration).get<std::uint64_t> ();
+            result.authority_key =
+              record.at (location_record_fields::authorityKey).get<std::string> ();
+            result.expected_store_version =
+              record.at (location_record_fields::expectedStoreVersion).get<std::string> ();
+            result.status = record.at ("status").get<std::string> ();
+            if (!record.at ("pageIndex").is_null ())
+                result.page_index = record.at ("pageIndex").get<std::size_t> ();
+            if (!record.at ("entryIndex").is_null ())
+                result.entry_index = record.at ("entryIndex").get<std::size_t> ();
+            if (result.aggregate_generation == 0 || result.authority_key.empty ()
+                || (result.status != aggregate_status::prepared && result.status != "committing"
+                    && result.status != aggregate_status::committed))
+                return std::nullopt;
+            return result;
+        }
+        catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    static store_key_t key_aggregate_commit_page (const aggregate_id_t &id, std::size_t page_index)
+    {
+        return {std::string (prefix) + "aggregate-commit:" + hex (id.value) + ":"
+                + std::to_string (page_index)};
+    }
+
+    static store_key_t key_aggregate_lock (std::string_view authority_key)
+    {
+        const auto digest = sha256 (to_bytes (authority_key));
+        return {std::string (prefix) + "aggregate-lock:" + hex (digest)};
+    }
+
     task_t<void> settle_cpp_lock (const legacy_aggregate_t &aggregate,
                                   const store_scan_item_t &root,
                                   const store_condition_t &lease,
@@ -665,8 +771,7 @@ class provider_location_repository_t::store_format_t
         const auto lock = decode_aggregate_lock (item.value.bytes);
         if (!lock || item.key.value != key_aggregate_lock (lock->authority_key).value)
             invalid_format ("Invalid C++ v11 aggregate lock: " + item.key.value);
-        if (aggregate.state != legacy_state_t::committed
-            && lock->status == aggregate_status::committing) {
+        if (aggregate.state != legacy_state_t::committed && lock->status == "committing") {
             const auto current_lock = co_await read (item.key);
             const auto *held = std::get_if<store_found_t> (&current_lock);
             if (!held)
@@ -723,16 +828,18 @@ class provider_location_repository_t::store_format_t
     {
         auto authority = parse_json (item.value.bytes);
         const bool dotnet = aggregate.writer == legacy_writer_t::dotnet;
+        const bool cpp_inline = aggregate.writer == legacy_writer_t::cpp_inline;
         if (aggregate.state == legacy_state_t::committed) {
             const auto index = legacy_count (dotnet ? authority.at ("aggregateParticipantIndex")
                                                     : authority.at ("aggregate").at ("index"));
             const auto index_suffix = std::to_string (index);
             const bool java = aggregate.writer == legacy_writer_t::java;
             const auto child =
-              dotnet
-                ? root.key.value + ":participant:" + index_suffix
-                : std::string (prefix) + (java ? "aggregate-inventory:" : "aggregate-participant:")
-                    + aggregate.identity + (java ? ":participant:" : ":") + index_suffix;
+              dotnet ? root.key.value + ":participant:" + index_suffix
+                     : std::string (prefix)
+                         + (java || cpp_inline ? "aggregate-inventory:" : "aggregate-participant:")
+                         + aggregate.identity + (java || cpp_inline ? ":participant:" : ":")
+                         + index_suffix;
             auto marker = dotnet ? json_t{} : authority.at ("aggregate");
             if (dotnet) {
                 const store_key_t meta_key{child + ":meta"};
@@ -742,7 +849,10 @@ class provider_location_repository_t::store_format_t
                 else
                     marker = nullptr;
             }
-            const store_key_t payload_key{child + (dotnet || java ? ":payload" : ":authority")};
+            const store_key_t payload_key{child
+                                          + (cpp_inline       ? ":authorityPayload"
+                                             : dotnet || java ? ":payload"
+                                                              : ":authority")};
             const auto payload = co_await read (payload_key);
             const auto *found = std::get_if<store_found_t> (&payload);
             if (!found || marker.is_null ()) {
@@ -807,10 +917,19 @@ class provider_location_repository_t::store_format_t
         } else if (const auto relocation = authority.at ("aggregate").find ("relocation");
                    relocation != authority.at ("aggregate").end ()) {
             auto saved = *relocation;
-            if (aggregate.writer == legacy_writer_t::java
-                && aggregate.state == legacy_state_t::committed)
-                saved["phase"] = "committed";
-            authority["aggregate"] = {{"relocation", std::move (saved)}};
+            if (cpp_inline && aggregate.state == legacy_state_t::committed) {
+                const auto aggregate = authority_aggregate_codec::without_capture (
+                  authority_aggregate_codec::read ({{"relocation", saved}}));
+                if (aggregate)
+                    authority["aggregate"] = aggregate->encoded;
+                else
+                    authority.erase ("aggregate");
+            } else {
+                if (aggregate.writer == legacy_writer_t::java
+                    && aggregate.state == legacy_state_t::committed)
+                    saved["phase"] = "committed";
+                authority["aggregate"] = {{"relocation", std::move (saved)}};
+            }
         } else {
             authority.erase ("aggregate");
         }

@@ -2155,6 +2155,14 @@ the Store. Section 4.1 defines the rule that prevents targeting it. Fixed RID li
 defined by [MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid). The two
 cleanup paths are independent and operate with different lifetimes.
 
+**A discard confirmed after host shutdown has waited for in-flight discard cleanup does local cleanup
+only and ends normally.** Shutdown waits for the discard cleanup it has accepted so far before it closes
+the transport. When a decision such as owner-lease loss or an outage deadline confirms a new discard after
+that, its cleanup doesn't report a closed transport or completion table as an error and treats it as an
+"already shutting down" terminal. It still completes local object removal and registry cleanup. Peers of
+the stopping host observe the result through that host's connection close, so nothing remains to send.
+No separate state or ordering exists for this case.
+
 The owner lease is released with the same token held by the terminating lifecycle.
 Cleanup does not reread and release another lifecycle's lease. The time boundary for Store
 cleanup and the return boundary of `ForceStopped` follow

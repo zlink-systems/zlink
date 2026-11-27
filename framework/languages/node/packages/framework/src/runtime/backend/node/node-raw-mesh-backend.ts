@@ -1,3 +1,4 @@
+import type { ServiceActorRouteFence } from '../../foundation/service-stateful-wire-codec';
 import type { MeshOperationSubmission } from '../mesh-completion-table';
 import type { RequestRuntime } from '../../foundation/request-runtime';
 import type { PendingOperation } from '../../foundation/operation-registry';
@@ -664,7 +665,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   disconnectPeer(peerRid: unknown, lifecycleGeneration: bigint): void {
     const nodeRoutingId = String(peerRid);
-    const admitted = this.runtime?.topology.peer(nodeRoutingId);
+    const runtime = this.runtime;
+    const admitted = runtime?.topology.peer(nodeRoutingId);
     if (admitted !== undefined && admitted.descriptor.lifecycleGeneration !== lifecycleGeneration) {
       return;
     }
@@ -679,8 +681,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
           intent.endpoint === admittedEndpoint)
     );
     if (found === undefined) {
-      if (admitted !== undefined) {
-        this.runtime?.disconnectPeer(
+      if (admitted === undefined) {
+        runtime?.topology.forgetEndedAdmission(nodeRoutingId, undefined, lifecycleGeneration);
+      } else {
+        runtime?.disconnectPeer(
           admitted.descriptor.advertisedEndpoint,
           nodeRoutingId,
           lifecycleGeneration
@@ -1342,13 +1346,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.requireStateful().sealSpotMessageFollowIngress(source);
   }
 
+  freezeSpotRelocationIngress(seal: ServiceSpotMessageFollowSeal) {
+    return this.requireStateful().freezeSpotRelocationIngress(seal);
+  }
+
   abortSpotMessageFollowIngress(seal: ServiceSpotMessageFollowSeal): boolean {
     return this.requireStateful().abortSpotMessageFollowIngress(seal);
   }
 
   commitSpotMessageFollowIngress(
     seal: ServiceSpotMessageFollowSeal,
-    target: ServiceDirectSpotRouteFence | null,
+    target: (ServiceDirectSpotRouteFence & { readonly ownerId?: string }) | null,
     durationMs: number
   ): Promise<boolean> {
     return this.requireStateful().commitSpotMessageFollowIngress(seal, target, durationMs);
@@ -1433,6 +1441,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       OperationKind.ActorLookup,
       this.requireStateful().lookupRemoteActor(String(targetNodeRid), actorId, timeoutMs)
     );
+  }
+
+  sendActorDestroy(fence: ServiceActorRouteFence): Promise<void> {
+    return this.requireStateful().sendActorDestroy(fence);
   }
 
   destroyActor(
@@ -2766,9 +2778,44 @@ function replyActorJoinNotSupported(): SubmitResultValue {
   return SubmitResult.NotSupported;
 }
 
+export function decodeRelocatedInstanceSpotRecord(
+  frozen: import('../../foundation/service-stateful-wire-codec').ServiceWireFrozenRecord,
+  reply: NonNullable<ServiceStatefulMailboxData['reply']>
+): ReceiveRecord {
+  const record = frozen.instanceSpot!;
+  const payload = frozen.applicationPayload!;
+  const mailbox: ServiceMailboxRecord = {
+    owner: `spot:${record.route.targetSpotId}`,
+    domain: 'application',
+    parts: [],
+    sourceRoutingId: frozen.source.nodeRid,
+    correlation: record.replyRouteId
+  };
+  return {
+    ...decodeStatefulRecord(
+      mailbox,
+      {
+        receiveKind: ReceiveKind.InstanceSpotActivation,
+        operationKind: frozen.operationKind,
+        sourceSpotId: record.sourceSpotId,
+        activationRecord: record,
+        applicationMetadata: frozen.metadataFrame,
+        ...(record.replyRouteId === undefined ? {} : { reply })
+      },
+      {
+        packetName: payload.packetName,
+        contentType: payload.contentType,
+        payload: payload.bytes
+      }
+    ),
+    operationId: frozen.operationId
+  };
+}
+
 function decodeStatefulRecord(
   record: ServiceMailboxRecord,
-  stateful: ServiceStatefulMailboxData
+  stateful: ServiceStatefulMailboxData,
+  relocatedApplication?: ServiceApplicationPayload
 ): ReceiveRecord {
   const payloadFrame = record.parts.length < 2 ? undefined : record.parts[1];
   const canonicalActorJoin =
@@ -2777,11 +2824,13 @@ function decodeStatefulRecord(
   const canonicalActorJoinPayload =
     stateful.operationKind === OperationKind.ActorJoin &&
     stateful.canonicalApplicationPayload !== undefined;
-  const application = canonicalActorJoinPayload
-    ? stateful.canonicalApplicationPayload
-    : payloadFrame === undefined
-      ? undefined
-      : decodeMultipartApplicationPayloadView(payloadFrame);
+  const application =
+    relocatedApplication ??
+    (canonicalActorJoinPayload
+      ? stateful.canonicalApplicationPayload
+      : payloadFrame === undefined
+        ? undefined
+        : decodeMultipartApplicationPayloadView(payloadFrame));
   const operationId =
     record.correlation === undefined
       ? { high: 0n, low: 0n }

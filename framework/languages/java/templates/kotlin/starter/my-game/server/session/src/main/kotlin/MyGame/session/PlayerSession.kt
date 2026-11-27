@@ -7,6 +7,10 @@ import systems.zlink.framework.streams.*
 class PlayerSession(private val session: ZLinkSessionContext) : ZLinkSuspendingSession() {
     override fun context() = session
 
+    override suspend fun onConnectedSuspending() {
+        println("EVENT STREAM client connected")
+    }
+
     override suspend fun onErrorSuspending(error: ZLinkStreamError) {
         System.err.println("Session error: ${error.error()}: ${error.message()}")
     }

@@ -16,7 +16,8 @@ public final class ZLinkActorAuthorityPayloadCodec {
 
     public enum State {
         CREATING,
-        READY
+        READY,
+        CLOSING
     }
 
     public record ActorAuthority(
@@ -47,13 +48,23 @@ public final class ZLinkActorAuthorityPayloadCodec {
         Writer actor = new Writer();
         actor.text8(stableType);
         actor.text8(actorId);
-        actor.u8(state == State.CREATING ? 0 : 1);
+        actor.u8(
+                switch (state) {
+                    case CREATING -> 0;
+                    case READY -> 1;
+                    case CLOSING -> 2;
+                });
         actor.text8(currentSpotId);
         actor.opaqueNonzeroU64(currentSpotGeneration);
         actor.u8(currentSpotKind);
 
         Writer body = new Writer();
-        body.u8(state == State.CREATING ? 1 : 0);
+        body.u8(
+                switch (state) {
+                    case CREATING -> 1;
+                    case READY -> 0;
+                    case CLOSING -> 3;
+                });
         body.conditional16(1, actor.bytes());
         body.text8(ownerId);
         body.nonzeroU64(ownerLeaseGeneration);
@@ -108,7 +119,9 @@ public final class ZLinkActorAuthorityPayloadCodec {
             State state =
                     stateValue == 0 && operationKind == 1
                             ? State.CREATING
-                            : stateValue == 1 && operationKind == 0 ? State.READY : null;
+                            : stateValue == 1 && operationKind == 0
+                                    ? State.READY
+                                    : stateValue == 2 && operationKind == 3 ? State.CLOSING : null;
             if (state == null || (currentSpotKind != 1 && currentSpotKind != 2)) {
                 return Optional.empty();
             }

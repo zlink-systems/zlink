@@ -188,7 +188,7 @@ direct, [ChannelName](02-glossary.ko.md#channelname), global
 | 항목 | 계약 |
 |---|---|
 | key와 value | UTF-8이며 NUL을 포함하지 않는다 |
-| 전체 크기 | encoding된 key와 value 및 구조 overhead를 포함해 최대 1024 bytes다 |
+| 전체 크기 | 최대 1024 bytes다. 크기는 [Wire protocol §4](../02-channel-transport/06-wire-protocol.ko.md#decode-검증과-크기-상한)의 한 가지 계산(entry마다 `ChannelHeader` field 13 encoding 길이의 합)으로 잰다 |
 | 같은 key | outbound builder에서 마지막으로 설정한 값이 적용된다 |
 | 수신 | handler context가 변경할 수 없는 [snapshot](02-glossary.ko.md#snapshot)을 제공한다 |
 | lifetime | [handler turn](02-glossary.ko.md#handler-turn)이 끝날 때까지 유효하며 보관하려면 application이 복사한다 |
@@ -266,7 +266,7 @@ receive 호출의 완료값만으로 다음을 확인한다. 각 항목은 test 
 
 **Metadata 제한**
 
-- Application metadata 전체 크기가 encoding된 key·value와 구조 overhead를 합쳐 1024 bytes를
+- Application metadata 전체 크기가 [Wire protocol §4](../02-channel-transport/06-wire-protocol.ko.md#decode-검증과-크기-상한)의 계산으로 1024 bytes를
   넘으면 handler를 호출하지 않고 protocol 오류로 처리된다.
 - 같은 key를 여러 번 설정하면 outbound builder에서 마지막으로 설정한 값만 handler context에
   도착한다.

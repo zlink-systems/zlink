@@ -34,6 +34,7 @@
 #include "runtime/client_server/weighted_selector.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
+#include <service_wire_codec.hpp>
 #include <service_wire_pilot_codec.hpp>
 
 #include <algorithm>
@@ -511,6 +512,75 @@ void verify_topology_ready_is_remote_admit_on_current_route ()
             == mesh::peer_admission_result_t::admitted);
     assert (ready.changed.await_ready ());
     assert (!observe ().peer->ready);
+}
+
+void verify_application_ingress_after_local_admit ()
+{
+    const auto local = descriptor ("ingress-target");
+    const auto remote = descriptor ("ingress-source");
+    mesh::raw_mesh_node_owner_t target (
+      zlink::framework::test::runtime_failure_options (mesh::raw_mesh_node_options_t{local}));
+    target.start ();
+
+    zlink::context_t context;
+    zlink::router_socket_t source (context);
+    source.set_routing_id (zlink::routing_id_t::from (remote.node_routing_id));
+    source.options ().mandatory (true);
+    source.options ().linger (0ms);
+    source.options ().connect_routing_id (zlink::routing_id_t::from (local.node_routing_id));
+    source.connect (target.endpoint ());
+    zlink::framework::detail::backend::raw_route_port_t port (source);
+    const auto route_deadline = std::chrono::steady_clock::now () + 2s;
+    while (source.routes_snapshot ().empty () && std::chrono::steady_clock::now () < route_deadline)
+        (void) port.poll (0ms);
+    assert (!source.routes_snapshot ().empty ());
+
+    const auto pump_record = [&] {
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        auto result = mesh::raw_mesh_pump_result_t::no_data;
+        while (result == mesh::raw_mesh_pump_result_t::no_data
+               && std::chrono::steady_clock::now () < deadline)
+            result = await_task (target.pump_one (std::chrono::steady_clock::now ()));
+        return result;
+    };
+    namespace wire = protocol::generated::detail;
+    wire::logicalMulticast_23_t multicast;
+    multicast.channelName.value = "alpha";
+    multicast.topic.value = "ingress";
+    multicast.sourceSpotId.value = "source-spot";
+    wire::writer_t header;
+    assert (wire::encode_head_logicalMulticast_23 (header, multicast) == wire::error_code::ok);
+    const auto send_multicast = [&] (std::vector<std::uint8_t> payload) {
+        assert (await_task (
+          port.send (local.node_routing_id,
+                     {header.data, protocol::encode_application_payload (
+                                     {"Ingress", "application/json", std::move (payload)})})));
+    };
+    constexpr auto application = mesh::service_mailbox_domain_t::application;
+    send_multicast (bytes ("\"before HELLO\""));
+    assert (pump_record () == mesh::raw_mesh_pump_result_t::infrastructure);
+    assert (target.mailbox ().pending_messages (application) == 0);
+
+    assert (await_task (port.send (local.node_routing_id, {protocol::encode_route_mesh_admission (
+                                                            protocol::command::hello, remote)})));
+    assert (pump_record () == mesh::raw_mesh_pump_result_t::infrastructure);
+    const auto admitted = target.topology ().peer (remote.node_routing_id);
+    assert (admitted && !admitted->ready);
+
+    const auto payload = bytes ("\"after HELLO\"");
+    send_multicast (payload);
+    assert (pump_record () == mesh::raw_mesh_pump_result_t::application);
+    auto claim = zlink::framework::test::claim_mailbox (target.mailbox (), application, 2, 4096);
+    assert (claim && claim->records.size () == 1);
+    const auto &record = *claim->records.front ();
+    assert (record.source_routing_id == remote.node_routing_id);
+    assert (protocol::decode_application_payload (protocol::message_bytes (record.parts ().back ()))
+              .payload_bytes ()
+            == payload);
+    assert (target.mailbox ().release (*claim));
+
+    port.close ();
+    target.close ();
 }
 
 void verify_unadmitted_route (bool repeat_hello)

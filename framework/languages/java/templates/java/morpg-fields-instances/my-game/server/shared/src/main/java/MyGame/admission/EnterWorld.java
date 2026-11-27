@@ -18,17 +18,20 @@ public final class EnterWorld {
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationPartyView(Entry spot, Player actor, ZLinkMessageContext context, PartyView message) {
+    public CompletionStage<Void> notificationPartyView(
+            Entry spot, Player actor, ZLinkMessageContext context, PartyView message) {
         return actor.deliver(message);
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationBorderVisible(Entry spot, Player actor, ZLinkMessageContext context, BorderVisible message) {
+    public CompletionStage<Void> notificationBorderVisible(
+            Entry spot, Player actor, ZLinkMessageContext context, BorderVisible message) {
         return actor.deliver(message);
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationDungeonView(Entry spot, Player actor, ZLinkMessageContext context, DungeonView message) {
+    public CompletionStage<Void> notificationDungeonView(
+            Entry spot, Player actor, ZLinkMessageContext context, DungeonView message) {
         return actor.deliver(message);
     }
 }

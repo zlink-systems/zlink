@@ -197,7 +197,9 @@ This binding should feel like a safe Rust crate on top of the native
 runtime.
 
 - A public resource type owns its native lifetime and releases the resource via `Drop`.
-- A fallible operation returns `Result<T, ZlinkError>`, or a more specific typed result when that improves clarity.
+- A fallible operation uses its concrete function-family error as `E` in `Result<T, E>` by default. Send
+  submission uses `SubmitError`. The `RequestOp` terminal uses `ZlinkError` to carry both submission and
+  request completion errors.
 - Concrete values — message, routing id, received metadata, topic message, snapshot, option, enum, error — stay concrete types.
 - A trait is used only when the caller needs substitutable behavior or a generic bound. Not every concrete handle gets a trait by default.
 - A Builder is required for multipart send, publish, request and reply operations, and it hides native state.
@@ -296,7 +298,7 @@ public crate items and re-exports.
 - `core/`: context, context option, routing id, version/capability lookup helpers, utility contracts.
 - `messaging/`: message, received metadata, topic message, subscription event, stream packet data, builder payload helpers.
 - `sockets/`: socket operations, socket family, typed options, request/reply, publish/subscribe surfaces.
-- `eventing/`: monitor, monitor snapshot/event, poller, poll event, timer, public poll helpers.
+- `eventing/`: monitor, monitor status/event, poller, poll event, timer, public poll helpers.
 - `errors/`: the typed error/result domain.
 - Enum, flag, and result types live in the category that defines their meaning. No `enums` module is created just to group declarations syntactically.
 
@@ -327,7 +329,7 @@ public crate items and re-exports.
   subscriber immediately returns `Backpressured`).
 - A send Future progresses when the socket-local owner drains a Core `DONTWAIT` completion.
   `submit_sync()` uses Core `NONE` admission. Future drop detaches only the waiter; a late completion
-  releases provisional-registry state and the native payload.
+  releases completion operation state and the native payload.
 - PUB/XPUB `publish` and ROUTER reply retain separate synchronous operation contracts. The raw
   ROUTER/`Received` reply terminal is the one-shot
   `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`. It submits a terminal reply or error reply
@@ -343,7 +345,7 @@ The crate must expose clear public modules or re-exports.
 - Core: context, options, version/capability lookup helpers, utility.
 - Messaging: message, routing id, received metadata, topic message, subscription event, stream packet data.
 - Sockets: pair, dealer, router, pub, sub, xpub, xsub, stream, typed options, request/reply, publish/subscribe, stream packet API.
-- Eventing: monitor, monitor snapshot/event, poller, poll event, timer.
+- Eventing: monitor, monitor status/event, poller, poll event, timer.
 - Error: the typed error/result domain that preserves core semantics.
 
 The public crate may re-export frequently used types at the crate root,
@@ -404,12 +406,73 @@ Once the binding is aligned with the common .NET-baseline policy, the
 public crate must cover the following stable, user-facing capabilities.
 
 - Context lifecycle, options, shutdown, auto-HWM recalculation, version, capability lookup, strerror.
-- Message ownership, multipart payload, routing id, received metadata, topic message, subscription event, and stream packet values.
+- Message ownership, multipart payload, routing id, received metadata, topic message, subscription event,
+  and the `StreamPacket` value used for pull receive.
 - Every socket family and its typed options. `SubSocket::subscription_at(index)` and `XSubSocket::subscription_at(index)` return that index's subscription filter and whether it is a pattern. If that index doesn't exist, they return `None`.
 - Monitor, poller, timer, readiness semantics.
 
 Rust names and the ownership model may differ from C, but behavior must
 match the meaning of the core capabilities.
+
+### Per-socket capabilities
+
+The [Socket Capability Matrix](../README.en.md#socket-capability-matrix) defines the common per-socket contract.
+
+| Socket | Submission | Receive |
+|---|---|---|
+| PAIR | `send` | `recv` |
+| DEALER | `send`, `request` | `recv` |
+| ROUTER | `send(routing_id)`, `request`, `reply` | `recv` |
+| PUB | `publish` | — |
+| SUB | — | `subscribe` |
+| XPUB | `publish` | `receive_subscription_event` |
+| XSUB | — | `subscribe` |
+| STREAM | `send(routing_id)` | `recv`, `recv_packet` |
+
+Every raw socket opens and closes an endpoint with `bind` and `unbind`, and disconnects a peer by routing
+ID with `disconnect_rid`. Sockets other than STREAM register outbound connections with `connect` and remove
+them with `disconnect`.
+
+`set_tls_server(&self, cert: &str, key: &str, require_client_cert: bool) -> Result<(), ConfigError>`
+configures the certificate, key, and client authentication requirement before bind.
+`set_tls_client(&self, ca_cert: &str, hostname: &str, trust_system: bool) -> Result<(), ConfigError>`
+configures the CA, server name, and use of the system CA store before connect. Every raw socket exposes
+both methods.
+
+Connection methods return `Result<(), E>`. `bind` uses `BindError`; the other methods use `ConnectError`.
+Endpoints take `&str`, and `disconnect_rid` takes `&RoutingId`. SUB and XSUB configure and remove filters
+with `set_subscription` and `unset_subscription`.
+
+Every socket provides `common_options()`. Use `router_options()`, `dealer_options()`, and
+`stream_options()` on their respective sockets, `pub_options()` on PUB and XPUB, and `sub_options()` on SUB
+and XSUB.
+
+### Socket readiness snapshots
+
+`RouterSocket::routes_snapshot(&self) -> Result<Vec<RouterRoute>, ConfigError>` returns one row per routing
+ID for the routes Core currently selects. `RouterRoute` exposes `routing_id`, `route_generation`. The route
+generation is a nonzero opaque token. Compare it only for equality. `POLLROUTE` signals a change in a
+selected route.
+
+A connection-attempt snapshot returns one row per outbound connect registration. The target surface (**not implemented yet**, #5746) is
+`connection_attempts_snapshot(&self) -> Result<Vec<ConnectionAttempt>, ConfigError>` on raw sockets other
+than STREAM, with Poller readiness `POLLCONNECT`. `ConnectionAttempt` contains `endpoint`, `intent_id`,
+`revision`, `last_failure_id`, `state`, `last_failure`. `ConnectionFailure` contains `kind`, `stage`,
+`normalized_errno`, `disconnect_reason`. The closed enums `ConnectionAttemptState`,
+`ConnectionFailureKind`, and `ConnectionFailureStage` preserve Core states, failure kinds, and stages.
+
+`endpoint` is a UTF-8 endpoint in a `String`. `last_failure` is a
+`ConnectionFailure` that retains the latest failure after recovery. `normalized_errno` (`i32`)
+and `disconnect_reason` (`u32`) are diagnostic values.
+
+`intent_id` and `revision` are nonzero opaque `u64` tokens. `last_failure_id` has the same
+type and is zero before the first failure. Compare tokens only for equality. Connection failures
+appear in snapshot rows. Only query failures use `ConfigError`. The binding does not infer
+connection results from monitor history or timer polling.
+
+A successful snapshot clears readiness for the changes it reflects. Use one observer per socket for each
+snapshot type. The [common snapshot contract](../README.en.md#socket-readiness-snapshots) defines both
+readiness signals.
 
 ## Spot Get-Or-Create
 
@@ -426,11 +489,22 @@ owns public Spot `GetOrCreate` inputs, results, and ownership.
 - Non-blocking no-data is distinguished from a hard receive failure.
 - Returned message data has clear ownership and lifetime. Borrowed data never outlives its native owner.
 
+`MonitorStatus` reflects Core ABI v4 under the
+[common MonitorStatus contract](../README.en.md#monitorstatus). `abi_version` and `struct_size` are
+diagnostic values for verifying the returned layout. The
+[common MonitorEvent contract](../README.en.md#monitorevent) defines the meaning and native layout of the
+`MonitorEvent` fields `event`, `value`, `routing_id`, `local_addr`, `remote_addr`, `connection_id`,
+`transport_lane`, `flags`.
+
 ## Error and validation policy
+
+Function-family errors preserve the 66 non-OK codes in the
+[common error code table](../README.en.md#error-code-table).
 
 - A native fixed-size id or string is validated before crossing the FFI boundary.
 - Routing id, endpoint, channel name, and topic are never silently truncated.
-- The submit, request, recv, handler, close, bind, connect, and config error domains are preserved.
+- The function-family error types are `SubmitError`, `RequestError`, `RecvError`, `HandlerError`,
+  `CloseError`, `BindError`, `ConnectError`, and `ConfigError`.
 - A public error must be checkable via a Rust type, not by parsing a string.
 
 ## Performance policy

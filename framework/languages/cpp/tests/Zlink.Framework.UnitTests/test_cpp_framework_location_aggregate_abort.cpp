@@ -5,11 +5,11 @@
 
 namespace
 {
-TEST (LocationAggregateAbort, InterruptedCommitPageRollbackRecoversOnAuthorityMutation)
+TEST (LocationAggregateAbort, LostAbortReplyPreservesSourceAuthorityAndReleasesCapacity)
 {
     using namespace zlink::framework::test::opaque_store;
     in_memory_location_store_t provider;
-    zlink::framework::test::aggregate_page_read_keeps_source_version_until_commit (provider, bytes,
-                                                                                   nullptr, true);
+    zlink::framework::test::aggregate_read_keeps_source_version_until_commit (provider, bytes,
+                                                                              nullptr, true);
 }
 }

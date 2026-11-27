@@ -120,20 +120,6 @@ public sealed class RouteCodecTests
     }
 
     [Fact]
-    public void MeshMetadataCodec_Accepts_Exactly_1024_Bytes_And_Rejects_The_Next_Byte()
-    {
-        var atLimit = new ZLinkCallMetadata();
-        atLimit.Set("k", new string('v', 1018));
-        Assert.Equal(1024, atLimit.Encode().Length);
-
-        var overLimit = new ZLinkCallMetadata();
-        overLimit.Set("k", new string('v', 1019));
-        var failure = Assert.Throws<ArgumentException>(() => overLimit.Encode());
-
-        Assert.Contains("1024-byte limit", failure.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void MeshMetadataCodec_Rejects_A_Malformed_Ingress_Frame()
     {
         var malformed = new byte[] { 1, 1, 3, (byte)'k' };

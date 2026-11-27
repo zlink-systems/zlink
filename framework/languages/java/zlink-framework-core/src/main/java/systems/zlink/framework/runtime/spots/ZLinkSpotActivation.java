@@ -22,12 +22,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
-final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
+final class SpotActivation extends SpotActivationBase<DefaultSpotContext>
+        implements ZLinkSpotRelocationUnit.Source {
     private final ZLinkSpot<?> spot;
     private volatile String meshName;
 
@@ -40,6 +40,28 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         super(host, spotHandlerInvoker, spot, backendSpot, context);
         this.spot = spot;
         context.bindCloseAdmission(this::hasCommittedClose);
+    }
+
+    @Override
+    public SpotActivation activation() {
+        return this;
+    }
+
+    @Override
+    public ZLinkUserSpotRelocationBarrier relocationBarrier(ZLinkActorSessionCoordinator actors) {
+        return context.relocationBarrier(actors);
+    }
+
+    @Override
+    public CompletionStage<Void> cleanupRelocationSource(
+            ZLinkSpotLifecycle spots,
+            ZLinkUserSpotRelocationBarrier barrier,
+            long generation,
+            Instant deadline) {
+        // A shell remains until its Actors have settled.
+        return barrier.relocatesActorMembers()
+                ? spots.completeRelocationSource(context.spotId(), generation, deadline)
+                : CompletableFuture.completedFuture(null);
     }
 
     ZLinkSpot<?> spot() {
@@ -370,9 +392,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             return CompletableFuture.completedFuture(null);
         }
         ZLinkFlowContext.State inboundFlow =
-                captureFlow && packet.header() != null
-                        ? ZLinkSpotFlowFrame.fromEnvelopeHeader(packet.header())
-                        : null;
+                captureFlow ? ZLinkSpotFlowFrame.fromEnvelopeHeader(packet.header()) : null;
         var flowScope =
                 captureFlow
                         ? ZLinkFlowContext.enterOrCreate(inboundFlow, ZLinkFlowOrigin.INBOUND)
@@ -386,16 +406,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                     packet.packetName(),
                     received.requestSeq(),
                     backendSpot.spotId());
-            if (ZLinkActorSpotRoutePackets.BOUND_SESSION_SEND_PACKET_NAME.equals(
-                    packet.packetName())) {
-                CompletionStage<?> stage =
-                        received.requestSeq().isPresent()
-                                ? handleRoutedBoundSessionSendRequestParts(received.parts())
-                                        .thenAccept(received::reply)
-                                : handleRoutedBoundSessionSendParts(received.parts());
-                return stage.thenApply(ignored -> (Void) null)
-                        .whenComplete((ignored, error) -> closeRouteReceived(received));
-            }
             if (ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(packet.packetName())) {
                 return handleRoutedActorPacketParts(received.parts(), received.receivedAt())
                         .thenAccept(
@@ -424,38 +434,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
     }
 
     CompletionStage<List<byte[]>> replayAccepted(ZLinkSpotAcceptedJournal.Record record) {
-        Objects.requireNonNull(record, "record");
-        CompletableFuture<List<byte[]>> reply = new CompletableFuture<>();
-        List<Message> parts = record.parts().stream().map(Message::from).toList();
-        var received =
-                new ZLinkBackendReceived(
-                        record.result(),
-                        record.routingId(),
-                        record.spotId(),
-                        record.requestSequence(),
-                        record.applicationMetadata(),
-                        new byte[0],
-                        parts,
-                        values -> {
-                            try {
-                                reply.complete(values.stream().map(Message::toByteArray).toList());
-                            } finally {
-                                values.forEach(Message::close);
-                            }
-                        },
-                        () -> {});
-        CompletionStage<Void> dispatched;
-        try {
-            dispatched = dispatchRouteAsync(received);
-        } catch (RuntimeException failure) {
-            received.close();
-            return CompletableFuture.failedFuture(failure);
-        }
-        return dispatched.thenCompose(
-                ignored ->
-                        record.requestSequence().isPresent()
-                                ? reply
-                                : CompletableFuture.completedFuture(List.of()));
+        return replayAccepted(record, this::dispatchRouteAsync);
     }
 
     private CompletionStage<Void> drainSubscriptionsAsync() {

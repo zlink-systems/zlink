@@ -1,5 +1,7 @@
 # MyGame Java starter
 
+[한국어](README.ko.md)
+
 This setup runs one Session node that accepts STREAM connections, with Redis for the Location Store and relocation storage. It provides hosting, diagnostics, process control, and an e2e starting point. It contains no application Spot, Actor, Entry, authentication, subscriptions, or game packets.
 
 ```mermaid
@@ -29,18 +31,38 @@ Build the node and runner images from this directory.
 The build command removes its image tags after checking the build; Docker retains reusable build layers. PowerShell provides the same command.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 Both commands build the modules listed in `settings.gradle.kts`.
+
+## Local server
+
+Install JDK 25 and keep Docker with Compose v2 running for Redis. Run the command from this project directory.
+
+```sh
+./run-server.sh
+```
+
+On Windows, install PowerShell 7 and run the CMD wrapper.
+
+```powershell
+.\run-server.cmd
+```
+
+The server builds the Java distributions, starts the nodes and Redis, and prints the WebSocket endpoint after `Server ready:`. Keep the terminal open. Press Ctrl+C to stop the nodes and Redis. A second server invocation is refused.
+
+Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal to use the running server. The runner detects `.logs/server.json` and prints `Using the running server`. With the server stopped, the default runner starts an isolated Docker stack. In attached mode, `connect` tests the WebSocket connection and skips the drain step so the Session node stays available.
+
+Each run keeps effective node settings, node stdout and stderr, Framework message-flow logs (`*.flow.log`), and any failure details in `.logs/run-<id>/`. Local build output is in `.logs/build.log` and isolated Docker build and cleanup output is in `.logs/docker-*/`.
 
 ## Client connection
 
 ### Endpoint and first packet
 
-Connect to the Session node's `players` STREAM listener. `server/config/session.json` configures `tcp://127.0.0.1:0`: loopback with port `0` requesting an OS-selected port. `server/shared/src/main/java/MyGame/Hosting.java` prints `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}`; use its actual `streamEndpoint`, not port `0`. Mesh and Redis endpoints are not client endpoints.
+Connect to the Session node's `players` STREAM listener. `server/config/session.json` configures `ws://127.0.0.1:0`: loopback with port `0` requesting an OS-selected port. `server/shared/src/main/java/MyGame/Hosting.java` prints `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}`; use its actual `streamEndpoint`, not port `0`. Mesh and Redis endpoints are not client endpoints.
 
-This is TCP with no URL path. Web browsers, Unity WebGL and Cocos Creator web cannot connect to this default TCP listener. Those targets need a separately configured WebSocket listener and a reachable `ws://` or `wss://` endpoint. Loopback is reachable only from the same host/network namespace. The Docker e2e runner owns and removes its temporary deployment. For an external client, keep a deployment running, bind a reachable interface and port, expose the container port, and use the server's reachable host.
+The default WebSocket endpoint uses the root path (`/`) and supports browsers, Unity WebGL and Cocos Creator web. An HTTPS page needs a reachable `wss://` endpoint. Loopback is reachable only from the same host/network namespace. The Docker e2e runner owns and removes its temporary deployment. For an external client, keep a deployment running, bind a reachable interface and port, expose the container port, and use the server's reachable host.
 
 The starter defines no game packets or application handshake. `PlayerSession.onDispatch` fails with `No application packets are registered yet.` for application packets. The e2e scenario only connects and closes the public connector; the example does the same. Add typed contracts and Session handlers before sending gameplay.
 
@@ -93,20 +115,22 @@ public final class ConnectOnce {
 }
 ```
 
-## Local e2e
+## End-to-end scenarios
 
-Run the default Docker scenario from this directory.
+The following scenarios run in an isolated Docker stack when a local server is unavailable.
+
+Run the scenario from this directory.
 
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario connect
 ```
 
-The `connect` scenario waits for node READY, connects and closes one public STREAM connector, then checks the drain markers. The runner verifies a successful shutdown while it cleans up. PowerShell selects the same scenario.
+The `connect` scenario waits for node READY, connects and closes one public STREAM connector, then checks the drain markers in isolated mode. The runner verifies a successful shutdown while it cleans up. PowerShell selects the same scenario.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario connect
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario connect
 ```
 
 A successful run prints `✓ connect` and `Scenarios: 1/1 passed`. Cleanup failures return a nonzero exit code.
@@ -120,7 +144,7 @@ Validate the structure without starting Redis or the node.
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -CheckStructure
 ```
 
 Changes to registrations, settings, structure, and scenarios must be made together; see [the development guide](AGENTS.md).

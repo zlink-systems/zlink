@@ -22,12 +22,14 @@ CHECKS = (
 # The step names select the Linux x64 main-queue checks. The workflows supply
 # their commands, arguments, working directories, environment and order.
 CPP = (
+    "Report oversized Framework C++ test sources",
     "Verify framework relocation conformance inventory",
     "Resolve the runner vcpkg",
     "Install Framework C++ vcpkg dependencies",
     "Verify vcpkg versions against the manifest and Conan locks",
     "Build the checkout C++ binding package",
     "Configure and build Framework C++ tests",
+    "Report Framework C++ compile RSS",
     "Run Framework C++ unit and contract tests",
 )
 JAVA_TEST = "Run Framework Java core, integration and Spring starter tests"
