@@ -225,6 +225,10 @@ export interface ZLinkSpotManagerOptions {
     actorId: string,
     records: readonly ZLinkActorHandoffPrefixRecord[]
   ) => ZLinkActorHandoffPrefixAdmission;
+  readonly sealEntryActorJoinCompletion?: (
+    meshName: string,
+    actorId: string
+  ) => ZLinkFrameworkException | undefined;
   readonly executeEntryActor?: <T>(
     meshName: string,
     actorId: string,
@@ -1817,6 +1821,22 @@ export class DefaultZLinkSpotManager {
     if (activation?.resolveJoinedActor(actor.context.actorId) !== actor) return;
     activation.serialExecutor.discardActor(actor.context.actorId, error);
     activation.commitActorDeparture(actor.context.actorId);
+  }
+
+  sealActorJoinCompletion(actor: ZLinkActor, cause: unknown): ZLinkFrameworkException {
+    const { actorId, meshName, spotId } = actor.context;
+    const failure =
+      spotId === undefined
+        ? this.options.sealEntryActorJoinCompletion?.(meshName, actorId)
+        : this.resolveApplicationActivation(
+            spotId,
+            meshName
+          )?.serialExecutor.sealActorJoinCompletion(actorId);
+    if (failure === undefined) {
+      throw new ZLinkConfigurationException(`Actor '${actorId}' has no active execution gate.`);
+    }
+    reportActorJoinCallbackFailure(this.options, meshName, actorId, 'OnJoinCompleted', cause);
+    return failure;
   }
 
   executeActorTurn<T>(

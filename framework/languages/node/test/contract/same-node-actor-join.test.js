@@ -365,3 +365,154 @@ test('stateful local membership restoration preserves Session binding identity a
   registry.restoreActor(actor.ref, 'player', spot.ref, 2n, actor.authorityOwnerGeneration);
   assert.deepEqual(registry.binding(actor.ref), { ...binding, membershipEpoch: 2n });
 });
+
+test('late request requires successful Join completion', { timeout: 15000 }, async (t) => {
+  const { Module } = require('@nestjs/common');
+  const { NestFactory } = require('@nestjs/core');
+  const nest = require('../../packages/nestjs/dist');
+  const {
+    ZLinkInMemoryProviderLocationStore
+  } = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
+  const observation = require('./fixtures/message-flow-observation.cjs')(
+    require('../../packages/framework/dist/runtime/diagnostics/message-flow-delivery')
+  );
+  t.after(() => observation.close());
+  await observation.observed();
+
+  const meshName = 'late-join';
+  const actorId = 'alice';
+  const completionFailure = new Error('Controlled Join completion failure.');
+  const completions = [];
+  let resolveCompletion;
+  const completionEntered = new Promise((resolve) => {
+    resolveCompletion = resolve;
+  });
+  let lateRequests = 0;
+  let lateSends = 0;
+
+  class Player {
+    constructor(context) {
+      this.context = context;
+    }
+    async onJoinCompleted(completion) {
+      completions.push(completion);
+      resolveCompletion();
+      throw completionFailure;
+    }
+  }
+  class PlayerFactory {
+    async create(context) {
+      return new Player(context);
+    }
+  }
+  class Entry {
+    async onCreateActor() {
+      return { accepted: true };
+    }
+  }
+  class Room {
+    async onJoinedActor() {}
+    async onActorJoin() {
+      return { accepted: true };
+    }
+  }
+  class Move {
+    async handle(_spot, actor, _dispatch, message) {
+      actor.context.joinSpot(message.spotId).defer();
+      return { queued: true };
+    }
+  }
+  class LateRequest {
+    async handle() {
+      lateRequests += 1;
+      return { ran: true };
+    }
+  }
+  class LateSend {
+    async handle() {
+      lateSends += 1;
+    }
+  }
+  nest.zlinkEntrySpotActorRequestHandler({ entrySpot: Entry, actor: Player, packetName: 'Move' })(
+    Move
+  );
+  nest.zlinkSpotActorRequestHandler({ spot: Room, actor: Player, packetName: 'LateRequest' })(
+    LateRequest
+  );
+  nest.zlinkSpotActorSendHandler({ spot: Room, actor: Player, packetName: 'LateSend' })(LateSend);
+
+  const builder = nest.zlinkFramework().addLocationStore(new ZLinkInMemoryProviderLocationStore());
+  builder.configureDispatch().messageFlow('normal');
+  const objects = builder.addRouteMesh(meshName).listen('tcp://127.0.0.1:0').objects();
+  objects.client();
+  objects
+    .server()
+    .addEntrySpot(Entry, 'Player')
+    .addSpotFactory('Room', Room, (factory) => factory.disableRelocation())
+    .addActorFactory('Player', PlayerFactory, (factory) => factory.disableRelocation());
+  class App {}
+  Module({
+    imports: [nest.ZLinkModule.forRoot(builder.build())],
+    providers: [Entry, Room, PlayerFactory, Move, LateRequest, LateSend]
+  })(App);
+  const app = await NestFactory.createApplicationContext(App, {
+    logger: false,
+    abortOnError: false
+  });
+  const runtime = app.get(nest.ZLINK_FRAMEWORK_RUNTIME);
+  try {
+    const { spot } = await app
+      .get(nest.ZLINK_SPOT_MANAGER)
+      .create('Room')
+      .inMesh(meshName)
+      .submit();
+    const actors = app.get(nest.ZLINK_ACTOR_MANAGER);
+    await actors.create(actorId, 'Player').inMesh(meshName).request({}).submit();
+    const client = app.get(nest.ZLINK_ACTOR_CLIENT);
+    assert.deepEqual(
+      await client
+        .requestToActor(actorId, { spotId: String(spot.spotId) })
+        .packetName('Move')
+        .submit(),
+      { queued: true }
+    );
+    await completionEntered;
+    // The callback has thrown and its rejected promise settles before the next turn.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0].status, 'accepted');
+    assert.equal(completions[0].actor.actorId, actorId);
+    assert.equal(completions[0].actor.nodeRid, (await actors.find(actorId)).nodeRid);
+
+    const deadlineMs = 5000;
+    const start = performance.now();
+    await assert.rejects(
+      client.requestToActor(actorId, {}).packetName('LateRequest').timeout(deadlineMs).submit(),
+      { kind: framework.ZLinkFrameworkErrorKind.Unavailable }
+    );
+    assert.ok(performance.now() - start < deadlineMs / 5, 'late request must settle promptly');
+    assert.equal(lateRequests, 0);
+    const logStart = observation.telemetryRecords.length;
+    await client.sendToActor(actorId, {}).packetName('LateSend').submit();
+    const dropDeadline = performance.now() + 1000;
+    let dropped;
+    do {
+      await observation.observed();
+      dropped = observation.telemetryRecords
+        .slice(logStart)
+        .find(
+          ({ attributes }) =>
+            attributes.error_message ===
+            'Actor Join completion did not release application dispatch.'
+        );
+      if (dropped !== undefined) break;
+      await new Promise((resolve) => setImmediate(resolve));
+    } while (performance.now() < dropDeadline);
+    assert.ok(dropped, 'the receiver must record the dropped send');
+    assert.equal(lateSends, 0);
+  } finally {
+    // Release any retained work if the assertion detects a regression.
+    runtime.actorHandoff.cancel(actorId);
+    await app.close();
+  }
+});

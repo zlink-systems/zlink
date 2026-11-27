@@ -1331,7 +1331,7 @@ for (const firstJoin of ['accepted', 'rejected', 'transferred']) {
     };
     const finishJoin = (outcome) =>
       outcome === 'accepted'
-        ? transfer.completeDeferredActorHandoff(actor, { spotId: 'target-spot' }, actorRef())
+        ? transfer.completeDeferredActorHandoff(actor)
         : transfer.cancelDeferredActorHandoff(actor, state);
     // The handler of the replayed record registers the next deferred Join,
     // which installs its provisional hold after the handler terminal and is
@@ -1488,11 +1488,7 @@ test('deferred Join release uses the direct Spot replay path without recapturing
     parts.forEach((part) => part.close());
   }
 
-  await transfer.completeDeferredActorHandoff(
-    { context: { actorId: 'actor-1' } },
-    { spotId: 'target-spot' },
-    actorRef()
-  );
+  await transfer.completeDeferredActorHandoff({ context: { actorId: 'actor-1' } });
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(replayed, ['D1', 'D2']);

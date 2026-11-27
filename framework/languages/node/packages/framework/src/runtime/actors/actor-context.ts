@@ -615,7 +615,12 @@ async function notifyJoinCompletion(
         operationId,
         ...replyField
       };
-  await actor.onJoinCompleted?.(completion);
+  try {
+    await actor.onJoinCompleted?.(completion);
+  } catch (error) {
+    if (result.accepted) await result.finalizeDeferredJoin?.({ error });
+    throw error;
+  }
 }
 
 async function notifyJoinFailure(

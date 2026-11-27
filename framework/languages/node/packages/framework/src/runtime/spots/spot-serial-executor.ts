@@ -1,6 +1,10 @@
 import { startActorTeardown } from '../actors/actor-runtime-state';
 import type { ZLinkExecutionPolicy } from '../admission';
-import { ZLinkUserSpotExecutionMode } from '../../contracts';
+import { ZLinkFrameworkException, ZLinkUserSpotExecutionMode } from '../../contracts';
+import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
 import { ZLinkActorSerialExecutor } from '../actors';
 import type {
   ZLinkActorHandoffDispatch,
@@ -21,12 +25,6 @@ export type ZLinkActorPacketTurnDispatch = (
   ...args: Parameters<ZLinkActorHandoffDispatch>
 ) => ReturnType<ZLinkActorHandoffDispatch>;
 
-class ActorJoinCompletionSealedError extends Error {
-  constructor() {
-    super('Actor Join completion did not release application dispatch.');
-  }
-}
-
 /**
  * Owns every application serial unit that belongs to one Spot activation.
  *
@@ -37,6 +35,8 @@ export class ZLinkSpotSerialExecutor {
   private readonly actorSerials = new Map<string, ZLinkSpotSerialTurnExecutor>();
   private readonly timerSerials = new Map<string, ZLinkSpotSerialTurnExecutor>();
   readonly actorExecutors = new Map<string, ZLinkActorSerialExecutor>();
+  /** Failures created by a sealed Join completion; held packets settle with exactly these. */
+  private readonly joinCompletionSeals = new WeakSet<object>();
   private executionBarrier: ZLinkExecutionBarrier | undefined;
   private captureActorExecutionPolicy?: (actorId: string) => ZLinkExecutionPolicy | undefined;
   private captureActorExecutionOwner?: (actorId: string) => object | undefined;
@@ -181,12 +181,7 @@ export class ZLinkSpotSerialExecutor {
             try {
               return await operation();
             } catch (error) {
-              // A failed Join completion seals application work in this Actor's mailbox.
-              const sealed = new ActorJoinCompletionSealedError();
-              executor.scheduler.setExecutionPolicy(() => ({
-                executionDecision: () => 'lost',
-                executionFailure: () => sealed
-              }));
+              this.sealActorJoinCompletion(actorId);
               return onFailure(error);
             }
           },
@@ -194,6 +189,19 @@ export class ZLinkSpotSerialExecutor {
         ),
       { lane: 'lifecycle' }
     );
+  }
+
+  sealActorJoinCompletion(actorId: string): ZLinkFrameworkException {
+    const error = createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable,
+      'Actor Join completion did not release application dispatch.'
+    );
+    this.joinCompletionSeals.add(error);
+    this.actorExecutor(actorId).scheduler.setExecutionPolicy(() => ({
+      executionDecision: () => 'lost',
+      executionFailure: () => error
+    }));
+    return error;
   }
 
   /** Admits held packets through the same Actor FIFO as ordinary ingress. */
@@ -217,7 +225,9 @@ export class ZLinkSpotSerialExecutor {
     );
     const settled = terminals.map((terminal, index) =>
       terminal.catch((error) => {
-        if (!(error instanceof ActorJoinCompletionSealedError)) throw error;
+        if (!(error instanceof ZLinkFrameworkException) || !this.joinCompletionSeals.has(error)) {
+          throw error;
+        }
         // Settle accepted requests through the existing handoff reply path.
         records[index]!.reject(error);
       })

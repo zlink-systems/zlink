@@ -111,7 +111,7 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
       completionOperationId,
       deadlineAtMs
     );
-    return this.withDeferredJoinFinalizer(actor, state, target, result, completionOperationId);
+    return this.withDeferredJoinFinalizer(actor, state, result, completionOperationId);
   }
 
   async joinEntrySpot(
@@ -160,13 +160,12 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
       completionOperationId,
       deadlineAtMs
     );
-    return this.withDeferredJoinFinalizer(actor, state, target, result, completionOperationId);
+    return this.withDeferredJoinFinalizer(actor, state, result, completionOperationId);
   }
 
   private withDeferredJoinFinalizer(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
-    target: Awaited<ReturnType<ZLinkSpotRouteResolver['resolve']>> | undefined,
     result: ZLinkActorJoinRuntimeResult<Message>,
     operationId: import('../../contracts').ZLinkActorJoinOperationId | undefined
   ): ZLinkActorJoinRuntimeResult<Message> {
@@ -178,12 +177,11 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
       return result;
     return {
       ...result,
-      finalizeDeferredJoin: async () => {
-        if (result.accepted && result.actor !== undefined && target !== undefined) {
+      finalizeDeferredJoin: async (completionFailure) => {
+        if (result.accepted && result.actor !== undefined) {
           await this.options.sourceTransfer!.completeDeferredActorHandoff?.(
             actor,
-            target,
-            result.actor
+            completionFailure
           );
         } else {
           await this.options.sourceTransfer!.cancelDeferredActorHandoff?.(actor, state);

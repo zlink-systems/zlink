@@ -337,14 +337,18 @@ export class ZLinkActorTransferRuntime {
 
   async completeDeferredActorHandoff(
     actor: ZLinkActor,
-    _target: ZLinkSpotRouteTarget,
-    _targetActorRef: ActorRef
+    completionFailure?: { readonly error: unknown }
   ): Promise<void> {
     const actorId = actor.context.actorId;
     if (!this.options.actorHandoff.isProvisional(actorId)) return;
     const manager = this.options.spotManager();
     if (manager === undefined) {
       throw new Error(`Actor '${actorId}' same-node Join has no local Spot manager.`);
+    }
+    if (completionFailure !== undefined) {
+      const unavailable = manager.sealActorJoinCompletion(actor, completionFailure.error);
+      this.options.actorHandoff.cancel(actorId, unavailable);
+      return;
     }
     const admitted = this.options.actorHandoff.admitDeferredPrefix(
       actorId,

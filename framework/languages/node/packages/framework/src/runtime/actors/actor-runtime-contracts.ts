@@ -33,7 +33,9 @@ export interface ZLinkActorJoinRuntimeResult<TReply> {
   readonly actor?: import('../../contracts').ActorRef;
   readonly reply?: TReply;
   /** Internal terminal work that must run after the completion callback. */
-  readonly finalizeDeferredJoin?: () => Promise<void>;
+  readonly finalizeDeferredJoin?: (completionFailure?: {
+    readonly error: unknown;
+  }) => Promise<void>;
 }
 
 export interface ZLinkActorManagerOptions {

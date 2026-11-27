@@ -152,6 +152,11 @@ export class ZLinkSpotRuntimeOptionsFactory {
         }
         return runtime.admitEntryActorPacketPrefix(meshName, actorId, records);
       },
+      sealEntryActorJoinCompletion: (meshName, actorId) =>
+        this.options
+          .spotNodeRuntime()
+          ?.entryActivations.get(meshName)
+          ?.sealActorJoinCompletion(actorId),
       executeEntryActor: (meshName, actorId, operation, onFailure) => {
         const runtime = this.options.spotNodeRuntime();
         if (runtime === undefined) {

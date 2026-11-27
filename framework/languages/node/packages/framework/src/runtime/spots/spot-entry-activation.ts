@@ -410,6 +410,10 @@ export class ZLinkEntrySpotActivation {
     }
   }
 
+  sealActorJoinCompletion(actorId: string) {
+    return this.spotSerialExecutor.sealActorJoinCompletion(actorId);
+  }
+
   executeActor<T>(
     actorId: string,
     operation: () => Promise<T>,

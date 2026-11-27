@@ -1,5 +1,4 @@
-import type { ActorRef, ZLinkActor } from '../../contracts';
-import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import type { ZLinkActor } from '../../contracts';
 import type { ZLinkActorRuntimeState } from './actor-runtime-state';
 
 export interface ZLinkActorSourceTransfer {
@@ -8,8 +7,7 @@ export interface ZLinkActorSourceTransfer {
   /** Finishes a same-node deferred Join handoff after completion callback. */
   completeDeferredActorHandoff?(
     actor: ZLinkActor,
-    target: ZLinkSpotRouteTarget,
-    targetActorRef: ActorRef
+    completionFailure?: { readonly error: unknown }
   ): Promise<void>;
   /** Releases an early handoff when Join cannot commit. */
   cancelDeferredActorHandoff?(actor: ZLinkActor, state: ZLinkActorRuntimeState): Promise<void>;
