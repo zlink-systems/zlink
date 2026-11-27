@@ -247,13 +247,27 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             Assert.Contains("application admission is sealed", rejected.Message);
             Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, rejected.Kind);
-            var requestRejected = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-                await new ZLinkActorClient(runtime)
-                    .RequestToActor(actorRef.ActorId, new ProbeRouteMessage("new-request"))
-                    .Async<ProbeReply>()
-            );
-            Assert.Contains("application admission is sealed", requestRejected.Message);
-            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, requestRejected.Kind);
+            if (shutdown)
+            {
+                var requestRejected = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                    await new ZLinkActorClient(runtime)
+                        .RequestToActor(actorRef.ActorId, new ProbeRouteMessage("new-request"))
+                        .Async<ProbeReply>()
+                );
+                Assert.Contains("application admission is sealed", requestRejected.Message);
+                Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, requestRejected.Kind);
+            }
+            else
+            {
+                // Spec 05-host-relocation-flow section 15: a relocation fence does not close
+                // host-wide admission for the public client's new outbound request. The
+                // request reaches the capturing node, which has no reply handler.
+                await Assert.ThrowsAsync<NotSupportedException>(async () =>
+                    await new ZLinkActorClient(runtime)
+                        .RequestToActor(actorRef.ActorId, new ProbeRouteMessage("new-request"))
+                        .Async<ProbeReply>()
+                );
+            }
             probe.Release.TrySetResult();
             probe.WarmRelease.TrySetResult();
             probe.SubmissionRelease.TrySetResult();

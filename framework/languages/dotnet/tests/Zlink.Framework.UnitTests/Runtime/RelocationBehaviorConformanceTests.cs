@@ -1567,15 +1567,17 @@ public sealed partial class RelocationBehaviorConformanceTests
             Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
             await trace.WaitAsync("sourceMembershipLeaveStarted");
 
-            // The original cutover releases its publication after the Join callback.
+            // Publication releases after the Join callback and before the target stage ends.
             await WaitUntilAsync(() => GetTargetAttemptState(target.Runtime).Count == 0);
+            await cutover.TargetCutoverCompleted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             var authorityMutations = trace.TargetAuthorityMutationCount;
             var lifecycleAttempts = trace.TargetLifecycleAttemptCount;
             var publicCompletions = trace.Events.Count(static value =>
                 value == "publicJoinCompleted"
             );
 
-            await cutover.DeliverCapturedCutoverAsync();
+            await cutover.ReplayCutoverAsync(CancellationToken.None);
+            await cutover.TargetCutoverReplayCompleted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.Equal(authorityMutations, trace.TargetAuthorityMutationCount);
             Assert.Equal(lifecycleAttempts, trace.TargetLifecycleAttemptCount);
             Assert.Equal(
@@ -3809,6 +3811,8 @@ internal sealed class CanonicalRelocationTransportProbe
     internal TaskCompletionSource CutoverSendStarted { get; } = Signal();
     internal TaskCompletionSource ReleaseCutoverSend { get; } = Signal();
     internal TaskCompletionSource CutoverSendSubmitted { get; } = Signal();
+    internal TaskCompletionSource TargetCutoverCompleted { get; } = Signal();
+    internal TaskCompletionSource TargetCutoverReplayCompleted { get; } = Signal();
     internal TaskCompletionSource SourceLeaveSubmitted { get; } = Signal();
     internal TaskCompletionSource RemoteSessionPushSubmitted { get; } = Signal();
     internal TaskCompletionSource TargetPreparedBeforeReadySend { get; } = Signal();
@@ -4288,11 +4292,18 @@ internal sealed class CanonicalRelocationTransportProbe
             CancellationToken cancellationToken
         ) => inner.StageDataAsync(data, authenticatedSourceNodeRid, cancellationToken);
 
-        public ValueTask CutoverAsync(
+        public async ValueTask CutoverAsync(
             ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
             RoutingId authenticatedSourceNodeRid,
             CancellationToken cancellationToken
-        ) => inner.CutoverAsync(cutover, authenticatedSourceNodeRid, cancellationToken);
+        )
+        {
+            await inner
+                .CutoverAsync(cutover, authenticatedSourceNodeRid, cancellationToken)
+                .ConfigureAwait(false);
+            if (!probe.TargetCutoverCompleted.TrySetResult())
+                probe.TargetCutoverReplayCompleted.TrySetResult();
+        }
     }
 }
 
