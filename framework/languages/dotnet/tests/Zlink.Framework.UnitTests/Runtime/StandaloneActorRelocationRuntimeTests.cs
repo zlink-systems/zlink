@@ -19,6 +19,110 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class StandaloneActorRelocationRuntimeTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void Canonical_replay_requires_relocation_store_even_without_requests(
+        int acceptedRequests
+    )
+    {
+        var id = Guid.NewGuid();
+        var sourceAuthority = SourceActorAuthority();
+        var target = TargetDescriptor();
+        var targetAuthority = sourceAuthority with
+        {
+            NodeRid = target.Rid,
+            NodeGeneration = target.LifecycleGeneration,
+            OwnerId = target.OwnerId,
+            OwnerLeaseGeneration = checked((ulong)target.LeaseGeneration),
+        };
+        var source = new ZLinkServiceWireCodec.RequestSourceFence(
+            sourceAuthority.OwnerId,
+            sourceAuthority.OwnerLeaseGeneration,
+            sourceAuthority.NodeRid,
+            sourceAuthority.NodeGeneration
+        );
+        ZLinkActorHandoffFrame[] frames =
+            acceptedRequests == 0 ? [] : [AcceptedRequestFrame(source, replyRouteId: 91)];
+        var identity = ZLinkCanonicalActorRelocationWriter.CreateInitial(
+            ZLinkStandaloneActorRelocationRuntime.CreateImmutableRoot(
+                SourceAuthority(),
+                sourceAuthority,
+                target,
+                id,
+                ReadOnlyMemory<byte>.Empty,
+                frames.Select(frame => new ZLinkActorAcceptedRecord(frame, source)).ToArray(),
+                default
+            ),
+            applicationVersion: 7
+        );
+        var snapshot = PublishedSnapshot(ReadOnlyMemory<byte>.Empty, targetAuthority, 12) with
+        {
+            Relocation = new(
+                id,
+                Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.RelocationPhase.Activated,
+                new(
+                    source.NodeRid.ToHex(),
+                    source.NodeGeneration,
+                    source.OwnerId,
+                    source.LeaseGeneration
+                ),
+                new(
+                    target.Rid.ToHex(),
+                    target.LifecycleGeneration,
+                    target.OwnerId,
+                    targetAuthority.OwnerLeaseGeneration,
+                    1
+                ),
+                new(
+                    target.Rid.ToHex(),
+                    target.LifecycleGeneration,
+                    target.OwnerId,
+                    targetAuthority.OwnerLeaseGeneration,
+                    "v9"
+                ),
+                new string('a', 64),
+                identity.AggregateGeneration,
+                ZLinkRelocationCompletionProgress.Start(checked((ulong)acceptedRequests))
+            ),
+        };
+        using var services = new ServiceCollection().BuildServiceProvider();
+        var registration = new ZLinkFrameworkRegistration
+        {
+            ImplicitHandlerAutoRegistrationEnabled = false,
+        };
+        registration.Locations._repository = new ProgressAuthorityStore(
+            identity.Participants.Single().AuthorityKey,
+            snapshot
+        );
+        registration.FreezeScannedHandlerCatalog();
+        var runtime = new ZLinkFrameworkRuntime(
+            services,
+            null!,
+            registration,
+            new ZLinkHandlerRegistry([]),
+            new ZLinkHandlerDispatcher(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                registration
+            )
+        );
+        var actor = runtime.GetOrCreateActorState(sourceAuthority.ActorId);
+        actor.BindNativeActorRef(new(target.Rid, actor.ActorId, 1));
+
+        var failure = Assert.Throws<ZLinkConfigurationException>(() =>
+        {
+            _ = runtime.QueueCanonicalStandaloneActorFrames(
+                actor,
+                targetAuthority,
+                identity,
+                id.ToString("N"),
+                snapshot,
+                frames
+            );
+        });
+        Assert.Contains("requires a Relocation Store", failure.Message);
+    }
+
     [Fact]
     public void Reconciliation_accepts_only_the_exact_normalized_target_authority()
     {
@@ -842,7 +946,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
     }
 
     [Fact]
-    public void Startup_recovery_requires_exact_source_lease_expiry()
+    public void Relocation_delivery_requires_exact_source_lease_expiry()
     {
         var now = DateTimeOffset.UtcNow;
         var source = new ZLinkActorRelocationSourceFence(
@@ -853,39 +957,43 @@ public sealed class StandaloneActorRelocationRuntimeTests
         );
 
         Assert.True(
-            ZLinkStandaloneActorRelocationRuntime.IsExactSourceLeaseExpired(
+            ZLinkFrameworkRuntime.IsExactSourceLeaseExpired(
                 new ZLinkOwnerLeaseReadResult.Missing(),
-                source
+                source.OwnerId,
+                source.OwnerLeaseGeneration
             )
         );
         Assert.True(
-            ZLinkStandaloneActorRelocationRuntime.IsExactSourceLeaseExpired(
+            ZLinkFrameworkRuntime.IsExactSourceLeaseExpired(
                 new ZLinkOwnerLeaseReadResult.Found(
                     new ZLinkLocationOwnerToken("source-owner", 4),
                     now.AddMinutes(1),
                     now
                 ),
-                source
+                source.OwnerId,
+                source.OwnerLeaseGeneration
             )
         );
         Assert.True(
-            ZLinkStandaloneActorRelocationRuntime.IsExactSourceLeaseExpired(
+            ZLinkFrameworkRuntime.IsExactSourceLeaseExpired(
                 new ZLinkOwnerLeaseReadResult.Found(
                     new ZLinkLocationOwnerToken("source-owner", 3),
                     now,
                     now
                 ),
-                source
+                source.OwnerId,
+                source.OwnerLeaseGeneration
             )
         );
         Assert.False(
-            ZLinkStandaloneActorRelocationRuntime.IsExactSourceLeaseExpired(
+            ZLinkFrameworkRuntime.IsExactSourceLeaseExpired(
                 new ZLinkOwnerLeaseReadResult.Found(
                     new ZLinkLocationOwnerToken("source-owner", 3),
                     now.AddMinutes(1),
                     now
                 ),
-                source
+                source.OwnerId,
+                source.OwnerLeaseGeneration
             )
         );
     }

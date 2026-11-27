@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.locations;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.locations.ZLinkCanonicalRelocationAuthorityStateCodec.Published;
 import systems.zlink.framework.runtime.internal.locations.ZLinkCanonicalRelocationAuthorityStateCodec.State;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 
@@ -41,7 +42,11 @@ final class ZLinkLegacyRelocationAuthorityFixture {
                                 previous.sourceNodeGeneration());
         byte[] projected =
                 ZLinkAggregateRelocationCoordinator.projectAuthorityPayload(
-                        application, request, transition);
+                        application,
+                        request.targetDescriptor(),
+                        request.targetDescriptorLifecycleGeneration(),
+                        request.targetOwner(),
+                        transition);
         return withRelocationSlot(
                 projected,
                 encodeState(
