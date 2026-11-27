@@ -1,13 +1,16 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import static systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireTargetEndpointTest.acceptedSpotRequest;
 import static systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireTargetEndpointTest.recoveryNode;
 import static systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireTargetEndpointTest.sourceAuthority;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -15,7 +18,9 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
@@ -28,7 +33,14 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRo
 import systems.zlink.framework.runtime.internal.locations.ZLinkSpotTypeCapacityDelta;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec.CoordinatorFence;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec.Operation;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec.RelocationId;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec.ReplyRelay;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec.RequestSourceFence;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1;
 import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireTargetEndpointTest.AuthorityState;
 import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireTargetEndpointTest.FakeStagingBackend;
 import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireTargetEndpointTest.TestSpot;
@@ -39,11 +51,143 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkTargetRelocationRepliesTest {
     private static final ZLinkStoreCancellation OPEN = () -> false;
+
+    @Test
+    void earlierRequesterLeaseKeepsAlreadyTerminalReplyRowPending() {
+        var timeout = Duration.ofSeconds(1);
+        var factory = new ZLinkJavaBackendAdapterFactory();
+        var options = new ZLinkBackendAdapterOptions(timeout);
+        try (var context = factory.createChannelAdapter(options).createContext();
+                var node = factory.createMeshAdapter(options).createMeshNode(context, "mesh")) {
+            var rid = RoutingId.from("journal-node");
+            var writer = new ZLinkLocationOwnerToken("journal-owner", 2);
+            node.setRoutingId(rid);
+            node.setBind("tcp://127.0.0.1:0");
+            node.start();
+            long generation = node.lifecycleGeneration();
+            node.confirmLocalOwnerFence(
+                    new ZLinkInternalMeshNode.PeerAuthorityFence(
+                            rid, generation, writer.ownerId(), writer.leaseGeneration()));
+
+            var authority = new AuthorityState();
+            var store = authority.proxy();
+            var coordinator = new ZLinkAggregateRelocationCoordinator(store);
+            var aggregateId = new UUID(4, 5);
+            var objectKey = ZLinkAuthorityKeyCodec.spot("room-a");
+            var participant =
+                    new ZLinkSpotRetireControl.ParticipantFence(
+                            objectKey, 2, "room-a", "room", true, 3, 5);
+            var stage =
+                    new ZLinkSpotRetireControl.StageRequest(
+                            new ZLinkSpotRetireControl.Fence(aggregateId, 6),
+                            rid,
+                            generation,
+                            writer.ownerId(),
+                            1,
+                            rid,
+                            generation,
+                            writer.ownerId(),
+                            writer.leaseGeneration(),
+                            "mesh",
+                            "room-a",
+                            "room",
+                            false,
+                            true,
+                            new byte[] {1},
+                            List.of(participant));
+
+            var codec = new ZLinkServiceRelocationWireCodec();
+            var relay =
+                    new ReplyRelay(
+                            new Operation(7, 8),
+                            33,
+                            new RelocationId(4, 5),
+                            6,
+                            new CoordinatorFence(
+                                    writer.ownerId(),
+                                    writer.leaseGeneration(),
+                                    rid,
+                                    generation,
+                                    "initial"),
+                            1,
+                            1,
+                            0,
+                            0);
+            var payload =
+                    new ApplicationPayloadEnvelopeV1(
+                            "reply", "application/octet-stream", new byte[] {42});
+            var frames = codec.encodeReplyRelayFrames(relay, payload);
+            var row =
+                    new ZLinkRelocationReplyRow(
+                            aggregateId,
+                            objectKey,
+                            new ZLinkRelocationReplyRow.Source(
+                                    writer.ownerId(),
+                                    "1",
+                                    rid.toHex(),
+                                    Long.toUnsignedString(generation)),
+                            "00000000000000070000000000000008",
+                            "33",
+                            writer,
+                            ZLinkRelocationReplyRow.PENDING,
+                            codec.encodeStoredReply(relay, payload));
+            authority.replyRows.put(row.key(), row.accepted());
+            var replies =
+                    new ZLinkTargetRelocationReplies(
+                            stage, coordinator, store, Runnable::run, List.of(row.accepted()));
+            var client = ZLinkSpotRetireControl.client(node);
+
+            var current =
+                    new RequestSourceFence(
+                            writer.ownerId(), writer.leaseGeneration(), rid, generation);
+            var ack =
+                    codec.decodeReplyRelayAck(
+                            client.relayCanonicalReply(
+                                            rid,
+                                            current,
+                                            frames.getFirst(),
+                                            frames.subList(1, frames.size()),
+                                            timeout)
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(2, ack.status());
+            assertEquals(current, ack.requestSource());
+
+            var earlier = new RequestSourceFence(writer.ownerId(), 1, rid, generation);
+            var failure =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    replies.complete(
+                                                    row,
+                                                    () -> row,
+                                                    ignored ->
+                                                            client.relayCanonicalReply(
+                                                                            rid,
+                                                                            earlier,
+                                                                            frames.getFirst(),
+                                                                            frames.subList(
+                                                                                    1,
+                                                                                    frames.size()),
+                                                                            timeout)
+                                                                    .thenApply(
+                                                                            encoded ->
+                                                                                    ZLinkRelocationReplyRow
+                                                                                            .ALREADY_TERMINAL))
+                                            .toCompletableFuture()
+                                            .join());
+            assertInstanceOf(IllegalArgumentException.class, failure.getCause());
+            assertEquals(
+                    ZLinkRelocationReplyRow.PENDING, authority.replyRows.get(row.key()).state());
+            assertEquals(List.of("pending-cas"), authority.completionTrace);
+        }
+    }
 
     @ParameterizedTest
     @CsvSource({"1, false, true", "2, false, true", "1, true, true", "1, false, false"})

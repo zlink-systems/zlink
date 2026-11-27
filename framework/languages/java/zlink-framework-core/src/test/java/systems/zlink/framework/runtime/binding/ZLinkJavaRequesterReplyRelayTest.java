@@ -73,13 +73,61 @@ final class ZLinkJavaRequesterReplyRelayTest {
     }
 
     @Test
-    void unknownOperationAndWrongReplyRouteGetNoAck() throws Exception {
+    void registryContainsOnlyRequestsAwaitingDirectOrRelayedResults() throws Exception {
+        try (var mesh = new Mesh()) {
+            var registry = mesh.requester.operationRegistry();
+            var direct = mesh.register();
+            var relayed = mesh.register();
+            var anotherDirect = mesh.register();
+            assertEquals(3, registry.pendingCount());
+
+            assertTrue(registry.complete(direct.id(), 17));
+            assertEquals(17, await(direct));
+            assertEquals(2, registry.pendingCount());
+
+            var relay = mesh.relay(relayed.id(), ROUTE, mesh.coordinator());
+            assertEquals(1, CODEC.decodeReplyRelayAck(await(mesh.send(relay, WAIT))).status());
+            assertEquals(42, await(relayed));
+            assertEquals(1, registry.pendingCount());
+
+            assertTrue(registry.complete(anotherDirect.id(), 19));
+            assertEquals(19, await(anotherDirect));
+            assertEquals(0, registry.pendingCount());
+            assertEquals(2, CODEC.decodeReplyRelayAck(await(mesh.send(relay, WAIT))).status());
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void relayCompletesARequestInItsCallerRegistry() throws Exception {
+        try (var mesh = new Mesh();
+                var caller = new ZLinkServiceOperationRegistry()) {
+            var request = mesh.register(caller);
+            var relay = mesh.relay(request.id(), ROUTE, mesh.coordinator());
+            assertEquals(1, caller.pendingCount());
+            assertEquals(0, mesh.requester.operationRegistry().pendingCount());
+            assertEquals(1, CODEC.decodeReplyRelayAck(await(mesh.send(relay, WAIT))).status());
+            assertEquals(42, await(request));
+            assertEquals(0, caller.pendingCount());
+            assertEquals(2, CODEC.decodeReplyRelayAck(await(mesh.send(relay, WAIT))).status());
+        }
+    }
+
+    @Test
+    void unknownOperationIsAcknowledgedWithCurrentRequesterFence() throws Exception {
+        try (var mesh = new Mesh()) {
+            var relay = mesh.relay(UUID.randomUUID(), ROUTE, mesh.coordinator());
+            var ack = CODEC.decodeReplyRelayAck(await(mesh.send(relay, WAIT)));
+            assertEquals(2, ack.status());
+            assertEquals(mesh.fence(), ack.requestSource());
+            assertEquals(0, mesh.requester.operationRegistry().pendingCount());
+        }
+    }
+
+    @Test
+    void wrongReplyRouteForPendingOperationGetsNoAck() throws Exception {
         try (var mesh = new Mesh()) {
             var request = mesh.register();
-            assertNoAck(
-                    mesh.send(
-                            mesh.relay(UUID.randomUUID(), ROUTE, mesh.coordinator()),
-                            Duration.ofMillis(200)));
             assertNoAck(
                     mesh.send(
                             mesh.relay(request.id(), ROUTE + 1, mesh.coordinator()),
@@ -144,6 +192,31 @@ final class ZLinkJavaRequesterReplyRelayTest {
                             Duration.ofMillis(200)));
             assertEquals(42, await(request));
             assertEquals(2, CODEC.decodeReplyRelayAck(await(mesh.send(relay, WAIT))).status());
+        }
+    }
+
+    @Test
+    void targetRejectsAlreadyTerminalAckForEarlierRequesterLease() throws Exception {
+        try (var mesh = new Mesh()) {
+            var relay = mesh.relay(UUID.randomUUID(), ROUTE, mesh.coordinator());
+            var frames = frames(relay);
+            var current = mesh.fence();
+            var previous =
+                    new RequestSourceFence(
+                            current.ownerId(),
+                            current.leaseGeneration() - 1,
+                            current.nodeRid(),
+                            current.nodeGeneration());
+            var ack = CODEC.decodeReplyRelayAck(await(mesh.send(relay, WAIT)));
+            assertEquals(2, ack.status());
+            assertEquals(current, ack.requestSource());
+            assertNoAck(
+                    mesh.target.requestRelocationReplyRelay(
+                            mesh.requester.routingId(),
+                            previous,
+                            frames.getFirst(),
+                            frames.subList(1, frames.size()),
+                            Duration.ofMillis(200)));
         }
     }
 
@@ -268,7 +341,11 @@ final class ZLinkJavaRequesterReplyRelayTest {
         }
 
         private ZLinkServiceOperationRegistry.Operation<Integer> register() throws Exception {
-            var registry = requester.operationRegistry();
+            return register(requester.operationRegistry());
+        }
+
+        private ZLinkServiceOperationRegistry.Operation<Integer> register(
+                ZLinkServiceOperationRegistry registry) throws Exception {
             var operation =
                     ZLinkServiceOperationRegistry.<Integer>prepareOperation(UUID.randomUUID());
             await(

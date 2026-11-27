@@ -7034,10 +7034,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             ZLinkServiceOperationRegistry.Operation<T> operation,
             long replyRoute,
             Function<ZLinkServiceRelocationWireCodec.StoredReply, T> decode) {
-        var local = requestSourceFence();
-        if (local != null) {
-            operations.registerRelocationReply(registry, operation, replyRoute, local, decode);
-        }
+        operations.registerRelocationReply(registry, operation, replyRoute, decode);
     }
 
     <T> void registerActorRelocationReply(

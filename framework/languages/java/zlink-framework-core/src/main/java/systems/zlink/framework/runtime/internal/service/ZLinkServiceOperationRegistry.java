@@ -18,7 +18,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -44,11 +43,9 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private final ZLinkStateLane owner;
     private final ConcurrentHashMap<UUID, Entry<?>> pending;
     private final Throwable closeFailure;
-    private static final long RELOCATION_TERMINAL_RETENTION = Duration.ofHours(24).toNanos();
-    private final ConcurrentHashMap<UUID, RelocationReplyRoute> relocationReplies =
+    // SPOT requests submitted with a caller registry still settle in that registry.
+    private final ConcurrentHashMap<UUID, ZLinkServiceOperationRegistry> externalRelocationOwners =
             new ConcurrentHashMap<>();
-    private final ConcurrentLinkedQueue<RelocationReplyRoute> relocationTerminals =
-            new ConcurrentLinkedQueue<>();
     private static final long DEADLINE_TICK_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
     private static final int DEADLINE_SLOTS = 256;
     private static final int BITMAP_WORD_BITS = Long.SIZE;
@@ -480,96 +477,72 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             ZLinkServiceOperationRegistry operationOwner,
             Operation<T> operation,
             long replyRoute,
-            ZLinkServiceRelocationWireCodec.RequestSourceFence source,
             Function<ZLinkServiceRelocationWireCodec.StoredReply, T> decode) {
+        UUID id = operation.id();
         @SuppressWarnings("unchecked")
-        Entry<T> entry = (Entry<T>) operationOwner.pending.get(operation.id());
+        Entry<T> entry = (Entry<T>) operationOwner.pending.get(id);
         if (closed || entry == null) return;
-        var route =
-                new RelocationReplyRoute(
-                        operation.id(),
-                        replyRoute,
-                        source,
-                        reply -> {
-                            boolean accepted =
-                                    operationOwner.completeRelocationReply(entry, reply, decode);
-                            return operation.handle((value, failure) -> accepted);
-                        },
-                        0);
-        if (relocationReplies.putIfAbsent(operation.id(), route) != null) {
+        if (entry.relocationReplyDecoder != null) {
             throw new IllegalStateException("relocation reply route is already registered");
         }
-        operation.whenComplete(
-                (value, failure) -> {
-                    long now = nanoTime.getAsLong();
-                    var terminal =
-                            new RelocationReplyRoute(
-                                    route.operation(),
-                                    route.replyRoute(),
-                                    route.source(),
-                                    null,
-                                    now + RELOCATION_TERMINAL_RETENTION);
-                    if (relocationReplies.replace(route.operation(), route, terminal)) {
-                        relocationTerminals.add(terminal);
-                        expireRelocationTerminals(now);
-                    }
-                });
+        entry.relocationReplyRoute = replyRoute;
+        entry.relocationReplyDecoder = decode;
+        if (operationOwner != this) {
+            entry.relocationRequester = this;
+            if (externalRelocationOwners.putIfAbsent(id, operationOwner) != null) {
+                throw new IllegalStateException("relocation reply route is already registered");
+            }
+            // Completion or requester shutdown can race with index insertion.
+            if (closed || operationOwner.pending.get(id) != entry) {
+                externalRelocationOwners.remove(id, operationOwner);
+            }
+        }
     }
 
     public CompletionStage<ZLinkServiceRelocationWireCodec.ReplyRelayAck> acceptRelocationReply(
             ZLinkServiceRelocationWireCodec.StoredReply reply,
             ZLinkServiceRelocationWireCodec.RequestSourceFence localSource) {
-        long now = nanoTime.getAsLong();
-        expireRelocationTerminals(now);
         var relay = reply.relay();
-        var route =
-                relocationReplies.get(new UUID(relay.operation().high(), relay.operation().low()));
-        if (route == null
-                || route.replyRoute() != relay.replyRouteId()
-                || !route.source().equals(localSource)
-                || route.receive() == null && now - route.expiresAt() >= 0) {
-            return CompletableFuture.completedFuture(null);
+        UUID id = new UUID(relay.operation().high(), relay.operation().low());
+        var operationOwner = this;
+        var entry = pending.get(id);
+        if (entry == null) {
+            var externalOwner = externalRelocationOwners.get(id);
+            if (externalOwner != null) {
+                operationOwner = externalOwner;
+                entry = externalOwner.pending.get(id);
+            }
         }
-        var received =
-                route.receive() == null
-                        ? CompletableFuture.completedFuture(false)
-                        : route.receive().apply(reply);
-        return received.thenApply(
-                first ->
+        if (entry != null) {
+            if (entry.relocationReplyDecoder == null
+                    || entry.relocationReplyRoute != relay.replyRouteId()) {
+                if (operationOwner.pending.get(id) == entry) {
+                    return CompletableFuture.completedFuture(null);
+                }
+            } else if (operationOwner.take(entry) != null) {
+                var ack =
                         new ZLinkServiceRelocationWireCodec.ReplyRelayAck(
                                 relay.relocation(),
                                 relay.coordinator(),
                                 relay.operation(),
                                 relay.replyRouteId(),
-                                route.source(),
-                                first ? 1 : 2));
-    }
-
-    private <T> boolean completeRelocationReply(
-            Entry<T> entry,
-            ZLinkServiceRelocationWireCodec.StoredReply reply,
-            Function<ZLinkServiceRelocationWireCodec.StoredReply, T> decode) {
-        if (take(entry) == null) return false;
-        entry.completeWithRelocationReply(() -> decode.apply(reply));
-        completions.post(entry);
-        return true;
-    }
-
-    private void expireRelocationTerminals(long now) {
-        RelocationReplyRoute terminal;
-        while ((terminal = relocationTerminals.peek()) != null && now - terminal.expiresAt() >= 0) {
-            if (relocationTerminals.remove(terminal)) {
-                relocationReplies.remove(terminal.operation(), terminal);
+                                localSource,
+                                1);
+                var received = entry.completion.handle((value, failure) -> ack);
+                entry.completeWithRelocationReply(reply);
+                completions.post(entry);
+                return received;
             }
         }
+        return CompletableFuture.completedFuture(
+                new ZLinkServiceRelocationWireCodec.ReplyRelayAck(
+                        relay.relocation(),
+                        relay.coordinator(),
+                        relay.operation(),
+                        relay.replyRouteId(),
+                        localSource,
+                        2));
     }
-
-    private record RelocationReplyRoute(
-            UUID operation,
-            long replyRoute,
-            ZLinkServiceRelocationWireCodec.RequestSourceFence source,
-            Function<ZLinkServiceRelocationWireCodec.StoredReply, CompletionStage<Boolean>> receive,
-            long expiresAt) {}
 
     public <T> boolean complete(UUID id, T value) {
         @SuppressWarnings("unchecked")
@@ -661,8 +634,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         if (closed) return null;
         closed = true;
         LockSupport.unpark(maintenance);
-        relocationReplies.clear();
-        relocationTerminals.clear();
+        externalRelocationOwners.clear();
         cancelPendingOnOwner();
         Arrays.fill(deadlineHeads, null);
         Arrays.fill(deadlineTails, null);
@@ -691,7 +663,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private Entry<?> take(Entry<?> entry) {
         if (entry.completion instanceof Operation<?> operation
                 && !operation.finishRegistration(this)) return null;
-        return pending.remove(entry.id, entry) ? entry : null;
+        if (!pending.remove(entry.id, entry)) return null;
+        var requester = entry.relocationRequester;
+        if (requester != null) requester.externalRelocationOwners.remove(entry.id, this);
+        return entry;
     }
 
     private void abandonRegistration(Entry<?> entry) {
@@ -1173,6 +1148,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private CompletableFuture<?> completion;
         private Consumer<? super T> discardValue;
         private final UUID id;
+        private long relocationReplyRoute;
+        private volatile Function<ZLinkServiceRelocationWireCodec.StoredReply, T>
+                relocationReplyDecoder;
+        private volatile ZLinkServiceOperationRegistry relocationRequester;
         private long deadlineTick;
         private long deadlineNanos;
         private int deadlineSlot;
@@ -1196,6 +1175,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         void released() {
             completion = null;
             discardValue = null;
+            relocationReplyDecoder = null;
+            relocationRequester = null;
         }
 
         void completeWithValue(Object value) {
@@ -1203,9 +1184,9 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             terminalValue = value;
         }
 
-        void completeWithRelocationReply(Supplier<T> decode) {
+        void completeWithRelocationReply(ZLinkServiceRelocationWireCodec.StoredReply reply) {
             terminalKind = RELOCATION_REPLY;
-            terminalValue = decode;
+            terminalValue = reply;
         }
 
         void completeWithFailure(Throwable failure) {
@@ -1240,7 +1221,9 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                             value =
                                     terminalKind == VALUE
                                             ? (T) terminalValue
-                                            : ((Supplier<T>) terminalValue).get();
+                                            : relocationReplyDecoder.apply(
+                                                    (ZLinkServiceRelocationWireCodec.StoredReply)
+                                                            terminalValue);
                         } catch (RuntimeException | Error failure) {
                             ((Operation<?>) completion).receiveFailure(failure);
                             return;
