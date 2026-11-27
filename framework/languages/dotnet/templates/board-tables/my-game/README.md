@@ -46,7 +46,7 @@ Scripts remove unique image tags after each invocation. Docker retains build lay
 
 ## Foreground server
 
-Run `./run-server.sh` on Linux or WSL, or `.\run-server.cmd` on Windows. When it prints `Server ready`, run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner automatically attaches to the published endpoint in `.logs/server.json` and checks `table`, `reconnect`, `match`, `match-cancel`, and `persist`. The full restart check in `reconnect` and node replacement in `update` run in isolation. Press Ctrl+C in the server terminal to stop the nodes and Redis and remove `.logs/server.json`.
+Run `./run-server.sh` on Linux or WSL, or `.\run-server.cmd` on Windows. When it prints `Server ready`, run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner automatically attaches to the published endpoint in `.logs/server.json` and checks `table`, `reconnect`, `match`, `match-cancel`, and `persist`. The full restart check in `reconnect` and node replacement in `update` run in isolation. Press Ctrl+C in the server terminal to stop the nodes and the Redis instance started by the runner and remove `.logs/server.json`.
 
 ## Client connection
 
@@ -133,7 +133,7 @@ Node stderr logs (`<node>.err.log`) include Framework message flow records becau
 
 On Unix sockets, Bash runs the runner with the caller's UID/GID and the socket's group so retained logs remain writable by the caller. Windows uses Docker Desktop's filesystem mapping. Build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`; node settings and control logs are in `.logs/run-<id>/`.
 
-For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`. Redis remains in Docker. After a local build, `--no-build` or `-NoBuild` skips compilation:
+For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`. By default, Redis runs in Docker. Set `ZLINK_REDIS_TEST_ENDPOINT=host:port` to use an existing Redis instance in local or foreground mode. Each run uses a unique key prefix. After a local build, `--no-build` or `-NoBuild` skips compilation:
 
 ```sh
 ./run-e2e.sh --local

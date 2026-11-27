@@ -41,27 +41,25 @@ internal sealed class ZLinkSpotMessageFollow(
     internal bool ShouldRemoveAfterRejectedFrame(TimeSpan now) => ExpiresAt <= now;
 
     internal bool MatchesSourceRoute(
-        ZLinkBackendRouteReceived received,
-        ulong currentObjectGeneration,
-        ZLinkLocationOwnerToken? currentSourceOwner,
+        ulong objectGeneration,
+        ulong nodeGeneration,
+        ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration,
+        byte hopCount,
         TimeSpan now
     ) =>
         ExpiresAt > now
-        && received.MessageFollowHopCount < ZLinkServiceWireCodec.MessageFollowMaximumHopCount
-        && received.OperationId.High != 0
-        && received.OperationId.Low != 0
+        && hopCount < ZLinkServiceWireCodec.MessageFollowMaximumHopCount
         && ObjectGeneration != 0
-        && ObjectGeneration == currentObjectGeneration
-        && received.TargetNodeGeneration == SourceNodeGeneration
-        && received.AuthorityOwnerGeneration == SourceAuthorityOwnerGeneration
+        && ObjectGeneration == objectGeneration
+        && nodeGeneration == SourceNodeGeneration
+        && authorityOwnerGeneration == SourceAuthorityOwnerGeneration
         && SourceOwner.LeaseGeneration > 0
         && TargetOwner.LeaseGeneration > 0
-        && received.OwnerLeaseGeneration == checked((ulong)SourceOwner.LeaseGeneration)
+        && ownerLeaseGeneration == checked((ulong)SourceOwner.LeaseGeneration)
         && SourceAuthorityOwnerGeneration is > 0 and <= long.MaxValue
         && TargetAuthorityOwnerGeneration is > 0 and <= long.MaxValue
-        && TargetAuthorityOwnerGeneration > SourceAuthorityOwnerGeneration
-        && currentSourceOwner is { } owner
-        && owner == SourceOwner;
+        && TargetAuthorityOwnerGeneration > SourceAuthorityOwnerGeneration;
 
     internal bool TryAcquire(long bytes, out AdmissionLease? lease)
     {
