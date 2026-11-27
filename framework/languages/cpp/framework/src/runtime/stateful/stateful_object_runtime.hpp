@@ -15,6 +15,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -137,6 +138,9 @@ struct turn_record_t
     // Source-retained rollback carries the same in-memory admission owner.
     // Codecs and target restore exclude this process-local ownership.
     std::shared_ptr<runtime::serial_application_record_t> accepted_owner;
+    // Actor FIFO admission is process-local and does not travel with a relocation.
+    std::chrono::steady_clock::time_point actor_admitted_at =
+      std::chrono::steady_clock::time_point::min ();
 
     friend bool operator== (const turn_record_t &left, const turn_record_t &right)
     {
