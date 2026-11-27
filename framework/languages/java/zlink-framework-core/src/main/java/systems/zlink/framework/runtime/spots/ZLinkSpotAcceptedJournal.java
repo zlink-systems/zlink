@@ -4,6 +4,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
@@ -24,11 +25,8 @@ final class ZLinkSpotAcceptedJournal {
     }
 
     static Record decode(byte[] encoded) {
-        if (systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec
-                .isCanonical(encoded)) {
-            var decoded =
-                    systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec
-                            .decodeSpot(encoded);
+        if (ZLinkServiceFrozenRecordCodec.isCanonical(encoded)) {
+            var decoded = ZLinkServiceFrozenRecordCodec.decodeSpot(encoded);
             return new Record(
                     ZLinkBackendRequestResult.OK,
                     Optional.of(decoded.sourceNodeRid()),
@@ -78,10 +76,6 @@ final class ZLinkSpotAcceptedJournal {
             long sourceNodeGeneration,
             long objectGeneration) {
         Record {
-            if (operationHigh == 0 && operationLow == 0) {
-                throw new IllegalArgumentException(
-                        "accepted Spot operation identity must not be zero");
-            }
             // sourceNodeGeneration is a node lifecycle-generation opaque
             // equality token (.NET ulong, spec 01-glossary "Lifecycle
             // generation"): full range, only zero is unassigned. A signed

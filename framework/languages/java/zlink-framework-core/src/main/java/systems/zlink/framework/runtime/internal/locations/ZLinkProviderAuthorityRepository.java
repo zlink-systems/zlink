@@ -926,42 +926,56 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                 request
                                                                                                         .targetOwner())));
                                                                     }
-                                                                    return canRebuild(
-                                                                                    key,
-                                                                                    null,
-                                                                                    null,
-                                                                                    request
-                                                                                            .targetOwner(),
-                                                                                    opaqueCancellation)
-                                                                            .thenComposeAsync(
-                                                                                    eligible -> {
-                                                                                        if (!eligible) {
-                                                                                            return provider.read(
-                                                                                                            key,
-                                                                                                            opaqueCancellation)
-                                                                                                    .thenCompose(
-                                                                                                            current ->
-                                                                                                                    projectRead(
-                                                                                                                            current,
-                                                                                                                            opaqueCancellation))
-                                                                                                    .thenApply(
-                                                                                                            ZLinkObjectConflict
-                                                                                                                    ::new);
-                                                                                        }
-                                                                                        return capacityAvailable(
-                                                                                                        conditions,
-                                                                                                        opaqueCancellation)
-                                                                                                .thenCompose(
-                                                                                                        available ->
-                                                                                                                available
-                                                                                                                        ? reserve(
-                                                                                                                                request,
-                                                                                                                                cancellation,
-                                                                                                                                reservationVersion)
-                                                                                                                        : completed(
-                                                                                                                                new ZLinkPlacementCapacityExhausted()));
-                                                                                    });
+                                                                    return resolveReserveConflict(
+                                                                            request,
+                                                                            cancellation,
+                                                                            key,
+                                                                            reservationVersion,
+                                                                            conditions,
+                                                                            opaqueCancellation);
                                                                 });
+                                            });
+                        });
+    }
+
+    private CompletionStage<ZLinkObjectReserveResult> resolveReserveConflict(
+            ZLinkObjectReservationRequest request,
+            ZLinkStoreCancellation cancellation,
+            ZLinkStoreKey key,
+            String reservationVersion,
+            List<ZLinkStoreCondition> conditions,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation opaqueCancellation) {
+        return provider.read(key, opaqueCancellation)
+                .thenComposeAsync(
+                        current -> {
+                            // The competing claim may be gone by the time the caller sees it.
+                            // Classify this conflict using the authority observed here.
+                            if (current instanceof ZLinkStoreReadFound) {
+                                return projectRead(current, opaqueCancellation)
+                                        .thenApply(ZLinkObjectConflict::new);
+                            }
+                            return requireLiveOwner(
+                                            request.targetOwner(),
+                                            new ArrayList<>(),
+                                            opaqueCancellation)
+                                    .thenCompose(
+                                            live -> {
+                                                if (!live) {
+                                                    return completed(
+                                                            new ZLinkObjectConflict(
+                                                                    toRead(current)));
+                                                }
+                                                return capacityAvailable(
+                                                                conditions, opaqueCancellation)
+                                                        .thenCompose(
+                                                                available ->
+                                                                        available
+                                                                                ? reserve(
+                                                                                        request,
+                                                                                        cancellation,
+                                                                                        reservationVersion)
+                                                                                : completed(
+                                                                                        new ZLinkPlacementCapacityExhausted()));
                                             });
                         });
     }

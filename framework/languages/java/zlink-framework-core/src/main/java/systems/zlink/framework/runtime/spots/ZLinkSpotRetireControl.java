@@ -604,9 +604,9 @@ final class ZLinkSpotRetireControl {
             long sourceAuthorityOwnerGeneration) {
         ParticipantFence {
             requireText(authorityKey, "authorityKey");
-            if (objectKind != 1 && objectKind != 2) {
+            if (objectKind < 1 || objectKind > 3) {
                 throw new IllegalArgumentException(
-                        "participant objectKind must be Actor or User Spot");
+                        "participant objectKind must be Actor, User Spot or Instance Spot");
             }
             requireText(objectId, "objectId");
             requireText(stableType, "stableType");

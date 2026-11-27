@@ -17,4 +17,6 @@
 
 `u64`, `positive_u64`, `i64`는 표의 범위를 따르는 64비트 정수이며 10진 JSON 문자열로 표현합니다. `disposition`은 `wire-v1.json`의 `enums`에 선언한 이름을 대소문자까지 맞춰 JSON 문자열로 표현합니다. 선언하지 않은 이름, JSON 숫자, 숫자 ordinal 문자열은 거부합니다. 정수와 enum 표현은 [framework-json-v1 §5](../../../framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)를 따릅니다.
 
+서버의 입력 판정 사유는 `InputDisposition` 하나로 대응합니다(`plugins/network-sync/server/Simulation/InputFeedback.cs`의 `ToWire`): `Accepted` → `Accepted`, `Late` → `Late`, `DuplicateTick`·`DuplicateAction` → `Duplicate`, `WrongMatch`·`WrongEpoch`·`UnknownActor`·`InvalidSize`·`RateLimited`·`InvalidTick`·`TooFarAhead` → `Rejected`. `action_id`는 Actor마다 같은 epoch 안에서 증가해야 하며, 같거나 작은 ID는 `Duplicate`입니다. Actor가 나갔다가 다시 들어오거나 새 epoch가 시작되면 새 순서로 시작합니다.
+
 검증: `python3 plugins/network-sync/protocol/validate.py`. 이 검증은 정의와 fixture만 검사하며 실제 언어별 serializer의 적합성 시험을 대신하지 않습니다.
