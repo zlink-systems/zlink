@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
-#include "runtime/locations/provider_location_repository.hpp"
+#include "location_store_observation.hpp"
 #include <cstdlib>
 #include <functional>
 #include <map>
@@ -33,60 +33,6 @@ struct outage_lease_profile_t
     {
         return std::chrono::milliseconds (std::stoll (values.at (key)));
     }
-};
-
-// Observation uses the repository's own key and record codecs. The overlay is
-// read-only: candidate writes never escape to Redis before their release.
-class outage_observation_store_t final : public fw::location_store_t
-{
-  public:
-    explicit outage_observation_store_t (fw::location_store_t *inner = nullptr,
-                                         const fw::store_write_request_t *overlay = nullptr) :
-        _inner (inner), _overlay (overlay)
-    {
-    }
-
-    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
-    {
-        observed_key = key;
-        if (_overlay) {
-            for (const auto &mutation : _overlay->mutations) {
-                if (const auto *put = std::get_if<fw::store_put_t> (&mutation);
-                    put && put->key.value == key.value) {
-                    co_return fw::store_found_t{
-                      fw::store_value_t{put->bytes,
-                                        {"outage-observation"},
-                                        std::nullopt,
-                                        std::chrono::system_clock::now ()}};
-                }
-                if (const auto *removed = std::get_if<fw::store_delete_t> (&mutation);
-                    removed && removed->key.value == key.value)
-                    co_return fw::store_missing_t{std::chrono::system_clock::now ()};
-            }
-        }
-        if (_inner)
-            co_return co_await _inner->read (std::move (key));
-        co_return fw::store_missing_t{std::chrono::system_clock::now ()};
-    }
-
-    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t) override
-    {
-        throw std::logic_error ("outage observation cannot write");
-        co_return fw::store_write_conflict_t{};
-    }
-
-    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
-    {
-        if (!_inner)
-            throw std::logic_error ("key observation cannot scan");
-        co_return co_await _inner->scan (std::move (request));
-    }
-
-    fw::store_key_t observed_key;
-
-  private:
-    fw::location_store_t *_inner;
-    const fw::store_write_request_t *_overlay;
 };
 
 class outage_location_store_t final : public fw::location_store_t
@@ -155,7 +101,7 @@ class outage_location_store_t final : public fw::location_store_t
         mesh (std::move (mesh)),
         node (std::move (node))
     {
-        outage_observation_store_t capture;
+        cross_language::location_store_observation_t capture;
         runtime::provider_location_repository_t codecs (capture);
         codecs.read_authority_core (actor_key).result ().value ();
         authority_store_key = capture.observed_key;
@@ -185,7 +131,7 @@ class outage_location_store_t final : public fw::location_store_t
         const auto submitted_at = now_nanos ();
         fail_if_outage ();
         if (target && !commit_released.load ()) {
-            outage_observation_store_t overlay (inner.get (), &request);
+            cross_language::location_store_observation_t overlay (inner.get (), &request);
             runtime::provider_location_repository_t projected (overlay);
             auto candidate = co_await projected.read_authority_core (actor_key);
             if (const auto *snapshot = std::get_if<fw::authority_snapshot_t> (&candidate);

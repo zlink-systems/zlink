@@ -4357,7 +4357,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE)
   # language's real package. It is part of the normal framework build; the
   # per-language scenario e2e apps above are opt-in.
   add_executable(zlink_cpp_cross_language_host
-    cross-language/cross_language_host.cpp)
+    cross-language/cross_language_host.cpp
+    cross-language/actor_destroy_host.cpp)
   target_link_libraries(zlink_cpp_cross_language_host PRIVATE
     zlink::framework
     zlink::framework_locations_redis

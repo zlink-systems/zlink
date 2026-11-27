@@ -43,6 +43,7 @@
 namespace fw = zlink::framework;
 namespace runtime = zlink::framework::runtime;
 
+#include "actor_destroy_host.hpp"
 #include "login_admission.hpp"
 #include "outage_location_store.hpp"
 
@@ -2011,6 +2012,9 @@ int main (int argc, char **argv)
     }
 
     try {
+        if (mode == "actor-destroy-owner" || mode == "actor-destroy-caller") {
+            return actor_destroy::run_host (argc, argv, mode == "actor-destroy-owner", host_args);
+        }
         if (mode == "login-admission-connector") {
             return login_admission::run_connector (require ("stream-endpoint"));
         }
