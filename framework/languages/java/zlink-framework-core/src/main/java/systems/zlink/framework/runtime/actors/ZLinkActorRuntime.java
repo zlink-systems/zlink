@@ -67,6 +67,7 @@ import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.spots.SpotHandle;
@@ -910,13 +911,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         if (submitter != null) {
             return submitter.submit(actorId, actorType, createRequest, getOrCreate, timeout);
         }
+        long deadline = System.nanoTime() + timeout.toNanos();
         CompletionStage<ZLinkActorCreateResult> operation =
                 serializeActorCreation(
                         actorId,
                         () ->
                                 getOrCreate
                                         ? getOrCreateActorOperation(
-                                                actorId, actorType, createRequest)
+                                                actorId, actorType, createRequest, deadline)
                                         : createActorOperation(actorId, actorType, createRequest));
         return operation.toCompletableFuture().orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS);
     }
@@ -2382,15 +2384,16 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         if (locations.hasStoreResolver()) {
             return locations.findStoredActorRefExact(actorId);
         }
-        ZLinkActor local = actorRegistry.actor(actorId);
-        if (local != null
-                && !actorRegistry.isPendingTransfer(actorId)
-                && !requireContext(local).moving()) {
-            return CompletableFuture.completedFuture(Optional.of(publicRefFor(local)));
-        }
-        if (local != null && requireContext(local).moving()
-                || actorRegistry.isPendingTransfer(actorId)) {
-            return CompletableFuture.completedFuture(Optional.empty());
+        var local = actorRegistry.entry(actorId);
+        if (local != null) {
+            var context = local.context();
+            var ref = context.actorRef();
+            return CompletableFuture.completedFuture(
+                    ref != null
+                                    && !actorRegistry.isPendingTransfer(actorId)
+                                    && context.state.steady()
+                            ? Optional.of(toPublicActorRef(ref, meshName))
+                            : Optional.empty());
         }
         try {
             ZLinkBackendActorRef nativeActor = spotNode.actorLookup(actorId);
@@ -2420,61 +2423,91 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             throw new ZLinkConfigurationException("actor is required");
         }
 
-        DestroyCheck check =
-                inStateLane(
-                        () -> {
-                            ZLinkActor current = actorRegistry.actor(actor.actorId());
-                            if (current == null) {
-                                return new DestroyCheck(
-                                        null, CompletableFuture.completedFuture(false));
-                            }
-                            DefaultActorContext context = actorRegistry.context(current);
-                            if (context == null || context.actorRef() == null) {
-                                return new DestroyCheck(
-                                        null, CompletableFuture.completedFuture(false));
-                            }
+        boolean ownTurn = dispatches.isCurrent(actor.actorId());
+        return locations.destroy(
+                actor,
+                actorJoinCanonicalMeshNode,
+                defaultRequestTimeout,
+                ref -> destroyLocal(ref, null, ownTurn));
+    }
 
-                            ZLinkBackendActorRef currentRef = context.actorRef();
-                            if (!currentRef.actorId().equals(actor.actorId())
-                                    || !currentRef.nodeRid().equals(actor.nodeRid())
-                                    || currentRef.generation() != actor.objectGeneration()
-                                    || !meshName.equals(actor.meshName())) {
-                                return new DestroyCheck(
-                                        null,
-                                        CompletableFuture.failedFuture(
-                                                new ZLinkFrameworkException(
-                                                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                                        "actor ref is not current for this runtime:"
-                                                                + " "
-                                                                + actor.actorId())));
-                            }
-                            if (context.moving()
-                                    || actorRegistry.isPendingTransfer(actor.actorId())) {
-                                return new DestroyCheck(
-                                        null,
-                                        CompletableFuture.failedFuture(
-                                                new ZLinkFrameworkException(
-                                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                        "actor is sealedResult for relocation: "
-                                                                + actor.actorId())));
-                            }
-                            if (context.currentSpot() != null) {
-                                return new DestroyCheck(
-                                        null,
-                                        CompletableFuture.failedFuture(
-                                                new ZLinkFrameworkException(
-                                                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                                        "actor must leave its current Spot before"
-                                                                + " destroy: "
-                                                                + actor.actorId())));
-                            }
-                            return new DestroyCheck(current, null);
-                        });
-        if (check.result() != null) {
-            return check.result();
-        }
-
-        return destroyFromEntrySpot(actor.nodeRid(), check.actor()).thenApply(ignored -> true);
+    private CompletionStage<Boolean> destroyLocal(
+            ActorRef actor, ZLinkActor expected, boolean ownTurn) {
+        return ZLinkHandlerStages.fromStageSupplier(
+                () -> {
+                    var entry = actorRegistry.entry(actor.actorId());
+                    if (entry == null || expected != null && entry.actor() != expected) {
+                        return CompletableFuture.completedFuture(false);
+                    }
+                    var context = entry.context();
+                    var ref = context.actorRef();
+                    if (ref == null) {
+                        return CompletableFuture.completedFuture(false);
+                    }
+                    if (ref.generation() != actor.objectGeneration()) {
+                        throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                "Actor destroy generation is stale: " + actor.actorId());
+                    }
+                    String actorId = actor.actorId();
+                    ActorRef currentRef = toPublicActorRef(ref, meshName);
+                    return dispatches
+                            .destroy(
+                                    actorId,
+                                    context,
+                                    ownTurn,
+                                    () ->
+                                            locations.publishActorClosing(
+                                                    entry.actorType(),
+                                                    currentRef,
+                                                    spotNode.localNodeGeneration()),
+                                    seal ->
+                                            inStateLane(
+                                                    () -> {
+                                                        if (actorRegistry.isPendingTransfer(
+                                                                actorId)) {
+                                                            throw new ZLinkFrameworkException(
+                                                                    ZLinkFrameworkErrorKind
+                                                                            .UNAVAILABLE,
+                                                                    "Actor is sealed for relocation: "
+                                                                            + actorId);
+                                                        }
+                                                        context.state.closeDestroyAdmission(
+                                                                ref.nodeRid(), actorId, seal);
+                                                        return null;
+                                                    }),
+                                    () ->
+                                            inOwnerTurn(
+                                                    () -> {
+                                                        context.state.reopenDestroyAdmission();
+                                                        return null;
+                                                    }),
+                                    () ->
+                                            context.disconnectBoundSessionForDestroy()
+                                                    .thenCompose(
+                                                            ignored ->
+                                                                    spotNode.destroyActor(
+                                                                            ref,
+                                                                            defaultRequestTimeout))
+                                                    .thenCompose(
+                                                            ignored ->
+                                                                    removeActorSessionRouteForContext(
+                                                                            context))
+                                                    .thenCompose(
+                                                            ignored ->
+                                                                    context.closeDestroyResources())
+                                                    .thenCompose(
+                                                            ignored ->
+                                                                    locations.releaseActorExact(
+                                                                            entry.actorType(),
+                                                                            currentRef))
+                                                    .thenCompose(
+                                                            ignored ->
+                                                                    actorRegistry.removeAsync(
+                                                                            actorId, entry.actor()))
+                                                    .thenRun(context.state::clearAfterDestroy))
+                            .thenApply(ignored -> true);
+                });
     }
 
     CompletionStage<Optional<ActorRef>> findCommittedRemoteActor(
@@ -2588,11 +2621,30 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private CompletionStage<ZLinkActorCreateResult> getOrCreateActorOperation(
-            String actorId, String actorType, ZLinkMessage createRequest) {
-        ZLinkActor actor = actorRegistry.actor(actorId);
-        if (actor != null) {
+            String actorId, String actorType, ZLinkMessage createRequest, long deadline) {
+        if (System.nanoTime() - deadline >= 0) {
+            return CompletableFuture.failedFuture(
+                    systems.zlink.framework.runtime.internal.locations.ZLinkObjectCreationDeadline
+                            .exceeded(null));
+        }
+        var entry = actorRegistry.entry(actorId);
+        if (entry != null) {
+            if (!actorType.equals(entry.actorType())) {
+                return CompletableFuture.failedFuture(
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+                                "Actor type does not match"));
+            }
+            var ref = entry.context().actorRef();
+            if (ref == null || !entry.context().state.active()) {
+                return ZLinkActorCreationCoordinator.awaitConflict()
+                        .thenCompose(
+                                ignored ->
+                                        getOrCreateActorOperation(
+                                                actorId, actorType, createRequest, deadline));
+            }
             return CompletableFuture.completedFuture(
-                    new ZLinkActorCreateResult.Existing(publicRefFor(actor)));
+                    new ZLinkActorCreateResult.Existing(toPublicActorRef(ref, meshName)));
         }
         AtomicReference<ZLinkActorCreateResponse> response = new AtomicReference<>();
         return createLocalActor(actorId, actorType, createRequest, false, response::set)
@@ -2834,11 +2886,31 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     CompletionStage<Void> closeNativeSessionBindingForDestroy(
             ZLinkActor actor, ZLinkInternalSpotNode node, Duration timeout) {
         return closeNativeSessionBinding(
-                () ->
-                        node.closeActorBoundSessionAsync(
-                                requireContext(actor).actorRef(),
-                                timeout,
-                                () -> CompletableFuture.completedFuture(null)));
+                () -> {
+                    var actorRef = requireContext(actor).actorRef();
+                    var requested =
+                            node.closeActorBoundSessionAsync(
+                                    actorRef,
+                                    timeout,
+                                    () -> CompletableFuture.completedFuture(null));
+                    var terminal =
+                            requested.exceptionallyCompose(
+                                    failure -> {
+                                        // The Session owner can finish disconnect cleanup before
+                                        // handling the close. The Actor owner's binding removal
+                                        // confirms completion of this destroy step.
+                                        if (ZLinkRequestFailureMapping.causeCode(failure)
+                                                        == ServiceWireConstants
+                                                                .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED
+                                                && node.boundSessionRoute(actorRef).isEmpty()) {
+                                            return CompletableFuture.completedFuture(null);
+                                        }
+                                        return CompletableFuture.failedFuture(failure);
+                                    });
+                    systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                            .forwardCancellation(terminal.toCompletableFuture(), requested);
+                    return terminal;
+                });
     }
 
     private CompletionStage<Void> closeNativeSessionBinding(Supplier<CompletionStage<Void>> close) {
@@ -4512,6 +4584,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public void setActorJoinCanonicalMeshNode(ZLinkInternalMeshNode meshNode) {
         actorJoinCanonicalMeshNode = meshNode;
+        if (meshNode != null && locations.hasStoreResolver()) {
+            meshNode.setActorDestroyHandler(
+                    fence ->
+                            locations.receiveDestroy(fence, ref -> destroyLocal(ref, null, false)));
+        }
     }
 
     /** Compares the notification identity in the Actor turn (Session-Actor binding §7). */
@@ -4627,91 +4704,22 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             throw new ZLinkConfigurationException("actor is required");
         }
 
-        DestroyFromEntrySpotCheck check =
-                inStateLane(
-                        () -> {
-                            ZLinkActor current = actorRegistry.actor(actor.context().actorId());
-                            if (current == null || current != actor) {
-                                return new DestroyFromEntrySpotCheck(
-                                        null, null, CompletableFuture.completedFuture(null));
-                            }
-
-                            DefaultActorContext context = actorRegistry.context(actor);
-                            if (context == null) {
-                                return new DestroyFromEntrySpotCheck(
-                                        null,
-                                        null,
-                                        CompletableFuture.failedFuture(
-                                                new ZLinkConfigurationException(
-                                                        "actor does not have a native Actor ref: "
-                                                                + actor.context().actorId())));
-                            }
-                            ZLinkBackendActorRef actorRef;
-                            try {
-                                actorRef =
-                                        context.beginDestroy(
-                                                entryNodeRid, actor.context().actorId());
-                            } catch (ZLinkConfigurationException ex) {
-                                return new DestroyFromEntrySpotCheck(
-                                        null, null, CompletableFuture.failedFuture(ex));
-                            }
-                            if (actorRef == null) {
-                                return new DestroyFromEntrySpotCheck(
-                                        null, null, CompletableFuture.completedFuture(null));
-                            }
-                            return new DestroyFromEntrySpotCheck(context, actorRef, null);
-                        });
-        if (check.result() != null) {
-            return check.result();
-        }
-
-        String actorType = actorRegistry.actorTypeOrDefault(actor.context().actorId(), "");
         String actorId = actor.context().actorId();
-        DefaultActorContext context = check.context();
-        ZLinkBackendActorRef actorRef = check.actorRef();
-        return dispatches
-                .beginTeardown(
-                        actorId,
-                        context,
-                        () ->
-                                spotNode.destroyActor(actorRef, defaultRequestTimeout)
-                                        .thenCompose(
-                                                ignored ->
-                                                        ZLinkHandlerStages.completeAll(
-                                                                List.of(
-                                                                        context
-                                                                                ::disconnectBoundSessionForDestroy,
-                                                                        () ->
-                                                                                locations
-                                                                                        .releaseActorExact(
-                                                                                                actorType,
-                                                                                                new ActorRef(
-                                                                                                        actorId,
-                                                                                                        actorRef
-                                                                                                                .generation(),
-                                                                                                        meshName,
-                                                                                                        actorRef
-                                                                                                                .nodeRid())),
-                                                                        () ->
-                                                                                actorRegistry
-                                                                                        .removeAsync(
-                                                                                                actorId,
-                                                                                                actor),
-                                                                        () ->
-                                                                                removeActorSessionRouteForContext(
-                                                                                        context),
-                                                                        context
-                                                                                ::clearAfterDestroy))))
-                .whenComplete(
-                        (ignored, error) -> {
-                            if (error != null) {
-                                inStateLane(
-                                        () -> {
-                                            context.resetDestroying();
-                                            return null;
-                                        });
-                            }
-                        });
+        var context = actorRegistry.context(actor);
+        var ref = context == null ? null : context.actorRef();
+        if (ref == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        if (!ref.nodeRid().equals(entryNodeRid)) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                            "Actor is not owned by this Entry Spot: " + actorId));
+        }
+        return destroyLocal(
+                        new ActorRef(actorId, ref.generation(), meshName, entryNodeRid),
+                        actor,
+                        dispatches.isCurrent(actorId))
+                .thenApply(ignored -> null);
     }
 
     public void close() {
@@ -5133,13 +5141,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     private record ActorStateSnapshot(
             ZLinkActor actor, DefaultActorContext context, String actorType) {}
 
-    private record DestroyCheck(ZLinkActor actor, CompletionStage<Boolean> result) {}
-
-    private record DestroyFromEntrySpotCheck(
-            DefaultActorContext context,
-            ZLinkBackendActorRef actorRef,
-            CompletionStage<Void> result) {}
-
     private record RelocationSourceCheck(
             ZLinkActor actor, DefaultActorContext context, CompletionStage<Void> result) {}
 
@@ -5421,11 +5422,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             return state.disconnectBoundSessionForDestroy();
         }
 
-        CompletionStage<Void> clearAfterDestroy() {
+        CompletionStage<Void> closeDestroyResources() {
             if (execution != null) execution.close();
+            return ZLinkHandlerStages.fromRunnable(this::closeHandlerInstances);
+        }
+
+        CompletionStage<Void> clearAfterDestroy() {
             return ZLinkHandlerStages.completeAll(
                     List.of(
-                            () -> ZLinkHandlerStages.fromRunnable(this::closeHandlerInstances),
+                            this::closeDestroyResources,
                             () -> ZLinkHandlerStages.fromRunnable(state::clearAfterDestroy)));
         }
 
@@ -5437,14 +5442,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
         ZLinkHandlerInstanceOwner handlerInstances() {
             return handlerInstances;
-        }
-
-        ZLinkBackendActorRef beginDestroy(RoutingId entryNodeRid, String actorId) {
-            return state.beginDestroy(entryNodeRid, actorId);
-        }
-
-        void resetDestroying() {
-            state.resetDestroying();
         }
     }
 }

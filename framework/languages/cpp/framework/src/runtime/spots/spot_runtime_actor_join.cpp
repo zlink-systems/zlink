@@ -820,9 +820,10 @@ spot_node_runtime_t::commit_accepted_actor_join (
             if (!member)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Actor membership authority is unavailable");
-            if (member->has_relocation_state)
+            if (member->has_relocation_state
+                || member->state == runtime::actor_authority_state_t::closing)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Actor membership is relocating");
+                                             "Actor membership is sealed");
             if (commit_failure)
                 throw framework_exception_t (*commit_failure, "Actor membership commit conflicted");
             const auto kind = target_state.is_entry_spot ()
@@ -1991,15 +1992,6 @@ bool spot_node_runtime_t::actor_transfer_in_progress (const actor_ref_t &actor_r
 {
     return !::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)
            && _state->actor_transfer_coordinator->blocks_dispatch (actor_key (actor_ref));
-}
-
-
-task_t<bool> spot_node_runtime_t::actor_transfer_in_progress_async (actor_ref_t actor) const
-{
-    const auto state = _state;
-    if (::zlink::framework::detail::actor_ref_access_t::empty (actor))
-        return task_t<bool> (result_t<bool>::success (false));
-    return state->actor_transfer_coordinator->blocks_dispatch_async (actor_key (actor));
 }
 
 std::optional<spot_id_t> spot_node_runtime_t::resolve_entry_spot_id () const

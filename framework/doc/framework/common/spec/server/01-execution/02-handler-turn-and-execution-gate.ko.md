@@ -547,8 +547,9 @@ Instance cold activation의 순서는 다음과 같다.
 
 ## 15. 오류 처리
 
-Handler가 예외를 반환하면 send handler는 application logger·telemetry provider와
-metric에 기록한다. Request handler는 같은 request의 framework 오류 reply를 생성한다.
+Handler가 예외를 반환하면 send handler는 그 실패를 `reason=handler_exception`인 `zlink.dispatch_error`로
+기록한다. 기록 여부는 [Message flow tracing §4](../06-observability/03-message-flow-tracing.ko.md#4-기록-범위-설정--level과-sampling)의
+diagnostics level을 따르며 `Off`에서는 기록하지 않는다. 이 실패를 위한 별도 metric은 없다. Request handler는 같은 request의 framework 오류 reply를 생성한다.
 Provider failure는 원래 dispatch 결과를 바꾸지 않으며 별도 public error observer를
 제공하지 않는다.
 

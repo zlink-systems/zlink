@@ -151,7 +151,8 @@ deactivate_actor_location_async (std::weak_ptr<detail::spot_node_builder_state_t
         co_return;
     }
 
-    std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor_registry;
+    std::shared_ptr<service::mesh_node_t> native;
+    std::optional<service_provider_t> services;
     if (!location.actor_ref) {
         co_return;
     }
@@ -189,13 +190,14 @@ deactivate_actor_location_async (std::weak_ptr<detail::spot_node_builder_state_t
         (void) state->dispatched_request_replies.erase_if ([&] (const auto &request_key) {
             return request_key.starts_with (actor_request_dedup_prefix (key));
         });
-        destroy_actor_registry = state->destroy_actor_registry;
+        native = state->native_node.lock ();
+        services = state->root_services;
         return true;
     });
-    if (!deactivated)
-        co_return;
-    if (destroy_actor_registry) {
-        (void) co_await destroy_actor_registry (actor);
+    if (deactivated) {
+        const auto cleaned = co_await detail::cleanup_local_actor_resources (
+          std::move (native), std::move (services), actor);
+        cleaned.value ();
     }
 }
 
@@ -2210,9 +2212,13 @@ void spot_node_runtime_t::end_relocation_activation_admissions (
 }
 
 void spot_node_runtime_t::on_destroy_actor (
-  std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor)
+  spot_node_builder_state_t::actor_close_authority_t close,
+  spot_node_builder_state_t::actor_delete_authority_t remove)
 {
-    _state->lane.run ([&] { _state->destroy_actor_registry = std::move (destroy_actor); }).get ();
+    _state->lane.run_sync ([&] {
+        _state->close_actor_authority = std::move (close);
+        _state->delete_actor_authority = std::move (remove);
+    });
 }
 
 void spot_node_runtime_t::on_actor_ref_updated (
@@ -2230,16 +2236,6 @@ std::optional<spot_id_t> spot_node_runtime_t::actor_spot (const actor_ref_t &act
         }
         return found->second;
     });
-}
-
-task_t<result_t<bool>> spot_node_runtime_t::release_local_actor_async (actor_ref_t actor)
-{
-    const auto state = _state;
-    if (co_await state->actor_transfer_coordinator->blocks_dispatch_async (actor_key (actor)))
-        co_return result_t<bool>::failure (framework_error_kind_t::unavailable,
-                                           "Actor transfer is in progress");
-    co_return co_await state->lane.run_task (
-      [state, actor] { return spot_node_runtime_t (state).release_local_actor_on_lane (actor); });
 }
 
 result_t<bool>
@@ -2265,7 +2261,9 @@ spot_node_runtime_t::validate_local_actor_release_on_lane (const actor_ref_t &ac
         return result_t<bool>::failure (framework_error_kind_t::invalid_operation,
                                         "ActorRef generation does not match the current actor");
     }
-    if (_state->destroying_actors.contains (key)) {
+    if (const auto pending = _state->destroying_actors.find (key);
+        pending != _state->destroying_actors.end ()
+        && pending->second->generation == actor_ref.object_generation ()) {
         return result_t<bool>::success (false);
     }
 
@@ -2277,6 +2275,12 @@ result_t<bool> spot_node_runtime_t::release_local_actor_on_lane (const actor_ref
     const auto selected = validate_local_actor_release_on_lane (actor_ref);
     if (!selected || !selected.value ())
         return selected;
+    erase_local_actor_on_lane (actor_ref);
+    return result_t<bool>::success (true);
+}
+
+void spot_node_runtime_t::erase_local_actor_on_lane (const actor_ref_t &actor_ref)
+{
     const auto key = actor_key (actor_ref);
     const auto location = _state->actor_spot_ids.find (key);
     if (location != _state->actor_spot_ids.end ()) {
@@ -2301,7 +2305,6 @@ result_t<bool> spot_node_runtime_t::release_local_actor_on_lane (const actor_ref
     (void) _state->dispatched_request_replies.erase_if ([&] (const auto &request_key) {
         return request_key.starts_with (actor_request_dedup_prefix (key));
     });
-    return result_t<bool>::success (true);
 }
 
 task_t<result_t<void>> cleanup_local_actor_resources (std::shared_ptr<service::mesh_node_t> native,
@@ -2367,24 +2370,140 @@ task_t<result_t<bool>> spot_node_runtime_t::discard_local_actor_async (
     co_return result_t<bool>::success (true);
 }
 
-task_t<result_t<bool>> spot_node_runtime_t::destroy_actor (actor_ref_t actor_ref)
+namespace
+{
+void erase_actor_destroy_unlocked (
+  spot_node_builder_state_t &state,
+  const std::string &key,
+  const std::shared_ptr<spot_node_builder_state_t::actor_destroy_t> &operation)
+{
+    const auto found = state.destroying_actors.find (key);
+    if (found != state.destroying_actors.end () && found->second == operation)
+        state.destroying_actors.erase (found);
+}
+} // namespace
+
+task_t<void> spot_node_runtime_t::finish_actor_destroy (
+  actor_ref_t actor, std::shared_ptr<spot_node_builder_state_t::actor_destroy_t> operation)
 {
     const auto state = _state;
-    spot_node_runtime_t runtime (state);
-    const auto selected = co_await runtime.release_local_actor_async (actor_ref);
-    if (!selected || !selected.value ())
-        co_return selected;
-    co_await release_actor_location_async (state, actor_ref);
-    const auto destroy_registry =
-      co_await state->lane.run_task ([state] { return state->destroy_actor_registry; });
-    if (destroy_registry) {
-        const auto destroyed = co_await destroy_registry (actor_ref);
-        if (!destroyed)
-            co_return result_t<bool>::failure (
-              destroyed.error_kind (),
-              destroyed.error () ? destroyed.error ()->what () : "Actor registry cleanup failed");
+    auto [native, services, remove_authority] = co_await state->lane.run_task ([state] {
+        return std::tuple{state->native_node.lock (), state->root_services,
+                          state->delete_actor_authority};
+    });
+    const auto cleaned =
+      co_await cleanup_local_actor_resources (std::move (native), std::move (services), actor);
+    cleaned.value ();
+    co_await release_actor_location_async (state, actor);
+    co_await state->lane.run_task (
+      [state, &actor] { spot_node_runtime_t (state).erase_local_actor_on_lane (actor); });
+    if (remove_authority)
+        co_await remove_authority (actor);
+    co_await state->lane.run_task ([state, &actor, &operation] {
+        erase_actor_destroy_unlocked (*state, actor_key (actor), operation);
+    });
+}
+
+task_t<result_t<bool>> spot_node_runtime_t::destroy_actor (actor_ref_t actor,
+                                                           std::optional<std::string> entry_spot,
+                                                           std::string expected_store_version)
+{
+    const auto state = _state;
+    const auto turn = detail::capture_current_serial_turn ();
+    const auto key = actor_key (actor);
+    using operation_t = spot_node_builder_state_t::actor_destroy_t;
+    struct selection_t
+    {
+        std::shared_ptr<operation_t> operation;
+        std::shared_ptr<spot_serial_executor_t> executor;
+        spot_serial_executor_t::actor_executor_ptr_t mailbox;
+        spot_node_builder_state_t::actor_close_authority_t close_authority;
+        bool self_turn = false;
+    };
+    const auto blocked = co_await state->actor_transfer_coordinator->blocks_dispatch_async (key);
+    const auto selected = co_await state->lane.run_task ([&] () -> result_t<selection_t> {
+        const auto pending = state->destroying_actors.find (key);
+        const auto member = state->actor_spot_ids.find (key);
+        std::shared_ptr<spot_serial_executor_t> executor;
+        if (member != state->actor_spot_ids.end ()) {
+            const auto context = state->spot_contexts_by_id.find (std::string (member->second));
+            if (context != state->spot_contexts_by_id.end () && context->second._state
+                && context->second._state->is_entry_spot ()
+                && (!entry_spot || *entry_spot == member->second))
+                executor = context->second._state->spot_serial_executor;
+        }
+        const auto mailbox = executor ? executor->find_actor_executor (key) : nullptr;
+        const bool self_turn = turn && mailbox && turn->belongs_to (mailbox->queue ().get ())
+                               && !turn->is_after_active_phase ();
+        if (pending != state->destroying_actors.end ()
+            && pending->second->generation == actor.object_generation ())
+            return result_t<selection_t>::success ({pending->second, {}, {}, {}, self_turn});
+        const auto local = spot_node_runtime_t (state).validate_local_actor_release_on_lane (actor);
+        if (!local)
+            return detail::propagate_failure<selection_t> (local, "Actor destroy was rejected");
+        if (!local.value ())
+            return result_t<selection_t>::success ({});
+        if (blocked)
+            return result_t<selection_t>::failure (framework_error_kind_t::unavailable,
+                                                   "Actor transfer is in progress");
+        if (!executor)
+            return result_t<selection_t>::failure (
+              framework_error_kind_t::invalid_operation,
+              "Actor must be in its Entry Spot before destroy");
+        auto target_mailbox = mailbox ? mailbox : executor->actor_executor (key);
+        auto operation = std::make_shared<operation_t> (actor.object_generation ());
+        state->destroying_actors.insert_or_assign (key, operation);
+        return result_t<selection_t>::success ({std::move (operation), std::move (executor),
+                                                std::move (target_mailbox),
+                                                state->close_actor_authority, self_turn});
+    });
+    if (!selected)
+        co_return detail::propagate_failure<bool> (selected, "Actor destroy was rejected");
+    const auto &selection = selected.value ();
+    const auto operation = selection.operation;
+    if (!operation)
+        co_return result_t<bool>::success (false);
+    if (selection.executor) {
+        auto closed = result_t<void>::success ();
+        if (selection.close_authority)
+            closed = co_await runtime::await_result (
+              selection.close_authority (actor, std::move (expected_store_version)));
+        if (!closed) {
+            co_await state->lane.run_task (
+              [&] { erase_actor_destroy_unlocked (*state, key, operation); });
+            const auto failure =
+              detail::propagate_failure<bool> (closed, "Actor Closing CAS failed");
+            operation->accepted.complete (failure);
+            operation->terminal.complete (failure);
+            co_return failure;
+        }
+        co_await state->lane.run_task ([&] { operation->closing_accepted = true; });
+        const auto rejected = [operation] {
+            operation->terminal.complete (result_t<bool>::failure (
+              framework_error_kind_t::shutting_down, "Actor destroy queue is closed"));
+        };
+        const auto posted = selection.executor->execute_actor_lifecycle (
+          selection.mailbox, "actor-destroy",
+          [state, actor, operation] (auto complete) {
+              auto pending = spot_node_runtime_t (state).finish_actor_destroy (actor, operation);
+              detail::observe_task_completion (pending, [state, actor, operation,
+                                                         complete] (const result_t<void> &result) {
+                  complete ([state, actor, operation, result] {
+                      operation->terminal.complete (
+                        result ? result_t<bool>::success (true)
+                               : detail::propagate_failure<bool> (result, "Actor destroy failed"));
+                      report_actor_control_terminal (state, result, {},
+                                                     std::string (actor.actor_id ().value ()));
+                  });
+              });
+          },
+          rejected);
+        if (!posted)
+            rejected ();
+        operation->accepted.complete (result_t<bool>::success (true));
     }
-    co_return result_t<bool>::success (true);
+    co_return co_await runtime::await_result (selection.self_turn ? operation->accepted.task ()
+                                                                  : operation->terminal.task ());
 }
 
 void spot_node_runtime_t::record_actor_spot (const actor_ref_t &actor_ref, spot_id_t spot_id)
@@ -2503,7 +2622,7 @@ spot_node_runtime_t::execution_queue_on_lane (const runtime::stateful::object_re
         const auto fence = _state->actor_authority_fences.find (key);
         if ((fence != _state->actor_authority_fences.end ()
              && fence->second.authority_owner_generation != object.authority_owner_generation)
-            || _state->retiring_actor_keys.contains (key))
+            || _state->destroying_actors.contains (key))
             return {};
     }
     const auto executor = spot->ensure_spot_serial_executor ();
@@ -3362,141 +3481,13 @@ task_t<void> entry_spot_context_t::destroy_actor_instance_erased (const void *in
 
 task_t<void> entry_spot_context_t::destroy_actor_erased (const actor_ref_t &actor)
 {
-    const auto run =
-      +[] (std::shared_ptr<detail::spot_context_state_t> state, actor_ref_t actor) -> task_t<void> {
-        if (!state || !state->node
-            || ::zlink::framework::detail::actor_ref_access_t::empty (actor)) {
-            throw framework_exception_t (framework_error_kind_t::not_found, "actor ref is empty");
-        }
-        /* A lifecycle callback receives a reference to the actor instance. Erasing
-     * actor_instances from that callback would destroy the object before the
-     * callback (and its coroutine frame) has returned. Queue the destructive
-     * part behind the current serial turn so the borrowed reference remains
-     * valid for the complete callback. */
-        if (state->is_current_callback_thread ()) {
-            const auto deferred_actor = actor;
-            const auto key =
-              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)) + ":"
-              + std::string (actor.actor_id ().value ());
-            const auto accepted = co_await state->node->lane.run_task ([&] {
-                const auto found_location = state->node->actor_spot_ids.find (key);
-                const auto found_generation = state->node->actor_generations.find (key);
-                if (found_location == state->node->actor_spot_ids.end ()
-                    || (found_generation != state->node->actor_generations.end ()
-                        && found_generation->second != actor.object_generation ())) {
-                    return false;
-                }
-                state->node->retiring_actor_keys.insert (key);
-                return true;
-            });
-            if (!accepted)
-                co_return;
-            const auto finish = +[] (std::shared_ptr<detail::spot_context_state_t> retained,
-                                     actor_ref_t target, std::string retiring) -> task_t<void> {
-                (void) co_await runtime::await_result (
-                  entry_spot_context_t (retained).destroy_actor_erased (target));
-                co_await retained->node->lane.run_task (
-                  [&] { retained->node->retiring_actor_keys.erase (retiring); });
-            };
-            const auto posted = state->try_post_serial_task_after_current_turn (
-              "entry-spot-actor-destroy-after-handler",
-              [state, deferred_actor, key, finish] { return finish (state, deferred_actor, key); },
-              runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
-            if (!posted) {
-                co_await state->node->lane.run_task (
-                  [&] { state->node->retiring_actor_keys.erase (key); });
-                throw framework_exception_t (framework_error_kind_t::shutting_down,
-                                             "Actor destroy queue is closed");
-            }
-            co_return;
-        }
-        std::function<task_t<result_t<void>> (actor_ref_t)> destroy_registry;
-        const auto key =
-          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)) + ":"
-          + std::string (actor.actor_id ().value ());
-        const auto blocked =
-          co_await state->node->actor_transfer_coordinator->blocks_dispatch_async (key);
-        const auto selected = co_await state->node->lane.run_task ([&] {
-            if (actor.node_rid ().empty ()
-                || actor.node_rid ().value () != state->node_rid.value ()) {
-                return result_t<bool>::failure (framework_error_kind_t::not_found,
-                                                "actor is not owned by this Entry SPOT");
-            }
-
-            const auto found_location = state->node->actor_spot_ids.find (key);
-            if (found_location != state->node->actor_spot_ids.end ()
-                && found_location->second != state->spot_id) {
-                return result_t<bool>::failure (framework_error_kind_t::not_found,
-                                                "actor must leave its current SPOT before destroy");
-            }
-
-            const auto found_generation = state->node->actor_generations.find (key);
-            if (found_generation != state->node->actor_generations.end ()
-                && found_generation->second != actor.object_generation ()) {
-                return result_t<bool>::success (false);
-            }
-            if (state->node->destroying_actors.contains (key)) {
-                return result_t<bool>::success (false);
-            }
-            // A destroy scheduled for the retained entry-spot record must not
-            // race a transfer that is re-admitting the same incarnation on this
-            // node (A→B→A): the transfer commit owns the instance lifecycle.
-            if (blocked) {
-                return result_t<bool>::failure (framework_error_kind_t::unavailable,
-                                                "Actor transfer is in progress");
-            }
-
-            const auto destroys_local_actor = found_location != state->node->actor_spot_ids.end ();
-            if (destroys_local_actor) {
-                state->node->destroying_actors.insert (key);
-                destroy_registry = state->node->destroy_actor_registry;
-            }
-            return result_t<bool>::success (destroys_local_actor);
-        });
-        if (!selected) {
-            throw framework_exception_t (selected.error_kind (), selected.error () != nullptr
-                                                                   ? selected.error ()->what ()
-                                                                   : "actor destroy failed");
-        }
-        if (!selected.value ())
-            co_return;
-
-        co_await release_actor_location_async (state->node, actor);
-        co_await state->node->lane.run_task ([&] {
-            if (state->node->destroying_actors.contains (key)) {
-                erase_actor_route_unlocked (*state->node, key);
-                state->node->actor_created_keys.erase (key);
-                state->node->destroyed_actor_keys.insert (key);
-                state->node->actor_instances.erase (key);
-                detail::erase_actor_instance_index_unlocked (
-                  *state->node, ::zlink::framework::detail::actor_ref_access_t::actor_type (actor),
-                  actor.actor_id ().value ());
-                (void) state->node->dispatched_request_replies.erase_if (
-                  [&] (const auto &request_key) {
-                      return request_key.starts_with (actor_request_dedup_prefix (key));
-                  });
-                decrement_actor_count_unlocked (*state);
-            }
-        });
-
-        if (destroy_registry) {
-            auto cleanup = co_await destroy_registry (actor);
-            co_await state->node->lane.run_task (
-              [&] { state->node->destroying_actors.erase (key); });
-            if (!cleanup) {
-                const auto *error = cleanup.error ();
-                throw framework_exception_t (cleanup.error_kind (),
-                                             error != nullptr ? error->what ()
-                                                              : "actor registry cleanup failed");
-            }
-        } else {
-            co_await state->node->lane.run_task (
-              [&] { state->node->destroying_actors.erase (key); });
-        }
-
-        co_return;
-    };
-    return run (_state, actor);
+    const auto state = _state;
+    if (!state || !state->node)
+        throw framework_exception_t (framework_error_kind_t::not_found,
+                                     "Entry Spot is unavailable");
+    const auto result =
+      co_await detail::spot_node_runtime_t (state->node).destroy_actor (actor, state->spot_id);
+    (void) result.value ();
 }
 
 } // namespace zlink::framework

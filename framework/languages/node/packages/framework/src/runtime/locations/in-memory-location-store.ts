@@ -1,3 +1,5 @@
+import { ZLinkAggregateInventoryStore } from './aggregate-inventory-store';
+import { ZLinkInMemoryProviderLocationStore } from './in-memory-provider-location-store';
 import { cleanupDiscardedAuthority } from './discarded-authority-cleanup';
 import type { RoutingId } from '../../contracts/Common';
 import { ZLinkSpotKind } from '../../contracts';
@@ -108,6 +110,22 @@ export class ZLinkInMemoryLocationStore
   private readonly actorTransfers = new Map<string, InMemoryActorTransferSlot>();
   private ownerLeaseGeneration = 0n;
   private readonly authority: ZLinkInMemoryAuthorityStore;
+  protected readonly aggregateInventory: ZLinkAggregateInventoryStore =
+    new ZLinkAggregateInventoryStore(new ZLinkInMemoryProviderLocationStore());
+
+  async storeAggregateInventory(
+    request: ZLinkAggregateFence & {
+      readonly participants: ZLinkAggregatePrepareRequest['participants'];
+    },
+    signal?: AbortSignal
+  ): Promise<string> {
+    return this.aggregateInventory.store(request, signal);
+  }
+
+  async readAggregateInventory(fence: ZLinkAggregateFence, digest: string, signal?: AbortSignal) {
+    return this.aggregateInventory.read(fence, Buffer.from(digest, 'hex'), signal);
+  }
+
   protected readonly ownerLeaseReleaseDelay: ZLinkOwnerLeaseReleaseDelay;
 
   constructor(

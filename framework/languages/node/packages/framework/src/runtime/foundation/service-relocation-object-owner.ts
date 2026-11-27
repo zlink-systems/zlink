@@ -86,7 +86,9 @@ export class ServiceRelocationObjectCaptureOwner {
     private readonly progress?: (
       phase: 'preparing' | 'captured' | 'aborted',
       units: readonly ServiceRelocationCaptureUnit[],
-      memberships: readonly ServiceRelocationMembership[]
+      memberships: readonly ServiceRelocationMembership[],
+      aggregateGeneration: bigint,
+      signal?: AbortSignal
     ) => Promise<void>
   ) {
     requireCallbackConcurrency(maxConcurrentCallbacks);
@@ -158,7 +160,7 @@ export class ServiceRelocationObjectCaptureOwner {
         captured.push(capture);
         capture.work = await unit.seal(signal);
       }
-      await this.progress?.('preparing', units, memberships);
+      await this.progress?.('preparing', units, memberships, aggregateGeneration, signal);
       const participants = await mapConcurrentOrdered(
         captured,
         this.maxConcurrentCallbacks,
@@ -183,7 +185,7 @@ export class ServiceRelocationObjectCaptureOwner {
         },
         signal
       );
-      await this.progress?.('captured', units, memberships);
+      await this.progress?.('captured', units, memberships, aggregateGeneration, signal);
       return new ServiceCapturedObjectRelocation(
         {
           aggregateId,
@@ -196,7 +198,7 @@ export class ServiceRelocationObjectCaptureOwner {
     } catch (error) {
       try {
         try {
-          await this.progress?.('aborted', units, memberships);
+          await this.progress?.('aborted', units, memberships, aggregateGeneration);
         } finally {
           await abortSourceSeals(captured.map(({ unit }) => unit));
         }

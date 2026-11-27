@@ -1,3 +1,4 @@
+import type { StoredAggregateInventoryEntry } from './aggregate-inventory-store';
 import type {
   ZLinkLocationOwnerToken,
   ZLinkLocationPage,
@@ -167,6 +168,18 @@ export interface ZLinkDomainLocationStore {
     signal?: AbortSignal,
     deadlineUnixMs?: bigint
   ): Promise<ZLinkObjectAbortResult>;
+
+  storeAggregateInventory?(
+    request: ZLinkAggregateFence & {
+      readonly participants: ZLinkAggregatePrepareRequest['participants'];
+    },
+    signal?: AbortSignal
+  ): Promise<string>;
+  readAggregateInventory?(
+    fence: ZLinkAggregateFence,
+    digest: string,
+    signal?: AbortSignal
+  ): Promise<readonly StoredAggregateInventoryEntry[]>;
 
   prepareAggregate(
     request: ZLinkAggregatePrepareRequest,
