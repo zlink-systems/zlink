@@ -266,7 +266,9 @@ Instance Spot default mesh), or the name of a STREAM registration with stage 2 o
     `unavailable` + queueRequired, as in the first row of §3.4, and that connection waits again per §3.5.5.
   - When the handler ends (success, failure, or cancellation), the node returns the permit with a `ReleasePermit` Spot send. The
     Spot treats repeated returns of the same permit as idempotent.
-  - The Spot records the node owner lease of each permit and reclaims every permit of a node whose lease ended. A node report (§3.5.3)
+  - The Spot records the node owner lease of each permit. Only when an `AdmitPermit` hits the limit does it check the
+    leases of the owners holding permits in the Location Store and reclaim every permit of a lease that ended (otherwise it
+    doesn't read the Store). A node report (§3.5.3)
     carries the permit IDs the node holds and the highest contiguous `requestSeq` such that every `AdmitPermit` at or below it
     has finished (answered, or abandoned at the default timeout). The Spot reclaims only permits whose `requestSeq` is at or
     below that value and that are missing from the list. A permit whose answer was lost is therefore reclaimed after that
