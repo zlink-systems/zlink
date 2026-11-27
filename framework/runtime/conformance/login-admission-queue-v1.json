@@ -457,7 +457,7 @@
     },
     {
       "name": "permit-reclaimed-when-missing-from-report",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:223",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:208",
       "given": {
         "globalLimit": 2,
         "epoch": 42,
@@ -466,13 +466,15 @@
             "node": "n1",
             "ownerId": "o1",
             "leaseGeneration": 3,
-            "permit": "p1"
+            "permit": "p1",
+            "permitId": 1
           },
           {
             "node": "n1",
             "ownerId": "o1",
             "leaseGeneration": 3,
-            "permit": "p2"
+            "permit": "p2",
+            "permitId": 2
           }
         ]
       },
@@ -483,8 +485,65 @@
           "heldPermits": [
             "p2"
           ],
+          "highestReceivedPermitId": 2,
           "expect": {
             "runningPermits": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "late-grant-survives-earlier-report",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:208",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": []
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "permitId": 1,
+            "runningPermits": 1
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [],
+          "highestReceivedPermitId": 0,
+          "note": "sent before the grant reached n1",
+          "expect": {
+            "runningPermits": 1
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "expect": {
+            "granted": false,
+            "runningPermits": 1
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [],
+          "highestReceivedPermitId": 1,
+          "note": "handler done and permit not released (lost send)",
+          "expect": {
+            "runningPermits": 0
           }
         }
       ]
@@ -809,13 +868,13 @@
     },
     {
       "name": "global-limit-spot-no-response",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:225",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:226",
       "given": {
         "queueEnabled": true,
         "globalLimit": 1,
         "ticketState": "valid",
         "reportedEpoch": 42,
-        "spotPermit": "noResponseBeforeDeadline"
+        "spotPermit": "noResponseWithinSpotRequestTimeout"
       },
       "steps": [
         {
