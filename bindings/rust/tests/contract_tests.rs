@@ -428,7 +428,7 @@ fn poller_wait_with_no_event_capacity_reports_core_config_error() {
     match error {
         ZlinkError::Config(config) => {
             assert_eq!(config.code(), zlink::ConfigResult::InvalidArgument);
-            assert_eq!(config.native_errno(), libc::EINVAL);
+            assert_eq!(config.internal_errno(), libc::EINVAL);
         }
         other => panic!("expected Core configuration error, got {other:?}"),
     }
@@ -857,4 +857,16 @@ fn reply_token_from_closed_router_is_rejected_by_recreated_router() {
         .submit()
         .unwrap_err();
     assert_eq!(error.code(), SubmitResult::InvalidArgument);
+}
+
+#[test]
+#[allow(deprecated)]
+fn internal_errno_and_deprecated_native_errno_return_the_same_value() {
+    use zlink::{ConfigError, ConfigResult, ZlinkError};
+    let error = ConfigError::new(ConfigResult::InvalidArgument, libc::EINVAL);
+    assert_eq!(error.internal_errno(), libc::EINVAL);
+    assert_eq!(error.native_errno(), error.internal_errno());
+    let wrapped = ZlinkError::from(error);
+    assert_eq!(wrapped.internal_errno(), libc::EINVAL);
+    assert_eq!(wrapped.native_errno(), wrapped.internal_errno());
 }

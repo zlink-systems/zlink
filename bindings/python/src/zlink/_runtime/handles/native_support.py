@@ -232,26 +232,19 @@ def _msg_to_bytes(msg):
     return ctypes.string_at(ptr, size)
 
 
-def _init_msg_from_buffer(msg, data, *, borrow):
-    if not borrow and _native_extension is not None:
+def _init_msg_from_buffer(msg, data):
+    if _native_extension is not None:
         source = data if isinstance(data, bytes) else _as_bytes_view(data)
         rc, native_errno = _native_extension.msg_init_buffer(msg, source)
         if rc != 0:
             _raise_result_error(ConfigError, ConfigResult, rc, native_errno)
-        return None
-    ptr, size, keepalive = _send_buffer(data)
-    if borrow:
-        data_ptr = ctypes.c_void_p(ptr if isinstance(ptr, int) else ctypes.cast(ptr, ctypes.c_void_p).value or 0)
-        rc = lib().zlink_msg_init_data(ctypes.byref(msg), data_ptr, size, None, None)
-    else:
-        rc = lib().zlink_msg_init_size(ctypes.byref(msg), size)
-        if rc == 0 and size:
-            ctypes.memmove(_msg_data_ptr(msg), ptr, size)
+        return
+    ptr, size, _keepalive = _send_buffer(data)
+    rc = lib().zlink_msg_init_size(ctypes.byref(msg), size)
+    if rc == 0 and size:
+        ctypes.memmove(_msg_data_ptr(msg), ptr, size)
     if rc != 0:
         _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-    # A copied message no longer depends on the caller buffer. Borrowed
-    # messages retain the source object until the native message is closed.
-    return keepalive if borrow else None
 
 
 def _clone_native_msg(src):

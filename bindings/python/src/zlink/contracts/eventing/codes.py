@@ -35,17 +35,37 @@ class MonitorEventFlag(IntFlag):
 
 class MonitorStatusDetail(IntFlag):
     """Detail bits describing which ``MonitorStatus`` fields are populated.
-    Mirrors ``zlink_monitor_status_detail_flag_e`` in the C ABI. Only the
-    flow-state bit is named here; the raw ``MonitorStatus.detail_flags``
-    field carries the others."""
+    Mirrors ``zlink_monitor_status_detail_flag_e`` in the C ABI."""
+    SND_PENDING_MSGS = 1 << 1
+    RCV_PENDING_MSGS = 1 << 2
+    AUTO_HWM_BUDGET = 1 << 3
+    AUTO_HWM_BUFFERS = 1 << 4
     FLOW_STATE = 1 << 5
+
+class MonitorStateFlag(IntFlag):
+    """State bits of ``MonitorStatus.state_flags``. Mirrors
+    ``zlink_monitor_state_flag_e`` in the C ABI."""
+    READY = 1 << 0
+    BOUND_READY = 1 << 1
+    CLOSED = 1 << 3
+
+class MonitorSourceKind(IntEnum):
+    """The kind of source a ``MonitorStatus`` describes."""
+    SOCKET = 1
+
+class TransportLane(IntEnum):
+    """The physical connection lane a monitor event belongs to."""
+    APPLICATION = 0
+    COMPLETION = 1
 
 class PollEventFlag(IntFlag):
     """Conditions a poll source can be watched for or report.
 
     Mirrors ``zlink_poller_event_flag_e`` in the C ABI. ``POLLCOMPLETION`` lets
     a public caller transfer completion dispatch ownership to the thread calling
-    ``Poller.wait``; ordinary receive/send readiness uses ``POLLIN`` / ``POLLOUT``.
+    ``Poller.wait``; ordinary receive/send readiness uses ``POLLIN`` / ``POLLOUT``. ``POLLROUTE``
+    reports a ROUTER selected-route change and ``POLLCONNECT`` a connection
+    attempt state change (see ``connection_attempts_snapshot``).
     """
 
     POLLIN = 1
@@ -55,6 +75,7 @@ class PollEventFlag(IntFlag):
     POLLITEMS_DFLT = 16
     POLLCOMPLETION = 32
     POLLROUTE = 64
+    POLLCONNECT = 128
 
 class PollSourceKind(IntEnum):
     """Whether a poll event came from a socket, a file descriptor, or a timer."""
@@ -66,6 +87,9 @@ __all__ = [
     "MonitorEventMask",
     "MonitorEventFlag",
     "MonitorStatusDetail",
+    "MonitorStateFlag",
+    "MonitorSourceKind",
+    "TransportLane",
     "PollEventFlag",
     "PollSourceKind",
 ]

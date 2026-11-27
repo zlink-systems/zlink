@@ -820,7 +820,7 @@ mod tests {
             .err()
             .expect("invalid native source");
         assert_eq!(error.code(), RequestResult::InternalError);
-        assert_eq!(error.native_errno(), libc::EFAULT);
+        assert_eq!(error.internal_errno(), libc::EFAULT);
         // The first source was adopted then dropped on error; the last source
         // remains owned by the completion, together with its empty prefix.
         assert_eq!(original.ref_count(), 2);
@@ -935,7 +935,7 @@ mod tests {
             entry.poll_writable(waker),
             Poll::Ready(Err(error))
                 if error.code() == SubmitResult::InternalError
-                    && error.native_errno() == libc::EPROTO
+                    && error.internal_errno() == libc::EPROTO
         ));
     }
 
@@ -992,13 +992,13 @@ mod tests {
             entry.poll_request(waker),
             Poll::Ready(Err(ZlinkError::Submit(error)))
                 if error.code() == SubmitResult::Terminated
-                    && error.native_errno() == libc::ESHUTDOWN
+                    && error.internal_errno() == libc::ESHUTDOWN
         ));
         assert!(matches!(
             entry.poll_writable(waker),
             Poll::Ready(Err(error))
                 if error.code() == SubmitResult::Terminated
-                    && error.native_errno() == libc::ESHUTDOWN
+                    && error.internal_errno() == libc::ESHUTDOWN
         ));
     }
 
@@ -1037,7 +1037,7 @@ mod tests {
                     entry.poll_writable(waker),
                     Poll::Ready(Err(error))
                         if error.code() == expected
-                            && error.native_errno() == if expected == SubmitResult::InternalError { libc::EPROTO } else { errno }
+                            && error.internal_errno() == if expected == SubmitResult::InternalError { libc::EPROTO } else { errno }
                 ));
             }
         }

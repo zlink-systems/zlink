@@ -1840,7 +1840,10 @@ JCS bytes, the same content gives the same check value whichever language wrote 
   `digestSha256` of the participant inventory root fixed at the seal. Because an entry's
   `expectedStoreVersion` is the value read at preparation, this value doesn't change after
   `preparing`. A move of a single Actor with no aggregate record uses the root `digestSha256` of an
-  inventory whose only entry is that Actor.
+  inventory whose only entry is that Actor. That move doesn't store inventory root, page, or participant
+  records, because it has no `aggregateId` for their keys. The target builds the one-entry inventory from
+  the authority record it read, computes its root `digestSha256`, and compares it with
+  `sourceInventorySha256`; it doesn't read an inventory record from the Store.
 
 The inventory root, pages, and participant change records aren't modified once written. Records
 of the same `(aggregateId, aggregateGeneration)` aren't rewritten with different content; different

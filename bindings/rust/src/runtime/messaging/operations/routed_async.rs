@@ -305,7 +305,8 @@ fn submit_request_attempt(
         .peer_rid
         .as_ref()
         .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
-    let timeout_ms = duration_to_timeout_ms(operation.timeout);
+    let timeout_ms =
+        duration_to_timeout_ms(operation.timeout).map_err(RequestAttemptError::without_token)?;
     let mut completion_id = 0;
     let handle = operation.routed.handle();
     if handle.is_null() {
@@ -364,7 +365,7 @@ fn submit_request_parts(
         .peer_rid
         .as_ref()
         .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
-    let timeout_ms = duration_to_timeout_ms(operation.timeout);
+    let timeout_ms = duration_to_timeout_ms(operation.timeout)?;
     let mut completion_id = 0;
     let (rc, errno) = submit_shared_message(&mut operation.parts, |parts, count| unsafe {
         ffi::zlink_request(
@@ -382,10 +383,12 @@ fn submit_request_parts(
     Ok(completion_id)
 }
 
-fn duration_to_timeout_ms(duration: Duration) -> u32 {
+/// Zero means no timeout; a sub-millisecond timeout rounds up to 1 ms. A
+/// timeout beyond Core's `u32` milliseconds is rejected, never clamped.
+fn duration_to_timeout_ms(duration: Duration) -> Result<u32, SubmitError> {
     if duration.is_zero() {
-        0
-    } else {
-        duration.as_millis().clamp(1, u32::MAX as u128) as u32
+        return Ok(0);
     }
+    u32::try_from(duration.as_millis().max(1))
+        .map_err(|_| SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL))
 }

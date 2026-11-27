@@ -22,6 +22,9 @@ pub const POLLCOMPLETION: i16 = 32;
 /// Poll event flag: a ROUTER's selected route changed; read
 /// `RouterSocket::routes_snapshot`.
 pub const POLLROUTE: i16 = 64;
+/// Poll event flag: outbound connection attempts changed; read
+/// `connection_attempts_snapshot`.
+pub const POLLCONNECT: i16 = 128;
 
 /// A built-in socket source that can be registered with a [`Poller`].
 ///
