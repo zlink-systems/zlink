@@ -982,20 +982,6 @@ public final class ZLinkSerialExecutionQueue {
         this.ownerTimeBudgetNanos = ownerTimeBudget.toNanos();
     }
 
-    public <T> CompletionStage<T> prepareRelocationTarget(Supplier<CompletionStage<T>> operation) {
-        return prepareActivation(
-                () ->
-                        trySealRelocation(captureActiveTurnSealHandle().orElseThrow())
-                                .thenCompose(
-                                        seal -> {
-                                            if (seal.isEmpty())
-                                                return CompletableFuture.failedFuture(
-                                                        new IllegalStateException(
-                                                                "relocation target preparation could not be sealed"));
-                                            return operation.get();
-                                        }));
-    }
-
     public CompletionStage<Optional<RelocationSeal>> relocationPreparationSeal() {
         return underSharedSpotGateAsync(
                 () -> {

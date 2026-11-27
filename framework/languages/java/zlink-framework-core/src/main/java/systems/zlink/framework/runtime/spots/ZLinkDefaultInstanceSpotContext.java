@@ -197,7 +197,8 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     }
 
     <T> CompletionStage<T> prepareRelocationTarget(Supplier<CompletionStage<T>> operation) {
-        return dispatchQueue.prepareRelocationTarget(() -> runLifecycleExecution(operation));
+        return ZLinkSpotSerialExecutor.prepareRelocationTarget(
+                dispatchQueue, () -> runLifecycleExecution(operation));
     }
 
     CompletionStage<Void> initializeRelocation(ZLinkInstanceSpot spot) {

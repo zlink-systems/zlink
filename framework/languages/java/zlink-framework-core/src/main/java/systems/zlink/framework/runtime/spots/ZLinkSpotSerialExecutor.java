@@ -459,7 +459,23 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     <T> CompletionStage<T> prepareRelocationTarget(Supplier<CompletionStage<T>> operation) {
-        return spotQueue.prepareRelocationTarget(operation);
+        return prepareRelocationTarget(spotQueue, operation);
+    }
+
+    /** Seals the target queue's active turn before preparing a relocation target on it. */
+    static <T> CompletionStage<T> prepareRelocationTarget(
+            ZLinkSerialExecutionQueue queue, Supplier<CompletionStage<T>> operation) {
+        return queue.prepareActivation(
+                () ->
+                        queue.trySealRelocation(queue.captureActiveTurnSealHandle().orElseThrow())
+                                .thenCompose(
+                                        seal -> {
+                                            if (seal.isEmpty())
+                                                return CompletableFuture.failedFuture(
+                                                        new IllegalStateException(
+                                                                "relocation target preparation could not be sealed"));
+                                            return operation.get();
+                                        }));
     }
 
     CompletionStage<Void> continueActivationPreparation(Supplier<CompletionStage<Void>> operation) {
