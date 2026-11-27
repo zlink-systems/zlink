@@ -9,7 +9,8 @@ public sealed record NodeSettings(
     string MeshEndpoint,
     string? StreamEndpoint = null,
     bool BootstrapMatchmaking = false,
-    int RoomCapacity = int.MaxValue
+    int RoomCapacity = int.MaxValue,
+    bool NetworkSync = false
 )
 {
     public static NodeSettings Load(string[] args)
@@ -33,6 +34,10 @@ public sealed record NodeSettings(
         ArgumentException.ThrowIfNullOrWhiteSpace(settings.MeshEndpoint);
         if (settings.RoomCapacity <= 0)
             throw new InvalidDataException("RoomCapacity must be positive.");
+#if !NETWORK_SYNC
+        if (settings.NetworkSync)
+            throw new InvalidDataException("Build with EnableNetworkSync=true to use the NetworkSync profile.");
+#endif
         return settings;
     }
 }

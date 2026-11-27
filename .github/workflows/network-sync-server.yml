@@ -2,20 +2,10 @@ name: Network sync server
 
 # network-sync 서버 플러그인과 시뮬레이션 코어를 빌드하고 시험한다(#3774).
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "plugins/network-sync/server/**"
-      - "plugins/network-sync/protocol/**"
-      - ".github/workflows/network-sync-server.yml"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "plugins/network-sync/server/**"
-      - "plugins/network-sync/protocol/**"
-      - ".github/workflows/network-sync-server.yml"
+  # 사용자 결정(11-27): Actions는 C++ 빌드 검증과 릴리스·데일리만. PR 검증은 로컬 실행.
+  schedule:
+    - cron: "37 18 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read

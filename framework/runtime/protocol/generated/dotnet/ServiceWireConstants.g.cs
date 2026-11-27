@@ -80,6 +80,7 @@ internal static class ServiceWireConstants
         RelocationState = 52,
         RelocationFailed = 53,
         BoundSessionClose = 54,
+        InstanceSpotFollow = 55,
     }
     [System.Flags]
     internal enum Flag : byte
