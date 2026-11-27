@@ -231,7 +231,8 @@ Connector는 다음과 같이 처리한다.
     Node는 거절을 받으면 client에 §3.4 첫 행과 같은 `unavailable`+queueRequired를 보내고, 그 연결은 §3.5.5대로 다시 대기한다.
   - Node는 handler가 끝나면(성공·실패·취소 모두) `ReleasePermit` Spot send로 permit을 반납한다. Spot은 같은 permit의 반납을
     멱등으로 처리한다.
-  - Spot은 permit마다 node owner lease를 기록하고, 그 lease가 끝난 node의 permit을 모두 회수한다. Node 보고(§3.5.3)는
+  - Spot은 permit마다 node owner lease를 기록한다. `AdmitPermit`이 상한에 닿았을 때만 permit을 쥔 owner들의 lease를
+    Location Store에서 확인해, 끝난 lease의 permit을 모두 회수한다(그 밖에는 Store를 읽지 않는다). Node 보고(§3.5.3)는
     쥐고 있는 permit ID 목록과 '이 순번 이하의 `AdmitPermit`은 모두 끝났다(응답을 받았거나 기본 timeout으로 포기했다)'인 연속 최대
     `requestSeq`를 보낸다. Spot은 `requestSeq`가 그 값 이하인데 목록에 없는 permit만 회수한다. 그래서 응답이 사라진 permit은 그
     요청의 timeout 뒤 회수되고, 응답 순서가 뒤바뀌어도 아직 끝나지 않은 요청의 permit은 회수되지 않는다.
