@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -16,10 +17,13 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.PairSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.streams.ManualScheduledExecutor;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -112,6 +116,50 @@ final class StreamPermitLivenessTest {
     @EnumSource(Scenario.class)
     void inProcessPermitWaitSuspendsReceiveDeadlines(Scenario scenario) throws Exception {
         verify("inproc", scenario, null);
+    }
+
+    @Test
+    void hostStreamTimesOutAfterPermitWaitAndResumedReceive() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.configureInboundDispatch().setMaxQueuedApplicationJobs(1);
+        options.addStreamNode("gateway")
+                .bind("tcp://127.0.0.1:0")
+                .heartbeat(INTERVAL, HEARTBEAT)
+                .registerSession(ZLinkMissingLocalActorTest.Session.class);
+
+        var queue = options.registration().applicationJobQueue();
+        var waitLimit = Duration.ofSeconds(10);
+        try (var metrics = ZLinkRuntimeMetricProbe.install();
+                var host =
+                        ZLinkFrameworkRuntimeTestAccess.startHost(
+                                options, new ZLinkJavaBackendAdapterFactory());
+                var peer =
+                        new Peer(
+                                URI.create(
+                                        host.listenerStatus(ZLinkListenerKind.STREAM, "gateway")
+                                                .endpoint()),
+                                null,
+                                System::nanoTime)) {
+            peer.openSession();
+            try (var held =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .get(waitLimit.toMillis(), TimeUnit.MILLISECONDS)) {
+                peer.ping();
+                await(() -> queue.snapshot().capacityWaiters() == 1, waitLimit);
+
+                // The controlled-clock cases assert exact deadlines and heartbeat phases.
+                Thread.sleep(HEARTBEAT.plus(INTERVAL));
+                peer.assertNoPong();
+                assertFalse(peer.sessionClosing.isDone(), "session closed during permit wait");
+            }
+
+            peer.awaitPong();
+            var closing = peer.sessionClosing.get(waitLimit.toMillis(), TimeUnit.MILLISECONDS);
+            assertEquals(3, closing.reason());
+            await(() -> closeReasons(metrics).contains("heartbeat_timeout"), waitLimit);
+        }
     }
 
     private void verify(String transport, Scenario scenario, Path tempDir) throws Exception {
