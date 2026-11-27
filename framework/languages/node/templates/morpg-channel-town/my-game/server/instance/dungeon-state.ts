@@ -73,8 +73,7 @@ export class DungeonState {
   }
 
   advance(): string | null {
-    if (this.stage < 0n || this.stage >= Game.maximumInteger)
-      return Rejection.integerOutOfRange;
+    if (this.stage < 0n || this.stage >= Game.maximumInteger) return Rejection.integerOutOfRange;
     if (this.phase !== RunPhase.Active) return Rejection.runNotActive;
     this.stage++;
     if (this.stage === Game.finalStage) this.phase = RunPhase.Completed;

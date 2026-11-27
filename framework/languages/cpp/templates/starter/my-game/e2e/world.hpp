@@ -3,6 +3,7 @@
 #include <random>
 #include <iostream>
 #include <cstdlib>
+#include <syncstream>
 
 namespace MyGame::E2E
 {
@@ -19,6 +20,7 @@ class World
     {
         std::unique_ptr<Process> process;
         bool stopped = false;
+        std::string name;
     };
     std::filesystem::path root_, bin_, logs_;
     std::string project_, redis_;
@@ -57,14 +59,15 @@ class World
         // Port zero: Framework publishes the bound endpoints in READY.
         constexpr auto ephemeral = "tcp://127.0.0.1:0";
         config["MeshEndpoint"] = ephemeral;
-        config["StreamEndpoint"] = ephemeral;
         const auto config_path = logs_ / (name + ".json");
         {
             std::ofstream output (config_path);
             output << config.dump (2);
             require (static_cast<bool> (output), "Config write failed");
         }
+        std::osyncstream (std::cout) << "[" << name << "] Starting" << std::endl;
         auto node = std::make_unique<Node> ();
+        node->name = name;
         auto executable = bin_ / ("my-game-" + name);
 #ifdef _WIN32
         executable += ".exe";
@@ -85,7 +88,7 @@ class World
             arguments = {"docker", "start", "-a", "-i", container};
         }
         node->process = std::make_unique<Process> (arguments, logs_ / (name + ".out.log"),
-                                                   logs_ / (name + ".err.log"));
+                                                   logs_ / (name + ".err.log"), name);
         auto *result = node.get ();
         nodes_.push_back (std::move (node));
         const auto line = result->process->wait_line (Control::ready);
@@ -95,16 +98,24 @@ class World
         const auto mesh = ready.at ("meshEndpoint").get<std::string> ();
         require (!mesh.empty () && !mesh.ends_with (":0"),
                  "Framework did not publish the bound mesh endpoint");
+        if (config.contains ("StreamEndpoint") && config.at ("StreamEndpoint").is_string ()) {
+            const auto stream = ready.at ("streamEndpoint").get<std::string> ();
+            require (stream.starts_with ("ws://") && !stream.ends_with (":0"),
+                     "Framework did not publish a bound WebSocket STREAM endpoint: " + stream);
+        }
+        std::osyncstream (std::cout) << "[" << result->name << "] Ready" << std::endl;
         return {result, ready};
     }
     static void stop_node (Node &node)
     {
         if (node.stopped)
             return;
+        std::osyncstream (std::cout) << "[" << node.name << "] Stopping" << std::endl;
         node.process->command (Control::shutdown);
         node.process->wait_line (Control::stopped, Limits::shutdown);
         require (node.process->wait_exit () == 0, "Node shutdown exit failed");
         node.stopped = true;
+        std::osyncstream (std::cout) << "[" << node.name << "] Stopped" << std::endl;
     }
 
   public:
@@ -118,8 +129,11 @@ class World
         std::filesystem::create_directories (logs_);
         std::cout << "Logs: " << logs_.string () << std::endl;
     }
-    std::string start ()
+    std::string start (const nlohmann::json *attached = nullptr)
     {
+        if (attached) {
+            return nonempty (*attached, "sessionEndpoint");
+        }
         if (docker_project_.empty ()) {
             compose_started_ = true;
             run_command (compose ({"up", "--detach", "--wait", "redis"}));
@@ -134,12 +148,20 @@ class World
         const auto [node, ready] = start_node (Names::session);
         session_ = node;
         const auto stream = ready.at ("streamEndpoint").get<std::string> ();
-        require (!stream.empty () && !stream.ends_with (":0"),
-                 "Framework did not publish stream endpoint");
         return stream;
     }
     Process &session () { return *session_->process; }
     void stop_session () { stop_node (*session_); }
+    nlohmann::json start_server ()
+    {
+        nlohmann::json endpoints{{"sessionEndpoint", start ()}};
+        return endpoints;
+    }
+    std::string client_addresses (const nlohmann::json &state) const
+    {
+        return nonempty (state, "sessionEndpoint");
+    }
+    const std::filesystem::path &logs () const { return logs_; }
     void close ()
     {
         std::vector<std::string> failures;

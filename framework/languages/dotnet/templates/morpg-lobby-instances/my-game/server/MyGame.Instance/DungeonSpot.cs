@@ -18,6 +18,7 @@ public sealed class DungeonSpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<LeaveDungeon, PlayerActor>(nameof(LeaveDungeonRequest));
         Context.Handlers.AddActorPacket<DungeonEnter, PlayerActor>(nameof(EnterDungeonRequest));
         Context.Handlers.AddActorPacket<DungeonTravel, PlayerActor>(nameof(JoinDungeon));
         Context.Handlers.AddActorPacket<PartyDelivery, PlayerActor>(nameof(PartyView));
@@ -35,27 +36,56 @@ public sealed class DungeonSpot(
         return new DungeonPrepared(Context.SpotId, request.RunId);
     }
 
-    public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(string actorId, ZLinkMessage request, CancellationToken ct) =>
-        ValueTask.FromResult(state.Admit(actorId, request.Decode<JoinDungeon>(), Context.SpotId)
-            ? ZLinkSpotActorJoinResult.Accept() : ZLinkSpotActorJoinResult.Reject());
+    public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+        string actorId,
+        ZLinkMessage request,
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult(
+            state.Admit(actorId, request.Decode<JoinDungeon>(), Context.SpotId)
+                ? ZLinkSpotActorJoinResult.Accept()
+                : ZLinkSpotActorJoinResult.Reject()
+        );
 
     public async ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct)
     {
         var started = state.Join(actor.Context.ActorId);
-        await Context.Outbound.SendToSpot(state.PartyId, new DungeonMemberEntered(state.RunId!, actor.Context.ActorId)).Async();
+        await Context
+            .Outbound.SendToSpot(
+                state.PartyId,
+                new DungeonMemberEntered(state.RunId!, actor.Context.ActorId)
+            )
+            .Async();
         if (started)
             await Context.Outbound.SendToSpot(state.PartyId, new RunStarted(state.RunId!)).Async();
         await BroadcastAsync();
     }
 
-    public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct) =>
-        ValueTask.CompletedTask;
+    public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct)
+    {
+        state.Joined.Remove(actor.Context.ActorId);
+        return ValueTask.CompletedTask;
+    }
+
+    public async ValueTask<DungeonLeft> LeaveAsync(PlayerActor actor, CancellationToken ct)
+    {
+        await Context.LeaveActorAsync(actor, ct);
+        return new DungeonLeft(Context.SpotId, Context.ObjectGeneration, state.Joined.Count);
+    }
 
     public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken ct) =>
         ValueTask.CompletedTask;
 
     private DungeonView View() =>
-        new(Context.SpotId, settings.Id, state.PartyId, state.Members, state.Stage, state.RunId, state.Phase);
+        new(
+            Context.SpotId,
+            settings.Id,
+            state.PartyId,
+            state.Members,
+            state.Stage,
+            state.RunId,
+            state.Phase
+        );
 
     public ValueTask ShowAsync(PlayerActor actor) =>
         actor.Context.BoundSession.Send(View()).Async();
@@ -69,16 +99,22 @@ public sealed class DungeonSpot(
             return;
         }
         if (state.Phase == RunPhase.Completed)
-            await Context.Outbound.SendToSpot(state.PartyId, new RunCompleted(state.RunId!)).Async();
+            await Context
+                .Outbound.SendToSpot(state.PartyId, new RunCompleted(state.RunId!))
+                .Async();
         await BroadcastAsync();
     }
 
-    public ValueTask EnterAsync(PlayerActor actor) => Context.Outbound.SendToSpot(state.PartyId, new EnterPartyRun(actor.Context.ActorId)).Async();
+    public ValueTask EnterAsync(PlayerActor actor) =>
+        Context
+            .Outbound.SendToSpot(state.PartyId, new EnterPartyRun(actor.Context.ActorId))
+            .Async();
 
     private async ValueTask BroadcastAsync()
     {
         var view = View();
-        foreach (var id in state.Joined) await actors.SendToActor(id, view).Async();
+        foreach (var id in state.Joined)
+            await actors.SendToActor(id, view).Async();
     }
 
     public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(state);

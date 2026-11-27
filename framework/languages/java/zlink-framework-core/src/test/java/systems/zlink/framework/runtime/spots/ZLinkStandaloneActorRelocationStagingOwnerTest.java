@@ -31,6 +31,74 @@ import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 final class ZLinkStandaloneActorRelocationStagingOwnerTest {
+    @Test
+    void savedAndRelayedWorkReplayWhileTemporaryIngressAwaitsConfirmation() {
+        var executed = new ArrayList<Integer>();
+        var owner =
+                new ZLinkStandaloneActorRelocationStagingOwner(
+                        new FakeBackend() {
+                            @Override
+                            public CompletionStage<Optional<byte[]>> replay(
+                                    Object actor,
+                                    ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                                    ZLinkActorAcceptedJournal.Record record) {
+                                executed.add((int) record.payload()[0]);
+                                return CompletableFuture.completedFuture(Optional.empty());
+                            }
+                        });
+        var id = UUID.randomUUID();
+        var saved =
+                ZLinkAcceptedJournalTestRecords.actor(
+                        "actor-a", 1, "probe", Map.of(), new byte[] {1});
+        var root =
+                ZLinkCanonicalActorRelocationEnvelope.encode(
+                        id,
+                        "actor-a",
+                        7,
+                        11,
+                        true,
+                        new byte[] {4, 5},
+                        List.of(new ZLinkSerialExecutionQueue.QueuedRecord(1, saved)));
+        var staged = owner.stage(request(id, true), root).toCompletableFuture().join();
+        owner.stageRelayedRecord(
+                        staged,
+                        ZLinkAcceptedJournalTestRecords.actor(
+                                "actor-a", 2, "probe", Map.of(), new byte[] {2}))
+                .toCompletableFuture()
+                .join();
+        var confirmation = new CompletableFuture<Boolean>();
+        assertTrue(
+                owner.acceptIngress(
+                        staged,
+                        () ->
+                                ZLinkAcceptedJournalTestRecords.actor(
+                                        "actor-a", 3, "probe", Map.of(), new byte[] {3}),
+                        null,
+                        failure -> fail(failure),
+                        confirmation));
+        assertTrue(
+                owner.acceptIngress(
+                        staged,
+                        ZLinkAcceptedJournalTestRecords.actor(
+                                "actor-a", 4, "probe", Map.of(), new byte[] {4}),
+                        null,
+                        failure -> fail(failure)));
+        var backlog = owner.closeDurableBacklog(staged, root, actorReplayer(owner, staged));
+        owner.publishHidden(backlog, 12);
+        try {
+            var adopted = owner.drainDurableBacklog(backlog).toCompletableFuture();
+            assertTrue(adopted.isDone(), "an unconfirmed item must not hold backlog admission");
+            assertTrue(executed.isEmpty());
+            owner.openAdmission(staged);
+            assertEquals(List.of(1, 2), executed);
+            confirmation.complete(false);
+            adopted.join().toCompletableFuture().join();
+            assertEquals(List.of(1, 2, 4), executed);
+        } finally {
+            confirmation.complete(false);
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"saved", "relayed", "temporary"})
     void hiddenBacklogIsAdoptedByActorFifoBeforeFinalPublicationOpensHandlers(String origin) {

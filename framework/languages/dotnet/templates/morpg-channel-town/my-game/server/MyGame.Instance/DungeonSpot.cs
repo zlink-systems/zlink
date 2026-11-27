@@ -18,11 +18,15 @@ public sealed class DungeonSpot(
 
     public void Configure()
     {
-        Context.Handlers.AddActorPacket<DungeonSpotActionRejectedNotification, PlayerActor>(nameof(ActionRejected));
+        Context.Handlers.AddActorPacket<DungeonSpotActionRejectedNotification, PlayerActor>(
+            nameof(ActionRejected)
+        );
         Context.Handlers.AddActorPacket<DungeonReconnect, PlayerActor>(nameof(JoinTownRequest));
         Context.Handlers.AddActorPacket<DungeonEnter, PlayerActor>(nameof(EnterDungeonRequest));
         Context.Handlers.AddActorPacket<DungeonTravelRepeat, PlayerActor>(nameof(JoinDungeon));
-        Context.Handlers.AddActorPacket<DungeonChangeChannel, PlayerActor>(nameof(ChangeChannelRequest));
+        Context.Handlers.AddActorPacket<DungeonChangeChannel, PlayerActor>(
+            nameof(ChangeChannelRequest)
+        );
         Context.Handlers.AddActorPacket<DungeonQuery, PlayerActor>(nameof(ViewRequest));
         Context.Handlers.AddActorPacket<Advance, PlayerActor>(nameof(AdvanceRequest));
         Context.Handlers.AddActorPacket<DungeonDelivery, PlayerActor>(nameof(DungeonView));
@@ -52,13 +56,16 @@ public sealed class DungeonSpot(
     public async ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct)
     {
         if (state.Join(actor.Context.ActorId))
-            await Context.Outbound.SendToSpot(state.OwnerSpotId, new RunStarted(state.RunId)).Async();
+            await Context
+                .Outbound.SendToSpot(state.OwnerSpotId, new RunStarted(state.RunId))
+                .Async();
         await BroadcastAsync();
     }
 
     private async ValueTask BroadcastAsync()
     {
-        foreach (var id in state.Joined) await actors.SendToActor(id, View()).Async();
+        foreach (var id in state.Joined)
+            await actors.SendToActor(id, View()).Async();
     }
 
     public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct) =>
@@ -68,17 +75,24 @@ public sealed class DungeonSpot(
         ValueTask.CompletedTask;
 
     private DungeonView View() =>
-        new(Context.SpotId, settings.Id, state.PartyId, state.Members, state.Stage, state.RunId, state.Phase);
+        new(
+            Context.SpotId,
+            settings.Id,
+            state.PartyId,
+            state.Members,
+            state.Stage,
+            state.RunId,
+            state.Phase
+        );
 
     public ValueTask ShowAsync(PlayerActor actor) =>
         actor.Context.BoundSession.Send(View()).Async();
 
     public async ValueTask ShowWithPartyAsync(PlayerActor actor)
     {
-        await Context.Outbound.SendToSpot(
-            state.OwnerSpotId,
-            new PartyViewRequest(actor.Context.ActorId)
-        ).Async();
+        await Context
+            .Outbound.SendToSpot(state.OwnerSpotId, new PartyViewRequest(actor.Context.ActorId))
+            .Async();
         await ShowAsync(actor);
     }
 
@@ -93,7 +107,9 @@ public sealed class DungeonSpot(
         }
         await BroadcastAsync();
         if (state.Phase == RunPhase.Completed)
-            await Context.Outbound.SendToSpot(state.OwnerSpotId, new RunCompleted(state.RunId)).Async();
+            await Context
+                .Outbound.SendToSpot(state.OwnerSpotId, new RunCompleted(state.RunId))
+                .Async();
     }
 
     public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(state);
@@ -140,7 +156,8 @@ public sealed class DungeonRelocation : IZLinkSpotRelocationAdapter<DungeonSpot>
 }
 
 [ZLinkSpotActorSendHandler(nameof(ActionRejected))]
-public sealed class DungeonSpotActionRejectedNotification : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, ActionRejected>
+public sealed class DungeonSpotActionRejectedNotification
+    : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, ActionRejected>
 {
     public ValueTask HandleAsync(
         DungeonSpot spot,

@@ -73,11 +73,12 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
     }
 
     private static bool IsClientPacketAllowed(string packetName) =>
-        packetName is nameof(JoinRoomRequest)
-            or nameof(RoomViewRequest)
-            or nameof(MoveRequest)
-            or nameof(ShootRequest)
-            or nameof(SessionInfoRequest);
+        packetName
+            is nameof(JoinRoomRequest)
+                or nameof(RoomViewRequest)
+                or nameof(MoveRequest)
+                or nameof(ShootRequest)
+                or nameof(SessionInfoRequest);
 
     private ValueTask RejectPacketAsync()
     {

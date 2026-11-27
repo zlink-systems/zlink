@@ -201,10 +201,11 @@ final class ZLinkActorSessionCoordinator {
     void publishRelocatedActor(
             ZLinkActorRuntime.PreparedTransferredActor actor,
             String targetSpotId,
-            long authorityOwnerGeneration) {
+            long authorityOwnerGeneration,
+            ZLinkSpot<?> membershipSpot) {
         requireActors()
                 .publishPreparedTransferredActor(
-                        actor, targetSpotId, authorityOwnerGeneration, null);
+                        actor, targetSpotId, authorityOwnerGeneration, membershipSpot);
     }
 
     CompletionStage<java.util.List<CompletableFuture<Void>>> admitRelocationPrefix(
@@ -543,24 +544,6 @@ final class ZLinkActorSessionCoordinator {
                         && !isLocalSpot.test(joinedSpotId.get())
                         && runtime.canRouteRemoteJoinedSpot(joinedSpotId.get());
         return new ActorRoute(joinedSpotId, actorRef, remote);
-    }
-
-    CompletionStage<Void> sendBoundSession(
-            ZLinkBackendActorRef actorRef,
-            byte[] frameBytes,
-            Supplier<CompletionStage<Void>> fallback) {
-        ZLinkActorRuntime runtime = requireActors();
-        return runtime.localActor(actorRef.actorId())
-                .map(
-                        actor ->
-                                runtime.sendBoundSessionFrame(actor, frameBytes)
-                                        .thenCompose(
-                                                sent ->
-                                                        sent
-                                                                ? CompletableFuture.completedFuture(
-                                                                        null)
-                                                                : fallback.get()))
-                .orElseGet(fallback);
     }
 
     private static <T> CompletionStage<Void> invokeLocalDispatch(

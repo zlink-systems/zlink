@@ -140,7 +140,11 @@ internal static class StructureCheck
             var loaded = NodeSettings.Load(["--config", config]);
             Require(loaded.Id == id, "Configuration ID differs from node ID.");
             Require(
-                role != "session" || loaded.StreamEndpoint is not null,
+                role != "session"
+                    || (
+                        Uri.TryCreate(loaded.StreamEndpoint, UriKind.Absolute, out var stream)
+                        && stream.Scheme == "ws"
+                    ),
                 "Session is missing STREAM binding."
             );
             Require(

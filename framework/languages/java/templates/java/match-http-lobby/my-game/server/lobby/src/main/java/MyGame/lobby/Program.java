@@ -7,8 +7,8 @@ import MyGame.lobby.infrastructure.*;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
-import systems.zlink.framework.locations.redis.*;
 import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.locations.redis.*;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spring.*;
 

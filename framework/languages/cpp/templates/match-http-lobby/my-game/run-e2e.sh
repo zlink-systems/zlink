@@ -3,24 +3,46 @@ set -euo pipefail
 umask 077
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/run-helpers.sh"
 local_mode=false
 no_build=false
 build_only=false
 domain_only=false
+attach=false
+check_only=false
 arguments=()
 for argument in "$@"; do
   case "$argument" in
     --local) local_mode=true ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
-    --check-domain) domain_only=true ;;
+    --attach) attach=true ;;
+    --check-structure) check_only=true; arguments+=("$argument") ;;
+    --check-domain) check_only=true; domain_only=true ;;
     *) arguments+=("$argument") ;;
   esac
 done
 mkdir -p "$ROOT/.logs"
+if ! $attach && ! $local_mode && ! $build_only && ! $check_only && server_running; then
+  attach=true
+fi
+if $attach; then
+  if $build_only || $check_only; then
+    echo '--attach requires a scenario run.' >&2
+    exit 1
+  fi
+  if [[ ! -x "$runner" ]]; then
+    echo 'Run ./run-server.sh to build and start the server before attaching.' >&2
+    exit 1
+  fi
+  echo 'Using the running server (.logs/server.json)'
+  exec "$runner" --root "$ROOT" --attach "${arguments[@]}"
+fi
 if $local_mode; then
   if ! $no_build; then
-    if ! { cmake -P bootstrap.cmake && cmake --preset default && cmake --build --preset default && ctest --test-dir build --verbose; } >"$ROOT/.logs/build.log" 2>&1; then
+    assert_no_running_server
+    build_local
+    if ! ctest --test-dir "$ROOT/build" --verbose >>"$ROOT/.logs/build.log" 2>&1; then
       tail -n 20 "$ROOT/.logs/build.log" >&2
       exit 1
     fi

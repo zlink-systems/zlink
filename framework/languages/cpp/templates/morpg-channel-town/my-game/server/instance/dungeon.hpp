@@ -1,4 +1,6 @@
 #pragma once
+#include <iostream>
+#include <syncstream>
 #include "domain.hpp"
 #include "server/shared/player.hpp"
 
@@ -59,6 +61,7 @@ class Dungeon final : public fx::spot_t<Player>
     }
     fx::task_t<void> on_actor_joined (Player &actor) override
     {
+        std::osyncstream (std::cout) << "GAME Player entered Dungeon" << std::endl;
         if (state.join (std::string (actor.context ().actor_id ().value ())))
             co_await context_.send_to_spot (state.ownerSpotId, RunStarted{state.runId}).async ();
         co_await broadcast ();

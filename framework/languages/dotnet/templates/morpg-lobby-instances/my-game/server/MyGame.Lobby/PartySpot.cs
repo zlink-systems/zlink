@@ -19,7 +19,9 @@ public sealed class PartySpot(
 
     public void Configure()
     {
-        Context.Handlers.AddActorPacket<PartySpotDungeonViewNotification, PlayerActor>(nameof(DungeonView));
+        Context.Handlers.AddActorPacket<PartySpotDungeonViewNotification, PlayerActor>(
+            nameof(DungeonView)
+        );
         Context.Handlers.AddActorPacket<RejectionDelivery, PlayerActor>(nameof(ActionRejected));
         Context.Handlers.AddActorPacket<PartyReconnect, PlayerActor>(nameof(JoinLobbyRequest));
         Context.Handlers.AddActorPacket<PartyQuery, PlayerActor>(nameof(ViewRequest));
@@ -72,7 +74,8 @@ public sealed class PartySpot(
         return BroadcastAsync(ct);
     }
 
-    public ValueTask EnterAsync(PlayerActor actor, CancellationToken ct) => EnterAsync(actor.Context.ActorId, ct);
+    public ValueTask EnterAsync(PlayerActor actor, CancellationToken ct) =>
+        EnterAsync(actor.Context.ActorId, ct);
 
     public async ValueTask EnterAsync(string playerId, CancellationToken ct)
     {
@@ -88,11 +91,18 @@ public sealed class PartySpot(
         }
         var runId = state.RunId!;
         var dungeonId = GameNames.DungeonId(runId);
-        var created = await spots.GetOrCreate(dungeonId, GameNames.DungeonType).InMesh(GameNames.WorldMesh).Async(ct);
+        var created = await spots
+            .GetOrCreate(dungeonId, GameNames.DungeonType)
+            .InMesh(GameNames.WorldMesh)
+            .Async(ct);
         if (created.State == ZLinkSpotCreateState.Rejected)
             throw new InvalidOperationException("Dungeon creation rejected.");
-        var prepared = await Context.Outbound.RequestToSpot(dungeonId,
-            new PrepareDungeon(runId, state.PartyId, state.Members.ToArray())).Async<DungeonPrepared>(ct);
+        var prepared = await Context
+            .Outbound.RequestToSpot(
+                dungeonId,
+                new PrepareDungeon(runId, state.PartyId, state.Members.ToArray())
+            )
+            .Async<DungeonPrepared>(ct);
         if (prepared.DungeonId != dungeonId || state.Prepared(prepared.RunId) is not null)
             throw new InvalidDataException(Rejection.RunMismatch);
         foreach (var id in state.Members.Where(id => !state.Entered.Contains(id)))
@@ -101,16 +111,20 @@ public sealed class PartySpot(
 
     public void Arrived(DungeonMemberEntered request)
     {
-        if (state.Arrived(request.RunId, request.PlayerId) is { } reason) throw new InvalidDataException(reason);
+        if (state.Arrived(request.RunId, request.PlayerId) is { } reason)
+            throw new InvalidDataException(reason);
     }
+
     public void Started(RunStarted request)
     {
-        if (state.Started(request.RunId) is { } reason) throw new InvalidDataException(reason);
+        if (state.Started(request.RunId) is { } reason)
+            throw new InvalidDataException(reason);
     }
 
     public void Completed(RunCompleted request)
     {
-        if (state.Completed(request.RunId) is { } reason) throw new InvalidDataException(reason);
+        if (state.Completed(request.RunId) is { } reason)
+            throw new InvalidDataException(reason);
     }
 
     public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(state);
@@ -198,7 +212,8 @@ public sealed class Arrived : IZLinkSpotPacketHandler<PartySpot, DungeonMemberEn
 }
 
 [ZLinkSpotActorSendHandler(nameof(DungeonView))]
-public sealed class PartySpotDungeonViewNotification : IZLinkSpotActorSendHandler<PartySpot, PlayerActor, DungeonView>
+public sealed class PartySpotDungeonViewNotification
+    : IZLinkSpotActorSendHandler<PartySpot, PlayerActor, DungeonView>
 {
     public ValueTask HandleAsync(
         PartySpot spot,

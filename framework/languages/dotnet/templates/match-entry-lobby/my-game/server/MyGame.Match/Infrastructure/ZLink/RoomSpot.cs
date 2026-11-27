@@ -69,9 +69,11 @@ public sealed class RoomSpot(
             await actor.Context.BoundSession.Send(rejection).Async();
         else
         {
-            var player = state.View().Single(candidate => candidate.PlayerId == actor.Context.ActorId);
-            await actor.Context.BoundSession
-                .Send(new MoveResult(player.X, player.Y, request.Sequence))
+            var player = state
+                .View()
+                .Single(candidate => candidate.PlayerId == actor.Context.ActorId);
+            await actor
+                .Context.BoundSession.Send(new MoveResult(player.X, player.Y, request.Sequence))
                 .Async();
             await BroadcastAsync(View(), ct);
         }
@@ -85,8 +87,8 @@ public sealed class RoomSpot(
             await actor.Context.BoundSession.Send(rejection).Async();
             return;
         }
-        await actor.Context.BoundSession
-            .Send(new ShotResult("hit", request.TargetId, request.Sequence))
+        await actor
+            .Context.BoundSession.Send(new ShotResult("hit", request.TargetId, request.Sequence))
             .Async();
         await BroadcastAsync(View(), ct);
         if (state.Winner is { } winner)

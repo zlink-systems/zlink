@@ -14,12 +14,26 @@ services:
     build:
       context: ${MY_GAME_BUILD_CONTEXT:-.}
       target: node
+  matchmaker:
+    profiles: [deployment]
+    stdin_open: true
+    image: ${COMPOSE_PROJECT_NAME}-node
+    command: [dist/server/matchmaker/main.js, /template/matchmaker.json]
+    volumes:
+      - ${MY_GAME_MATCHMAKER_CONFIG:-./server/config/matchmaker.json}:/template/matchmaker.json:ro
+  api:
+    profiles: [deployment]
+    stdin_open: true
+    image: ${COMPOSE_PROJECT_NAME}-node
+    command: [dist/server/api/main.js, /template/api.json]
+    volumes:
+      - ${MY_GAME_API_CONFIG:-./server/config/api.json}:/template/api.json:ro
   runner:
     profiles: [docker]
     image: ${COMPOSE_PROJECT_NAME}-runner
-    user: "${MY_GAME_RUNNER_USER:-0:0}"
+    user: '${MY_GAME_RUNNER_USER:-0:0}'
     group_add:
-      - "${MY_GAME_DOCKER_GID:-0}"
+      - '${MY_GAME_DOCKER_GID:-0}'
     build:
       context: ${MY_GAME_BUILD_CONTEXT:-.}
       target: runner

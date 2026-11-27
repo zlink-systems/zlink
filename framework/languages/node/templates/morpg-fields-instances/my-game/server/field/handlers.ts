@@ -172,9 +172,18 @@ export class Delivery {
 }
 
 @Injectable()
-@zlinkSpotActorSendHandler({ spot: () => Field, actor: () => Player, packetName: PacketNames.viewRequest })
+@zlinkSpotActorSendHandler({
+  spot: () => Field,
+  actor: () => Player,
+  packetName: PacketNames.viewRequest
+})
 export class FieldQuery {
-  async handle(spot: Field, actor: Player, _context: ZLinkMessageContext, _request: ViewRequest): Promise<void> {
+  async handle(
+    spot: Field,
+    actor: Player,
+    _context: ZLinkMessageContext,
+    _request: ViewRequest
+  ): Promise<void> {
     await spot.show(actor);
   }
 }

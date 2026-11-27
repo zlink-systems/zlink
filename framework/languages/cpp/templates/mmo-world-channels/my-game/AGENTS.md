@@ -25,6 +25,16 @@ Every server process in this project is a stateful ZLink node. Before writing co
 
 Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
+## New game projects
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference. Keep this template intact as you build the new project.
+
+## Server and e2e commands
+
+Run one scenario with `./run-e2e.sh --scenario worlds`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
+Use `./run-server.sh` in Bash or `.\run-server.cmd` on Windows to build and start Redis and the nodes. The foreground process prints the client address and stops its children on Ctrl+C. In another terminal, use `./run-e2e.sh` or `.\run-e2e.cmd` to attach through `.logs/server.json` or start an isolated Docker run. The runner reports which scenarios require isolation. Each run writes node stdout, stderr, Framework message-flow and failure details under `.logs/run-<id>/`. See [README](README.md) for prerequisites and options.
+
 ## Project overview
 
 This C++20 project is an MMORPG example with independent worlds and switchable field channels. It runs an Accounts HTTP service that lists the worlds, a Session node per world (`sessionA`, `sessionB`), play nodes (channel) that host the fields (`channelA1`, `channelA2`, `channelB`), and a separate Redis per world (`dbA`, `dbB`) for player gold and for Framework location and relocation state. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
@@ -117,6 +127,10 @@ Requests in the example game follow this path. Reading the code along this path 
 6. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the gold from `capture` in `PlayerRelocation` and calls `restore` on another node of the same world; `ZoneRelocation` carries no state.
 
 ## Extending the MMORPG domain
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use `std::optional<T>` in the DTO for nullable fields. To allow omission, separately mark the field `zlink::json::defaulted` in `dto_traits`.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/cpp/guide/server/20-channel-messaging/#12-message-value-rules)
 
 Extend this template's domain to build an MMORPG server.
 

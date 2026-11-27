@@ -65,9 +65,19 @@ export class Reconnect {
     }
     spot.setConnected(actor.context.actorId, true);
     if (!previous.connected)
-      await spot.publishLocal(actor.context.actorId, new PlayerAppeared(actor.context.actorId, previous.position, String(spot.context.spotId)));
+      await spot.publishLocal(
+        actor.context.actorId,
+        new PlayerAppeared(actor.context.actorId, previous.position, String(spot.context.spotId))
+      );
     await actor.context.boundSession
-      .send(new WorldState(String(spot.context.spotId), spot.nodeId, previous.position.x, previous.sequence))
+      .send(
+        new WorldState(
+          String(spot.context.spotId),
+          spot.nodeId,
+          previous.position.x,
+          previous.sequence
+        )
+      )
       .submit();
   }
 }
@@ -95,8 +105,15 @@ export class Move {
       actor.move(destination);
       return;
     }
-    await spot.publishLocal(actor.context.actorId, new PlayerMoved(actor.context.actorId, movement.position, movement.sequence,
-        String(spot.context.spotId)));
+    await spot.publishLocal(
+      actor.context.actorId,
+      new PlayerMoved(
+        actor.context.actorId,
+        movement.position,
+        movement.sequence,
+        String(spot.context.spotId)
+      )
+    );
     if (movement.borderKind)
       await spot.publishBorder(
         actor.context.actorId,
@@ -106,7 +123,14 @@ export class Move {
         movement.borderKind === 'left' ? 'out-of-range' : null
       );
     await actor.context.boundSession
-      .send(new WorldState(String(spot.context.spotId), spot.nodeId, movement.position.x, movement.sequence))
+      .send(
+        new WorldState(
+          String(spot.context.spotId),
+          spot.nodeId,
+          movement.position.x,
+          movement.sequence
+        )
+      )
       .submit();
   }
 }
@@ -121,33 +145,63 @@ export class BorderHandler {
   }
 }
 @Injectable()
-@zlinkSpotActorSendHandler({ spot: () => Zone, actor: () => Player, packetName: PacketNames.playerAppeared })
+@zlinkSpotActorSendHandler({
+  spot: () => Zone,
+  actor: () => Player,
+  packetName: PacketNames.playerAppeared
+})
 export class PlayerAppearedDelivery {
-  async handle(_spot: Zone, actor: Player, context: ZLinkMessageContext, event: PlayerAppeared): Promise<void> {
+  async handle(
+    _spot: Zone,
+    actor: Player,
+    context: ZLinkMessageContext,
+    event: PlayerAppeared
+  ): Promise<void> {
     await actor.deliver(
       context.packetName,
       event,
-      _spot.state(actor.context.actorId)?.connected === true);
+      _spot.state(actor.context.actorId)?.connected === true
+    );
   }
 }
 @Injectable()
-@zlinkSpotActorSendHandler({ spot: () => Zone, actor: () => Player, packetName: PacketNames.playerMoved })
+@zlinkSpotActorSendHandler({
+  spot: () => Zone,
+  actor: () => Player,
+  packetName: PacketNames.playerMoved
+})
 export class PlayerMovedDelivery {
-  async handle(_spot: Zone, actor: Player, context: ZLinkMessageContext, event: PlayerMoved): Promise<void> {
+  async handle(
+    _spot: Zone,
+    actor: Player,
+    context: ZLinkMessageContext,
+    event: PlayerMoved
+  ): Promise<void> {
     await actor.deliver(
       context.packetName,
       event,
-      _spot.state(actor.context.actorId)?.connected === true);
+      _spot.state(actor.context.actorId)?.connected === true
+    );
   }
 }
 @Injectable()
-@zlinkSpotActorSendHandler({ spot: () => Zone, actor: () => Player, packetName: PacketNames.playerLeft })
+@zlinkSpotActorSendHandler({
+  spot: () => Zone,
+  actor: () => Player,
+  packetName: PacketNames.playerLeft
+})
 export class PlayerLeftDelivery {
-  async handle(_spot: Zone, actor: Player, context: ZLinkMessageContext, event: PlayerLeft): Promise<void> {
+  async handle(
+    _spot: Zone,
+    actor: Player,
+    context: ZLinkMessageContext,
+    event: PlayerLeft
+  ): Promise<void> {
     await actor.deliver(
       context.packetName,
       event,
-      _spot.state(actor.context.actorId)?.connected === true);
+      _spot.state(actor.context.actorId)?.connected === true
+    );
   }
 }
 @Injectable()

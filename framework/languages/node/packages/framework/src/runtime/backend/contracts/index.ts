@@ -1,3 +1,4 @@
+import type { ServiceActorRouteFence } from '../../foundation/service-stateful-wire-codec';
 import type { PendingOperation } from '../../foundation/operation-registry';
 import type { RequestRuntime } from '../../foundation/request-runtime';
 import type {
@@ -189,6 +190,7 @@ export interface ZLinkBackendMeshNode {
     request: Omit<ServiceUserSpotCloseRecord, 'kind' | 'correlation' | 'operation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult>;
+  sendActorDestroy(fence: ServiceActorRouteFence): Promise<void>;
   requestActorCreate(
     targetNodeRid: string,
     request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation'>,
@@ -698,8 +700,8 @@ export interface ZLinkBackendSubscriberSocket extends ZLinkBackendConnectableSoc
 }
 
 export interface ZLinkBackendReadablePoller {
-  wait(timeoutMs: number): boolean;
-  waitForReadable(signal?: AbortSignal): Promise<boolean>;
+  wait(timeoutMs: number, refresh?: boolean): boolean;
+  waitForReadable(signal?: AbortSignal, wakeOnly?: boolean): Promise<boolean>;
   wake(): void;
   markDrained(): void;
   dispose(): void;

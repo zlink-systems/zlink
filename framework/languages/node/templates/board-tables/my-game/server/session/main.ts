@@ -1,7 +1,8 @@
-import { runHost, failHost } from '../shared/hosting';
+import { addGameMesh, runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
 import { SessionFactory } from './session';
-runHost((builder, config, mesh) => {
+runHost((builder, config) => {
+  const mesh = addGameMesh(builder, config);
   if (config.streamEndpoint === null) throw new Error('Session requires streamEndpoint');
   mesh.objects().client();
   builder

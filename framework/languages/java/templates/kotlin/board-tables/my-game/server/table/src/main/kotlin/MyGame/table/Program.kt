@@ -1,12 +1,12 @@
 package MyGame.table
 
 import MyGame.*
+import kotlin.system.exitProcess
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.locations.redis.*
 import systems.zlink.framework.spring.*
-import kotlin.system.exitProcess
 
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)
@@ -19,6 +19,7 @@ class Program {
     ) = ZLinkFrameworkConfigurer { options ->
         configure(options, locations, relocations)
         options.addHandlersFromPackageOf<Program>()
+        options.addClientServerChannel(Names.PLAYER_DATA).client()
         options
             .addRouteMesh(Names.MESH)
             .listen(config.meshEndpoint)
@@ -29,6 +30,9 @@ class Program {
             .addSpotFactory<Table>(Names.TABLE) {
                 if (config.tableCapacity > 0) stableTypeLimit(config.tableCapacity)
                 preserveStateWith<Table, TableTransfer>()
+            }
+            .addInstanceSpotFactory<RoomProvisioner>(Names.ROOM_PROVISIONER) {
+                recreateOnRelocation()
             }
             .addActorFactory<Player, PlayerFactory>(Names.PLAYER) {
                 preserveStateWith<Player, PlayerTransfer>()

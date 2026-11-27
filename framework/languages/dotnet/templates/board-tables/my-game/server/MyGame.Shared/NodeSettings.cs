@@ -6,9 +6,11 @@ public sealed record NodeSettings(
     string Id,
     string RedisEndpoint,
     string KeyPrefix,
-    string MeshEndpoint,
+    string? MeshEndpoint,
     string? StreamEndpoint = null,
-    int TableCapacity = 0
+    int TableCapacity = 0,
+    string? ApiEndpoint = null,
+    string? PlayerRecordsKeyPrefix = null
 )
 {
     public static NodeSettings Load(string[] args)
@@ -29,7 +31,10 @@ public sealed record NodeSettings(
         ArgumentException.ThrowIfNullOrWhiteSpace(settings.Id);
         ArgumentException.ThrowIfNullOrWhiteSpace(settings.RedisEndpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(settings.KeyPrefix);
-        ArgumentException.ThrowIfNullOrWhiteSpace(settings.MeshEndpoint);
+        if (settings.MeshEndpoint is null)
+            ArgumentException.ThrowIfNullOrWhiteSpace(settings.ApiEndpoint);
+        else
+            ArgumentException.ThrowIfNullOrWhiteSpace(settings.MeshEndpoint);
         ArgumentOutOfRangeException.ThrowIfNegative(settings.TableCapacity);
         return settings;
     }

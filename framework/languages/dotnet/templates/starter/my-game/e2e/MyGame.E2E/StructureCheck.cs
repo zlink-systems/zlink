@@ -135,8 +135,9 @@ internal static class StructureCheck
         {
             Require(roles[id] == "session", "No entry point is registered for this node role.");
             Require(
-                !string.IsNullOrWhiteSpace(configured.StreamEndpoint),
-                "Session requires StreamEndpoint."
+                Uri.TryCreate(configured.StreamEndpoint, UriKind.Absolute, out var stream)
+                    && stream.Scheme == "ws",
+                "Session requires a ws:// StreamEndpoint."
             );
         }
         Require(Array(document, "channels").Count == 0, "No application channels are registered.");

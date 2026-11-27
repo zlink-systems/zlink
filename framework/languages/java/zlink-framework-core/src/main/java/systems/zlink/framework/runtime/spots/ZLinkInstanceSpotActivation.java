@@ -293,9 +293,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             if (host.flowCaptureEnabled()) {
                 try {
                     observed = ZLinkSpotRuntime.parsePacket(received.parts(), true);
-                    if (observed.header() != null) {
-                        flow = ZLinkSpotFlowFrame.fromEnvelopeHeader(observed.header());
-                    }
+                    flow = ZLinkSpotFlowFrame.fromEnvelopeHeader(observed.header());
                 } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
                     failRouteInvalidFlow(received, invalidEnvelope);
                     accepted.complete(null);
@@ -563,7 +561,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             return CompletableFuture.failedFuture(failure);
         }
         ZLinkFlowContext.State flow = captureFlow ? inboundFlow : null;
-        if (captureFlow && flow == null && packet.header() != null) {
+        if (captureFlow && flow == null) {
             flow = ZLinkSpotFlowFrame.fromEnvelopeHeader(packet.header());
         }
         ZLinkFlowContext.State dispatchFlow = flow;

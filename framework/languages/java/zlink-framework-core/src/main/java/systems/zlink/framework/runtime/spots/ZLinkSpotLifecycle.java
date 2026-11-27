@@ -125,6 +125,10 @@ final class ZLinkSpotLifecycle {
         return spots.keySet().stream().sorted().toList();
     }
 
+    List<SpotActivation> userSpotActivations() {
+        return List.copyOf(spots.values());
+    }
+
     CompletionStage<Boolean> close(String spotId) {
         requireSpotId(spotId);
         if (actorOccupancy.hasActorsInSpot(spotId)) {
@@ -335,6 +339,15 @@ final class ZLinkSpotLifecycle {
         }
         recordSpotCount(current.meshName(), ZLinkRuntimeMetrics.SpotKind.USER, -1);
         countChanged.run();
+    }
+
+    CompletionStage<Void> completeRelocatedShellSource(String spotId, Instant deadline) {
+        SpotActivation activation = spots.get(spotId);
+        if (activation == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return completeRelocationSource(
+                spotId, activation.backendSpot.lifecycleGeneration(), deadline);
     }
 
     CompletionStage<Void> completeRelocationSource(

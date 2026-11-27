@@ -17,7 +17,11 @@ public final class ZLinkRequestCalls {
 
     public static Duration remainingTimeout(Duration timeout, long started, LongSupplier nanoTime) {
         if (timeout == null) return null;
-        long remaining = timeout.toNanos() - (nanoTime.getAsLong() - started);
+        return remainingUntil(started + timeout.toNanos(), nanoTime.getAsLong());
+    }
+
+    public static Duration remainingUntil(long deadline, long now) {
+        long remaining = deadline - now;
         if (remaining <= 0) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,

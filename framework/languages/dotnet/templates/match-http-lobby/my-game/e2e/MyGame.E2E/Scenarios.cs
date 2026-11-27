@@ -7,7 +7,15 @@ namespace MyGame.E2E;
 
 internal static class Scenarios
 {
-    private static readonly string[] Order = ["lobby", "hit", "wall", "input", "reconnect", "update"];
+    private static readonly string[] Order =
+    [
+        "lobby",
+        "hit",
+        "wall",
+        "input",
+        "reconnect",
+        "update",
+    ];
     private const double LaneY = GameNames.FirstSpawnY;
     private const double WallCenterY = (GameNames.WallMinY + GameNames.WallMaxY) / 2;
     internal static IReadOnlyList<string> All => Order;
@@ -56,43 +64,7 @@ internal static class Scenarios
         roomId.StartsWith(GameNames.RoomPrefix, StringComparison.Ordinal)
         && Guid.TryParseExact(roomId[GameNames.RoomPrefix.Length..], "N", out _);
 
-    public static async Task RunAsync(
-        string root,
-        string[] selected,
-        List<MatchRun> runs,
-        CancellationToken ct
-    )
-    {
-        var passed = 0;
-        try
-        {
-            foreach (var scenario in selected)
-            {
-                try
-                {
-                    await using (var run = new MatchRun(root))
-                    {
-                        runs.Add(run);
-                        await run.StartAsync(ct);
-                        await PlayAsync(run.Endpoint, scenario, run, ct);
-                    }
-                    Console.WriteLine($"✓ {scenario}");
-                    passed++;
-                }
-                catch
-                {
-                    Console.WriteLine($"✗ {scenario}");
-                    throw;
-                }
-            }
-        }
-        finally
-        {
-            Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed");
-        }
-    }
-
-    private static async Task PlayAsync(
+    public static async Task PlayAsync(
         string endpoint,
         string scenario,
         MatchRun run,
@@ -104,7 +76,10 @@ internal static class Scenarios
         var player2 = "p2-" + suffix;
         var assignment = await MatchPairAsync(run.LobbyEndpoint, player1, player2, ct);
         Require(HasRoomIdFormat(assignment.RoomId), "Lobby returned an invalid Room ID.");
-        Require(assignment.SessionEndpoint == endpoint, "Lobby returned a different Session endpoint.");
+        Require(
+            assignment.SessionEndpoint == endpoint,
+            "Lobby returned a different Session endpoint."
+        );
 
         if (scenario == "lobby")
             await VerifyLobbyAsync(run, assignment, player1, player2, suffix, ct);
@@ -131,11 +106,15 @@ internal static class Scenarios
             view => view.Players.Length == GameNames.PlayersPerRoom,
             ct
         );
-        Require(Equal(ready1, ready2) && ready1.Players.All(p => p.Hp == GameNames.InitialHp),
-            "Initial room state differs.");
+        Require(
+            Equal(ready1, ready2) && ready1.Players.All(p => p.Hp == GameNames.InitialHp),
+            "Initial room state differs."
+        );
         Require(ready1.RoomId == assignment.RoomId, "STREAM joined a different room.");
-        Require(ready1.Phase == GameNames.PlayingPhase && ready1.Winner is null,
-            "Room phase did not start in Playing.");
+        Require(
+            ready1.Phase == GameNames.PlayingPhase && ready1.Winner is null,
+            "Room phase did not start in Playing."
+        );
         Require(ready1.Players.All(p => p.LastSequence == 0), "Initial action sequence differs.");
         var spawnPositions = ready1.Players.Select(player => (player.X, player.Y)).ToArray();
         Require(
@@ -183,17 +162,15 @@ internal static class Scenarios
         else
         {
             var moved = await MoveByAsync(p1, p2, p1, 1, 0, 1, ct);
-            var before = await HitAsync(
-                p1,
-                p2,
-                2,
-                GameNames.InitialHp - GameNames.ShotDamage,
-                ct
+            var before = await HitAsync(p1, p2, 2, GameNames.InitialHp - GameNames.ShotDamage, ct);
+            Require(
+                before.Players.Single(p => p.PlayerId == p1.PlayerId).LastSequence == 2,
+                "Update snapshot omitted the accepted action sequence."
             );
-            Require(before.Players.Single(p => p.PlayerId == p1.PlayerId).LastSequence == 2,
-                "Update snapshot omitted the accepted action sequence.");
-            Require(moved.Phase == GameNames.PlayingPhase && moved.Winner is null,
-                "Update input changed match phase.");
+            Require(
+                moved.Phase == GameNames.PlayingPhase && moved.Winner is null,
+                "Update input changed match phase."
+            );
             await run.DrainAsync(before.NodeId, ct);
             Require(
                 await p1.SessionAsync(ct) == session1 && await p2.SessionAsync(ct) == session2,
@@ -205,13 +182,7 @@ internal static class Scenarios
             SameState(before, after2);
             await run.ReplaceAsync(before.NodeId, ct);
             await NewMatchAsync(run, before.NodeId, assignment.RoomId, ct);
-            await HitAsync(
-                p1,
-                p2,
-                3,
-                GameNames.InitialHp - GameNames.ShotDamage * 2,
-                ct
-            );
+            await HitAsync(p1, p2, 3, GameNames.InitialHp - GameNames.ShotDamage * 2, ct);
             Require(
                 await p1.SessionAsync(ct) == session1 && await p2.SessionAsync(ct) == session2,
                 "Replacement changed session binding."
@@ -264,10 +235,7 @@ internal static class Scenarios
     {
         var before = await observer.ViewAsync(_ => true, ct);
         var response = player.WaitActionAsync(_ => true, ct);
-        await player.SendAsync(
-            new PrepareRoom(roomId, [player.PlayerId, observer.PlayerId]),
-            ct
-        );
+        await player.SendAsync(new PrepareRoom(roomId, [player.PlayerId, observer.PlayerId]), ct);
         var result = await response;
         Require(
             result is ActionRejected { Reason: Rejection.PacketNotAllowed, RetryAfterMs: 0 },
@@ -307,8 +275,10 @@ internal static class Scenarios
             ct
         );
         await second.WaitViewAsync(item => item.Players.Length == GameNames.PlayersPerRoom, ct);
-        Require(view.RoomId == next.RoomId && view.RoomId != previous.RoomId,
-            "New lobby assignment did not create a new prepared Room.");
+        Require(
+            view.RoomId == next.RoomId && view.RoomId != previous.RoomId,
+            "New lobby assignment did not create a new prepared Room."
+        );
     }
 
     private static async Task PlayHitAsync(
@@ -343,11 +313,16 @@ internal static class Scenarios
 
         var ended1 = await p1.WaitAsync<MatchEnded>(_ => true, ct);
         var ended2 = await p2.WaitAsync<MatchEnded>(_ => true, ct);
-        Require(ended1.Winner == p1.PlayerId && ended2.Winner == p1.PlayerId, "Wrong match winner.");
+        Require(
+            ended1.Winner == p1.PlayerId && ended2.Winner == p1.PlayerId,
+            "Wrong match winner."
+        );
         var final = await p2.ViewAsync(view => view.Phase == GameNames.FinishedPhase, ct);
         Require(final.Winner == p1.PlayerId, "RoomView omitted the winner.");
-        Require(final.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence == 4,
-            "RoomView omitted the accepted action sequence.");
+        Require(
+            final.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence == 4,
+            "RoomView omitted the accepted action sequence."
+        );
     }
 
     private static async Task PlayWallAsync(GameClient p1, GameClient p2, CancellationToken ct)
@@ -359,7 +334,8 @@ internal static class Scenarios
 
         var beforeWall = await p1.ViewAsync(_ => true, ct);
         var targetBefore = beforeWall.Players.Single(player => player.PlayerId == p2.PlayerId);
-        var nextSequence = beforeWall.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence + 1;
+        var nextSequence =
+            beforeWall.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence + 1;
         await RejectMoveAsync(
             p1,
             p2,
@@ -367,34 +343,26 @@ internal static class Scenarios
             Rejection.MoveBlockedByWall,
             ct
         );
-        await RejectShotAsync(
-            p1,
-            p2,
-            nextSequence,
-            Rejection.BlockedByWall,
-            ct
-        );
+        await RejectShotAsync(p1, p2, nextSequence, Rejection.BlockedByWall, ct);
 
         var afterWall = await p1.ViewAsync(_ => true, ct);
         SameState(beforeWall, afterWall);
         Require(
-            afterWall.Players.Single(player => player.PlayerId == p2.PlayerId).Hp == targetBefore.Hp,
+            afterWall.Players.Single(player => player.PlayerId == p2.PlayerId).Hp
+                == targetBefore.Hp,
             "Wall-blocked shot changed HP."
         );
 
         await WalkAsync(p1, p2, p1, GameNames.FirstSpawnX, GameNames.FirstSpawnY, ct);
         await WalkAsync(p1, p2, p2, GameNames.SecondSpawnX, GameNames.SecondSpawnY, ct);
         var beforeClearShot = await p1.ViewAsync(_ => true, ct);
-        var expectedHp = beforeClearShot.Players.Single(player => player.PlayerId == p2.PlayerId).Hp
+        var expectedHp =
+            beforeClearShot.Players.Single(player => player.PlayerId == p2.PlayerId).Hp
             - GameNames.ShotDamage;
-        var shotSequence = beforeClearShot.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence + 1;
-        var clearShot = await HitAsync(
-            p1,
-            p2,
-            shotSequence,
-            expectedHp,
-            ct
-        );
+        var shotSequence =
+            beforeClearShot.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence
+            + 1;
+        var clearShot = await HitAsync(p1, p2, shotSequence, expectedHp, ct);
         Require(
             clearShot.Players.Single(player => player.PlayerId == p2.PlayerId).Hp == expectedHp,
             "Wall behind target blocked a clear shot."
@@ -404,8 +372,8 @@ internal static class Scenarios
     private static async Task PlayInputAsync(GameClient p1, GameClient p2, CancellationToken ct)
     {
         var beforeMove = await p1.ViewAsync(_ => true, ct);
-        var firstSpawn = beforeMove.Players.Single(
-            player => player.X == GameNames.FirstSpawnX && player.Y == GameNames.FirstSpawnY
+        var firstSpawn = beforeMove.Players.Single(player =>
+            player.X == GameNames.FirstSpawnX && player.Y == GameNames.FirstSpawnY
         );
         var mover = firstSpawn.PlayerId == p1.PlayerId ? p1 : p2;
         var other = mover.PlayerId == p1.PlayerId ? p2 : p1;
@@ -415,18 +383,30 @@ internal static class Scenarios
         var moveSequence = source.LastSequence + 1;
         await MoveByAsync(p1, p2, mover, moveDelta, 0, moveSequence, ct, beforeMove);
         await MoveByAsync(p1, p2, mover, moveDelta, 0, moveSequence + 1, ct);
-        await RejectActionAsync(mover, new MoveRequest(moveDelta, 0, moveSequence + 1), Rejection.StaleSequence, ct);
+        await RejectActionAsync(
+            mover,
+            new MoveRequest(moveDelta, 0, moveSequence + 1),
+            Rejection.StaleSequence,
+            ct
+        );
 
         var beforeShot = await p1.ViewAsync(_ => true, ct);
-        var shotSequence = beforeShot.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence + 1;
+        var shotSequence =
+            beforeShot.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence + 1;
         var shotTarget = beforeShot.Players.Single(player => player.PlayerId == p2.PlayerId);
         await HitAsync(p1, p2, shotSequence, shotTarget.Hp - GameNames.ShotDamage, ct);
-        await RejectActionAsync(p1, new ShootRequest(p2.PlayerId, shotSequence), Rejection.StaleSequence, ct);
+        await RejectActionAsync(
+            p1,
+            new ShootRequest(p2.PlayerId, shotSequence),
+            Rejection.StaleSequence,
+            ct
+        );
         var afterShot = await p1.ViewAsync(_ => true, ct);
         Require(
             afterShot.Players.Single(player => player.PlayerId == p2.PlayerId).Hp
                 == shotTarget.Hp - GameNames.ShotDamage
-                && afterShot.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence == shotSequence,
+                && afterShot.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence
+                    == shotSequence,
             "Accepted shot or stale-sequence rejection changed the wrong state."
         );
 
@@ -460,9 +440,9 @@ internal static class Scenarios
         );
 
         var outsideStart = await WalkAsync(p1, p2, mover, 1, LaneY, ct);
-        var outsideSequence = outsideStart
-            .Players.Single(player => player.PlayerId == mover.PlayerId)
-            .LastSequence + 1;
+        var outsideSequence =
+            outsideStart.Players.Single(player => player.PlayerId == mover.PlayerId).LastSequence
+            + 1;
         await RejectActionAsync(
             mover,
             new MoveRequest(-GameNames.MaxStep, 0, outsideSequence),
@@ -478,9 +458,8 @@ internal static class Scenarios
             WallCenterY,
             ct
         );
-        var wallSequence = beforeWall
-            .Players.Single(player => player.PlayerId == mover.PlayerId)
-            .LastSequence + 1;
+        var wallSequence =
+            beforeWall.Players.Single(player => player.PlayerId == mover.PlayerId).LastSequence + 1;
         await RejectActionAsync(
             mover,
             new MoveRequest(GameNames.MaxStep, 0, wallSequence),
@@ -502,7 +481,6 @@ internal static class Scenarios
             ct
         );
     }
-
 
     private static async Task PlayReconnectAsync(
         GameClient p1,
@@ -544,7 +522,8 @@ internal static class Scenarios
         Require(
             restored.Winner == p1.PlayerId
                 && restored.Phase == GameNames.FinishedPhase
-                && restored.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence == 4,
+                && restored.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence
+                    == 4,
             "Reconnect did not restore sequence, phase and winner."
         );
     }
@@ -628,8 +607,10 @@ internal static class Scenarios
         var response = actor.WaitActionAsync(_ => true, ct);
         await actor.SendAsync(request, ct);
         var result = await response;
-        Require(result is ActionRejected rejected && rejected.Reason == reason,
-            "Wrong movement rejection.");
+        Require(
+            result is ActionRejected rejected && rejected.Reason == reason,
+            "Wrong movement rejection."
+        );
         var rejection = (ActionRejected)result;
         Require(
             reason == Rejection.MoveBudget
@@ -650,7 +631,8 @@ internal static class Scenarios
     {
         bool Hit(RoomView view) =>
             view.Players.Any(player => player.PlayerId == b.PlayerId && player.Hp == hp)
-            && view.Players.Single(player => player.PlayerId == a.PlayerId).LastSequence == sequence;
+            && view.Players.Single(player => player.PlayerId == a.PlayerId).LastSequence
+                == sequence;
 
         while (true)
         {
@@ -687,12 +669,17 @@ internal static class Scenarios
         var response = a.WaitActionAsync(_ => true, ct);
         await a.SendAsync(new ShootRequest(target ?? b.PlayerId, sequence), ct);
         var result = await response;
-        Require(result is ActionRejected rejected && rejected.Reason == reason,
-            "Wrong shot rejection.");
-        Require(((ActionRejected)result).RetryAfterMs == 0,
-            "Non-cooldown shot rejection returned RetryAfterMs.");
+        Require(
+            result is ActionRejected rejected && rejected.Reason == reason,
+            "Wrong shot rejection."
+        );
+        Require(
+            ((ActionRejected)result).RetryAfterMs == 0,
+            "Non-cooldown shot rejection returned RetryAfterMs."
+        );
         SameState(before, await b.ViewAsync(_ => true, ct));
     }
+
     private static async Task<RoomView> WalkAsync(
         GameClient a,
         GameClient b,
@@ -707,23 +694,14 @@ internal static class Scenarios
         while (player.X != destinationX || player.Y != destinationY)
         {
             var remainingX = destinationX - player.X;
-            var dx = remainingX == 0
-                ? 0
-                : Math.Clamp(remainingX, -GameNames.MaxStep, GameNames.MaxStep);
+            var dx =
+                remainingX == 0 ? 0 : Math.Clamp(remainingX, -GameNames.MaxStep, GameNames.MaxStep);
             var remainingY = destinationY - player.Y;
-            var dy = dx != 0 || remainingY == 0
-                ? 0
-                : Math.Clamp(remainingY, -GameNames.MaxStep, GameNames.MaxStep);
-            view = await MoveByAsync(
-                a,
-                b,
-                mover,
-                dx,
-                dy,
-                player.LastSequence + 1,
-                ct,
-                view
-            );
+            var dy =
+                dx != 0 || remainingY == 0
+                    ? 0
+                    : Math.Clamp(remainingY, -GameNames.MaxStep, GameNames.MaxStep);
+            view = await MoveByAsync(a, b, mover, dx, dy, player.LastSequence + 1, ct, view);
             player = view.Players.Single(candidate => candidate.PlayerId == mover.PlayerId);
         }
         return view;
@@ -744,13 +722,13 @@ internal static class Scenarios
         var player = before.Players.Single(view => view.PlayerId == mover.PlayerId);
         var targetX = player.X + dx;
         var targetY = player.Y + dy;
-        bool Moved(RoomView view) => view.Players.Any(
-            candidate =>
+        bool Moved(RoomView view) =>
+            view.Players.Any(candidate =>
                 candidate.PlayerId == mover.PlayerId
                 && candidate.X == targetX
                 && candidate.Y == targetY
                 && candidate.LastSequence == sequence
-        );
+            );
         var request = new MoveRequest(dx, dy, sequence);
         var moveBudgetRejected = false;
         while (true)

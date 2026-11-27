@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
 final class ZLinkActorContextState {
     private ZLinkActor actor;
@@ -293,13 +294,6 @@ final class ZLinkActorContextState {
                 && Objects.equals(route.sessionRid(), sourceSessionRid);
     }
 
-    CompletionStage<Boolean> sendBoundSessionFrame(byte[] frameBytes) {
-        if (boundSession instanceof ZLinkNativeBoundSessionRuntime runtime) {
-            return runtime.sendFrame(frameBytes).thenApply(ignored -> true);
-        }
-        return CompletableFuture.completedFuture(false);
-    }
-
     CompletionStage<Void> disconnectBoundSessionForDestroy() {
         if (boundSession instanceof ZLinkSessionBoundSession current) {
             return current.disconnectForDestroy();
@@ -324,28 +318,30 @@ final class ZLinkActorContextState {
                 new ZLinkConfigurationException("actor was destroyed while moving: " + actorId));
     }
 
-    ZLinkBackendActorRef beginDestroy(RoutingId entryNodeRid, String actorId) {
-        if (destroying) {
-            return null;
-        }
+    void reopenDestroyAdmission() {
+        destroying = false;
+    }
+
+    void closeDestroyAdmission(RoutingId entryNodeRid, String actorId, BooleanSupplier seal) {
         if (actorRef == null) {
             throw new ZLinkConfigurationException(
                     "actor does not have a native Actor ref: " + actorId);
         }
         if (spot != null) {
-            throw new ZLinkConfigurationException(
-                    "actor must leave its current Spot before destroy: " + actorId);
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "Actor must leave its current Spot before destroy: " + actorId);
         }
         if (!actorRef.nodeRid().equals(entryNodeRid)) {
             throw new ZLinkConfigurationException(
                     "actor is not owned by this Entry Spot: " + actorId);
         }
 
+        if (!seal.getAsBoolean()) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Actor is sealed for relocation: " + actorId);
+        }
         destroying = true;
-        return actorRef;
-    }
-
-    void resetDestroying() {
-        destroying = false;
     }
 }

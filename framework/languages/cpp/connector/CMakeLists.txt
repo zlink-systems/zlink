@@ -338,6 +338,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     set_tests_properties(test_connector_wait_queue_race_${_mode} PROPERTIES
       LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
   endforeach()
+  add_executable(test_connector_wait_close_predicate tests/test_connector_wait_close_predicate.cpp)
+  target_compile_features(test_connector_wait_close_predicate PRIVATE cxx_std_20)
+  target_include_directories(test_connector_wait_close_predicate PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/core/src)
+  target_link_libraries(test_connector_wait_close_predicate PRIVATE
+    zlink::stream_connector Threads::Threads)
+  zlink_framework_cpp_add_boost_headers(test_connector_wait_close_predicate)
+  foreach(_mode immediate manual)
+    foreach(_order after-registration queued-before-registration)
+      add_test(NAME test_connector_wait_close_predicate_${_mode}_${_order}
+        COMMAND test_connector_wait_close_predicate ${_mode} ${_order})
+      set_tests_properties(test_connector_wait_close_predicate_${_mode}_${_order} PROPERTIES
+        LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
+    endforeach()
+  endforeach()
   add_test(NAME test_connector_unreal_fifo COMMAND test_connector_unreal_fifo)
   set_tests_properties(test_connector_unreal_fifo PROPERTIES
     LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)

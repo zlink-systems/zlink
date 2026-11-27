@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator.TargetIngressAuthority;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
 import java.io.ByteArrayInputStream;
@@ -282,12 +283,17 @@ final class ZLinkSpotRetireControl {
         }
 
         /** Applies an admitted target-only profile before authority prepare. */
-        default TargetProfile applyTargetProfile(
-                StageRequest request, long defaultActorSpotGeneration) {
-            return new TargetProfile(request, defaultActorSpotGeneration, 1);
+        default CompletionStage<TargetProfile> applyTargetProfile(
+                TargetProfile profile, Supplier<CompletionStage<Void>> awaitShellPublication) {
+            return CompletableFuture.completedFuture(profile);
         }
 
         CompletionStage<Void> stage(StageRequest request);
+
+        default CompletionStage<Void> stage(
+                StageRequest request, TargetIngressAuthority authority) {
+            return stage(request);
+        }
 
         CompletionStage<Void> publish(StageRequest request);
 

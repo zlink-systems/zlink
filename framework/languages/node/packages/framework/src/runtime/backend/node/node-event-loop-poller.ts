@@ -45,6 +45,14 @@ export class ZLinkNodeEventLoopPoller {
     this.readableHandler = handler;
   }
 
+  pollReadable(): boolean {
+    return (
+      !this.disposed &&
+      this.poller.wait(this.events, 0) > 0 &&
+      this.events.hasEvent(0, zlink.PollEventFlag.PollIn)
+    );
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.poller.close();

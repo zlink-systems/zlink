@@ -27,9 +27,7 @@ export class Session implements ZLinkSession {
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
     if (!allowedClientPackets.has(dispatch.packetName)) {
-      await this.context.client
-        .send(new ActionRejected(Rejection.packetNotAllowed, 0))
-        .submit();
+      await this.context.client.send(new ActionRejected(Rejection.packetNotAllowed, 0)).submit();
       return;
     }
     if (!this.context.actors.bound.length) {

@@ -213,8 +213,7 @@ export class RoomState {
       const retryAfterMs = toRetryAfterMs(
         Game.fireIntervalMs - this.elapsedMilliseconds(shooter.lastShotAtMs, now)
       );
-      if (retryAfterMs > 0)
-        return new ActionRejected(Rejection.fireTooSoon, retryAfterMs);
+      if (retryAfterMs > 0) return new ActionRejected(Rejection.fireTooSoon, retryAfterMs);
     }
 
     target.hp = Math.max(0, target.hp - Game.shotDamage);

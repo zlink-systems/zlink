@@ -94,10 +94,7 @@ export class PartyViewRequest {
   constructor(readonly playerId: string) {}
 }
 
-const notificationTypes: ReadonlyMap<
-  string,
-  () => Notification
-> = new Map<
+const notificationTypes: ReadonlyMap<string, () => Notification> = new Map<
   string,
   () => Notification
 >([
@@ -106,10 +103,7 @@ const notificationTypes: ReadonlyMap<
   [PacketNames.actionRejected, () => new ActionRejected('')]
 ]);
 export type Notification = TownView | DungeonView | ActionRejected;
-export function restoreNotification(
-  packetName: string,
-  payload: Notification
-): Notification {
+export function restoreNotification(packetName: string, payload: Notification): Notification {
   const create = notificationTypes.get(packetName);
   if (!create) throw new Error(`Unknown notification ${packetName}`);
   return Object.assign(create(), payload);

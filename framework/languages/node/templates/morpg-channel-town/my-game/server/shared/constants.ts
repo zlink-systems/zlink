@@ -24,12 +24,15 @@ export const Rejection = {
 } as const;
 const messageFollowMs = 30_000;
 const relocationMs = 25_000;
+const startupMs = 30_000;
 export const Limits = {
   messageFollowMs,
   safeMs: messageFollowMs + relocationMs,
   observationCapacity: 64,
   messageMs: 10_000,
-  startupMs: 30_000,
+  startupMs,
+  // The server waits for runtime serving and mesh readiness in sequence.
+  startupBudgetMs: 2 * startupMs,
   relocationMs,
   shutdownMs: 10_000
 } as const;
@@ -70,8 +73,7 @@ export const NodeEntrypoints = {
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;
 export function townId(channel: bigint): string {
-  if (channel < 1n || channel > BigInt(Game.channelCount))
-    throw new Error('Invalid channel');
+  if (channel < 1n || channel > BigInt(Game.channelCount)) throw new Error('Invalid channel');
   return `town-${channel}`;
 }
 export function dungeonId(runId: string): string {

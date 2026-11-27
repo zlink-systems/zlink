@@ -232,7 +232,7 @@ internal abstract class PressureSocket<T>(T inner) : IReceivingMessageSocket, IC
     public IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot() =>
         inner.ConnectionAttemptsSnapshot();
 
-    public bool Recv(Received result, RecvFlags flags = RecvFlags.None) =>
+    public virtual bool Recv(Received result, RecvFlags flags = RecvFlags.None) =>
         inner.Recv(result, flags);
 
     public ISocketMonitor MonitorOpen(SocketEvent events = SocketEvent.All) =>
@@ -269,7 +269,7 @@ internal sealed class PressureDealer(IDealerSocket inner)
     public RequestOperation Request() => inner.Request();
 }
 
-internal sealed class PressureRouter(IRouterSocket inner)
+internal class PressureRouter(IRouterSocket inner)
     : PressureSocket<IRouterSocket>(inner),
         IRouterSocket
 {
@@ -285,7 +285,7 @@ internal sealed class PressureRouter(IRouterSocket inner)
 
     public ReplyOperation Reply(RoutingId rid, ReplyToken token) => inner.Reply(rid, token);
 
-    public IReadOnlyList<RouterRoute> RoutesSnapshot() => inner.RoutesSnapshot();
+    public virtual IReadOnlyList<RouterRoute> RoutesSnapshot() => inner.RoutesSnapshot();
 }
 
 internal static class ReceiveFlowMonitor
@@ -311,7 +311,10 @@ internal static class ReceiveFlowMonitor
     }
 }
 
-internal sealed class CapturingRouterContext(IContext inner) : IContext
+internal sealed class CapturingRouterContext(
+    IContext inner,
+    Func<IRouterSocket, IRouterSocket>? decorate = null
+) : IContext
 {
     private readonly List<IRouterSocket> _routers = [];
 
@@ -321,7 +324,7 @@ internal sealed class CapturingRouterContext(IContext inner) : IContext
     {
         var router = inner.CreateRouterSocket();
         _routers.Add(router);
-        return router;
+        return decorate?.Invoke(router) ?? router;
     }
 
     internal IRouterSocket GetRouter(RoutingId routingId) =>

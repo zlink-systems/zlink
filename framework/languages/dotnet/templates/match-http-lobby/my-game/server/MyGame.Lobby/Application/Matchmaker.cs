@@ -10,10 +10,7 @@ public interface IRoomProvisioner
 // HTTP callbacks run concurrently. This lock owns only the application lobby queue.
 public sealed class Matchmaker(IRoomProvisioner rooms)
 {
-    private sealed record Pending(
-        string PlayerId,
-        TaskCompletionSource<MatchResponse> Completion
-    );
+    private sealed record Pending(string PlayerId, TaskCompletionSource<MatchResponse> Completion);
 
     private readonly object gate = new();
     private readonly Dictionary<string, LinkedList<Pending>> queues = new(StringComparer.Ordinal);

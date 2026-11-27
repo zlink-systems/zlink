@@ -17,6 +17,7 @@ public sealed class PlayerActor(IZLinkActorContext context) : IZLinkActor
             return ValueTask.CompletedTask;
         return Context.BoundSession.Send(message).Async();
     }
+
     public IZLinkActorContext Context { get; } = context;
 
     public async ValueTask OnJoinCompletedAsync(

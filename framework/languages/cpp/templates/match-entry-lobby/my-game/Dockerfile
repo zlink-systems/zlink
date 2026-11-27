@@ -10,7 +10,7 @@ RUN cmake -P bootstrap.cmake
 COPY CMakeLists.txt CMakePresets.json ./
 COPY server server
 COPY e2e e2e
-RUN cmake --preset default && cmake --build --preset default \
+RUN cmake --preset default && cmake --build --preset default --parallel 4 \
     && ctest --test-dir build --output-on-failure \
     && mkdir -p /out/bin /out/lib \
     && cp build/bin/my-game-* /out/bin/ \
@@ -29,7 +29,7 @@ FROM node AS runner
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 WORKDIR /template
 COPY bootstrap.cmake zlink.structure.json docker-compose.yml ./
-COPY README.md AGENTS.md CMakeLists.txt CMakePresets.json run-e2e.sh run-e2e.ps1 ./
+COPY README.md AGENTS.md CMakeLists.txt CMakePresets.json run-e2e.sh run-e2e.ps1 run-e2e.cmd run-server.sh run-server.ps1 run-server.cmd ./
 COPY server server
 COPY e2e e2e
 ENTRYPOINT ["/app/bin/my-game-e2e", "--root", "/template"]

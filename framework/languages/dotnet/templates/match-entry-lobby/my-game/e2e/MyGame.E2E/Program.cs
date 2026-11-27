@@ -28,46 +28,108 @@ string? Option(string name)
     return args[index + 1];
 }
 
-List<MatchRun> runs = [];
-Exception? scenarioFailure = null;
-var result = 0;
+var root = Path.GetFullPath(Option("--root") ?? Directory.GetCurrentDirectory());
+if (args.Contains("--is-running"))
+    return ServerHost.IsRunning(root) ? 0 : 1;
+
+var outcome = new RunOutcome();
+RunLog? log = null;
+Exception? failure = null;
 try
 {
-    result = await RunAsync();
+    await RunAsync();
 }
+catch (OperationCanceledException)
+    when (cancellation.IsCancellationRequested && args.Contains("--serve")) { }
 catch (Exception error)
 {
-    scenarioFailure = error;
+    failure = error;
 }
-var failures = runs.SelectMany(run => run.Outcome.Failures).ToList();
-if (scenarioFailure is not null)
-    failures.Insert(0, scenarioFailure);
-if (failures.Count > 0)
+if (failure is not null)
+    outcome.Failures.Insert(0, failure);
+if (outcome.Failures.Count > 0)
 {
-    Console.Error.WriteLine(
-        new AggregateException("Run failed (scenario first, then cleanup).", failures)
-    );
-    return 1;
+    var error =
+        outcome.Failures.Count == 1
+            ? outcome.Failures[0]
+            : new AggregateException(outcome.Failures[0].Message, outcome.Failures);
+    if (log is null)
+        Console.Error.WriteLine(error);
+    else
+        log.Fail(error);
 }
-return result;
+log?.Complete();
+if (outcome.Failures.Count == 0 && log is not null && !args.Contains("--serve"))
+    Console.WriteLine("match-entry-lobby=completed");
+return outcome.Failures.Count == 0 ? 0 : 1;
 
-async Task<int> RunAsync()
+async Task RunAsync()
 {
-    var root = Path.GetFullPath(Option("--root") ?? Directory.GetCurrentDirectory());
     if (args.Contains("--check-structure"))
     {
         StructureCheck.Run(root, Option("--structure"));
-        return 0;
+        return;
+    }
+    if (args.Contains("--serve"))
+    {
+        log = new RunLog(root, []);
+        StructureCheck.Run(root, null);
+        var server = new MatchRun(root, outcome, log.DirectoryPath, foreground: true);
+        await ServerHost.RunAsync(
+            root,
+            async ct =>
+            {
+                await server.StartAsync(ct);
+                return server.PublishedEndpoints;
+            },
+            server.WaitForExitAsync,
+            server.DisposeAsync,
+            TimeSpan.FromMinutes(3),
+            cancellation.Token
+        );
+        return;
+    }
+    if (args.Contains("--check-domain"))
+    {
+        DomainChecks.Run();
+        await WireChecks.RunAsync();
+        return;
+    }
+    var attach = args.Contains("--attach");
+    var selected = Scenarios.Select(Option("--scenario"));
+    if (attach)
+        selected = RunLog.ForAttached(
+            selected,
+            scenario => scenario == "update" ? "node replacement" : null
+        );
+    log = new RunLog(root, selected);
+    if (selected.Length == 0)
+    {
+        Console.WriteLine("Scenarios: 0/0 passed");
+        return;
     }
     DomainChecks.Run();
     await WireChecks.RunAsync();
-    if (args.Contains("--check-domain"))
-        return 0;
-    var selected = Scenarios.Select(Option("--scenario"));
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
     deadline.CancelAfter(TimeSpan.FromMinutes(3));
+    var ct = deadline.Token;
     StructureCheck.Run(root, null);
-    await Scenarios.RunAsync(root, selected, runs, deadline.Token);
-    Console.WriteLine("match-entry-lobby=completed");
-    return 0;
+    var endpoints = attach ? ServerHost.Read(root) : null;
+    foreach (var scenario in selected)
+    {
+        log.Start(scenario);
+        await using (
+            var active = new MatchRun(root, outcome, Path.Combine(log.DirectoryPath, scenario))
+        )
+        {
+            if (endpoints is null)
+                await active.StartAsync(ct);
+            else
+                active.Attach(endpoints);
+            await Scenarios.PlayAsync(active.Endpoint, scenario, active, ct);
+        }
+        if (outcome.Failures.Count > 0)
+            return;
+        log.Pass(scenario);
+    }
 }

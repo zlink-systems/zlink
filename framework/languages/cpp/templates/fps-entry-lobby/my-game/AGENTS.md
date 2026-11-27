@@ -25,6 +25,16 @@ Every server process in this project is a stateful ZLink node. Before writing co
 
 Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
+## New game projects
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference. Keep this template intact as you build the new project.
+
+## Server and e2e commands
+
+Run one scenario with `./run-e2e.sh --scenario matchmaking`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
+Use `./run-server.sh` in Bash or `.\run-server.cmd` on Windows to build and start Redis and the nodes. The foreground process prints the client address and stops its children on Ctrl+C. In another terminal, use `./run-e2e.sh` or `.\run-e2e.cmd` to attach through `.logs/server.json` or start an isolated Docker run. The runner reports which scenarios require isolation. Each run writes node stdout, stderr, Framework message-flow and failure details under `.logs/run-<id>/`. See [README](README.md) for prerequisites and options.
+
 ## Project and development
 
 Extend this template's domain to build an FPS server. This C++20 project runs a Session node, play nodes A and B (match), and a Redis Location Store. Entry Spots forward players to a fixed Matchmaking User Spot; same-mode players join dynamic Room User Spots. Public Framework and connector packages are pinned to 0.34.1 in `bootstrap.cmake`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes the initial topology and ordered scenarios.
@@ -50,6 +60,10 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 For host process debugging, install a C++20 compiler (GCC 13 or later, or Visual Studio 2022 17.4 or later in a Visual Studio developer shell on Windows), CMake 3.24 or later, and Ninja. Add `--local` or `-Local`; after a local build, `--no-build` or `-NoBuild` skips compilation. Keep scenario assertions and inspect the first failure before rerunning.
 
 ## Modules and extension points
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use `std::optional<T>` in the DTO for nullable fields. To allow omission, separately mark the field `zlink::json::defaulted` in `dto_traits`.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/cpp/guide/server/20-channel-messaging/#12-message-value-rules)
 
 - `server/shared/contracts.hpp`: typed client and internal contracts, action limits and protocol names. `server/match/domain.hpp`: Vec3, closed slab ray/AABB intersection, static map, spawn points, player boxes and RoomState. `server/match/matchmaking.hpp`: mode queues and Room ID sequence state used by the Entry Matchmaking Spot.
 - `server/match/domain.hpp` (`RoomState`): authoritative positions, HP, phase, winner, shared sequences, movement budgets, fire cooldowns and hit selection. Extend this domain for weapons, scoring and match rules. Production time is monotonic; only the domain constructor accepts a test clock. Snapshot values contain remaining milliseconds instead of process clock readings.

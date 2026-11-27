@@ -5,7 +5,7 @@ import {
   ActionRejected,
   MoveRequest,
   QueueRequest,
-  ShootRequest,
+  ShootRequest
 } from '../server/shared/messages.js';
 import { MatchmakingState, RoomState, type RoomClock } from '../server/match/domain.js';
 
@@ -61,10 +61,16 @@ test('matchmaking pairs by mode, deduplicates players, and guards room sequence'
   assert.deepEqual(matchmaking.pair(), []);
   matchmaking.enqueue(new QueueRequest('p2'));
   const pair = matchmaking.pair();
-  assert.deepEqual(pair.map((player) => player.playerId), ['p1', 'p2']);
+  assert.deepEqual(
+    pair.map((player) => player.playerId),
+    ['p1', 'p2']
+  );
   assert.equal(matchmaking.allocateRoom(), 'room-1');
   matchmaking.remove(pair);
-  assert.deepEqual(matchmaking.waiting.map(([mode]) => mode), ['ranked']);
+  assert.deepEqual(
+    matchmaking.waiting.map(([mode]) => mode),
+    ['ranked']
+  );
   matchmaking.roomSequence = Game.maxSafeInteger;
   assert.equal(matchmaking.allocateRoom(), null);
 });
@@ -81,14 +87,16 @@ test('shared action sequences commit only accepted actions', () => {
   const overflowSequence = BigInt(Game.maxSafeInteger) + 1n;
   room.players[0].lastSequence = overflowSequence;
   const beforeOverflow = room.capture();
-  rejection(room.move('a', new MoveRequest(0, 0, BigInt(overflowSequence))), Rejection.integerOutOfRange);
+  rejection(
+    room.move('a', new MoveRequest(0, 0, BigInt(overflowSequence))),
+    Rejection.integerOutOfRange
+  );
   assert.deepEqual(room.capture(), beforeOverflow, 'out-of-range move changed room state');
   rejection(
     room.shoot('a', new ShootRequest('b', BigInt(overflowSequence))),
     Rejection.integerOutOfRange
   );
   assert.deepEqual(room.capture(), beforeOverflow, 'out-of-range shot changed room state');
-
 });
 
 test('MaxStep and inclusive map bounds are enforced', () => {
@@ -133,13 +141,19 @@ test('closed wall endpoints and crossing block movement', () => {
   for (const endpointY of [Game.wallMinY, Game.wallMaxY]) {
     const room = positioned(clock, Game.wallX - Game.maxStep, endpointY);
     const before = room.capture();
-    rejection(room.move('a', new MoveRequest(Game.maxStep, 0, BigInt(1))), Rejection.moveBlockedByWall);
+    rejection(
+      room.move('a', new MoveRequest(Game.maxStep, 0, BigInt(1))),
+      Rejection.moveBlockedByWall
+    );
     assert.deepEqual(room.capture(), before, `wall endpoint ${endpointY} changed room state`);
   }
 
   const crossing = positioned(clock, Game.wallX - 1, (Game.wallMinY + Game.wallMaxY) / 2);
   const crossingBefore = crossing.capture();
-  rejection(crossing.move('a', new MoveRequest(Game.maxStep, 0, BigInt(1))), Rejection.moveBlockedByWall);
+  rejection(
+    crossing.move('a', new MoveRequest(Game.maxStep, 0, BigInt(1))),
+    Rejection.moveBlockedByWall
+  );
   assert.deepEqual(crossing.capture(), crossingBefore, 'wall crossing changed room state');
 
   const clearLane = positioned(clock, Game.wallX - Game.maxStep, Game.wallMinY - 1);
@@ -188,7 +202,11 @@ test('fire interval rejects early shots and accepts the exact boundary', () => {
   const room = newRoom(clock);
   assert.equal(room.shoot('a', new ShootRequest('b', BigInt(1))), null);
   const before = room.capture();
-  rejection(room.shoot('a', new ShootRequest('b', BigInt(2))), Rejection.fireTooSoon, Game.fireIntervalMs);
+  rejection(
+    room.shoot('a', new ShootRequest('b', BigInt(2))),
+    Rejection.fireTooSoon,
+    Game.fireIntervalMs
+  );
   assert.deepEqual(room.capture(), before);
   clock.advance(Game.fireIntervalMs - 1);
   const lastMillisecondBefore = room.capture();
@@ -221,7 +239,11 @@ test('relocation snapshot stores remaining milliseconds and restores under anoth
   assert.equal(destination.Phase, source.Phase);
   assert.equal(destination.Winner, source.Winner);
   assert.equal(player(destination, 'a').lastSequence, 2n);
-  rejection(destination.move('a', new MoveRequest(Game.maxStep, 0, BigInt(3))), Rejection.moveBudget, 140);
+  rejection(
+    destination.move('a', new MoveRequest(Game.maxStep, 0, BigInt(3))),
+    Rejection.moveBudget,
+    140
+  );
   rejection(destination.shoot('a', new ShootRequest('b', BigInt(3))), Rejection.fireTooSoon, 190);
   destinationClock.advance(140);
   assert.equal(destination.move('a', new MoveRequest(Game.maxStep, 0, BigInt(3))), null);

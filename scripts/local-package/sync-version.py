@@ -1021,6 +1021,17 @@ TEMPLATE_TRANSITIVE_BINDING = (
 # Node templates whose lock root declarations follow TEMPLATE_VERSIONS.
 TEMPLATE_NODE_LOCKS = (
     "framework/languages/node/templates/board-tables",
+    "framework/languages/node/templates/fps-entry-lobby",
+    "framework/languages/node/templates/fps-http-lobby",
+    "framework/languages/node/templates/match-entry-lobby",
+    "framework/languages/node/templates/match-http-lobby",
+    "framework/languages/node/templates/mmo-megaserver",
+    "framework/languages/node/templates/mmo-seamless",
+    "framework/languages/node/templates/mmo-world-channels",
+    "framework/languages/node/templates/morpg-channel-town",
+    "framework/languages/node/templates/morpg-fields-instances",
+    "framework/languages/node/templates/morpg-lobby-instances",
+    "framework/languages/node/templates/starter",
 )
 
 TEMPLATE_ROOTS = {

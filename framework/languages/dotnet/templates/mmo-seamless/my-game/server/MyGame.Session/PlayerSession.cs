@@ -46,9 +46,7 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
         {
             if (Context.Actors.Bound.Count == 0)
             {
-                await Context
-                    .Client.Reply(new SessionInfo(Context.SessionId, null, null))
-                    .Async();
+                await Context.Client.Reply(new SessionInfo(Context.SessionId, null, null)).Async();
                 return;
             }
             var actor = Context.Actors.Bound.Single().Ref;
@@ -59,11 +57,7 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
             }
             await Context
                 .Client.Reply(
-                    new SessionInfo(
-                        Context.SessionId,
-                        actor.ActorId,
-                        (long)actor.ObjectGeneration
-                    )
+                    new SessionInfo(Context.SessionId, actor.ActorId, (long)actor.ObjectGeneration)
                 )
                 .Async();
             return;

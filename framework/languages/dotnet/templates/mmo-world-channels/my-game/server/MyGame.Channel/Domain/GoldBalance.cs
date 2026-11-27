@@ -11,7 +11,9 @@ public sealed record GoldSnapshot(long Value, long EarnCooldownRemainingMs);
 
 public sealed class GoldBalance
 {
-    private static readonly TimeSpan EarnInterval = TimeSpan.FromMilliseconds(GameRules.EarnIntervalMs);
+    private static readonly TimeSpan EarnInterval = TimeSpan.FromMilliseconds(
+        GameRules.EarnIntervalMs
+    );
     private readonly TimeProvider _clock;
     private long? _lastEarnTimestamp;
 
@@ -38,7 +40,9 @@ public sealed class GoldBalance
     public void CommitEarn(GoldEarnDecision decision)
     {
         if (!decision.Accepted || decision.NewValue != Value + GameRules.EarnAmount)
-            throw new InvalidOperationException("Only the accepted gold decision can be committed.");
+            throw new InvalidOperationException(
+                "Only the accepted gold decision can be committed."
+            );
 
         Value = decision.NewValue.Value;
         _lastEarnTimestamp = _clock.GetTimestamp();

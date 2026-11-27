@@ -91,6 +91,7 @@ struct JoinTableRequest
 {
     static constexpr auto packet_name = "JoinTableRequest";
     std::string playerId, tableId;
+    bool reconnect = false;
 };
 struct BetRequest
 {
@@ -164,7 +165,8 @@ template <> struct dto_traits<::MyGame::JoinTableRequest>
 {
     static constexpr auto fields = std::tuple{
       zlink::json::field ("playerId", &::MyGame::JoinTableRequest::playerId),
-      zlink::json::field ("tableId", &::MyGame::JoinTableRequest::tableId)
+      zlink::json::field ("tableId", &::MyGame::JoinTableRequest::tableId),
+      zlink::json::field ("reconnect", &::MyGame::JoinTableRequest::reconnect, zlink::json::defaulted)
     };
 };
 

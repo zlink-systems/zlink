@@ -1,12 +1,15 @@
 export const Names = { mesh: 'my-game-world', stream: 'players' } as const;
 const messageFollowMs = 30_000;
 const relocationMs = 25_000;
+const startupMs = 30_000;
 export const Limits = {
   messageFollowMs,
   safeMs: messageFollowMs + relocationMs,
   observationCapacity: 64,
   messageMs: 10_000,
-  startupMs: 30_000,
+  startupMs,
+  // The server waits for runtime serving and mesh readiness in sequence.
+  startupBudgetMs: 2 * startupMs,
   relocationMs,
   shutdownMs: 10_000
 } as const;

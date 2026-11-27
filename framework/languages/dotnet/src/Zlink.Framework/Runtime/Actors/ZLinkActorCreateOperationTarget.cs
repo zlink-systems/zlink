@@ -252,7 +252,7 @@ internal sealed class ZLinkActorOperationTarget(
             .ConfigureAwait(false);
     }
 
-    public async ValueTask<ActorDestroyOperationTerminal> DestroyAsync(
+    public async ValueTask<bool> DestroyAsync(
         ActorDestroyOperation operation,
         CancellationToken cancellationToken
     )
@@ -262,9 +262,22 @@ internal sealed class ZLinkActorOperationTarget(
             .ReadAuthorityAsync(key, cancellationToken)
             .ConfigureAwait(false);
         if (read is ZLinkAuthorityReadResult.Missing)
-            return Destroyed(false);
+            return false;
 
-        var snapshot = ((ZLinkAuthorityReadResult.Found)read).Snapshot;
+        return await DestroyObservedAsync(
+                operation,
+                ((ZLinkAuthorityReadResult.Found)read).Snapshot,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+    }
+
+    internal async ValueTask<bool> DestroyObservedAsync(
+        ActorDestroyOperation operation,
+        ZLinkAuthoritySnapshot snapshot,
+        CancellationToken cancellationToken
+    )
+    {
         if (
             snapshot.ObjectGeneration != operation.Actor.ObjectGeneration
             || snapshot.AuthorityOwnerGeneration != operation.AuthorityOwnerGeneration
@@ -275,7 +288,8 @@ internal sealed class ZLinkActorOperationTarget(
             throw Stale(operation.Actor.ActorId, "The Actor destroy authority fence is stale.");
         if (
             !ZLinkActorAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var authority)
-            || authority.State != ZLinkActorAuthorityState.Ready
+            || authority.State
+                is not (ZLinkActorAuthorityState.Ready or ZLinkActorAuthorityState.Closing)
             || authority.NodeRid != operation.TargetNodeRid
             || authority.NodeGeneration != operation.TargetNodeGeneration
             || authority.NodeRid != node.RoutingId
@@ -286,46 +300,40 @@ internal sealed class ZLinkActorOperationTarget(
                 "The Actor is moving or its current owner changed."
             );
         if (
-            !runtime.TryGetCreatedActorState(operation.Actor.ActorId, out var state)
+            !runtime.TryGetActorState(operation.Actor.ActorId, out var state)
+            || state.IsDispatchBlocked && !state.IsTeardownPending
             || state.NativeActorRef is not { } current
             || state.Actor is not { } instance
             || current.Generation != operation.Actor.ObjectGeneration
             || current.NodeRid != node.RoutingId
         )
+        {
+            // The owner removes the registry entry after the Delete CAS.
+            // This call has already observed the exact incarnation, so a
+            // completed deletion settles its destroy when there is no Task left to join.
+            var read = await authorityStore
+                .ReadAuthorityAsync(
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(operation.Actor.ActorId),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (
+                read is ZLinkAuthorityReadResult.Missing
+                || read is ZLinkAuthorityReadResult.Found found
+                    && found.Snapshot.ObjectGeneration > snapshot.ObjectGeneration
+            )
+                return true;
             throw Stale(
                 operation.Actor.ActorId,
                 "The current owner does not contain the exact Actor incarnation."
             );
+        }
 
         await runtime
             .DestroyActorAsync(node.RoutingId, instance, cancellationToken)
             .ConfigureAwait(false);
-        var deleted = await authorityStore
-            .CompareExchangeAuthorityAsync(
-                key,
-                snapshot.StoreVersion,
-                new ZLinkAuthorityMutation.Delete(),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (
-            deleted
-            is ZLinkAuthorityCompareExchangeResult.Deleted
-                or ZLinkAuthorityCompareExchangeResult.Conflict
-                {
-                    Current: ZLinkAuthorityReadResult.Missing
-                }
-        )
-            return Destroyed(true);
-        throw Stale(operation.Actor.ActorId, "The Actor authority changed during destroy.");
+        return true;
     }
-
-    private static ActorDestroyOperationTerminal Destroyed(bool value) =>
-        new(
-            RequestResult.Ok,
-            ServiceWireConstants.FrameworkErrorCode.None,
-            new ActorDestroyCompletion(value)
-        );
 
     private async ValueTask<ActorCreateOperationTerminal> FailAsync(
         ActorCreateOperation operation,

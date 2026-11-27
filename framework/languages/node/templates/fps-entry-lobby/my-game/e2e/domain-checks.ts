@@ -14,22 +14,38 @@ export function runDomainChecks(): void {
   };
   const equal = (a: unknown, b: unknown): boolean => isDeepStrictEqual(a, b);
   const sequenceRoom = new RoomState(() => 1000);
-  sequenceRoom.admit('a'); sequenceRoom.admit('b');
-  const upperAccepted = sequenceRoom.move('a', new MoveRequest(new Vec3(0, 0, -1), MaxSequence)) === null;
+  sequenceRoom.admit('a');
+  sequenceRoom.admit('b');
+  const upperAccepted =
+    sequenceRoom.move('a', new MoveRequest(new Vec3(0, 0, -1), MaxSequence)) === null;
   const sequenceBefore = sequenceRoom.capture();
-  check(upperAccepted &&
-    sequenceRoom.move('a', new MoveRequest(new Vec3(0, 0, -1), MaxSequence + 1n))?.reason === Rejection.integerOutOfRange &&
-    sequenceRoom.shoot('a', new ShootRequest(new Vec3(1, 0, 0), MaxSequence + 1n)).rejected?.reason === Rejection.integerOutOfRange &&
-    equal(sequenceBefore, sequenceRoom.capture()), 'sequence upper bound invariant');
+  check(
+    upperAccepted &&
+      sequenceRoom.move('a', new MoveRequest(new Vec3(0, 0, -1), MaxSequence + 1n))?.reason ===
+        Rejection.integerOutOfRange &&
+      sequenceRoom.shoot('a', new ShootRequest(new Vec3(1, 0, 0), MaxSequence + 1n)).rejected
+        ?.reason === Rejection.integerOutOfRange &&
+      equal(sequenceBefore, sequenceRoom.capture()),
+    'sequence upper bound invariant'
+  );
   const box = new Aabb(new Vec3(1, 1, 1), new Vec3(2, 2, 2));
-  check(box.intersect(new Vec3(0, 1, 1), new Vec3(1, 0, 0), 1) === 1, 'closed face and exact limit');
+  check(
+    box.intersect(new Vec3(0, 1, 1), new Vec3(1, 0, 0), 1) === 1,
+    'closed face and exact limit'
+  );
   check(box.intersect(new Vec3(0, 2, 2), new Vec3(1, 0, 0), 3) === 1, 'parallel corner tangent');
-  check(box.intersect(new Vec3(0, 2.001, 2), new Vec3(1, 0, 0), 3) === null, 'parallel outside slab');
+  check(
+    box.intersect(new Vec3(0, 2.001, 2), new Vec3(1, 0, 0), 3) === null,
+    'parallel outside slab'
+  );
   check(box.intersect(new Vec3(1.5, 1.5, 1.5), new Vec3(1, 0, 0), 3) === 0, 'inside origin');
   check(box.intersect(new Vec3(3, 1, 1), new Vec3(-1, 0, 0), 1) === 1, 'negative direction');
   check(box.intersect(new Vec3(0, 1, 1), new Vec3(-1, 0, 0), 3) === null, 'box behind ray');
   check(box.intersect(new Vec3(0, 1, 1), new Vec3(1, 0, 0), 0.999) === null, 'range cutoff');
-  check(vecLength(new Vec3(Number.MIN_VALUE, 0, 0)) === Number.MIN_VALUE, 'subnormal movement length');
+  check(
+    vecLength(new Vec3(Number.MIN_VALUE, 0, 0)) === Number.MIN_VALUE,
+    'subnormal movement length'
+  );
   const huge = normalizeVec(new Vec3(Number.MAX_VALUE, Number.MAX_VALUE, 0));
   check(huge !== null && Math.abs(vecLength(huge) - 1) < 1e-12, 'large finite aim normalization');
   const tiny = normalizeVec(new Vec3(Number.MIN_VALUE, 0, 0));
@@ -50,20 +66,30 @@ export function runDomainChecks(): void {
   const room = new RoomState(() => now);
   room.admit('a');
   room.admit('b');
-  check(room.move('a', new MoveRequest(new Vec3(0, 0, -2), 1n)) === null, 'first movement full budget');
+  check(
+    room.move('a', new MoveRequest(new Vec3(0, 0, -2), 1n)) === null,
+    'first movement full budget'
+  );
   let before = room.capture();
   const budget = room.move('a', new MoveRequest(new Vec3(0, 0, -2), 2n));
   check(
-    budget?.reason === Rejection.moveBudget && budget.retryAfterMs === 200 && equal(before, room.capture()),
+    budget?.reason === Rejection.moveBudget &&
+      budget.retryAfterMs === 200 &&
+      equal(before, room.capture()),
     'movement rejection leaves timing and sequence unchanged'
   );
   const tinyMove = room.move('a', new MoveRequest(new Vec3(Number.MIN_VALUE, 0, 0), 2n));
   check(
-    tinyMove?.reason === Rejection.moveBudget && tinyMove.retryAfterMs > 0 && equal(before, room.capture()),
+    tinyMove?.reason === Rejection.moveBudget &&
+      tinyMove.retryAfterMs > 0 &&
+      equal(before, room.capture()),
     'nonzero subnormal movement with zero elapsed budget leaves state unchanged'
   );
   now += 100;
-  check(room.move('a', new MoveRequest(new Vec3(0, 0, -1), 2n)) === null, 'partial elapsed movement budget');
+  check(
+    room.move('a', new MoveRequest(new Vec3(0, 0, -1), 2n)) === null,
+    'partial elapsed movement budget'
+  );
   before = room.capture();
   check(
     room.move('a', new MoveRequest(new Vec3(0, 0, -3), 3n))?.reason === Rejection.stepTooLarge &&
@@ -88,8 +114,8 @@ export function runDomainChecks(): void {
     'horizontal map boundary invariant'
   );
   check(
-    room.move('a', new MoveRequest(new Vec3(Number.NaN, 0, 0), 3n))?.reason === Rejection.nonFinite &&
-      equal(before, room.capture()),
+    room.move('a', new MoveRequest(new Vec3(Number.NaN, 0, 0), 3n))?.reason ===
+      Rejection.nonFinite && equal(before, room.capture()),
     'nonfinite movement invariant'
   );
   check(
@@ -98,57 +124,67 @@ export function runDomainChecks(): void {
   );
   before = room.capture();
   check(
-    room.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 3n)).rejected?.reason === Rejection.staleSequence &&
-      equal(before, room.capture()),
+    room.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 3n)).rejected?.reason ===
+      Rejection.staleSequence && equal(before, room.capture()),
     'shared stale sequence invariant'
   );
   check(
-    room.shoot('a', new ShootRequest(new Vec3(0, 0, 0), 4n)).rejected?.reason === Rejection.invalidAim &&
-      equal(before, room.capture()),
+    room.shoot('a', new ShootRequest(new Vec3(0, 0, 0), 4n)).rejected?.reason ===
+      Rejection.invalidAim && equal(before, room.capture()),
     'invalid aim leaves cooldown unchanged'
   );
   const fire = room.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 4n)).rejected;
   check(
-    fire?.reason === Rejection.fireTooSoon && fire.retryAfterMs === Game.fireIntervalMs &&
+    fire?.reason === Rejection.fireTooSoon &&
+      fire.retryAfterMs === Game.fireIntervalMs &&
       equal(before, room.capture()),
     'fire interval invariant'
   );
   now += Game.fireIntervalMs;
-  check(room.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 4n)).result !== null, 'exact fire interval');
-  check(room.move('a', new MoveRequest(new Vec3(0, 0, -2), 5n)) === null, 'movement budget capped at max step');
+  check(
+    room.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 4n)).result !== null,
+    'exact fire interval'
+  );
+  check(
+    room.move('a', new MoveRequest(new Vec3(0, 0, -2), 5n)) === null,
+    'movement budget capped at max step'
+  );
 
   const tie = positioned(new Vec3(48, 0, 22), new Vec3(49.5, 0, 22));
   check(
-    tie.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome === ShotOutcome.blockedByWall &&
-      tie.view()[1].hp === Game.initialHp,
+    tie.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome ===
+      ShotOutcome.blockedByWall && tie.view()[1].hp === Game.initialHp,
     'equal wall and player distance selects wall'
   );
   const behind = positioned(ArenaMap.spawns[0], ArenaMap.spawns[1]);
   check(
-    behind.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome === ShotOutcome.hit &&
-      behind.view()[1].hp === Game.initialHp - Game.shotDamage,
+    behind.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome ===
+      ShotOutcome.hit && behind.view()[1].hp === Game.initialHp - Game.shotDamage,
     'wall behind target does not block'
   );
   const exactRange = positioned(new Vec3(0, 0, 65), new Vec3(80.5, 0, 65));
   check(
-    exactRange.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome === ShotOutcome.hit,
+    exactRange.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome ===
+      ShotOutcome.hit,
     'player face at exact range'
   );
   const beyondRange = positioned(new Vec3(0, 0, 65), new Vec3(80.501, 0, 65));
   check(
-    beyondRange.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome === ShotOutcome.miss,
+    beyondRange.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome ===
+      ShotOutcome.miss,
     'player face beyond range'
   );
   const crossing = positioned(new Vec3(48, 0, 22), ArenaMap.spawns[1]);
   before = crossing.capture();
   check(
-    crossing.move('a', new MoveRequest(new Vec3(2, 0, 0), 1n))?.reason === Rejection.moveBlockedByWall &&
-      equal(before, crossing.capture()),
+    crossing.move('a', new MoveRequest(new Vec3(2, 0, 0), 1n))?.reason ===
+      Rejection.moveBlockedByWall && equal(before, crossing.capture()),
     'movement endpoint inside wall'
   );
   const touching = positioned(new Vec3(48, 0, 20), ArenaMap.spawns[1]);
   check(
-    touching.move('a', new MoveRequest(new Vec3(1, 0, 0), 1n))?.reason === Rejection.moveBlockedByWall,
+    touching.move('a', new MoveRequest(new Vec3(1, 0, 0), 1n))?.reason ===
+      Rejection.moveBlockedByWall,
     'movement touches wall face'
   );
 
@@ -212,12 +248,16 @@ export function runDomainChecks(): void {
   const finished = new RoomState(() => destinationNow);
   finished.restore(before);
   check(
-    finished.phase === MatchPhase.Finished && finished.winner === 'a' &&
+    finished.phase === MatchPhase.Finished &&
+      finished.winner === 'a' &&
       equal(finished.view(), lethal.view()),
     'finished snapshot preserves winner and sequence'
   );
   check(
-    room.view().concat(destination.view(), finished.view()).every((player) => player.position.y === 0),
+    room
+      .view()
+      .concat(destination.view(), finished.view())
+      .every((player) => player.position.y === 0),
     'feet remain on ground through movement and relocation'
   );
   assert.equal(checkedCount, 46, 'Domain boundary count differs from .NET');
@@ -227,8 +267,22 @@ export function runDomainChecks(): void {
     const result = new RoomState(() => now);
     result.restore({
       players: [
-        { playerId: 'a', position: a, hp: 100, sequence: 0n, fireRemainingMs: 0, moveRemainingMs: 0 },
-        { playerId: 'b', position: b, hp: 100, sequence: 0n, fireRemainingMs: 0, moveRemainingMs: 0 }
+        {
+          playerId: 'a',
+          position: a,
+          hp: 100,
+          sequence: 0n,
+          fireRemainingMs: 0,
+          moveRemainingMs: 0
+        },
+        {
+          playerId: 'b',
+          position: b,
+          hp: 100,
+          sequence: 0n,
+          fireRemainingMs: 0,
+          moveRemainingMs: 0
+        }
       ],
       phase: MatchPhase.Playing,
       winner: null

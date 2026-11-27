@@ -2,6 +2,12 @@
 
 ## Rules for AI
 
+### Use this template as a reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+### Server design
+
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
@@ -38,6 +44,10 @@ This Node.js 22 starter provides one Session node, Redis hosting, diagnostics, s
 
 ## Development from samples
 
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Declare nullable fields as `T | null`. The template schema generator emits `{ type: "nullable", value }` for the packet. Use `?` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/node/guide/server/20-channel-messaging/#12-message-value-rules)
+
 Download and run a structure from [ZLink Start](https://zlink.systems/start) before introducing its features here. The sample collection contains nine structures in five server languages. Keep the sample separate and transfer only the registrations, application state, and tests required by your feature.
 
 Choose the sample according to the composition your game needs.
@@ -66,7 +76,7 @@ The feature paths below are relative to the ZLink repository's `framework/langua
 | Dynamic dungeon                       | `morpg-lobby-instances/my-game/server/lobby/spots.ts`: getOrCreate and preparation; pair with `server/instance/dungeon.ts` and `server/instance/main.ts`             |
 | World/channel selection               | `mmo-world-channels/my-game/server/channel/handlers.ts`: ChangeChannel handler uses deferred membership changes; inspect `server/accounts/main.ts` for world listing |
 | Channel pub/sub and seamless movement | `mmo-seamless/my-game/server/zone/zone.ts`: border subscription/publication; pair with `handlers.ts` for delivery and `player.ts` for movement                       |
-| API node (matchmaking)                 | `match-http-lobby/my-game/server/lobby/http.ts`: HTTP endpoint; pair with `matchmaker.ts` for matching; room creation is in `http.ts`                                |
+| API node (matchmaking)                | `match-http-lobby/my-game/server/lobby/http.ts`: HTTP endpoint; pair with `matchmaker.ts` for matching; room creation is in `http.ts`                                |
 | Typed messages                        | `board-tables/my-game/server/shared/messages.ts`: shared packet classes                                                                                              |
 
 The channels in `mmo-world-channels` are player-selected game spaces within a world. They differ from messaging subscription channels, and that sample registers no pub/sub subscriptions. Use the actual registrations and handlers in `mmo-seamless` for border messaging subscriptions.
@@ -83,17 +93,25 @@ Use public APIs and the Framework default typed JSON serializer. Do not introduc
 
 Each fact has one state owner. When gameplay is added, replies inside an Actor handler go through that Actor's bound Session. Other pushes address the Actor by player ID; the receiving Actor handler forwards them through its bound Session. A Spot must not retain Actor references for later delivery because host relocation does not repeat `onJoinedActor` on the target. Framework owns routing, leases, execution gates, and membership; relocation adapters capture application state only.
 
+## Run the server and e2e
+
+Run one scenario with `./run-e2e.sh --scenario connect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
+Run `./run-server.sh` or `.\run-server.cmd` to build and start the local nodes and Redis. Use the WebSocket endpoint printed by `Server ready` and stop the server with Ctrl+C. In another terminal, `./run-e2e.sh` or `.\run-e2e.cmd` detects that server and runs compatible scenarios. Stop the server for full Docker isolation. On PowerShell 7 the corresponding scripts are `run-server.ps1` and `run-e2e.ps1`.
+
+Node stdout, stderr, Framework message-flow files and failure details are under `.logs/run-<id>/`. Docker build and cleanup logs are under `.logs/docker-<project>/`. Use the log paths printed by each command.
+
 ## Changes and verification
 
 Run the README commands from this directory. For debugger attachment, use `--local` or `-Local` and attach to the spawned node process. The `connect` scenario owns the current smoke check; add gameplay scenarios without replacing it. Preserve received-result assertions and check failure exit codes as well as success.
 
 Use OS-assigned ports, unique Redis key prefixes, and unique Compose projects. Clean up only resources created by the run. A cleanup error or an intermittent failure is a failure; preserve the first logs before another run.
 
-The runner owns the run result and collects connector cleanup failures separately. It reports the scenario exception before cleanup errors and returns exit 1 for either kind of failure. Node, container, and Redis cleanup continue after an individual cleanup error.
+The runner owns the run result and preserves both connection and connector cleanup failures. It reports the scenario exception before cleanup errors and returns exit 1 for either kind of failure. Node, container, and Redis cleanup continue after an individual cleanup error.
 
 ## Debugging settings
 
-`runHost` enables dispatch diagnostics at `Normal` and writes Framework message flow to node stderr. Node stdout and stderr are stored separately as `session-0.out.log` and `session-0.err.log` under `.logs/run-<id>/`. Do not add a second flow listener. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
+`runHost` enables dispatch diagnostics at `Normal` and writes Framework message flow to node stderr. The runner also collects those records in the node's `*.flow.log` file. Node stdout and stderr are stored separately as `session-0.out.log` and `session-0.err.log` under `.logs/run-<id>/`. Keep the existing flow listener. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
 
 Read the first exception and the preceding flow/correlation records. A connection-only run may contain no application message-flow events because it dispatches no game packets. Startup failures before dispatch must retain their exception and stack.
 
@@ -113,6 +131,6 @@ Compare public API usage with the guide and a working sample first. Preserve the
 
 The [README client connection section](README.md#client-connection) owns the shared client installation table and minimal TypeScript example. The Session `players` listener defaults to `ws://127.0.0.1:0` in `server/config/session.json` (WebSocket root path `/`, OS-assigned port). Use its actual STREAM address from `READY`; mesh and Redis are internal endpoints. External clients need a running deployment with a reachable interface and exposed port; HTTPS web clients require `wss://`.
 
-The starter has no game DTOs, packet handlers, Actors, or application login. The public connector performs the STREAM handshake; the existing e2e only connects and closes. Add typed contracts, server handlers, and tests before sending game packets.
+The starter has no game DTOs, packet handlers, Actors, or application login. The public connector performs the STREAM handshake; the client scenario connects and closes. Add typed contracts, server handlers, and tests before sending game packets.
 
 Match connector versions to `package.json` dependencies `@zlink-systems/framework` and `@zlink-systems/stream-connector`; check examples against the public connector source and pinned package. Preserve the endpoint, HTTP preconditions, packet names, and push/reply distinction when updating the README.

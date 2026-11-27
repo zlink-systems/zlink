@@ -3,16 +3,18 @@ using MyGame.Shared;
 
 namespace MyGame.E2E;
 
-internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposable
+internal sealed class TableRun(
+    string root,
+    int tableCapacity,
+    RunOutcome outcome,
+    string runDirectory,
+    bool foreground = false,
+    ServerEndpoints? persistenceSource = null
+) : IAsyncDisposable
 {
-    public RunOutcome Outcome { get; } = new();
+    public static readonly TimeSpan RunDeadline = TimeSpan.FromMinutes(3);
     private readonly List<ManagedProcess> nodes = [];
     private readonly string project = "my-game-e2e-" + Guid.NewGuid().ToString("N");
-    private readonly string runDirectory = Path.Combine(
-        root,
-        ".logs",
-        "run-" + Guid.NewGuid().ToString("N")
-    );
     private readonly string? dockerProject = Environment.GetEnvironmentVariable(
         "MY_GAME_DOCKER_PROJECT"
     );
@@ -21,6 +23,11 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
     private string redisEndpoint = "";
     private readonly Dictionary<string, (string Config, ManagedProcess Process)> tables = [];
     public string Endpoint { get; private set; } = "";
+    private string? apiEndpoint;
+    private string WorldPrefix => project + ":";
+    private string PlayerRecordsPrefix => persistenceSource?.PlayerRecordsKeyPrefix ?? WorldPrefix;
+    public ServerEndpoints Endpoints =>
+        new([Endpoint], apiEndpoint, redisEndpoint, PlayerRecordsPrefix);
 
     private string[] Compose(params string[] arguments) =>
         ["compose", "-f", Path.Combine(root, "docker-compose.yml"), "-p", project, .. arguments];
@@ -28,8 +35,11 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
     public async Task StartAsync(CancellationToken ct)
     {
         Directory.CreateDirectory(runDirectory);
-        Console.WriteLine($"Run logs: {runDirectory}");
-        if (dockerProject is null)
+        if (persistenceSource is not null)
+        {
+            redisEndpoint = persistenceSource.Redis;
+        }
+        else if (dockerProject is null)
         {
             composeStarted = true;
             await Commands.RunAsync(
@@ -47,7 +57,14 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
         }
         else
             redisEndpoint = "location:6379";
-        foreach (var configName in new[] { "table-a", "table-b" })
+        var api = await StartNodeAsync("api", "MyGame.Api", false, ct);
+        apiEndpoint =
+            api.Ready.ApiEndpoint
+            ?? throw new InvalidOperationException("API endpoint was not published.");
+        if (persistenceSource is null)
+            await StartNodeAsync("matchmaker", "MyGame.Matchmaker", false, ct);
+        var tableConfigs = persistenceSource is null ? new[] { "table-a", "table-b" } : ["table-a"];
+        foreach (var configName in tableConfigs)
         {
             var table = await StartNodeAsync(configName, "MyGame.Table", false, ct);
             tables.Add(table.Ready.Id, (configName, table.Process));
@@ -65,19 +82,16 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
         CancellationToken ct
     )
     {
-        var settings =
-            JsonSerializer.Deserialize<NodeSettings>(
-                await File.ReadAllTextAsync(
-                    Path.Combine(root, "server", "config", configName + ".json"),
-                    ct
-                )
-            ) ?? throw new InvalidOperationException($"Invalid {configName} configuration.");
+        var sourceConfig = Path.Combine(root, "server", "config", configName + ".json");
+        var settings = NodeSettings.Load(["--config", sourceConfig]);
         settings = settings with
         {
             TableCapacity = tableCapacity,
             RedisEndpoint = redisEndpoint,
-            KeyPrefix = (dockerProject ?? project) + ":",
-            MeshEndpoint = "tcp://127.0.0.1:0",
+            KeyPrefix = WorldPrefix,
+            PlayerRecordsKeyPrefix = configName == "api" ? PlayerRecordsPrefix : null,
+            MeshEndpoint = settings.MeshEndpoint is null ? null : "tcp://127.0.0.1:0",
+            ApiEndpoint = configName == "api" ? "tcp://127.0.0.1:0" : null,
             StreamEndpoint = settings.StreamEndpoint is null ? null : "ws://127.0.0.1:0",
         };
         var suffix = configName + (replacement ? "-replacement" : "");
@@ -86,7 +100,7 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
         ManagedProcess node;
         if (dockerProject is not null)
         {
-            var name = dockerProject + "-" + suffix;
+            var name = project + "-" + suffix;
             var image =
                 Environment.GetEnvironmentVariable("MY_GAME_NODE_IMAGE")
                 ?? throw new InvalidOperationException("Missing node image.");
@@ -124,11 +138,12 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
                 ct
             );
             node = new ManagedProcess(
-                Outcome,
+                outcome,
                 "docker",
                 ["start", "-a", "-i", name],
                 runDirectory,
-                suffix
+                suffix,
+                foreground
             );
         }
         else
@@ -143,11 +158,12 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
                 assembly + ".dll"
             );
             node = new ManagedProcess(
-                Outcome,
+                outcome,
                 "dotnet",
                 [dll, "--config", config],
                 runDirectory,
-                suffix
+                suffix,
+                foreground
             );
         }
         nodes.Add(node);
@@ -155,9 +171,36 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
             JsonSerializer.Deserialize<NodeReady>(
                 await node.WaitLineAsync(NodeProtocol.ReadyPrefix, ct)
             ) ?? throw new InvalidOperationException($"Invalid readiness for {configName}.");
-        if (ready.Id != settings.Id || ready.MeshEndpoint.EndsWith(":0", StringComparison.Ordinal))
+        var listener = ready.MeshEndpoint ?? ready.ApiEndpoint;
+        if (
+            ready.Id != settings.Id
+            || listener is null
+            || listener.EndsWith(":0", StringComparison.Ordinal)
+        )
             throw new InvalidOperationException($"Incorrect listener readiness for {configName}.");
+        node.Ready();
         return (node, ready);
+    }
+
+    public async Task ProbeFreshWorldAsync(
+        Func<string, CancellationToken, Task> probe,
+        CancellationToken ct
+    )
+    {
+        await using var fresh = new TableRun(
+            root,
+            1,
+            outcome,
+            Path.Combine(runDirectory, "fresh-world")
+        );
+        await fresh.StartAsync(ct);
+        await probe(fresh.Endpoint, ct);
+    }
+
+    public async Task WaitForExitAsync(CancellationToken ct)
+    {
+        var exited = await Task.WhenAny(nodes.Select(node => node.WaitForExitAsync(ct)));
+        throw new InvalidOperationException($"Server node {await exited} exited.");
     }
 
     public async Task DrainAsync(string nodeId, CancellationToken ct)
@@ -195,7 +238,7 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
             }
             catch (Exception error)
             {
-                Outcome.Record(error);
+                outcome.Record(error);
             }
         }
         if (composeStarted)
@@ -211,7 +254,7 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
             }
             catch (Exception error)
             {
-                Outcome.Record(error);
+                outcome.Record(error);
             }
             try
             {
@@ -224,7 +267,7 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
             }
             catch (Exception error)
             {
-                Outcome.Record(error);
+                outcome.Record(error);
             }
         }
     }

@@ -98,6 +98,10 @@ def node(game, packages, fw, bind):
     (game / "package-lock.json").unlink(missing_ok=True)
     # The lockfile pins registry tarballs, so installs resolve again from package.json.
     edit(game / "run-e2e.sh", (r"npm ci", "npm install", False))
+    # run-server builds through these helpers; they install with npm ci as well.
+    for helper in ("scripts/run-server.mjs", "scripts/run-helpers.sh", "scripts/run-helpers.ps1"):
+        if (game / helper).is_file():
+            edit(game / helper, (r"\['ci'\]", "['install']", False), (r"npm ci", "npm install", False))
     edit(game / "Dockerfile",
          (r"npm ci", "npm install", False),
          (r"^(COPY package(?:-lock)?\.json[^\n]*\n)", r"COPY local-npm local-npm\n\1", True, 1),

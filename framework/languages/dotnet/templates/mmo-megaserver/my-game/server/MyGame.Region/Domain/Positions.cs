@@ -116,10 +116,12 @@ public sealed class Positions(TimeProvider? clock = null)
             )
                 throw new InvalidDataException("Invalid Region position snapshot.");
             var available = GameNames.MaxStep - player.RemainingMs * GameNames.MaxSpeed / 1000.0;
-            if (!restored.TryAdd(
+            if (
+                !restored.TryAdd(
                     player.PlayerId,
                     new PositionState(player.X, player.Sequence, available, now)
-                ))
+                )
+            )
                 throw new InvalidDataException("Duplicate player in Region position snapshot.");
         }
         players.Clear();

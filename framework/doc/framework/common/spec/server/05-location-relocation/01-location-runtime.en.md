@@ -1728,6 +1728,11 @@ and `level` are decimal integers without leading zeros.
 | A participant's new authority payload | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:authorityPayload` |
 | A participant's membership change | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
 
+**Relocation key values.** When a relocation (`aggregate.relocation` of §9.1) writes the records of
+this section, `aggregateId` is its `relocationId` and `aggregateGeneration` is `1`. The source writes
+this inventory once at seal, before it chooses a target, and keeps using the same inventory when the
+target attempt (`target.attemptGeneration`) changes.
+
 **Participant change bytes.** A participant's new authority payload record and membership change
 record store bytes as they are, not JSON. The new authority payload record is the
 application-defined opaque bytes that become the participant authority's `payload` at commit, and
@@ -2149,6 +2154,14 @@ previous descriptor. The owner lease expires after renewals stop, but that descr
 the Store. Section 4.1 defines the rule that prevents targeting it. Fixed RID lifecycle rules are
 defined by [MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid). The two
 cleanup paths are independent and operate with different lifetimes.
+
+**A discard confirmed after host shutdown has waited for in-flight discard cleanup does local cleanup
+only and ends normally.** Shutdown waits for the discard cleanup it has accepted so far before it closes
+the transport. When a decision such as owner-lease loss or an outage deadline confirms a new discard after
+that, its cleanup doesn't report a closed transport or completion table as an error and treats it as an
+"already shutting down" terminal. It still completes local object removal and registry cleanup. Peers of
+the stopping host observe the result through that host's connection close, so nothing remains to send.
+No separate state or ordering exists for this case.
 
 The owner lease is released with the same token held by the terminating lifecycle.
 Cleanup does not reread and release another lifecycle's lease. The time boundary for Store

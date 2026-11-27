@@ -54,7 +54,10 @@ export class Zone implements ZLinkSpot<Player> {
     await this.onLeaveActor(actor);
   }
   private async publishPlayers(): Promise<void> {
-    const view = new ChannelView(channelOf(String(this.context.spotId)), [...this.playerIds].sort());
+    const view = new ChannelView(
+      channelOf(String(this.context.spotId)),
+      [...this.playerIds].sort()
+    );
     for (const playerId of this.playerIds) {
       await this.actors.sendToActor(playerId, view).submit();
     }

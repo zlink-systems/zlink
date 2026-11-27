@@ -458,6 +458,7 @@ class raw_mesh_node_owner_t
       std::optional<protocol::application_payload_t> application_reply = std::nullopt);
     task_t<bool> send_reply_relay_ack (const std::vector<std::uint8_t> &target_routing_id,
                                        const protocol::reply_relay_ack_t &ack);
+    task_t<bool> send_actor_destroy (protocol::actor_destroy_command_t command);
     task_t<bool> send_message_follow (const std::vector<std::uint8_t> &target_routing_id,
                                       const protocol::message_follow_notice_t &notice);
     task_t<bool> send_relocation_control (const std::vector<std::uint8_t> &target_routing_id,
@@ -703,11 +704,11 @@ class raw_mesh_node_owner_t
     void submit_pending_hellos_on_lane ();
     // The one admission of a HELLO, ADMIT or UPDATE received on a selected route.
     raw_mesh_pump_result_t
-    admit_descriptor_record (const std::vector<std::uint8_t> &source_routing_id,
-                             std::uint64_t route_generation,
-                             protocol::command kind,
-                             std::span<const std::uint8_t> bytes,
-                             service_liveness_registry_t::clock_t::time_point now);
+    dispatch_admission_record (const std::vector<std::uint8_t> &source_routing_id,
+                               std::uint64_t route_generation,
+                               protocol::command kind,
+                               std::span<const std::uint8_t> bytes,
+                               service_liveness_registry_t::clock_t::time_point now);
     bool route_current_locked (const std::vector<std::uint8_t> &node_routing_id,
                                std::uint64_t route_generation) const;
     void

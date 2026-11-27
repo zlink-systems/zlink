@@ -7,6 +7,14 @@ import systems.zlink.framework.kotlin.*
 
 @ZLinkHandlerGroup(Names.PLAYER)
 class DungeonActions {
+    @ZLinkSpotActorRequest
+    suspend fun leave(
+        spot: Dungeon,
+        actor: Player,
+        context: ZLinkMessageContext,
+        request: LeaveDungeonRequest,
+    ): DungeonLeft = spot.leave(actor)
+
     @ZLinkSpotActorSend
     suspend fun login(
         spot: Dungeon,
@@ -43,19 +51,44 @@ class DungeonActions {
     ) {
         actor.deliver(request)
     }
+
     @ZLinkSpotActorSend
-    suspend fun enter(spot: Dungeon, actor: Player, context: ZLinkMessageContext, request: EnterDungeonRequest) = spot.enter(actor)
+    suspend fun enter(
+        spot: Dungeon,
+        actor: Player,
+        context: ZLinkMessageContext,
+        request: EnterDungeonRequest,
+    ) = spot.enter(actor)
+
     @ZLinkSpotActorSend
-    suspend fun travel(spot: Dungeon, actor: Player, context: ZLinkMessageContext, request: JoinDungeon) { actor.context.joinSpot(request.dungeonId, request).defer() }
-    @ZLinkSpotActorSend
-    suspend fun reject(spot: Dungeon, actor: Player, context: ZLinkMessageContext, request: ActionRejected) {
-        actor.deliver(request)
+    suspend fun travel(
+        spot: Dungeon,
+        actor: Player,
+        context: ZLinkMessageContext,
+        request: JoinDungeon,
+    ) {
+        actor.context.joinSpot(request.dungeonId, request).defer()
     }
+
     @ZLinkSpotActorSend
-    suspend fun party(spot: Dungeon, actor: Player, context: ZLinkMessageContext, request: PartyView) {
+    suspend fun reject(
+        spot: Dungeon,
+        actor: Player,
+        context: ZLinkMessageContext,
+        request: ActionRejected,
+    ) {
         actor.deliver(request)
     }
 
+    @ZLinkSpotActorSend
+    suspend fun party(
+        spot: Dungeon,
+        actor: Player,
+        context: ZLinkMessageContext,
+        request: PartyView,
+    ) {
+        actor.deliver(request)
+    }
 }
 
 @ZLinkHandlerGroup(Names.DUNGEON)

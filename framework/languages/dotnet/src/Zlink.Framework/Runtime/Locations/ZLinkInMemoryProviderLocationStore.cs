@@ -49,8 +49,22 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
         {
             var now = _time.GetUtcNow();
             RemoveExpiredNoLock(now);
+            ReadOnlyMemory<byte>? ReadCounter(ZLinkStoreKey key) =>
+                _entries.TryGetValue(key, out var entry)
+                    ? entry.Bytes
+                    : (ReadOnlyMemory<byte>?)null;
+
             foreach (var condition in request.Conditions)
             {
+                if (condition is ZLinkStoreCondition.SumAtMost sum)
+                {
+                    if (!ZLinkStoreCounter.TrySumWithinLimit(sum, ReadCounter, out var withinLimit))
+                        return new ZLinkStoreWriteResult.Corrupt(now);
+                    if (!withinLimit)
+                        return new ZLinkStoreWriteResult.Conflict(now);
+                    continue;
+                }
+
                 var satisfied = condition switch
                 {
                     ZLinkStoreCondition.Missing missing => !_entries.ContainsKey(missing.Key),
@@ -71,10 +85,20 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
                 }
             }
 
+            Dictionary<ZLinkStoreKey, ZLinkStoreMutation.Put>? counterPuts = null;
+            foreach (var mutation in request.Mutations)
+            {
+                if (mutation is not ZLinkStoreMutation.Add add)
+                    continue;
+                if (!ZLinkStoreCounter.TryAdd(add, ReadCounter(add.Key), out var put))
+                    return new ZLinkStoreWriteResult.Corrupt(now);
+                (counterPuts ??= []).Add(add.Key, put);
+            }
+
             var versions = new Dictionary<ZLinkStoreKey, ZLinkStoreVersion>();
             foreach (var mutation in request.Mutations)
             {
-                switch (mutation)
+                switch (mutation is ZLinkStoreMutation.Add add ? counterPuts![add.Key] : mutation)
                 {
                     case ZLinkStoreMutation.Put put:
                     {
@@ -247,26 +271,9 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
     {
         var encodedBytes = 0L;
         var conditionKeys = request
-            .Conditions.Select(static condition =>
-                condition switch
-                {
-                    ZLinkStoreCondition.Missing missing => missing.Key,
-                    ZLinkStoreCondition.Version version => version.Key,
-                    ZLinkStoreCondition.Value value => value.Key,
-                    _ => throw new ArgumentException("Unknown Store condition.", nameof(request)),
-                }
-            )
+            .Conditions.SelectMany(ZLinkStoreBatchKeys.ForCondition)
             .ToArray();
-        var mutationKeys = request
-            .Mutations.Select(static mutation =>
-                mutation switch
-                {
-                    ZLinkStoreMutation.Put put => put.Key,
-                    ZLinkStoreMutation.Delete delete => delete.Key,
-                    _ => throw new ArgumentException("Unknown Store mutation.", nameof(request)),
-                }
-            )
-            .ToArray();
+        var mutationKeys = request.Mutations.Select(ZLinkStoreBatchKeys.ForMutation).ToArray();
         if (
             conditionKeys.Distinct().Count() != conditionKeys.Length
             || mutationKeys.Distinct().Count() != mutationKeys.Length
@@ -322,6 +329,13 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
             }
             encodedBytes += put.Bytes.Length;
         }
+        encodedBytes +=
+            16L
+            * request.Conditions.Count(static condition =>
+                condition is ZLinkStoreCondition.SumAtMost
+            );
+        encodedBytes +=
+            8L * request.Mutations.Count(static mutation => mutation is ZLinkStoreMutation.Add);
         if (encodedBytes > ZLinkLocationStoreLimits.MaximumEncodedBatchBytes)
             throw new ArgumentException(
                 $"The encoded Store batch exceeds {ZLinkLocationStoreLimits.MaximumEncodedBatchBytes} bytes.",

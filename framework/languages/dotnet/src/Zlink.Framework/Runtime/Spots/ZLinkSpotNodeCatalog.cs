@@ -431,6 +431,8 @@ internal sealed class ZLinkSpotNodeCatalog(
             activation.CancelActiveOperations();
     }
 
+    internal Func<ZLinkSpotActivation, ValueTask>? BeforeShutdownCloseForTest { get; set; }
+
     internal async ValueTask CloseLifecycleAsync()
     {
         await StopIdleEvictionAsync().ConfigureAwait(false);
@@ -448,6 +450,9 @@ internal sealed class ZLinkSpotNodeCatalog(
             await CaptureAsync(async () =>
                 {
                     if (registration.Owner is { } owner)
+                    {
+                        if (BeforeShutdownCloseForTest is { } beforeClose)
+                            await beforeClose(owner.Activation).ConfigureAwait(false);
                         _ = await ExecuteCloseTransactionAsync(
                                 spotId,
                                 owner.Activation,
@@ -457,6 +462,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                                 requireNoActors: false
                             )
                             .ConfigureAwait(false);
+                    }
                     else
                         _ = await registration.Joined!.ConfigureAwait(false);
                 })
@@ -739,7 +745,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 })
                 .ConfigureAwait(false);
             ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
-            await activation._serial.FinishActivationPreparation().ConfigureAwait(false);
+            await activation._serial.FinishPublishedUserPreparationAsync().ConfigureAwait(false);
 
             return new ZLinkSpotCreateResult(
                 Reference(activation),
@@ -922,7 +928,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 })
                 .ConfigureAwait(false);
             ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
-            await activation._serial.FinishActivationPreparation().ConfigureAwait(false);
+            await activation._serial.FinishPublishedUserPreparationAsync().ConfigureAwait(false);
         }
         catch (Exception error)
         {
@@ -1230,7 +1236,9 @@ internal sealed class ZLinkSpotNodeCatalog(
             })
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
-        await prepared.Activation._serial.FinishActivationPreparation().ConfigureAwait(false);
+        await prepared
+            .Activation._serial.FinishPublishedUserPreparationAsync()
+            .ConfigureAwait(false);
     }
 
     internal ValueTask ValidateRelocatedReservedAsync(
@@ -2250,14 +2258,16 @@ internal sealed class ZLinkSpotNodeCatalog(
                 && instance.State == ZLinkInstanceSpotAuthorityState.Closing
         )
             return false;
-        throw new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.Unavailable,
+        throw CloseMoving(
             $"User Spot '{spotId}' authority names an incarnation this owner does not host."
-        )
+        );
+    }
+
+    private static ZLinkFrameworkException CloseMoving(string message) =>
+        new(ZLinkFrameworkErrorKind.Unavailable, message, ZLinkRetryAdvice.RetryAfterBackoff)
         {
             FrameworkFailureCode = (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving,
         };
-    }
 
     private async ValueTask<CloseAuthority> BeginCloseAuthorityAsync(
         ZLinkSpotActivation activation,
@@ -2279,6 +2289,20 @@ internal sealed class ZLinkSpotNodeCatalog(
             snapshot.Payload.Span,
             out var authority
         );
+        if (
+            activation.PlacementKind == ZLinkPlacementObjectKind.UserSpot
+            && (
+                snapshot.Relocation is { Phase: not ServiceWireCodec.RelocationPhase.Aborted }
+                || snapshot.Relocation is null
+                    && !userDecoded
+                    && ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                        snapshot,
+                        out var canonical
+                    )
+                    && canonical.Phase < (byte)ServiceWireCodec.RelocationPhase.Aborted
+            )
+        )
+            throw CloseMoving($"User Spot '{spotId}' authority is moving.");
         var instanceDecoded = ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
             snapshot.Payload.Span,
             out var instance

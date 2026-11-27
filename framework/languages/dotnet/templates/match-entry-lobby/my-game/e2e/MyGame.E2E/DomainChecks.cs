@@ -40,9 +40,11 @@ internal static class DomainChecks
         )
         {
             var room = NewRoom(clock);
-            var snapshot = JsonNode.Parse(room.Capture())
+            var snapshot =
+                JsonNode.Parse(room.Capture())
                 ?? throw new InvalidOperationException("Room snapshot was empty.");
-            var players = snapshot["Players"]?.AsArray()
+            var players =
+                snapshot["Players"]?.AsArray()
                 ?? throw new InvalidOperationException("Room snapshot omitted players.");
             players[0]!["X"] = ax;
             players[0]!["Y"] = ay;
@@ -59,15 +61,27 @@ internal static class DomainChecks
         Check(matchmaking.Pair().Length == 0, "matchmaking does not pair across modes");
         matchmaking.Enqueue(new QueueRequest("p2"));
         var pair = matchmaking.Pair();
-        Check(pair.Select(player => player.PlayerId).SequenceEqual(["p1", "p2"]), "matchmaking pairs FIFO within a mode");
-        Check(matchmaking.TryAllocateRoom(out var firstRoom) && firstRoom == "room-1", "first room sequence allocated");
+        Check(
+            pair.Select(player => player.PlayerId).SequenceEqual(["p1", "p2"]),
+            "matchmaking pairs FIFO within a mode"
+        );
+        Check(
+            matchmaking.TryAllocateRoom(out var firstRoom) && firstRoom == "room-1",
+            "first room sequence allocated"
+        );
         matchmaking.Remove(pair);
-        Check(matchmaking.Waiting.Keys.SequenceEqual(["ranked"]), "matched queue removal preserves other modes");
+        Check(
+            matchmaking.Waiting.Keys.SequenceEqual(["ranked"]),
+            "matched queue removal preserves other modes"
+        );
         matchmaking.RoomSequence = GameNames.MaxSafeInteger;
         Check(!matchmaking.TryAllocateRoom(out _), "unsafe room sequence rejected");
 
         var sequenceRoom = NewRoom(new ManualTimeProvider(0));
-        Check(sequenceRoom.Move("a", new MoveRequest(0, 0, 1)) is null, "sequence baseline accepted");
+        Check(
+            sequenceRoom.Move("a", new MoveRequest(0, 0, 1)) is null,
+            "sequence baseline accepted"
+        );
         var sequenceBefore = sequenceRoom.Capture();
         Check(
             sequenceRoom.Move("a", new MoveRequest(0, 0, 1)) is { Reason: Rejection.StaleSequence }
@@ -86,7 +100,8 @@ internal static class DomainChecks
             "out-of-range sequence rejection preserves all state"
         );
         var oversizedStoredSequenceRoom = NewRoom(new ManualTimeProvider(0));
-        var oversizedStoredSequence = JsonNode.Parse(oversizedStoredSequenceRoom.Capture())
+        var oversizedStoredSequence =
+            JsonNode.Parse(oversizedStoredSequenceRoom.Capture())
             ?? throw new InvalidOperationException("Room snapshot was empty.");
         oversizedStoredSequence["Players"]!.AsArray()[0]!["LastSequence"] =
             GameNames.MaxSafeInteger + 2;
@@ -98,13 +113,20 @@ internal static class DomainChecks
             oversizedStoredSequenceRoom.Move(
                 "a",
                 new MoveRequest(0, 0, GameNames.MaxSafeInteger + 1)
-            ) is { Reason: Rejection.IntegerOutOfRange }
-                && SameSnapshot(oversizedStoredSequenceBefore, oversizedStoredSequenceRoom.Capture()),
+            )
+                is { Reason: Rejection.IntegerOutOfRange }
+                && SameSnapshot(
+                    oversizedStoredSequenceBefore,
+                    oversizedStoredSequenceRoom.Capture()
+                ),
             "out-of-range sequence precedes stale sequence when both apply"
         );
 
         var stepRoom = NewRoom(new ManualTimeProvider(0));
-        Check(stepRoom.Move("a", new MoveRequest(GameNames.MaxStep, 0, 1)) is null, "MaxStep boundary accepted");
+        Check(
+            stepRoom.Move("a", new MoveRequest(GameNames.MaxStep, 0, 1)) is null,
+            "MaxStep boundary accepted"
+        );
         var stepBefore = stepRoom.Capture();
         Check(
             stepRoom.Move("a", new MoveRequest(GameNames.MaxStep + 0.001, 0, 2))
@@ -116,10 +138,42 @@ internal static class DomainChecks
         var edgeClock = new ManualTimeProvider(0);
         var mapEdges = new[]
         {
-            (Name: "x lower inclusive", X: 2.0, Y: 50.0, Dx: -2.0, Dy: 0.0, TargetX: 0.0, TargetY: 50.0),
-            (Name: "x upper inclusive", X: 98.0, Y: 50.0, Dx: 2.0, Dy: 0.0, TargetX: 100.0, TargetY: 50.0),
-            (Name: "y lower inclusive", X: 50.0, Y: 2.0, Dx: 0.0, Dy: -2.0, TargetX: 50.0, TargetY: 0.0),
-            (Name: "y upper inclusive", X: 50.0, Y: 98.0, Dx: 0.0, Dy: 2.0, TargetX: 50.0, TargetY: 100.0),
+            (
+                Name: "x lower inclusive",
+                X: 2.0,
+                Y: 50.0,
+                Dx: -2.0,
+                Dy: 0.0,
+                TargetX: 0.0,
+                TargetY: 50.0
+            ),
+            (
+                Name: "x upper inclusive",
+                X: 98.0,
+                Y: 50.0,
+                Dx: 2.0,
+                Dy: 0.0,
+                TargetX: 100.0,
+                TargetY: 50.0
+            ),
+            (
+                Name: "y lower inclusive",
+                X: 50.0,
+                Y: 2.0,
+                Dx: 0.0,
+                Dy: -2.0,
+                TargetX: 50.0,
+                TargetY: 0.0
+            ),
+            (
+                Name: "y upper inclusive",
+                X: 50.0,
+                Y: 98.0,
+                Dx: 0.0,
+                Dy: 2.0,
+                TargetX: 50.0,
+                TargetY: 100.0
+            ),
         };
         foreach (var edge in mapEdges)
         {
@@ -131,13 +185,15 @@ internal static class DomainChecks
                 edge.Name
             );
         }
-        foreach (var edge in new[]
-        {
-            (Name: "x lower outside", X: 0.0, Y: 50.0, Dx: -0.01, Dy: 0.0),
-            (Name: "x upper outside", X: 100.0, Y: 50.0, Dx: 0.01, Dy: 0.0),
-            (Name: "y lower outside", X: 50.0, Y: 0.0, Dx: 0.0, Dy: -0.01),
-            (Name: "y upper outside", X: 50.0, Y: 100.0, Dx: 0.0, Dy: 0.01),
-        })
+        foreach (
+            var edge in new[]
+            {
+                (Name: "x lower outside", X: 0.0, Y: 50.0, Dx: -0.01, Dy: 0.0),
+                (Name: "x upper outside", X: 100.0, Y: 50.0, Dx: 0.01, Dy: 0.0),
+                (Name: "y lower outside", X: 50.0, Y: 0.0, Dx: 0.0, Dy: -0.01),
+                (Name: "y upper outside", X: 50.0, Y: 100.0, Dx: 0.0, Dy: 0.01),
+            }
+        )
         {
             var room = Positioned(edgeClock, edge.X, edge.Y);
             var before = room.Capture();
@@ -150,11 +206,21 @@ internal static class DomainChecks
         }
 
         var wallClock = new ManualTimeProvider(0);
-        foreach (var contact in new[]
-        {
-            (Name: "wall upper endpoint contact", X: GameNames.WallX - GameNames.MaxStep, Y: GameNames.WallMinY),
-            (Name: "wall lower endpoint contact", X: GameNames.WallX - GameNames.MaxStep, Y: GameNames.WallMaxY),
-        })
+        foreach (
+            var contact in new[]
+            {
+                (
+                    Name: "wall upper endpoint contact",
+                    X: GameNames.WallX - GameNames.MaxStep,
+                    Y: GameNames.WallMinY
+                ),
+                (
+                    Name: "wall lower endpoint contact",
+                    X: GameNames.WallX - GameNames.MaxStep,
+                    Y: GameNames.WallMaxY
+                ),
+            }
+        )
         {
             var room = Positioned(wallClock, contact.X, contact.Y);
             var before = room.Capture();
@@ -173,7 +239,11 @@ internal static class DomainChecks
                 && SameSnapshot(crossingBefore, crossing.Capture()),
             "wall segment crossing rejected"
         );
-        var clearLane = Positioned(wallClock, GameNames.WallX - GameNames.MaxStep, GameNames.WallMinY - 1);
+        var clearLane = Positioned(
+            wallClock,
+            GameNames.WallX - GameNames.MaxStep,
+            GameNames.WallMinY - 1
+        );
         Check(
             clearLane.Move("a", new MoveRequest(GameNames.MaxStep, 0, 1)) is null,
             "movement below wall endpoint remains clear"
@@ -209,13 +279,14 @@ internal static class DomainChecks
         );
 
         var invalidClock = new ManualTimeProvider(0);
-        foreach (var value in new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+        foreach (
+            var value in new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity }
+        )
         {
             var room = NewRoom(invalidClock);
             var before = room.Capture();
             Check(
-                room.Move("a", new MoveRequest(value, 0, 1))
-                    is { Reason: Rejection.InvalidMove }
+                room.Move("a", new MoveRequest(value, 0, 1)) is { Reason: Rejection.InvalidMove }
                     && SameSnapshot(before, room.Capture()),
                 $"nonfinite move {value} rejected without state change"
             );
@@ -240,9 +311,18 @@ internal static class DomainChecks
             "fire interval reports the last millisecond"
         );
         fireClock.Advance(TimeSpan.FromMilliseconds(1));
-        Check(fireRoom.Shoot("a", new ShootRequest("b", 2)) is null, "fire interval exact boundary accepted");
+        Check(
+            fireRoom.Shoot("a", new ShootRequest("b", 2)) is null,
+            "fire interval exact boundary accepted"
+        );
 
-        var wallShotRoom = Positioned(new ManualTimeProvider(0), 40, WallCenterY(), 60, WallCenterY());
+        var wallShotRoom = Positioned(
+            new ManualTimeProvider(0),
+            40,
+            WallCenterY(),
+            60,
+            WallCenterY()
+        );
         var wallShotBefore = wallShotRoom.Capture();
         Check(
             wallShotRoom.Shoot("a", new ShootRequest("b", 1)) is { Reason: Rejection.BlockedByWall }
@@ -259,14 +339,18 @@ internal static class DomainChecks
         var missingTargetRoom = NewRoom(new ManualTimeProvider(0));
         var missingTargetBefore = missingTargetRoom.Capture();
         Check(
-            missingTargetRoom.Shoot("a", new ShootRequest("missing", 1)) is { Reason: Rejection.NoTarget }
+            missingTargetRoom.Shoot("a", new ShootRequest("missing", 1))
+                is { Reason: Rejection.NoTarget }
                 && SameSnapshot(missingTargetBefore, missingTargetRoom.Capture()),
             "missing target rejects shot without changing state"
         );
 
         var sourceClock = new ManualTimeProvider(5_000_000);
         var source = NewRoom(sourceClock);
-        Check(source.Move("a", new MoveRequest(GameNames.MaxStep, 0, 1)) is null, "snapshot source move accepted");
+        Check(
+            source.Move("a", new MoveRequest(GameNames.MaxStep, 0, 1)) is null,
+            "snapshot source move accepted"
+        );
         Check(source.Shoot("a", new ShootRequest("b", 2)) is null, "snapshot source shot accepted");
         sourceClock.Advance(TimeSpan.FromMilliseconds(60));
         var snapshot = source.Capture();
@@ -278,7 +362,9 @@ internal static class DomainChecks
             "snapshot stores remaining movement and fire milliseconds"
         );
         Check(
-            !System.Text.Encoding.UTF8.GetString(snapshot).Contains("Timestamp", StringComparison.Ordinal)
+            !System
+                .Text.Encoding.UTF8.GetString(snapshot)
+                .Contains("Timestamp", StringComparison.Ordinal)
                 && SameSnapshot(snapshot, source.Capture()),
             "snapshot stores no absolute timestamp and capture is stable"
         );
@@ -342,7 +428,9 @@ internal static class DomainChecks
             "finished shooting rejection preserves state"
         );
 
-        Console.WriteLine($"Domain checks: 10 categories; {checkedCount}/{checkedCount} assertions passed");
+        Console.WriteLine(
+            $"Domain checks: 10 categories; {checkedCount}/{checkedCount} assertions passed"
+        );
 
         static double WallCenterY() => (GameNames.WallMinY + GameNames.WallMaxY) / 2;
     }

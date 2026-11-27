@@ -18,6 +18,19 @@ flowchart LR
     players -->|HTTP POST /match| lobby["API node (matchmaking)"]
 ```
 
+## Server and e2e
+
+Run the server from the project directory. The local build requires CMake, Ninja, a C++20 compiler and Docker Compose for Redis.
+
+| Shell | Start the server | Run e2e in a second terminal |
+| --- | --- | --- |
+| Bash | `./run-server.sh` | `./run-e2e.sh` |
+| Windows (PowerShell 7) | `.\run-server.cmd` | `.\run-e2e.cmd` |
+
+Use the WebSocket address printed after `Server ready` for game clients. Press Ctrl+C in the server terminal to stop the nodes and Redis. E2e attaches automatically when the server has published `.logs/server.json`. With no running server, e2e starts an isolated Docker deployment. Attached runs skip `lobby` (API node restart) and `update` (Play node replacement).
+
+Each run saves node stdout (`*.out.log`), stderr (`*.err.log`), Framework message-flow (`*.flow.log`) and failure details (`failure.log`, on failure) under `.logs/run-<id>/`. Build and Docker Compose logs are also under `.logs/`. See [한국어](README.ko.md).
+
 ## Prerequisites
 
 Docker Compose v2 and a running Linux-container daemon are required for the default run. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain and CMake; the host does not need them for Docker execution.
@@ -28,9 +41,9 @@ Public Framework 0.34.1 is pinned in `bootstrap.cmake`, the only file that names
 
 ### Endpoint and first packet
 
-Connect to the Session `players` STREAM listener. `server/config/session.json` pins `StreamEndpoint` to `tcp://127.0.0.1:0`: loopback with an OS-assigned port. Read the Session stdout line `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}` and use its actual `streamEndpoint`, not port `0`. `server/shared/hosting.hpp` emits this value and `e2e/world.hpp` consumes it. Mesh and Redis addresses are internal endpoints.
+Connect to the Session `players` STREAM listener. `server/config/session.json` pins `StreamEndpoint` to `ws://127.0.0.1:0`: loopback with an OS-assigned port. Read the Session stdout line `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}` and use its actual `streamEndpoint`, not port `0`. `server/shared/hosting.hpp` emits this value and `e2e/world.hpp` consumes it. Mesh and Redis addresses are internal endpoints.
 
-The listener is reachable from its host/network namespace. Keep a deployment running separately from e2e, which owns and removes its nodes; configure a reachable `StreamEndpoint` interface and port and expose it from containers for external clients. This is a TCP endpoint with no HTTP/WebSocket path. Browsers, Unity WebGL and Cocos Creator web cannot connect to this default listener; those clients require a deployed WebSocket listener.
+The listener is reachable from its host/network namespace. Keep a deployment running separately from e2e, which owns and removes its nodes; configure a reachable `StreamEndpoint` interface and port and expose it from containers for external clients. The WebSocket listener supports native and browser clients.
 
 `server/config/lobby.json` configures `HttpEndpoint` as `http://127.0.0.1:0`; use the API node `READY` JSON `httpEndpoint` plus `/match`. Configure `SessionEndpoint` with the actual bound Session endpoint before starting the API node, as `e2e/world.hpp` does.
 
@@ -117,10 +130,10 @@ Run from this directory:
 PowerShell 7 provides the same commands:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario lobby,hit,wall,input,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 The scripts build node and runner images, check `zlink.structure.json`, then start Redis and nodes in a unique Compose project. Nodes share the runner's network namespace, preserving loopback listeners and OS-assigned ports. The runner copies configuration before attaching stdin and stdout; `drain`, `shutdown` and lifecycle output retain their existing protocol.
@@ -163,7 +176,7 @@ For host process debugging, install a C++20 compiler (GCC 13 or later, or Visual
 On Windows:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -Local
+.\run-e2e.cmd -Local
 ```
 
 The script runs `cmake -P bootstrap.cmake`, `cmake --preset default` and `cmake --build --preset default` before starting `build/bin/my-game-e2e`. Redis remains in an isolated Compose project. Use `--no-build` or `-NoBuild` to reuse a local debugger build. Local build-only uses `--local --build-only` or `-Local -BuildOnly`.
@@ -172,6 +185,8 @@ Start Redis, play node A (match), play node B (match), Session, then the API nod
 
 ## Framework behavior to know
 
+The pinned C++ Framework release can publish a `tcp://` address for a STREAM listener configured with WebSocket. The runner reports a startup failure when this occurs. [#5460](https://github.com/zlink-systems/zlink/issues/5460)
+
 - **Waiting for DB or file I/O in a handler** — An ordinary async terminal holds the turn, while `Yield` lets other handlers on the same Spot proceed. [Guide](https://docs.zlink.systems/cpp/guide/server/32-execution-model/#io-worker-wait).
 - **Creation that misses its deadline** — `DeadlineExceeded` and caller cancellation have distinct outcomes. [Guide](https://docs.zlink.systems/cpp/guide/server/22-actor/#creation-deadline). [server/session/session.hpp:36](server/session/session.hpp).
 - **Many logins at once** — Each creation for a different ID requires a Location Store round trip, so measure expected load when setting the deadline. [Guide](https://docs.zlink.systems/cpp/guide/server/25-location/#creation-load).
@@ -179,3 +194,7 @@ Start Redis, play node A (match), play node B (match), Session, then the API nod
 - **Duplicate login** — Without a callback, binding a different Session is accepted; reject it in the Actor duplicate-bind callback to prevent it. [Guide](https://docs.zlink.systems/cpp/guide/server/39-session-binding/#duplicate-session-bind). This template keeps the default (accepts the new Session).
 - **ObjectGeneration** — `ObjectGeneration` identifies a logical incarnation of the same ID; it is neither a data version nor write authority. [Guide](https://docs.zlink.systems/cpp/guide/server/34-activation-lifetime/#object-generation). [server/session/session.hpp:56](server/session/session.hpp).
 - **READY and Serving** — Framework nodes print `READY` after observing runtime `Serving`. [Guide](https://docs.zlink.systems/cpp/guide/server/12-operations/#wait-for-serving). [server/shared/hosting.hpp:45](server/shared/hosting.hpp); [server/shared/hosting.hpp:84](server/shared/hosting.hpp).
+
+## Known issues
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.

@@ -298,24 +298,29 @@ auto raw_stateful_dispatch_t::admit_accepted_ingress (const object_ref_t &owner,
 }
 
 template <class Take>
-task_t<stateful_error_t>
-raw_stateful_dispatch_t::commit_accepted_ingress (const object_ref_t &owner,
-                                                  turn_record_t turn,
-                                                  pending_delivery_t pending,
-                                                  Take take,
-                                                  stateful_error_t collision_error,
-                                                  ingress_admission_t &admission)
+task_t<stateful_error_t> raw_stateful_dispatch_t::commit_accepted_ingress (
+  const object_ref_t &owner,
+  turn_record_t turn,
+  pending_delivery_t pending,
+  Take take,
+  stateful_error_t collision_error,
+  ingress_admission_t &admission,
+  const committed_target_ingress_t *committed_target)
 {
+    const auto &accepted_owner = committed_target ? committed_target->target : owner;
+    if (committed_target)
+        pending.owner = accepted_owner;
     stateful_object_runtime_t::enqueue_outcome_t outcome;
     try {
         outcome = co_await _objects->enqueue_admitted (
-          owner, admit_accepted_ingress (owner, turn, pending, take, collision_error, admission),
-          false);
+          owner,
+          admit_accepted_ingress (accepted_owner, turn, pending, take, collision_error, admission),
+          false, committed_target);
     }
     catch (...) {
         outcome.error = stateful_error_t::backpressured;
     }
-    co_return finish_accepted_ingress (owner, std::move (outcome), admission);
+    co_return finish_accepted_ingress (accepted_owner, std::move (outcome), admission);
 }
 
 stateful_error_t
@@ -639,7 +644,8 @@ task_t<stateful_error_t>
 raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
                                          ingress_original_t original,
                                          std::optional<retained_relocation_source_t> retained,
-                                         std::optional<claimed_ingress_t> prepared)
+                                         std::optional<claimed_ingress_t> prepared,
+                                         object_ref_t *accepted_owner)
 {
     // Only immutable header/source values and shared frames survive authority suspension.
     // The original stays in the canonical mailbox slot until the handoff wins its take.
@@ -839,9 +845,12 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
     const auto enqueued = co_await commit_accepted_ingress (
       owner, turn_record_t{0, {}, application_payload_bytes, std::move (frozen)},
       pending_delivery_t{owner, std::move (accepted_frozen), {}, request, {}, {}}, take,
-      stateful_error_t::conflict, admission);
-    if (enqueued == stateful_error_t::none)
+      stateful_error_t::conflict, admission, accepted_authority->committed_target.get ());
+    if (enqueued == stateful_error_t::none) {
+        if (accepted_owner && accepted_authority->committed_target)
+            *accepted_owner = accepted_authority->committed_target->target;
         co_return enqueued;
+    }
     // A turn the owner did not accept is answered once by whoever holds its original: the
     // admission that took it, or this ingress when the owner refused before the take.
     std::optional<mesh::service_mailbox_record_t> rejected;
@@ -959,7 +968,8 @@ task_t<stateful_error_t> raw_stateful_dispatch_t::accept_local (
   std::shared_ptr<runtime::serial_application_record_t> application_record,
   ingress_original_t original,
   std::optional<mesh::service_mailbox_record_t> &taken,
-  std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal)
+  std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal,
+  const committed_target_ingress_t *committed_target)
 {
     if (!application_record || !application_record->payload ()
         || !application_record->payload ()->application_record)
@@ -1002,7 +1012,7 @@ task_t<stateful_error_t> raw_stateful_dispatch_t::accept_local (
     const auto accepted = co_await commit_accepted_ingress (
       owner, std::move (turn),
       pending_delivery_t{owner, std::move (frozen), {}, request, std::move (terminal), {}}, take,
-      stateful_error_t::conflict, admission);
+      stateful_error_t::conflict, admission, committed_target);
     // An owner that refused before the take leaves the original for its caller's reply.
     if (accepted != stateful_error_t::none && !taken) {
         if (slot)
@@ -1039,6 +1049,8 @@ raw_stateful_dispatch_t::accepted_actor_authority (
     query.target = std::move (owner);
     query.requested_authority_owner_generation = actor.target.authority_owner_generation;
     query.requested_object_generation = actor.target.object_generation;
+    query.direct_request =
+      actor.correlation && !actor.bound_session_source && actor.message_follow_hop_count == 0;
     query.source_node_routing_id = std::move (source_node_routing_id);
     query.source_node_generation = source_node_generation;
     query.source_original = std::move (source_original);

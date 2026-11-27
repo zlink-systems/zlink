@@ -8,7 +8,14 @@ import type {
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from './config';
 import { fieldId } from './constants';
-import { BorderVisible, DungeonView, restoreNotification, type Notification, EnterField, WorldState } from './messages';
+import {
+  BorderVisible,
+  DungeonView,
+  restoreNotification,
+  type Notification,
+  EnterField,
+  WorldState
+} from './messages';
 export class Player implements ZLinkActor {
   async deliver(packetName: string, payload: Notification, visible = true): Promise<void> {
     const message = restoreNotification(packetName, payload);
@@ -56,7 +63,9 @@ export class PlayerFactory implements ZLinkActorFactory<Player> {
 @Injectable()
 export class PlayerRelocation implements ZLinkActorRelocationAdapter<Player> {
   async capture(actor: Player): Promise<Uint8Array> {
-    return Buffer.from(JSON.stringify({ x: actor.x, sequence: actor.sequence.toString(), partyId: actor.partyId }));
+    return Buffer.from(
+      JSON.stringify({ x: actor.x, sequence: actor.sequence.toString(), partyId: actor.partyId })
+    );
   }
   async restore(actor: Player, payload: Uint8Array): Promise<void> {
     const state = JSON.parse(Buffer.from(payload).toString('utf8'));

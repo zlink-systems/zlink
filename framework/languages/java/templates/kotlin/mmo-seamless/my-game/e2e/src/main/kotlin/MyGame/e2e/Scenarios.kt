@@ -12,10 +12,10 @@ private fun sameActor(before: SessionInfo, after: SessionInfo) {
     check(before.objectGeneration == after.objectGeneration) { "Actor generation changed" }
 }
 
-suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
+suspend fun scenario(name: String, target: ScenarioTarget) = coroutineScope {
     val clients = mutableListOf<Client>()
     suspend fun create(playerId: String = "$name-${UUID.randomUUID()}"): Client {
-        val client = Client(nodes.endpoint, playerId)
+        val client = Client(target.endpoint, playerId)
         clients.add(client)
         client.connect()
         return client
@@ -72,23 +72,27 @@ suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
                 val appeared = observer.next<PlayerAppeared> { it.playerId == client.playerId }
                 check(appeared.position.x == 299.0)
                 client.move(-1.0, 1L)
-                val moved = observer.next<PlayerMoved> {
-                    it.playerId == client.playerId && it.sequence == 1L
-                }
+                val moved =
+                    observer.next<PlayerMoved> {
+                        it.playerId == client.playerId && it.sequence == 1L
+                    }
                 check(moved.position.x == 298.0)
                 client.move(2.0, 2L)
-                val left = observer.next<PlayerLeft> {
-                    it.playerId == client.playerId && it.reason == PlayerLeftReason.LEFT_ZONE
-                }
+                val left =
+                    observer.next<PlayerLeft> {
+                        it.playerId == client.playerId && it.reason == PlayerLeftReason.LEFT_ZONE
+                    }
                 check(left.reason == PlayerLeftReason.LEFT_ZONE)
-                val reappeared = observer.next<PlayerAppeared> {
-                    it.playerId == client.playerId && it.position.x == 300.0
-                }
+                val reappeared =
+                    observer.next<PlayerAppeared> {
+                        it.playerId == client.playerId && it.position.x == 300.0
+                    }
                 check(reappeared.position.x == 300.0)
                 client.move(1.0, 3L)
-                val movedAfterJoin = observer.next<PlayerMoved> {
-                    it.playerId == client.playerId && it.sequence == 3L
-                }
+                val movedAfterJoin =
+                    observer.next<PlayerMoved> {
+                        it.playerId == client.playerId && it.sequence == 3L
+                    }
                 check(movedAfterJoin.position.x == 301.0)
                 val adjacentObserver = create()
                 val adjacent = adjacentObserver.join(299.0)
@@ -96,24 +100,27 @@ suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
                     "The out-of-range observer did not start in the adjacent Zone"
                 }
                 client.move(-1.0, 4L)
-                val reentered = adjacentObserver.next<PlayerMoved> {
-                    it.playerId == client.playerId && it.sequence == 4L
-                }
+                val reentered =
+                    adjacentObserver.next<PlayerMoved> {
+                        it.playerId == client.playerId && it.sequence == 4L
+                    }
                 check(reentered.position.x == 300.0) {
                     "The adjacent Zone did not observe the player re-entering the border band"
                 }
                 client.move(10.0, 5L)
-                val outOfRange = adjacentObserver.next<PlayerLeft> {
-                    it.playerId == client.playerId && it.reason == PlayerLeftReason.OUT_OF_RANGE
-                }
+                val outOfRange =
+                    adjacentObserver.next<PlayerLeft> {
+                        it.playerId == client.playerId && it.reason == PlayerLeftReason.OUT_OF_RANGE
+                    }
                 check(outOfRange.reason == PlayerLeftReason.OUT_OF_RANGE) {
                     "The adjacent Zone did not observe PlayerLeft(out-of-range) after inward movement"
                 }
                 client.close()
                 clients.remove(client)
-                val disconnected = observer.next<PlayerLeft> {
-                    it.playerId == client.playerId && it.reason == PlayerLeftReason.DISCONNECTED
-                }
+                val disconnected =
+                    observer.next<PlayerLeft> {
+                        it.playerId == client.playerId && it.reason == PlayerLeftReason.DISCONNECTED
+                    }
                 check(disconnected.reason == PlayerLeftReason.DISCONNECTED)
                 check(observer.disconnects == 0)
             }
@@ -142,7 +149,10 @@ suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
                     check(before.nodeId == "zoneA")
                     var state = client.move(-1.0, 1L)
                     // Independent IO lets gameplay continue during the host drain observation.
-                    val drain = async(Dispatchers.IO) { nodes.drain(before.nodeId) }
+                    val drain =
+                        async(Dispatchers.IO) {
+                            requireNotNull(target.deployment).drain(before.nodeId)
+                        }
                     var sequence = 1L
                     do {
                         if (drain.isCompleted) drain.await()
@@ -154,7 +164,7 @@ suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
                     } while (!drain.isCompleted)
                     drain.await()
                     check(state.zoneId == "zone-3" && state.nodeId == "zoneB")
-                    nodes.replace(before.nodeId)
+                    requireNotNull(target.deployment).replace(before.nodeId)
                     val after = client.move(299.0 - state.x, sequence + 1)
                     check(
                         after.nodeId == "zoneB" &&
@@ -163,7 +173,9 @@ suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
                     )
                     check(client.dungeon("after-update-${UUID.randomUUID()}").nodeId == "instance")
                     val replacement = create()
-                    check(replacement.join(Control.REPLACEMENT_X.toDouble()).nodeId == before.nodeId)
+                    check(
+                        replacement.join(Control.REPLACEMENT_X.toDouble()).nodeId == before.nodeId
+                    )
                     val fresh = replacement.sessionInfo()
                     check(replacement.move(1.0, 1L).nodeId == before.nodeId)
                     sameActor(fresh, replacement.sessionInfo())

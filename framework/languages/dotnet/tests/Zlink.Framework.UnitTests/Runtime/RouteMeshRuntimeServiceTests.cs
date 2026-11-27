@@ -427,7 +427,7 @@ public sealed class RouteMeshRuntimeServiceTests(Xunit.Abstractions.ITestOutputH
 #endif
 
     [Fact]
-    public async Task Capacity_Metrics_Use_Store_Commit_Instead_Of_Local_Actor_Count()
+    public async Task Capacity_Metrics_Use_Last_Store_Snapshot_Instead_Of_Local_Actor_Count()
     {
         await using var fixture = await RuntimeFixture.StartAsync(
             ZLinkMeshNodeObjectRole.Server,
@@ -493,11 +493,13 @@ public sealed class RouteMeshRuntimeServiceTests(Xunit.Abstractions.ITestOutputH
             }
         );
         listener.Start();
+        await fixture.Store.ListMeshNodesAsync(RuntimeFixture.MeshName, new());
         listener.RecordObservableInstruments();
         Assert.Equal(1, samples["zlink.object.capacity.reserved"]);
         Assert.IsType<ZLinkObjectCommitResult.Committed>(
             await fixture.Store.CommitAsync(reserved.Reservation, new byte[] { 0x02 })
         );
+        await fixture.Store.ListMeshNodesAsync(RuntimeFixture.MeshName, new());
         listener.RecordObservableInstruments();
         Assert.Equal(1, samples["zlink.object.capacity.active"]);
         Assert.Equal(0, samples["zlink.object.capacity.reserved"]);

@@ -17,7 +17,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class ZLinkUserSpotRetireRuntimePreflightTest {
     @Test
     void deadlineFailureRemainsFailureWhileShutdownStopsBeforeNextUnit() {
-        var plan = new ZLinkUserSpotRetireRuntime.RelocationPlan(List.of("spot-a"), List.of());
+        var plan =
+                new ZLinkUserSpotRetireRuntime.RelocationPlan(
+                        List.of(), List.of(), List.of("spot-a"));
         var timeout = new java.util.concurrent.TimeoutException("original deadline");
         var starts = new AtomicInteger();
         var failed =
@@ -67,7 +69,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var relocationStarts = new AtomicInteger();
         var plan =
                 new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                        List.of("spot-a", "spot-b"), List.of("actor-c"));
+                        List.of(), List.of("actor-c"), List.of("spot-a", "spot-b"));
 
         CompletionException failure =
                 assertThrows(
@@ -118,7 +120,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var events = new ArrayList<String>();
         var plan =
                 new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                        List.of("spot-a", "spot-b"), List.of("actor-c"));
+                        List.of(), List.of("actor-c"), List.of("spot-a", "spot-b"));
 
         ZLinkUserSpotRetireRuntime.executePlan(
                         plan,
@@ -161,7 +163,8 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var publication = new CompletableFuture<Void>();
         var completion =
                 ZLinkUserSpotRetireRuntime.executePlan(
-                        new ZLinkUserSpotRetireRuntime.RelocationPlan(List.of("spot-a"), List.of()),
+                        new ZLinkUserSpotRetireRuntime.RelocationPlan(
+                                List.of(), List.of(), List.of("spot-a")),
                         spotId -> CompletableFuture.completedFuture(null),
                         actorId -> CompletableFuture.completedFuture(null),
                         () -> {
@@ -190,7 +193,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var completion =
                 ZLinkUserSpotRetireRuntime.executePlan(
                         new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                                List.of("spot-wide"), List.of("entry-actor")),
+                                List.of(), List.of("entry-actor"), List.of("spot-wide")),
                         spotId -> CompletableFuture.completedFuture(null),
                         actorId -> CompletableFuture.completedFuture(null),
                         () -> {},
@@ -219,7 +222,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var completion =
                 ZLinkUserSpotRetireRuntime.executePlan(
                         new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                                List.of("spot-wide"), List.of("entry-a", "entry-b")),
+                                List.of(), List.of("entry-a", "entry-b"), List.of("spot-wide")),
                         spotId -> CompletableFuture.completedFuture(null),
                         actorId -> CompletableFuture.completedFuture(null),
                         () -> {},
@@ -257,7 +260,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var completion =
                 ZLinkUserSpotRetireRuntime.executePlan(
                         new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                                List.of("spot-wide"), List.of("entry-actor")),
+                                List.of(), List.of("entry-actor"), List.of("spot-wide")),
                         spotId -> CompletableFuture.completedFuture(null),
                         actorId -> CompletableFuture.completedFuture(null),
                         () -> {},
@@ -282,7 +285,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var completion =
                 ZLinkUserSpotRetireRuntime.executePlan(
                         new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                                List.of("spot-a", "spot-b", "spot-c"), List.of()),
+                                List.of(), List.of(), List.of("spot-a", "spot-b", "spot-c")),
                         spotId -> CompletableFuture.completedFuture(null),
                         actorId -> CompletableFuture.completedFuture(null),
                         () -> {},
@@ -316,7 +319,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var completion =
                 ZLinkUserSpotRetireRuntime.executePlan(
                         new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                                List.copyOf(spotIds), List.of()),
+                                List.of(), List.of(), List.copyOf(spotIds)),
                         spotId -> CompletableFuture.completedFuture(null),
                         actorId -> CompletableFuture.completedFuture(null),
                         () -> {},
@@ -352,7 +355,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var completion =
                 ZLinkUserSpotRetireRuntime.executePlan(
                         new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                                List.of("spot-a", "spot-b"), List.of()),
+                                List.of(), List.of(), List.of("spot-a", "spot-b")),
                         spotId -> CompletableFuture.completedFuture(null),
                         actorId -> CompletableFuture.completedFuture(null),
                         () -> {},
@@ -388,7 +391,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var completion =
                 ZLinkUserSpotRetireRuntime.executePlan(
                         new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                                List.of("spot-a", "spot-b"), List.of()),
+                                List.of(), List.of(), List.of("spot-a", "spot-b")),
                         spotId -> CompletableFuture.completedFuture(null),
                         actorId -> CompletableFuture.completedFuture(null),
                         () -> {},

@@ -50,6 +50,11 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
         this(socket, ownsCompletionQueue, false);
     }
 
+    static ZLinkJavaSocketReceivePoller wakeable(Socket socket) {
+        return new ZLinkJavaSocketReceivePoller(
+                socket, true, false, Zlink::createPoller, Zlink::createTimer);
+    }
+
     /**
      * {@code observesRoutes} also waits for ROUTER {@code POLLROUTE}. That readiness stays set
      * until a routes snapshot succeeds (Core ROUTER §10.1), so only the socket's one route observer

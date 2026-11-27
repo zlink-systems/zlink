@@ -67,7 +67,8 @@ public final class Actions {
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationDungeonView(Field spot, Player actor, ZLinkMessageContext context, DungeonView message) {
+    public CompletionStage<Void> notificationDungeonView(
+            Field spot, Player actor, ZLinkMessageContext context, DungeonView message) {
         return actor.deliver(message, spot.isVisible(actor));
     }
 }

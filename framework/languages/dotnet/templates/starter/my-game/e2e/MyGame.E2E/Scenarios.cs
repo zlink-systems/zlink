@@ -24,34 +24,18 @@ internal static class Scenarios
         return All.Where(selected.Contains).ToArray();
     }
 
-    public static async Task RunAsync(WorldRun run, string[] selected, CancellationToken ct)
+    public static async Task RunAsync(
+        WorldRun run,
+        string[] selected,
+        RunLog log,
+        CancellationToken ct
+    )
     {
-        var passed = 0;
-        try
+        foreach (var scenario in selected)
         {
-            foreach (var id in selected)
-            {
-                try
-                {
-                    switch (id)
-                    {
-                        case Connect:
-                            await ConnectAsync(run, ct);
-                            break;
-                    }
-                    Console.WriteLine($"✓ {id}");
-                    passed++;
-                }
-                catch
-                {
-                    Console.WriteLine($"✗ {id}");
-                    throw;
-                }
-            }
-        }
-        finally
-        {
-            Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed");
+            log.Start(scenario);
+            await ConnectAsync(run, ct);
+            log.Pass(scenario);
         }
     }
 
@@ -75,6 +59,8 @@ internal static class Scenarios
         {
             await run.Outcome.CleanupAsync(client.DisposeAsync);
         }
+        if (run.IsAttached)
+            return;
         await run.Session.CommandAsync(NodeProtocol.Drain);
         await run.Session.WaitLineAsync(NodeProtocol.RelocationRequested, ct);
         await run.Session.WaitLineAsync(NodeProtocol.Relocated, ct);

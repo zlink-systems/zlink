@@ -2,6 +2,12 @@
 
 ## Rules for AI
 
+### Use this template as a reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+### Server design
+
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
@@ -23,6 +29,8 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/nod
 
 ## Project and development
 
+Run one scenario with `./run-e2e.sh --scenario matchmaking`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 This Node.js 22 project uses TypeScript and NestJS to run a Session node, play nodes A and B (match), and a Redis Location Store. Entry Spots forward players to a fixed Matchmaking User Spot; same-mode players join dynamic Room User Spots. Public Framework and connector packages are pinned to `0.34.0` in `package.json`. The [README](README.md) owns execution, deployment, and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
 
 Run from this project root with Docker Compose v2 and Linux containers:
@@ -38,11 +46,11 @@ Run from this project root with Docker Compose v2 and Linux containers:
 PowerShell 7 provides the same commands:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario matchmaking,hit,wall,input,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario matchmaking,hit,wall,input,reconnect,update
+.\run-e2e.cmd -CheckStructure
+.\run-e2e.cmd -CheckDomain
 ```
 
 For host process debugging, install Node.js 22 or later and npm, then add `--local` or `-Local`. After a local build, `--no-build` or `-NoBuild` skips compilation. Keep scenario assertions and inspect the first failure before rerunning.
@@ -50,6 +58,10 @@ For host process debugging, install Node.js 22 or later and npm, then add `--loc
 `--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check runs in the Framework execution image; the runner does not load Framework. It briefly starts one local typed Session node and observes its public connector payloads; Redis and game scenario nodes are not started.
 
 ## Modules and extension points
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Declare nullable fields as `T | null`. The template schema generator emits `{ type: "nullable", value }` for the packet. Use `?` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/node/guide/server/20-channel-messaging/#12-message-value-rules)
 
 - `server/shared/messages.ts`: typed client and internal contracts. `constants.ts`: action limits, protocol names, and rejection reasons. `geometry.ts`: `Vec3`, closed slab ray/AABB intersection, static map, spawn points, and player boxes.
 - `server/match/domain.ts`: authoritative positions, HP, phase, winner, shared sequences, movement budgets, cooldowns, and hit selection. Extend this domain for weapons, scoring, and match rules. Production time is monotonic; only the `RoomState` constructor accepts a test clock. Snapshot objects contain remaining milliseconds rather than process clock readings.
@@ -85,3 +97,9 @@ The [README client connection section](README.md#client-connection) owns the sha
 Send `QueueRequest(playerId, mode)` first. Two players in the same mode are required for `MatchFound` and `RoomView` pushes. Register push handlers before sending with `send(...).submit()`; do not turn admission into request/reply. Request `SessionInfoRequest` only after Actor binding. Retain the default typed JSON path and validate identity before binding when adding authentication.
 
 Match connector versions to `package.json` dependencies `@zlink-systems/framework` and `@zlink-systems/stream-connector`; check examples against the public connector source and pinned package. Preserve the endpoint, HTTP preconditions, packet names, and push/reply distinction when updating the README.
+
+## Run the server and e2e
+
+Run `./run-server.sh` or `.\run-server.cmd` to build and start the local nodes and Redis. Use the WebSocket endpoint printed by `Server ready` and stop the server with Ctrl+C. In another terminal, `./run-e2e.sh` or `.\run-e2e.cmd` detects that server and runs compatible scenarios. Stop the server for full Docker isolation. On PowerShell 7 the corresponding scripts are `run-server.ps1` and `run-e2e.ps1`.
+
+Node stdout, stderr, Framework message-flow files and failure details are under `.logs/run-<id>/`. Docker build and cleanup logs are under `.logs/docker-<project>/`. Use the log paths printed by each command.

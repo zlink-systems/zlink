@@ -33,4 +33,7 @@
             </_ProjectReferencesWithVersions>
         </ItemGroup>
     </Target>
+    <ItemGroup>
+        <Compile Include="../Shared/ZLinkStoreBatchKeys.cs" Link="Internal/ZLinkStoreBatchKeys.cs"/>
+    </ItemGroup>
 </Project>

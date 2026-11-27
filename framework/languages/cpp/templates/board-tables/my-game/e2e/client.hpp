@@ -109,9 +109,9 @@ class Client
     {
         return next<T> ([] (const auto &) { return true; });
     }
-    TableView join ()
+    TableView join (bool reconnect = false)
     {
-        send (JoinTableRequest{player_id, table_id});
+        send (JoinTableRequest{player_id, table_id, reconnect});
         return next<TableView> ();
     }
     SessionInfo info ()

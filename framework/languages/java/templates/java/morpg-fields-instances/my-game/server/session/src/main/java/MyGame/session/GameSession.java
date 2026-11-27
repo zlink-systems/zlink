@@ -4,6 +4,7 @@ import MyGame.*;
 
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.streams.*;
 
 import java.util.concurrent.*;
@@ -12,9 +13,18 @@ public final class GameSession implements ZLinkSession {
     private final ZLinkSessionContext context;
     private final ZLinkActorManager actors;
 
-    public GameSession(ZLinkSessionContext context, ZLinkActorManager actors) {
+    private final ZLinkActorClient actorClient;
+    private final ZLinkSpotManager spots;
+
+    public GameSession(
+            ZLinkSessionContext context,
+            ZLinkActorManager actors,
+            ZLinkActorClient actorClient,
+            ZLinkSpotManager spots) {
         this.context = context;
         this.actors = actors;
+        this.actorClient = actorClient;
+        this.spots = spots;
     }
 
     public ZLinkSessionContext context() {
@@ -35,9 +45,17 @@ public final class GameSession implements ZLinkSession {
 
     public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
-        if (!java.util.Set.of("JoinWorldRequest", "MoveRequest", "CreatePartyRequest",
-                "JoinPartyRequest", "EnterDungeonRequest", "AdvanceRequest", "ViewRequest",
-                "SessionInfoRequest").contains(dispatch.packetName())) {
+        if (!java.util.Set.of(
+                        "JoinWorldRequest",
+                        "MoveRequest",
+                        "CreatePartyRequest",
+                        "JoinPartyRequest",
+                        "EnterDungeonRequest",
+                        "AdvanceRequest",
+                        "ViewRequest",
+                        "LeaveDungeonRequest",
+                        "SessionInfoRequest")
+                .contains(dispatch.packetName())) {
             return context.client().send(new ActionRejected(Rejection.PACKET_NOT_ALLOWED)).submit();
         }
         if (dispatch.packetName().equals(SessionInfoRequest.class.getSimpleName())) {
@@ -75,7 +93,34 @@ public final class GameSession implements ZLinkSession {
                                         .thenCompose(bound -> bound.relay(dispatch, payload));
                             });
         }
+        if (dispatch.packetName().equals(LeaveDungeonRequest.class.getSimpleName())) {
+            return leaveDungeon();
+        }
         return bound().relay(dispatch, payload);
+    }
+
+    private CompletionStage<Void> leaveDungeon() {
+        return actorClient
+                .requestToActor(bound().actorId(), new LeaveDungeonRequest())
+                .submit(DungeonLeft.class)
+                .thenCompose(
+                        left -> {
+                            if (left.remainingPlayers() != 0) {
+                                return context.client().reply(left).submit();
+                            }
+                            // Close outside the Dungeon turn after the last membership change.
+                            return spots.find(left.dungeonId())
+                                    .thenCompose(
+                                            found -> {
+                                                if (found.isPresent()
+                                                        && found.get().objectGeneration()
+                                                                == left.objectGeneration()) {
+                                                    return spots.close(found.get());
+                                                }
+                                                return CompletableFuture.completedFuture(false);
+                                            })
+                                    .thenCompose(closed -> context.client().reply(left).submit());
+                        });
     }
 
     private ZLinkSessionActor bound() {

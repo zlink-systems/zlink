@@ -25,4 +25,10 @@
         <ProjectReference Include="../../src/Zlink.Framework/Zlink.Framework.csproj"/>
         <ProjectReference Include="../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj"/>
     </ItemGroup>
+    <ItemGroup>
+        <Compile Include="../Common/LocationStoreCounterContract.cs" Link="Common/LocationStoreCounterContract.cs"/>
+        <Compile Include="../Common/LocationCreationContentionContract.cs" Link="Common/LocationCreationContentionContract.cs"/>
+        <Compile Include="../Common/LocationContentionFixture.cs" Link="Common/LocationContentionFixture.cs"/>
+        <Compile Include="../Common/FrameworkTestEnvironment.cs" Link="Common/FrameworkTestEnvironment.cs"/>
+    </ItemGroup>
 </Project>

@@ -12,8 +12,8 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 
 /**
- * Executes one Entry Spot Actor relocation through the same fenced control channel used by User
- * Spot aggregates.
+ * Executes one Actor relocation through the same fenced control channel used by User Spot
+ * aggregates.
  */
 final class ZLinkStandaloneActorRelocationScheduler {
     CompletionStage<Void> executeRemote(
@@ -60,7 +60,7 @@ final class ZLinkStandaloneActorRelocationScheduler {
                 yield ZLinkRelocationHandOff.completeSourceCleanup(
                         List.of(
                                 source::completeSourceQueueCommit,
-                                source::cleanupLocal,
+                                source::cleanupHostLocal,
                                 source::discardInitialAfterCommit));
             }
             case SOURCE_PRESERVED ->

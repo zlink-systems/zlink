@@ -10,7 +10,12 @@ import {
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
 import { Names } from '../shared/constants';
 import { Http, LobbyNames } from '../shared/lobby-constants';
-import { MatchRequest, MatchResponse, PrepareRoom, type RoomPrepared } from '../shared/lobby-messages';
+import {
+  MatchRequest,
+  MatchResponse,
+  PrepareRoom,
+  type RoomPrepared
+} from '../shared/lobby-messages';
 import { Matchmaker, InvalidMatchRequest } from './matchmaker';
 @Injectable()
 export class LobbyHttp {
@@ -32,7 +37,8 @@ export class LobbyHttp {
       const prepared = await outbound
         .requestToSpot(roomId, new PrepareRoom(roomId, members))
         .submit<RoomPrepared>();
-      if (prepared.matchId !== roomId) throw new Error('Prepared Room identity differs from the match.');
+      if (prepared.matchId !== roomId)
+        throw new Error('Prepared Room identity differs from the match.');
       if (!config.sessionEndpoint) throw new Error('Session endpoint required');
       return new MatchResponse(roomId, config.sessionEndpoint);
     });

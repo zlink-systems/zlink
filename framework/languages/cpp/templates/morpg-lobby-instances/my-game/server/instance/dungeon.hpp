@@ -1,4 +1,6 @@
 #pragma once
+#include <iostream>
+#include <syncstream>
 #include "domain.hpp"
 #include "server/shared/relocation.hpp"
 namespace MyGame
@@ -51,6 +53,7 @@ class Dungeon final : public fx::spot_t<Player>
     fx::task_t<void> on_actor_joined (Player &actor) override
     {
         const auto started = state.join(std::string(actor.context().actor_id().value()));
+        std::osyncstream (std::cout) << "GAME Player entered Dungeon" << std::endl;
         co_await context_.send_to_spot(state.partyId, DungeonMemberEntered{*state.runId, std::string(actor.context().actor_id().value())}).async();
         if (started) co_await context_.send_to_spot(state.partyId, RunStarted{*state.runId}).async();
         co_await broadcast();

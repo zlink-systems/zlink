@@ -3,9 +3,17 @@ using MyGame.Shared;
 
 namespace MyGame.E2E;
 
-internal static class Scenarios
+internal static partial class Scenarios
 {
-    private static readonly string[] Order = ["table", "reconnect", "update"];
+    private static readonly string[] Order =
+    [
+        "table",
+        "reconnect",
+        "match",
+        "match-cancel",
+        "persist",
+        "update",
+    ];
     internal static IReadOnlyList<string> All => Order;
     private const int FirstBet = 100;
     private const int SecondBet = 50;
@@ -19,7 +27,9 @@ internal static class Scenarios
             || selected.Distinct().Count() != selected.Length
             || selected.Any(id => !Order.Contains(id))
         )
-            throw new ArgumentException("Select distinct scenarios from table,reconnect,update.");
+            throw new ArgumentException(
+                $"Select distinct scenarios from {string.Join(",", Order)}."
+            );
         return Order.Where(selected.Contains).ToArray();
     }
 
@@ -33,37 +43,40 @@ internal static class Scenarios
         JsonSerializer.Serialize(left) == JsonSerializer.Serialize(right);
 
     public static async Task RunAsync(
-        string endpoint,
-        TableRun run,
+        string root,
+        ServerEndpoints endpoints,
+        TableRun? run,
+        RunOutcome outcome,
         string[] selected,
+        RunLog log,
         CancellationToken ct
     )
     {
-        var passed = 0;
-        try
+        var endpoint = endpoints.Streams.Single();
+        foreach (var scenario in selected)
         {
-            foreach (var scenario in selected)
+            log.Start(scenario);
+            if (scenario is "match" or "match-cancel")
+                await MatchAsync(endpoint, scenario == "match-cancel", outcome, ct);
+            else
             {
-                try
-                {
-                    await PlayAsync(endpoint, scenario, run, run.Outcome, ct);
-                    Console.WriteLine($"✓ {scenario}");
-                    passed++;
-                }
-                catch
-                {
-                    Console.WriteLine($"✗ {scenario}");
-                    throw;
-                }
+                var (tableId, balance) = await PlayAsync(endpoint, scenario, run, outcome, ct);
+                if (scenario == "persist")
+                    await VerifyPersistenceAsync(
+                        root,
+                        endpoints,
+                        tableId,
+                        balance,
+                        outcome,
+                        log,
+                        ct
+                    );
             }
-        }
-        finally
-        {
-            Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed");
+            log.Pass(scenario);
         }
     }
 
-    private static async Task PlayAsync(
+    private static async Task<(string TableId, SeatView Balance)> PlayAsync(
         string endpoint,
         string scenario,
         TableRun? run,
@@ -98,10 +111,7 @@ internal static class Scenarios
         );
         await p2.SendAsync(new HandResult(0, 0, [], [], []), ct);
         var internalPacket = await packetRejected;
-        Require(
-            internalPacket.RetryAfterMs == 0,
-            "Packet rejection included a retry delay."
-        );
+        Require(internalPacket.RetryAfterMs == 0, "Packet rejection included a retry delay.");
         var unchangedAfterPacket = await p2.ViewAsync(
             view => view.TableId == table && !view.InHand,
             ct
@@ -160,7 +170,10 @@ internal static class Scenarios
                 ct
             );
             var overLimitRejection = await overLimit;
-            Require(overLimitRejection.RetryAfterMs == 0, "Integer rejection included a retry delay.");
+            Require(
+                overLimitRejection.RetryAfterMs == 0,
+                "Integer rejection included a retry delay."
+            );
             var unchangedAfterLimit = await p1.ViewAsync(
                 view => view.InHand && view.TurnSeat == 0 && view.Pot == 0,
                 ct
@@ -171,10 +184,7 @@ internal static class Scenarios
                 rejection => rejection.Reason == Rejection.InvalidAmount,
                 ct
             );
-            await p1.SendAsync(
-                new BetRequest(hand1.HandNumber, GameNames.InitialChips + 1),
-                ct
-            );
+            await p1.SendAsync(new BetRequest(hand1.HandNumber, GameNames.InitialChips + 1), ct);
             var invalidAmountRejection = await invalidAmount;
             Require(
                 invalidAmountRejection.RetryAfterMs == 0,
@@ -201,6 +211,7 @@ internal static class Scenarios
         PrivateCards(p1, hand1);
         PrivateCards(p2, hand2);
 
+        HandResult result;
         if (scenario == "reconnect")
         {
             await p2.DisposeAsync();
@@ -210,7 +221,7 @@ internal static class Scenarios
                 p2.PlayerId,
                 ct
             );
-            var restored = await reconnected.JoinAsync(table, ct);
+            var restored = await reconnected.JoinAsync(table, ct, reconnect: true);
             var restoredCards = await reconnected.WaitAsync<HandDealt>(_ => true, ct);
             var restoredSession = await reconnected.SessionAsync(ct);
             Require(
@@ -226,7 +237,7 @@ internal static class Scenarios
                     == GameNames.InitialChips,
                 "Reconnect changed waiting player's chips."
             );
-            await FinishAsync(p1, reconnected, hand1, hand2, amount1, ct);
+            result = await FinishAsync(p1, reconnected, hand1, hand2, amount1, ct);
         }
         else
         {
@@ -247,7 +258,7 @@ internal static class Scenarios
                     "Relocation changed cards."
                 );
             }
-            await FinishAsync(p1, p2, hand1, hand2, amount1, ct);
+            result = await FinishAsync(p1, p2, hand1, hand2, amount1, ct);
             if (scenario == "update")
             {
                 await run!.ReplaceAsync(before1.NodeId, ct);
@@ -260,6 +271,43 @@ internal static class Scenarios
         );
         if (scenario != "reconnect")
             Require(!p2.Disconnected && p2.Connector.IsConnected, "Second player disconnected.");
+        else if (run is not null)
+        {
+            await run.ProbeFreshWorldAsync(
+                async (freshEndpoint, deadline) =>
+                {
+                    await using (
+                        var stale = await GameClient.ConnectAsync(
+                            outcome,
+                            freshEndpoint,
+                            p2.PlayerId,
+                            deadline
+                        )
+                    )
+                    {
+                        await stale.SendJoinAsync(table, reconnect: true, deadline);
+                        var rejection = await stale.WaitAsync<ActionRejected>(_ => true, deadline);
+                        Require(
+                            rejection == new ActionRejected(Rejection.NotSeated, 0),
+                            "Reconnect accepted a seat missing from the fresh deployment."
+                        );
+                    }
+                    await using var fresh = await GameClient.ConnectAsync(
+                        outcome,
+                        freshEndpoint,
+                        p1.PlayerId,
+                        deadline
+                    );
+                    var joined = await fresh.JoinAsync(table, deadline);
+                    Require(
+                        joined.YourSeat == 0 && joined.Seats.Length == 1,
+                        "Rejected reconnect left a seat in the table."
+                    );
+                },
+                ct
+            );
+        }
+        return (table, result.Seats.Single(seat => seat.PlayerId == p1.PlayerId));
     }
 
     private static void SameState(TableView before, TableView after) =>
@@ -283,7 +331,7 @@ internal static class Scenarios
         }
     }
 
-    private static async Task FinishAsync(
+    private static async Task<HandResult> FinishAsync(
         GameClient p1,
         GameClient p2,
         HandDealt hand1,
@@ -370,5 +418,6 @@ internal static class Scenarios
                 "Final public state differs from settlement."
             );
         }
+        return result;
     }
 }

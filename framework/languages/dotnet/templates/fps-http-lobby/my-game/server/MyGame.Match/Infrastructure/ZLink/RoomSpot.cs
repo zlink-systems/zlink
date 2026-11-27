@@ -41,7 +41,8 @@ public sealed class RoomSpot(
             throw new InvalidDataException("Room admission identity mismatch.");
         return ValueTask.FromResult(
             roster.CanAdmit(id) && state.Admit(id)
-                ? ZLinkSpotActorJoinResult.Accept() : ZLinkSpotActorJoinResult.Reject()
+                ? ZLinkSpotActorJoinResult.Accept()
+                : ZLinkSpotActorJoinResult.Reject()
         );
     }
 
@@ -54,7 +55,8 @@ public sealed class RoomSpot(
     public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct) =>
         ValueTask.CompletedTask;
 
-    private RoomView View() => new(Context.SpotId, settings.Id, state.View(), state.Phase, state.Winner);
+    private RoomView View() =>
+        new(Context.SpotId, settings.Id, state.View(), state.Phase, state.Winner);
 
     public ValueTask ViewAsync(PlayerActor actor) =>
         actor.Context.BoundSession.Send(View()).Async();
@@ -73,9 +75,14 @@ public sealed class RoomSpot(
             await actor.Context.BoundSession.Send(rejected).Async();
         else
         {
-            await actor.Context.BoundSession.Send(new MoveResult(
-                state.Players.Single(p => p.PlayerId == actor.Context.ActorId).Position,
-                request.Sequence)).Async();
+            await actor
+                .Context.BoundSession.Send(
+                    new MoveResult(
+                        state.Players.Single(p => p.PlayerId == actor.Context.ActorId).Position,
+                        request.Sequence
+                    )
+                )
+                .Async();
             await BroadcastAsync(View(), ct);
         }
     }
@@ -94,11 +101,15 @@ public sealed class RoomSpot(
             await BroadcastAsync(new MatchEnded(winner), ct);
     }
 
-    public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(new HttpRoomSnapshot(state.Capture(), roster.Capture()));
+    public byte[] Capture() =>
+        JsonSerializer.SerializeToUtf8Bytes(
+            new HttpRoomSnapshot(state.Capture(), roster.Capture())
+        );
 
     public void Restore(ReadOnlyMemory<byte> payload)
     {
-        var snapshot = JsonSerializer.Deserialize<HttpRoomSnapshot>(payload.Span)
+        var snapshot =
+            JsonSerializer.Deserialize<HttpRoomSnapshot>(payload.Span)
             ?? throw new InvalidDataException("Missing room state.");
         roster.Restore(snapshot.Roster);
         state.Restore(snapshot.Game);

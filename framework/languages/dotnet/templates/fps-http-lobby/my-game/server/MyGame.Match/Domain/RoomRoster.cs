@@ -9,10 +9,13 @@ public sealed class RoomRoster
 
     public RoomPrepared Prepare(string roomId, PrepareRoom request)
     {
-        if (request.MatchId != roomId || string.IsNullOrWhiteSpace(roomId)
+        if (
+            request.MatchId != roomId
+            || string.IsNullOrWhiteSpace(roomId)
             || request.Members.Length != GameNames.PlayersPerRoom
             || request.Members.Any(string.IsNullOrWhiteSpace)
-            || request.Members.Distinct(StringComparer.Ordinal).Count() != request.Members.Length)
+            || request.Members.Distinct(StringComparer.Ordinal).Count() != request.Members.Length
+        )
             throw new InvalidDataException("Invalid room roster preparation.");
         if (matchId is not null)
         {
@@ -26,7 +29,9 @@ public sealed class RoomRoster
     }
 
     public bool CanAdmit(string playerId) => matchId is not null && members.Contains(playerId);
-    public RosterSnapshot Capture() => new(matchId, members.Order(StringComparer.Ordinal).ToArray());
+
+    public RosterSnapshot Capture() =>
+        new(matchId, members.Order(StringComparer.Ordinal).ToArray());
 
     public void Restore(RosterSnapshot snapshot)
     {
@@ -40,4 +45,5 @@ public sealed class RoomRoster
 }
 
 public sealed record RosterSnapshot(string? MatchId, string[] Members);
+
 public sealed record HttpRoomSnapshot(RoomSnapshot Game, RosterSnapshot Roster);

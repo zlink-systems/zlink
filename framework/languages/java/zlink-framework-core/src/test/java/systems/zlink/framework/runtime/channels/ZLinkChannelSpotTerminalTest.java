@@ -186,6 +186,7 @@ final class ZLinkChannelSpotTerminalTest {
                                 payload,
                                 Optional.of("Request"),
                                 Duration.ofSeconds(1),
+                                Duration.ofSeconds(1),
                                 "application/json",
                                 null,
                                 null,

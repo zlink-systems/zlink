@@ -5,14 +5,20 @@
   "language": "node",
   "run": {
     "commands": {
-      "sh": ["./run-e2e.sh --build-only", "./run-e2e.sh", "./run-e2e.sh --scenario table,reconnect"],
+      "sh": [
+        "./run-server.sh",
+        "./run-e2e.sh --build-only",
+        "./run-e2e.sh",
+        "./run-e2e.sh --scenario match,match-cancel"
+      ],
       "powershell": [
-        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
-        "pwsh -NoProfile -File ./run-e2e.ps1",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect"
+        ".\\run-server.cmd",
+        ".\\run-e2e.cmd -BuildOnly",
+        ".\\run-e2e.cmd",
+        ".\\run-e2e.cmd -Scenario match,match-cancel"
       ]
     },
-    "scenarios": ["table", "reconnect", "update"]
+    "scenarios": ["table", "reconnect", "match", "match-cancel", "update", "persist"]
   },
   "nodes": [
     {
@@ -28,16 +34,28 @@
       "config": "server/config/session.json"
     },
     {
-      "id": "playA",
+      "id": "tableA",
       "role": "table",
-      "title": "Play node A (table)",
-      "config": "server/config/play-a.json"
+      "title": "Table node A",
+      "config": "server/config/table-a.json"
     },
     {
-      "id": "playB",
+      "id": "tableB",
       "role": "table",
-      "title": "Play node B (table)",
-      "config": "server/config/play-b.json"
+      "title": "Table node B",
+      "config": "server/config/table-b.json"
+    },
+    {
+      "id": "matchmaker",
+      "role": "matchmaker",
+      "title": "Matchmaker node",
+      "config": "server/config/matchmaker.json"
+    },
+    {
+      "id": "api",
+      "role": "api",
+      "title": "API node (Actor DB)",
+      "config": "server/config/api.json"
     },
     {
       "id": "location",
@@ -46,26 +64,47 @@
       "config": "docker-compose.yml"
     }
   ],
-  "channels": [],
+  "channels": [
+    {
+      "name": "my-game-player-records",
+      "kind": "clientServer",
+      "owner": "api",
+      "clients": ["tableA", "tableB"]
+    }
+  ],
   "spots": [
     {
       "id": "table-entry-a",
       "kind": "entry",
       "type": null,
-      "owner": "playA"
+      "owner": "tableA"
     },
     {
       "id": "table-entry-b",
       "kind": "entry",
       "type": null,
-      "owner": "playB"
+      "owner": "tableB"
     },
     {
       "id": "table",
       "kind": "user",
       "type": "Table",
-      "owner": "playA",
+      "owner": "tableA",
       "dynamic": true
+    },
+    {
+      "id": "room-provisioner",
+      "kind": "instance",
+      "type": "RoomProvisioner",
+      "owner": "tableA",
+      "logicalId": "room-provisioner-board"
+    },
+    {
+      "id": "pool",
+      "kind": "instance",
+      "type": "Pool",
+      "owner": "matchmaker",
+      "logicalId": "pool-board"
     }
   ],
   "edges": [
@@ -75,15 +114,40 @@
       "from": "players"
     },
     {
-      "to": "playA",
+      "to": "tableA",
       "label": "relay",
       "from": "session"
+    },
+    {
+      "to": "matchmaker",
+      "label": "MatchRequest",
+      "from": "tableA"
+    },
+    {
+      "to": "tableA",
+      "label": "PrepareRoom",
+      "from": "matchmaker"
     },
     {
       "to": "location",
       "label": "Location / lease",
       "semantic": "location-authority",
-      "from": "playA"
+      "from": "tableA"
+    },
+    {
+      "to": "api",
+      "label": "LoadPlayer / CommitRound",
+      "from": "tableA"
+    },
+    {
+      "to": "api",
+      "label": "LoadPlayer / CommitRound",
+      "from": "tableB"
+    },
+    {
+      "from": "api",
+      "to": "location",
+      "label": "Player records"
     }
   ]
 }

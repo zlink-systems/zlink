@@ -14,11 +14,11 @@ public sealed class LocationStoreOperationMetricsTests
     {
         var samples = new List<string>();
         using var listener = Listen(samples);
-        var provider = new FailingProvider { FailReads = false };
-        var runtime = new ZLinkLocationRuntime(
-            new ZLinkLocationOptions(),
-            new ZLinkProviderLocationRepository(provider)
-        );
+        var provider = new FailingProvider { FailReads = false, Failure = null };
+        var repository = new ZLinkProviderLocationRepository(provider);
+        await repository.EnsureStoreFormatAsync(CancellationToken.None);
+        provider.Failure = new IOException("backend unavailable");
+        var runtime = new ZLinkLocationRuntime(new ZLinkLocationOptions(), repository);
         Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
         Assert.Equal(["compare_exchange"], samples);
         AssertClosed(samples);

@@ -70,6 +70,21 @@ inline void check_structure (const std::filesystem::path &root)
     require (run.at ("scenarios").get<std::vector<std::string>> () == scenario_names (),
              "Scenario order mismatch");
     const auto &commands = run.at ("commands");
+    require (commands.at ("sh").at (0) == "./run-server.sh"
+               && commands.at ("powershell").at (0) == ".\\run-server.cmd",
+             "Run commands must start with run-server");
+    for (const auto &command : commands.at ("powershell"))
+        require (command.get<std::string> ().starts_with (".\\run-server.cmd")
+                   || command.get<std::string> ().starts_with (".\\run-e2e.cmd"),
+                 "Windows run commands must use the CMD wrappers");
+    require (nonempty (read_json (root / "server/config/session.json"), "StreamEndpoint")
+               .starts_with ("ws://"),
+             "Session STREAM configuration must use WebSocket");
+    for (const auto *script : {"run-server.sh", "run-server.ps1", "run-server.cmd", "run-e2e.sh",
+                               "run-e2e.ps1", "run-e2e.cmd"})
+        require (std::filesystem::is_regular_file (root / script),
+                 std::string ("Missing run script: ") + script);
+
     require (commands.is_object () && commands.size () == 2 && commands.contains ("sh")
                && commands.contains ("powershell"),
              "Invalid run commands");

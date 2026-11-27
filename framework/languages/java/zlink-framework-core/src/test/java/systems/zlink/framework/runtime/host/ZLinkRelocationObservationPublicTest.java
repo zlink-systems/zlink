@@ -7,28 +7,48 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.*;
+import systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateParticipant;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime.RelocationBlockedException;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.spots.*;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkStreamError;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.net.Socket;
 import java.net.URI;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 /** Public inputs for the source observation and current membership contracts (#1740). */
 final class ZLinkRelocationObservationPublicTest {
@@ -40,6 +60,7 @@ final class ZLinkRelocationObservationPublicTest {
     private static CompletableFuture<Void> sourceLeft;
     private static CompletableFuture<ZLinkSessionContext> connected;
     private static CompletableFuture<String> relayed;
+    private static volatile Consumer<String> captureObserver = ignored -> {};
 
     @Test
     void boundSessionRelaySurvivesActualUserSpotRelocation() throws Exception {
@@ -535,6 +556,391 @@ final class ZLinkRelocationObservationPublicTest {
         }
     }
 
+    @Test
+    void perActorShellCommitsBeforeMembersMoveAsSeparateUnits() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        var units = new RelocationUnits();
+        var perActor = ZLinkAuthorityKeyCodec.spot("per-actor-room");
+        var spotWide = ZLinkAuthorityKeyCodec.spot("wide-room");
+        var first = ZLinkAuthorityKeyCodec.actor("member-a");
+        var second = ZLinkAuthorityKeyCodec.actor("member-b");
+        var wideMember = ZLinkAuthorityKeyCodec.actor("wide-member");
+        Consumer<ZLinkMeshObjectServerBuilder> factories =
+                objects -> {
+                    addWideRoom(objects);
+                    objects.addSpotFactory(
+                            "per-actor",
+                            PerActorRoom.class,
+                            f -> {
+                                f.executionMode(ZLinkUserSpotExecutionMode.PER_ACTOR);
+                                f.recreateOnRelocation();
+                            });
+                };
+        captureObserver = units::capture;
+        try (var source =
+                startObserved(
+                        options("shell-source", locations, relocations, null, factories), units)) {
+            awaitReady(source);
+            await(source.spotManager().getOrCreate("per-actor-room", "per-actor").submit());
+            await(source.spotManager().getOrCreate("wide-room", "room").submit());
+            createMember(source, "member-a", "per-actor-room");
+            createMember(source, "member-b", "per-actor-room");
+            createMember(source, "wide-member", "wide-room");
+
+            var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            try (var target =
+                            startObserved(
+                                    options(
+                                            "shell-target",
+                                            locations,
+                                            relocations,
+                                            endpoint,
+                                            factories),
+                                    units);
+                    var ready =
+                            observe(
+                                    source.routeMeshRuntime().observe(MESH, 8),
+                                    s -> s.isReady() && s.readyPeerCount() > 0)) {
+                awaitReady(target);
+                await(ready.result);
+                var result = await(source.relocate(relocationOptions()));
+                assertEquals(
+                        ZLinkFrameworkRelocationOutcome.RELOCATED,
+                        result.outcome(),
+                        result.toString());
+                var shell = Set.of(perActor);
+                var firstUnit = Set.of(first);
+                var secondUnit = Set.of(second);
+                var aggregate = Set.of(spotWide, wideMember);
+                assertEquals(
+                        Set.of(shell, firstUnit, secondUnit, aggregate),
+                        units.events.stream()
+                                .filter(event -> event.phase().equals("prepare"))
+                                .map(UnitEvent::participants)
+                                .collect(Collectors.toSet()),
+                        units.events.toString());
+                int shellCommit = units.events.indexOf(new UnitEvent("commit", shell));
+                assertTrue(shellCommit >= 0, units.events.toString());
+                int aggregatePrepare = units.events.indexOf(new UnitEvent("prepare", aggregate));
+                for (var member : List.of(firstUnit, secondUnit)) {
+                    int capture = units.events.indexOf(new UnitEvent("capture", member));
+                    assertTrue(shellCommit < capture, units.events.toString());
+                    int memberCommit = units.events.indexOf(new UnitEvent("commit", member));
+                    assertTrue(
+                            memberCommit >= 0 && memberCommit < aggregatePrepare,
+                            units.events.toString());
+                }
+                for (String actorId : List.of("member-a", "member-b")) {
+                    var membership = await(target.actorManager().findSpot(actorId)).orElseThrow();
+                    assertEquals("per-actor-room", membership.spotId());
+                    assertEquals(RoutingId.from("shell-target"), membership.nodeRid());
+                }
+            }
+        } finally {
+            captureObserver = ignored -> {};
+        }
+    }
+
+    @Test
+    void disabledStandaloneActorBlocksMixedHostBeforeAnyUnitStarts() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        var units = new RelocationUnits();
+        Consumer<ZLinkMeshObjectServerBuilder> factories =
+                objects -> {
+                    addWideRoom(objects);
+                    objects.addActorFactory(
+                            "disabled",
+                            Player.class,
+                            PlayerFactory.class,
+                            f -> f.disableRelocation());
+                };
+        captureObserver = units::capture;
+        try (var source =
+                startObserved(
+                        options("disabled-source", locations, relocations, null, factories),
+                        units)) {
+            awaitReady(source);
+            await(source.spotManager().getOrCreate("wide-room", "room").submit());
+            assertInstanceOf(
+                    ZLinkActorCreateResult.Created.class,
+                    await(source.actorManager().create("disabled-actor", "disabled").submit()));
+            assertInstanceOf(
+                    ZLinkActorCreateResult.Created.class,
+                    await(source.actorManager().create("enabled-actor", "player").submit()));
+
+            var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            try (var target =
+                            startObserved(
+                                    options(
+                                            "disabled-target",
+                                            locations,
+                                            relocations,
+                                            endpoint,
+                                            factories),
+                                    units);
+                    var ready =
+                            observe(
+                                    source.routeMeshRuntime().observe(MESH, 8),
+                                    s -> s.isReady() && s.readyPeerCount() > 0)) {
+                awaitReady(target);
+                await(ready.result);
+                var result = await(source.relocate(relocationOptions()));
+                assertAll(
+                        () ->
+                                assertEquals(
+                                        ZLinkFrameworkRelocationOutcome.BLOCKED, result.outcome()),
+                        () ->
+                                assertEquals(
+                                        ZLinkFrameworkRelocationReason.RELOCATION_DISABLED,
+                                        result.reason()),
+                        () ->
+                                assertEquals(
+                                        ZLinkFrameworkRuntimeState.SERVING,
+                                        source.status().state()),
+                        () -> assertEquals(List.of(), units.events));
+            }
+        } finally {
+            captureObserver = ignored -> {};
+        }
+    }
+
+    @Test
+    void activeRecreateInstanceSpotDoesNotBlockUserSpotRelocation() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        var sourceOptions =
+                options(
+                        "instance-source",
+                        locations,
+                        relocations,
+                        null,
+                        objects -> {
+                            addWideRoom(objects);
+                            objects.addInstanceSpotFactory(
+                                    "instance",
+                                    ActiveInstance.class,
+                                    factory -> factory.recreateOnRelocation());
+                        });
+        try (var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions)) {
+            awaitReady(source);
+            await(source.spotManager().getOrCreate("wide-room", "room").submit());
+            assertEquals(
+                    "instance-source",
+                    await(
+                            source.route()
+                                    .requestToSpot("active-instance", new ReadInstanceOwner())
+                                    .instanceSpot("instance")
+                                    .inMesh(MESH)
+                                    .timeout(WAIT)
+                                    .submit(String.class)));
+
+            var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            try (var target =
+                            ZLinkFrameworkRuntimeTestAccess.start(
+                                    options("instance-target", locations, relocations, endpoint));
+                    var ready =
+                            observe(
+                                    source.routeMeshRuntime().observe(MESH, 8),
+                                    status -> status.isReady() && status.readyPeerCount() > 0)) {
+                awaitReady(target);
+                await(ready.result);
+                var result = await(source.relocate(relocationOptions()));
+                assertEquals(
+                        ZLinkFrameworkRelocationOutcome.RELOCATED,
+                        result.outcome(),
+                        result.toString());
+                var room = await(target.spotManager().getOrCreate("wide-room", "room").submit());
+                assertEquals(RoutingId.from("instance-target"), room.spot().nodeRid());
+            }
+        }
+    }
+
+    @Test
+    void perActorShellDoesNotRestoreSourceSpotTimerRegistration() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        Consumer<ZLinkMeshObjectServerBuilder> factories =
+                objects ->
+                        objects.addSpotFactory(
+                                "timer-room",
+                                TimerRoom.class,
+                                factory -> {
+                                    factory.executionMode(ZLinkUserSpotExecutionMode.PER_ACTOR);
+                                    factory.recreateOnRelocation();
+                                });
+        try (var source =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options("timer-source", locations, relocations, null, factories))) {
+            awaitReady(source);
+            await(source.spotManager().getOrCreate("timer-room", "timer-room").submit());
+            assertTrue(readSpotTimerRegistration(source));
+            var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            try (var target =
+                            ZLinkFrameworkRuntimeTestAccess.start(
+                                    options(
+                                            "timer-target",
+                                            locations,
+                                            relocations,
+                                            endpoint,
+                                            factories));
+                    var ready =
+                            observe(
+                                    source.routeMeshRuntime().observe(MESH, 8),
+                                    status -> status.isReady() && status.readyPeerCount() > 0)) {
+                awaitReady(target);
+                await(ready.result);
+                var result = await(source.relocate(relocationOptions()));
+                assertEquals(
+                        ZLinkFrameworkRelocationOutcome.RELOCATED,
+                        result.outcome(),
+                        result.toString());
+                assertTrue(
+                        readSpotTimerRegistration(target),
+                        "the target can independently register the same key with a different handler");
+            }
+        }
+    }
+
+    @Test
+    void missingFactoryPolicyUsesLegacyHostPreflightReasons() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        try (var source =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options("legacy-inventory", locations, relocations, null))) {
+            awaitReady(source);
+            await(source.spotManager().getOrCreate("legacy-room", "room").submit());
+
+            // The inventory contains a live Room, and these registrations omit its policy.
+            var mixedRegistrations =
+                    options("legacy-inventory", locations, relocations, null, false)
+                            .registration()
+                            .meshNodes();
+            assertEquals(
+                    ZLinkFrameworkRelocationReason.STATE_INCOMPATIBLE,
+                    missingFactoryReason(source, mixedRegistrations));
+            assertEquals(
+                    ZLinkFrameworkRelocationReason.RELOCATION_DISABLED,
+                    missingFactoryReason(source, List.of()));
+        }
+    }
+
+    private static ZLinkFrameworkRelocationReason missingFactoryReason(
+            ZLinkFrameworkRuntime host, List<MeshNodeRegistration> registrations) {
+        var failure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                ZLinkUserSpotRetireRuntime.preflightWithoutRelocationRuntime(
+                                                ZLinkFrameworkRuntimeTestAccess.spots(host),
+                                                ZLinkFrameworkRuntimeTestAccess.actors(host),
+                                                registrations,
+                                                () ->
+                                                        fail(
+                                                                "the legacy object must block before target lookup"))
+                                        .toCompletableFuture()
+                                        .join());
+        return assertInstanceOf(RelocationBlockedException.class, failure.getCause()).reason();
+    }
+
+    private static boolean readSpotTimerRegistration(ZLinkFrameworkRuntime host) throws Exception {
+        return await(
+                host.route()
+                        .requestToSpot("timer-room", new ReadTimerRegistration())
+                        .inMesh(MESH)
+                        .timeout(WAIT)
+                        .submit(Boolean.class));
+    }
+
+    private static void addWideRoom(ZLinkMeshObjectServerBuilder objects) {
+        objects.addSpotFactory("room", Room.class, f -> f.recreateOnRelocation());
+    }
+
+    private static void createMember(ZLinkFrameworkRuntime source, String actorId, String spotId)
+            throws Exception {
+        assertInstanceOf(
+                ZLinkActorCreateResult.Created.class,
+                await(source.actorManager().create(actorId, "player").submit()));
+        joined = new CompletableFuture<>();
+        await(
+                source.actorClient()
+                        .requestToActor(actorId, new Join(spotId))
+                        .timeout(WAIT)
+                        .submit(String.class));
+        assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, await(joined));
+    }
+
+    private static ZLinkFrameworkRelocationOptions relocationOptions() {
+        return new ZLinkFrameworkRelocationOptions(
+                ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE, null, WAIT);
+    }
+
+    private static ZLinkFrameworkRuntime startObserved(
+            DefaultZLinkFrameworkOptions options, RelocationUnits units) {
+        return ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                options,
+                new ZLinkJavaBackendAdapterFactory(),
+                ZLinkHandlerActivator.reflection(),
+                null,
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .aggregateRelocationAuthorityStoreDecorator(units::observe));
+    }
+
+    private record UnitEvent(String phase, Set<String> participants) {}
+
+    private static final class RelocationUnits {
+        final List<UnitEvent> events = new CopyOnWriteArrayList<>();
+        private final Map<UUID, Set<String>> inventory = new ConcurrentHashMap<>();
+
+        void capture(String actorId) {
+            events.add(new UnitEvent("capture", Set.of(ZLinkAuthorityKeyCodec.actor(actorId))));
+        }
+
+        ZLinkLocationRepository observe(ZLinkLocationRepository delegate) {
+            return (ZLinkLocationRepository)
+                    Proxy.newProxyInstance(
+                            ZLinkLocationRepository.class.getClassLoader(),
+                            new Class<?>[] {ZLinkLocationRepository.class},
+                            (proxy, method, arguments) -> {
+                                if (method.getName().equals("prepareAggregate")) {
+                                    var request = (ZLinkAggregatePrepareRequest) arguments[0];
+                                    var participants =
+                                            request.participants().stream()
+                                                    .map(ZLinkAggregateParticipant::authorityKey)
+                                                    .collect(Collectors.toUnmodifiableSet());
+                                    inventory.put(request.aggregateId(), participants);
+                                    events.add(new UnitEvent("prepare", participants));
+                                }
+                                try {
+                                    var result = method.invoke(delegate, arguments);
+                                    if (method.getName().equals("commitAggregate")) {
+                                        var fence = (ZLinkAggregateFence) arguments[0];
+                                        return ((CompletionStage<?>) result)
+                                                .thenApply(
+                                                        committed -> {
+                                                            if (committed
+                                                                    == ZLinkAggregateCommitResult
+                                                                            .COMMITTED) {
+                                                                events.add(
+                                                                        new UnitEvent(
+                                                                                "commit",
+                                                                                inventory.get(
+                                                                                        fence
+                                                                                                .aggregateId())));
+                                                            }
+                                                            return committed;
+                                                        });
+                                    }
+                                    return result;
+                                } catch (InvocationTargetException failure) {
+                                    throw failure.getCause();
+                                }
+                            });
+        }
+    }
+
     private static <T> T await(CompletionStage<T> stage) throws Exception {
         return stage.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
     }
@@ -553,6 +959,22 @@ final class ZLinkRelocationObservationPublicTest {
             InMemoryRelocationStore relocations,
             String peer,
             boolean hostsRooms) {
+        return options(
+                rid,
+                locations,
+                relocations,
+                peer,
+                objects -> {
+                    if (hostsRooms) addWideRoom(objects);
+                });
+    }
+
+    private static DefaultZLinkFrameworkOptions options(
+            String rid,
+            ZLinkInMemoryLocationStore locations,
+            InMemoryRelocationStore relocations,
+            String peer,
+            Consumer<ZLinkMeshObjectServerBuilder> factories) {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
@@ -572,7 +994,7 @@ final class ZLinkRelocationObservationPublicTest {
                 Player.class,
                 PlayerFactory.class,
                 f -> f.preserveStateWith(PlayerState.class));
-        if (hostsRooms) objects.addSpotFactory("room", Room.class, f -> f.recreateOnRelocation());
+        factories.accept(objects);
         return options;
     }
 
@@ -653,6 +1075,7 @@ final class ZLinkRelocationObservationPublicTest {
         @Override
         public CompletionStage<byte[]> capture(
                 Player actor, ZLinkRelocationCancellation cancellation) {
+            captureObserver.accept(actor.context().actorId());
             return CompletableFuture.completedFuture(new byte[0]);
         }
 
@@ -679,6 +1102,109 @@ final class ZLinkRelocationObservationPublicTest {
         public void configure() {
             context.handlers().addHandler(JoinHandler.class);
             context.handlers().addHandler(ReadGenerationHandler.class);
+        }
+    }
+
+    public record ReadInstanceOwner() {}
+
+    public record ActiveInstance(ZLinkInstanceSpotContext context) implements ZLinkInstanceSpot {
+        @Override
+        public void configure() {
+            context.handlers().addPacket(ReadInstanceOwnerHandler.class);
+        }
+    }
+
+    public static final class ReadInstanceOwnerHandler
+            implements ZLinkSpotRequestHandler<ActiveInstance, ReadInstanceOwner, String> {
+        @Override
+        public CompletionStage<String> handle(ActiveInstance spot, ReadInstanceOwner request) {
+            return CompletableFuture.completedFuture(spot.context().nodeRid().toString());
+        }
+    }
+
+    public record ReadTimerRegistration() {}
+
+    public static final class TimerRoom implements ZLinkSpot<Player> {
+        private final ZLinkSpotContext context;
+        private boolean registered;
+
+        public TimerRoom(ZLinkSpotContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public ZLinkSpotContext context() {
+            return context;
+        }
+
+        @Override
+        public void configure() {
+            context.handlers().addHandler(ReadTimerRegistrationHandler.class);
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(Player actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(Player actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
+                String actorId, ZLinkMessage request) {
+            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject());
+        }
+
+        @Override
+        public CompletionStage<Void> onInitialize() {
+            Class<?> handler =
+                    context.nodeRid().equals(RoutingId.from("timer-source"))
+                            ? SourceSpotTimer.class
+                            : TargetSpotTimer.class;
+            return context.addTimer("spot-timer", Duration.ofDays(1), handler, null)
+                    .handle(
+                            (timer, failure) -> {
+                                registered = failure == null;
+                                return null;
+                            });
+        }
+    }
+
+    public static final class ReadTimerRegistrationHandler
+            implements ZLinkSpotRequestHandler<TimerRoom, ReadTimerRegistration, Boolean> {
+        @Override
+        public CompletionStage<Boolean> handle(TimerRoom spot, ReadTimerRegistration request) {
+            return CompletableFuture.completedFuture(spot.registered);
+        }
+    }
+
+    public static class SourceSpotTimer implements ZLinkSpotTimerHandler<TimerRoom> {
+        @Override
+        public CompletionStage<Void> handle(TimerRoom spot, ZLinkTimerTick tick) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class TargetSpotTimer extends SourceSpotTimer {}
+
+    public record PerActorRoom(ZLinkSpotContext context) implements ZLinkSpot<Player> {
+        @Override
+        public CompletionStage<Void> onJoinedActor(Player actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(Player actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
+                String actorId, ZLinkMessage request) {
+            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
         }
     }
 

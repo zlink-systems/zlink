@@ -120,7 +120,12 @@ export class ViewPlayer {
   packetName: PacketNames.channelViewRequest
 })
 export class ViewChannel {
-  async handle(spot: Zone, actor: Player, _context: ZLinkMessageContext, _request: ChannelViewRequest) {
+  async handle(
+    spot: Zone,
+    actor: Player,
+    _context: ZLinkMessageContext,
+    _request: ChannelViewRequest
+  ) {
     await spot.showChannelView(actor);
   }
 }

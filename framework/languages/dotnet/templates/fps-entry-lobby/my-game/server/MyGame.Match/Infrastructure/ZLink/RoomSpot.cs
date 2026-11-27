@@ -50,7 +50,8 @@ public sealed class RoomSpot(
     public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct) =>
         ValueTask.CompletedTask;
 
-    private RoomView View() => new(Context.SpotId, settings.Id, state.View(), state.Phase, state.Winner);
+    private RoomView View() =>
+        new(Context.SpotId, settings.Id, state.View(), state.Phase, state.Winner);
 
     public ValueTask ViewAsync(PlayerActor actor) =>
         actor.Context.BoundSession.Send(View()).Async();
@@ -69,9 +70,14 @@ public sealed class RoomSpot(
             await actor.Context.BoundSession.Send(rejected).Async();
         else
         {
-            await actor.Context.BoundSession.Send(new MoveResult(
-                state.Players.Single(p => p.PlayerId == actor.Context.ActorId).Position,
-                request.Sequence)).Async();
+            await actor
+                .Context.BoundSession.Send(
+                    new MoveResult(
+                        state.Players.Single(p => p.PlayerId == actor.Context.ActorId).Position,
+                        request.Sequence
+                    )
+                )
+                .Async();
             await BroadcastAsync(View(), ct);
         }
     }
@@ -93,8 +99,10 @@ public sealed class RoomSpot(
     public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(state.Capture());
 
     public void Restore(ReadOnlyMemory<byte> payload) =>
-        state.Restore(JsonSerializer.Deserialize<RoomSnapshot>(payload.Span)
-            ?? throw new InvalidDataException("Missing room state."));
+        state.Restore(
+            JsonSerializer.Deserialize<RoomSnapshot>(payload.Span)
+                ?? throw new InvalidDataException("Missing room state.")
+        );
 }
 
 public sealed class RoomRelocation : IZLinkSpotRelocationAdapter<RoomSpot>

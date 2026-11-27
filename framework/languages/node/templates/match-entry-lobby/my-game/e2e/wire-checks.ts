@@ -153,7 +153,9 @@ export async function runWireChecks(): Promise<void> {
         timer.unref();
       })
     ]);
-    console.log(`Wire golden: ${Object.keys(expected).length}/${Object.keys(expected).length} passed`);
+    console.log(
+      `Wire golden: ${Object.keys(expected).length}/${Object.keys(expected).length} passed`
+    );
   } finally {
     await client.close();
     await app.close();

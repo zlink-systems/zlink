@@ -3699,6 +3699,7 @@ internal sealed class CanonicalRelocationTransportProbe
     internal ZLinkServiceWireCodec.SessionRelocationRouteRecord? SessionRoute;
     internal int DataSendCount;
     internal Action? OnCanonicalActorJoinSubmitted { get; init; }
+    internal Action<RoutingId, UserSpotCloseFence>? OnUserSpotClose { get; init; }
     internal int TargetAbortCallCount => Volatile.Read(ref _targetAbortCallCount);
     internal Guid RelocationId =>
         ZLinkRelocationTransferPayload
@@ -4345,6 +4346,8 @@ internal class ProbedBackendSpotNode : DispatchProxy
 
         try
         {
+            if (targetMethod.Name == nameof(IZLinkBackendSpotNode.CloseUserSpotAsync))
+                _probe.OnUserSpotClose?.Invoke((RoutingId)args[0]!, (UserSpotCloseFence)args[1]!);
             var result = targetMethod.Invoke(_target, args);
             if (
                 targetMethod.Name

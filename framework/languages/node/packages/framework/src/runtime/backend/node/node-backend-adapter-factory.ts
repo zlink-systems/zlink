@@ -169,6 +169,7 @@ function createNodeReadablePoller(socket: {
     | {
         readonly promise: Promise<boolean>;
         readonly resolve: (readable: boolean) => void;
+        readonly wakeOnly: boolean;
         readonly signal?: AbortSignal;
         readonly onAbort?: () => void;
       }
@@ -187,16 +188,17 @@ function createNodeReadablePoller(socket: {
   eventLoopPoller.setReadableHandler(() => {
     if (disposed) return;
     readable = true;
-    settlePending(true);
+    if (pending?.wakeOnly !== true) settlePending(true);
   });
 
   return {
-    wait(_timeoutMs: number): boolean {
+    wait(_timeoutMs: number, refresh = false): boolean {
+      if (!disposed && !readable && refresh) readable = eventLoopPoller.pollReadable();
       return !disposed && readable;
     },
-    waitForReadable(signal?: AbortSignal): Promise<boolean> {
+    waitForReadable(signal?: AbortSignal, wakeOnly = false): Promise<boolean> {
       if (disposed || signal?.aborted === true) return Promise.resolve(false);
-      if (readable) return Promise.resolve(true);
+      if (readable && !wakeOnly) return Promise.resolve(true);
       if (pending !== undefined) return pending.promise;
 
       let resolvePending!: (value: boolean) => void;
@@ -204,7 +206,7 @@ function createNodeReadablePoller(socket: {
         resolvePending = resolve;
       });
       const onAbort = signal === undefined ? undefined : (): void => settlePending(false);
-      pending = { promise, resolve: resolvePending, signal, onAbort };
+      pending = { promise, resolve: resolvePending, signal, onAbort, wakeOnly };
       if (signal !== undefined && onAbort !== undefined) {
         signal.addEventListener('abort', onAbort, { once: true });
       }

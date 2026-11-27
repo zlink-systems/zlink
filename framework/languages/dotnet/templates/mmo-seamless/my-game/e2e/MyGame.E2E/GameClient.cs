@@ -60,10 +60,7 @@ internal sealed class GameClient(
 
     public async Task<WorldState> JoinAsync(double x, CancellationToken ct)
     {
-        var response = Connector
-            .WaitFor<WorldState>()
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Async(ct);
+        var response = Connector.WaitFor<WorldState>().Timeout(TimeSpan.FromSeconds(10)).Async(ct);
         await Connector.Send(new JoinWorldRequest(PlayerId, x)).Async(ct);
         return (await response).Payload;
     }
@@ -143,12 +140,17 @@ internal sealed class GameClient(
             var rejection = (await rejected).Payload;
             attempt.Cancel();
             if (rejection.RetryAfterMs <= 0)
-                throw new InvalidOperationException("move-budget must report a positive retry delay.");
+                throw new InvalidOperationException(
+                    "move-budget must report a positive retry delay."
+                );
             await Task.Delay(TimeSpan.FromMilliseconds(rejection.RetryAfterMs), ct);
         }
     }
 
-    public async Task<ActionRejected> PacketRejectedAsync<TMessage>(TMessage packet, CancellationToken ct)
+    public async Task<ActionRejected> PacketRejectedAsync<TMessage>(
+        TMessage packet,
+        CancellationToken ct
+    )
         where TMessage : notnull
     {
         var response = Connector

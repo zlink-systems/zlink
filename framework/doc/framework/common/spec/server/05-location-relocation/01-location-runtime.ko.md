@@ -1537,6 +1537,10 @@ lowercase canonical UUID(8-4-4-4-12)이고 `aggregateGeneration`과 `index`·`le
 | Participant의 새 authority payload | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:authorityPayload` |
 | Participant의 membership 변경 | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
 
+**Relocation의 key 값.** Relocation(§9.1의 `aggregate.relocation`)이 이 절의 record를 쓸 때
+`aggregateId`는 그 `relocationId`이고 `aggregateGeneration`은 `1`이다. Source는 target을 고르기 전 seal 때
+이 목록을 한 번 쓰고, target 시도(`target.attemptGeneration`)가 바뀌어도 같은 목록을 그대로 쓴다.
+
 **Participant 변경 bytes.** Participant의 새 authority payload record와 membership 변경 record는
 JSON이 아니라 bytes를 그대로 저장한다. 새 authority payload record는 commit 때 그 participant의
 authority `payload`가 될 application 정의 opaque bytes이고, membership 변경 record는 규범 schema의
@@ -1910,6 +1914,12 @@ descriptor key에 routing ID가 들어가기 때문이다. 따라서 automatic R
 Store에 남는다. 이를 대상으로 삼지 않는 규칙은 §4.1이 정한다. Fixed RID의 lifecycle 규칙은
 [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)이 정한다. 두 정리 경로는
 서로 독립적이며 서로 다른 lifetime으로 동작한다.
+
+**Host 종료가 실행 중 discard 정리를 기다린 뒤 새로 확정된 discard는 local 정리만 하고 정상으로 끝난다.**
+종료는 transport를 닫기 전에 그때까지 수락한 discard 정리를 기다린다. 그 뒤 lease 상실·outage 기한 같은
+판정이 discard를 새로 확정하면, 그 정리는 transport나 completion table이 닫힌 것을 오류로 보고하지 않고
+"이미 종료 중"인 terminal로 처리한다. Local object 제거와 registry 정리는 끝까지 수행한다. 종료하는 host의
+peer는 그 host의 연결 종료로 결과를 관찰하므로 보낼 것이 남지 않는다. 이 경우를 위한 별도 상태나 순서는 두지 않는다.
 
 Owner lease는 종료 lifecycle이 보유한 동일 token으로 해제한다. 다른 lifecycle의 lease를
 다시 읽어 해제하지 않는다. Store 정리의 시간 범위와 `ForceStopped` 반환 경계는

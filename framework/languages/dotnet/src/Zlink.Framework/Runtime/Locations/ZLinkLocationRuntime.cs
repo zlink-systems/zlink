@@ -399,13 +399,8 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                     );
                 })
                 .ConfigureAwait(false);
-            if (stop is null)
-            {
-                await DrainDiscardedLocalExecutionsAsync(cancellationToken).ConfigureAwait(false);
-                return;
-            }
-            var heartbeat = stop.Value.Heartbeat;
-            var heartbeatLoop = stop.Value.HeartbeatLoop;
+            var heartbeat = stop?.Heartbeat;
+            var heartbeatLoop = stop?.HeartbeatLoop;
             if (heartbeat is not null)
                 await heartbeat.CancelAsync().ConfigureAwait(false);
 
@@ -419,7 +414,17 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
             }
 
             heartbeat?.Dispose();
-            await DrainDiscardedLocalExecutionsAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await DrainDiscardedLocalExecutionsAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                await _lane.RunAsync(_discardedExecutions.Clear).ConfigureAwait(false);
+            }
+            if (stop is null)
+                return;
+
             UpdateHealth(static health => health with { Healthy = false });
 
             // Keep the lease valid while owned rows are removed. Allocated routing-id slots are
@@ -842,6 +847,14 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                             return false;
                         }
 
+                        // Store §8.1 applies before the first lease claim, including
+                        // when the initial attempt was deferred by a Store outage.
+                        await _store
+                            .EnsureStoreFormatAsync(operation.Token)
+                            .AsTask()
+                            .WaitAsync(operation.Token)
+                            .ConfigureAwait(false);
+
                         claimStarted = true;
                         pendingClaim = ObserveStoreAsync(
                                 () =>
@@ -980,6 +993,10 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                             )
                             .ConfigureAwait(false);
                     }
+                }
+                catch (ZLinkConfigurationException)
+                {
+                    throw;
                 }
                 catch (ZLinkOwnerLeaseClaimRejectedException)
                 {
@@ -1353,6 +1370,12 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
             try
             {
                 await RenewOwnerLeaseOnceAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (ZLinkConfigurationException exception)
+            {
+                RecordLeaseFailure(exception.Message);
+                OwnerLeaseRenewalFailed?.Invoke();
+                return;
             }
             catch (ZLinkOwnerLeaseClaimRejectedException exception)
             {

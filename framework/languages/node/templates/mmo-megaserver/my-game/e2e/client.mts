@@ -14,6 +14,8 @@ import {
   RegionView,
   MoveRequest,
   SessionInfo,
+  LeaveRegionRequest,
+  RegionLeft,
   SessionInfoRequest,
   OpenDungeonRequest,
   DungeonOpened,
@@ -36,7 +38,7 @@ export async function scenario(
   endpoint: string,
   runId: string,
   logDir: string,
-  control: NodeControl
+  control?: NodeControl
 ): Promise<void> {
   const clients: PlayerClient[] = [];
   const create = (suffix: string, playerId = `${name}-${runId}-${suffix}`): PlayerClient => {
@@ -44,12 +46,25 @@ export async function scenario(
     clients.push(client);
     return client;
   };
+  if (name === 'connect') {
+    const client = create('smoke');
+    try {
+      await client.connector.connect();
+      client.verifyConnected();
+    } finally {
+      await client.close();
+    }
+    return;
+  }
+  const members = new Set<PlayerClient>();
   const enter = async (
     client: PlayerClient,
     region = Test.region as string
   ): Promise<RegionView> => {
     await client.enter(region);
-    return client.wait<RegionView>(PacketNames.regionView, 0);
+    const view = await client.wait<RegionView>(PacketNames.regionView, 0);
+    members.add(client);
+    return view;
   };
   const failures: unknown[] = [];
   let a = create('p1');
@@ -103,17 +118,25 @@ export async function scenario(
     if (name === 'region') {
       assert.equal(before.players.length, 2);
       assert(c);
-      const d = create('p4'), exhausted = create('p5'), unknown = create('p6');
+      const d = create('p4'),
+        exhausted = create('p5'),
+        unknown = create('p6');
       await enter(d);
       const exhaustedMark = exhausted.messages.length;
       await exhausted.enter(Test.region);
-      const unavailable = await exhausted.wait<RegionUnavailable>(PacketNames.regionUnavailable, exhaustedMark);
+      const unavailable = await exhausted.wait<RegionUnavailable>(
+        PacketNames.regionUnavailable,
+        exhaustedMark
+      );
       assert.equal(unavailable.reason, 'capacity-exhausted');
       assert.equal(unavailable.region, Test.region);
       assert.equal((await exhausted.sessionInfo()).actorId, exhausted.playerId);
       const unknownMark = unknown.messages.length;
       await unknown.enter('unknown');
-      const unknownReply = await unknown.wait<RegionUnavailable>(PacketNames.regionUnavailable, unknownMark);
+      const unknownReply = await unknown.wait<RegionUnavailable>(
+        PacketNames.regionUnavailable,
+        unknownMark
+      );
       assert.equal(unknownReply.reason, 'region-unknown');
       const deniedMark = unknown.messages.length;
       await unknown.connector.send(new RegionFull('region-full', Test.region, 1)).submit();
@@ -143,6 +166,7 @@ export async function scenario(
       assert.equal(opened.nodeId, 'instance');
     } else if (name === 'reconnect') {
       await a.close();
+      members.delete(a);
       a = create('reconnected', a.playerId);
       const restored = await enter(a);
       sameState(before, restored);
@@ -152,6 +176,7 @@ export async function scenario(
       assert.equal(after.objectGeneration, identity.objectGeneration);
       assert.notEqual(after.sessionId, identity.sessionId);
     } else if (name === 'update') {
+      assert(control, 'update requires an isolated run');
       await control.drain(before.nodeId);
       assert.deepEqual(await a.sessionInfo(), identity);
       assert.deepEqual(await b.sessionInfo(), otherIdentity);
@@ -173,6 +198,7 @@ export async function scenario(
     a.verifyConnected();
     b.verifyConnected();
     c?.verifyConnected();
+    for (const member of members) await member.leave();
   } catch (error) {
     failures.push(error);
   } finally {
@@ -275,6 +301,9 @@ class PlayerClient {
     const index = this.messages.length;
     await this.connector.send(new ViewRequest()).submit();
     return this.wait<RegionView>(PacketNames.regionView, index);
+  }
+  async leave(): Promise<void> {
+    await this.connector.request(new LeaveRegionRequest()).submit(RegionLeft);
   }
   async close(): Promise<void> {
     await this.connector.close();

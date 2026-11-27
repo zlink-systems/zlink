@@ -23,7 +23,8 @@ class RecordingProvisioner {
   prepare = (roomId: string, members: string[]): Promise<MatchResponse> => {
     this.calls.push({ roomId, members: [...members] });
     return (
-      this.completion ?? Promise.resolve(new MatchResponse(roomId, RecordingProvisioner.sessionEndpoint))
+      this.completion ??
+      Promise.resolve(new MatchResponse(roomId, RecordingProvisioner.sessionEndpoint))
     );
   };
 }
@@ -185,7 +186,10 @@ export async function runLobbyDomainChecks(): Promise<void> {
   assert(heldCall);
   release(new MatchResponse(heldCall.roomId, RecordingProvisioner.sessionEndpoint));
   const [heldResultA, heldResultB] = await Promise.all([heldA, heldB]);
-  check(isDeepStrictEqual(heldResultA, heldResultB), 'prepared assignment releases both HTTP responses');
+  check(
+    isDeepStrictEqual(heldResultA, heldResultB),
+    'prepared assignment releases both HTTP responses'
+  );
   assert.equal(count, 19, 'HTTP domain boundary count differs from .NET');
   console.log(`HTTP domain boundaries: ${count}/${count} passed`);
 }

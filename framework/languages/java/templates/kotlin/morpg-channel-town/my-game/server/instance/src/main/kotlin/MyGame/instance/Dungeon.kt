@@ -23,14 +23,18 @@ class Dungeon(
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
         val join = request.decode<JoinDungeon>()
-        return if (state.accepts(actorId, context.spotId(), join))
-            ZLinkSpotActorJoinResult.accept()
+        return if (state.accepts(actorId, context.spotId(), join)) ZLinkSpotActorJoinResult.accept()
         else ZLinkSpotActorJoinResult.reject()
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {
+        println("EVENT Dungeon joined: ${context.spotId()}")
         if (state.join(actor.context.actorId())) {
-            context.outbound().kotlin().sendToSpot(state.ownerSpotId, RunStarted(state.runId)).await()
+            context
+                .outbound()
+                .kotlin()
+                .sendToSpot(state.ownerSpotId, RunStarted(state.runId))
+                .await()
         }
         broadcast()
     }
@@ -74,7 +78,12 @@ class Dungeon(
         }
         broadcast()
         if (state.phase == RunPhase.Completed) {
-            context.outbound().kotlin().sendToSpot(state.ownerSpotId, RunCompleted(state.runId)).await()
+            println("EVENT Dungeon completed: ${context.spotId()}")
+            context
+                .outbound()
+                .kotlin()
+                .sendToSpot(state.ownerSpotId, RunCompleted(state.runId))
+                .await()
         }
     }
 }

@@ -3,6 +3,7 @@
 #include "server/shared/http.hpp"
 #include "server/match/domain.hpp"
 #include <future>
+#include <algorithm>
 #include <limits>
 #include <string_view>
 #include <thread>
@@ -159,7 +160,7 @@ inline Vec3 aim (Client &shooter, const Client &target)
     return player (current, target).position - player (current, shooter).position;
 }
 
-inline void shoot (Client &shooter, const Vec3 &direction, std::string_view expected)
+inline std::int64_t shoot (Client &shooter, const Vec3 &direction, std::string_view expected)
 {
     const auto before = view (shooter);
     const ShootRequest request{direction, next (before, shooter)};
@@ -174,14 +175,20 @@ inline void shoot (Client &shooter, const Vec3 &direction, std::string_view expe
         const auto *shot = std::get_if<ShotResult> (&response);
         require (shot && shot->outcome == expected && shot->sequence == request.sequence,
                  "Shot result differs.");
-        return;
+        return shot->sequence;
     }
 }
 
 inline void hit (Client &shooter, Client &target, int expectedHp)
 {
-    shoot (shooter, aim (shooter, target), ShotOutcome::hit);
-    const auto first = view (shooter), second = view (target);
+    const auto sequence = shoot (shooter, aim (shooter, target), ShotOutcome::hit);
+    const auto after_shot = [&] (const RoomView &room) {
+        return std::any_of (room.players.begin (), room.players.end (), [&] (const PlayerView &p) {
+            return p.playerId == shooter.player_id && p.lastSequence == sequence;
+        });
+    };
+    const auto first = shooter.view_if (after_shot);
+    const auto second = target.view_if (after_shot);
     require (first == second && player (first, target).hp == expectedHp,
              "Hit views or damage differ.");
 }

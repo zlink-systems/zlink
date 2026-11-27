@@ -45,18 +45,36 @@ fun checkStructure(root: Path) {
     }
     val run = requireNotNull(structure["run"])
     check(
-        run["scenarios"]?.isArray == true && run["scenarios"].map { it.asText() } == ScenarioList.order
+        run["scenarios"]?.isArray == true &&
+            run["scenarios"].map { it.asText() } == ScenarioList.order
     )
     val commands = requireNotNull(run["commands"])
     check(commands.fieldNames().asSequence().toSet() == setOf("sh", "powershell"))
     val scenarioArgument = ScenarioList.order.joinToString(",")
-    check(commands["sh"].isArray && commands["sh"].map { it.asText() } == listOf(
-        "./run-e2e.sh --build-only", "./run-e2e.sh", "./run-e2e.sh --scenario $scenarioArgument",
-    )) { "Invalid shell commands" }
-    check(commands["powershell"].isArray && commands["powershell"].map { it.asText() } == listOf(
-        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly", "pwsh -NoProfile -File ./run-e2e.ps1",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario $scenarioArgument",
-    )) { "Invalid PowerShell commands" }
+    check(
+        commands["sh"].isArray &&
+            commands["sh"].map { it.asText() } ==
+                listOf(
+                    "./run-server.sh",
+                    "./run-e2e.sh --build-only",
+                    "./run-e2e.sh",
+                    "./run-e2e.sh --scenario $scenarioArgument",
+                )
+    ) {
+        "Invalid shell commands"
+    }
+    check(
+        commands["powershell"].isArray &&
+            commands["powershell"].map { it.asText() } ==
+                listOf(
+                    ".\\run-server.cmd",
+                    ".\\run-e2e.cmd -BuildOnly",
+                    ".\\run-e2e.cmd",
+                    ".\\run-e2e.cmd -Scenario $scenarioArgument",
+                )
+    ) {
+        "Invalid PowerShell commands"
+    }
     val nodes = array("nodes")
     val ids = nodes.map { text(it, "id") }
     unique(ids)

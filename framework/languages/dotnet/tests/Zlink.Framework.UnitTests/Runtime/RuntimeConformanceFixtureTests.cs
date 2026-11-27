@@ -756,7 +756,7 @@ public sealed class RuntimeConformanceFixtureTests
                     ).Status
                 );
             await resolver.ListLiveMeshNodesAsync(mesh);
-            var discoveryScans = provider.Scans;
+            var discoveryScans = provider.DescriptorScans;
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var selected = resolver
                 .SelectPlacementAsync(
@@ -771,7 +771,7 @@ public sealed class RuntimeConformanceFixtureTests
             if (initial == "preparing")
             {
                 Assert.False(selected.IsCompleted);
-                Assert.Equal(discoveryScans, provider.Scans);
+                Assert.Equal(discoveryScans, provider.DescriptorScans);
                 switch (update)
                 {
                     case "serving":
@@ -819,7 +819,7 @@ public sealed class RuntimeConformanceFixtureTests
                 Assert.Null(await selected);
             Assert.Equal(
                 discoveryScans + scenario.GetProperty("requestScans").GetInt32(),
-                provider.Scans
+                provider.DescriptorScans
             );
         }
     }
@@ -827,8 +827,8 @@ public sealed class RuntimeConformanceFixtureTests
     private sealed class PlacementScanStore : IZLinkLocationStore
     {
         private readonly ZLinkInMemoryProviderLocationStore _store = new();
-        private int _scans;
-        internal int Scans => Volatile.Read(ref _scans);
+        private int _descriptorScans;
+        internal int DescriptorScans => Volatile.Read(ref _descriptorScans);
 
         public ValueTask<ZLinkStoreReadResult> ReadAsync(
             ZLinkStoreKey key,
@@ -845,7 +845,8 @@ public sealed class RuntimeConformanceFixtureTests
             CancellationToken cancellationToken = default
         )
         {
-            Interlocked.Increment(ref _scans);
+            if (request.Prefix.StartsWith("mesh-node\0", StringComparison.Ordinal))
+                Interlocked.Increment(ref _descriptorScans);
             return _store.ScanAsync(request, cancellationToken);
         }
     }

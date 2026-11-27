@@ -35,6 +35,8 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
+Run one scenario with `./run-e2e.sh --scenario reconnect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Default builds and e2e run the nodes and the runner in Docker without a host toolchain. Run these commands from this directory.
 
 ```powershell
@@ -106,7 +108,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
 1. The client connects to the Session node over STREAM and sends the first packet, `JoinTableRequest`. `Session::on_packet` checks the first packet name, calls `get_or_create` for the Player Actor by `playerId`, binds it with `bind_or_get`, and relays the original packet.
-2. A new Actor starts in the Entry Spot `Entry`. `Entry::join` checks the identity, calls `get_or_create` for the Table Spot named by `tableId`, and requests `join_spot(...).defer()`.
+2. A new Actor starts in the Entry Spot `Entry`. `Entry::join` checks the identity. For first entry, it calls `get_or_create` for the Table Spot named by `tableId`, and requests `join_spot(...).defer()`. Entry rejects a reconnect with `not-seated`.
 3. `Table::on_actor_join` seats the player through `TableState::admit` or rejects when the table is full; a rejection reaches the client as `ActionRejected` from `Player::on_join_completed`. When a player joins, `Table::on_actor_joined` pushes a `TableView` to every seated player through the Actor client, and `Table::deliver` forwards it to the bound Session.
 4. Later packets from the same client are handled by the handlers of the Table that holds the Actor: `Table::start` deals a hand and pushes each player's `HandDealt`, and `Table::bet` applies a `BetRequest` and publishes the updated views and, at the end of a hand, the `HandResult`. `Table::inspect` answers `TableViewRequest` on demand.
 5. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the table state from `capture` in `TableRelocation` and calls `restore` on another node. `PlayerRelocation` carries no state.
@@ -122,6 +124,8 @@ Before adding a rule, run the build and e2e with the [Development commands](#dev
 ### Add a game rule
 
 1. Define typed requests and results in `server/shared/contracts.hpp`. Keep the shared integer limit and rejection reasons in this file. Clients send requested actions; `TableState` validates each request and calculates the result.
+   - Use `std::optional<T>` in the DTO for nullable fields. To allow omission, separately mark the field `zlink::json::defaulted` in `dto_traits`.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/cpp/guide/server/20-channel-messaging/#12-message-value-rules)
 2. Add table state and decisions to `TableState` in `server/table/domain.hpp`. Add request handlers and client delivery in `Table` in `server/table/table.hpp`. `TableRelocation` serializes `TableState`. Use a monotonic clock for time-based rules, pass a test clock only to the domain constructor, and store remaining milliseconds in relocation state.
 3. Add only client-to-server request packets to the allowlist in `Session::on_packet` in `server/session/session.hpp`. The Session rejects all other packets with `packet-not-allowed`.
 4. Add client-observable checks to `e2e/scenarios.hpp`. Keep the `table`, `reconnect`, and `update` scenarios. When adding a scenario ID, update the README table and `run.scenarios` in `zlink.structure.json` in the same order.
@@ -145,6 +149,8 @@ Write handlers as `task_t` coroutines and `co_await` public asynchronous calls a
 Keep type registration and per-instance callbacks in their defined lifecycle phases: factories and Entry Spots are registered in each node's `main.cpp`, handlers in `configure()`, and admission and membership decisions in `on_actor_join`, `on_actor_joined`, `on_leave_actor` and `on_disconnect_actor`. Use `join_spot(...).defer()` and the public completion callback `on_join_completed` for membership changes, and relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion. [Activation and lifetime](https://docs.zlink.systems/cpp/guide/server/34-activation-lifetime/) explains creation and initialization.
 
 ### Reconnection and failure handling
+
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to table selection. Omit `reconnect` or send `false` for first entry.
 
 Reconnect with the same Actor ID and bind the new Session to continue using existing player state: `Session::on_packet` binds with `bind_or_get`, and `Table::reconnect` re-sends the table view and the player's cards to the new Session. Framework manages current placement, so do not add an application route cache or reset player state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/cpp/guide/server/33-backpressure/).
 

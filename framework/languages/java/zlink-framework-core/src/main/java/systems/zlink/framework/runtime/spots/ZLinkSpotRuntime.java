@@ -4073,6 +4073,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return publishers.client();
     }
 
+    boolean isOwnerLeaseValid(ZLinkLocationOwnerToken owner) {
+        return spotLocations.isOwnerLeaseValid(owner);
+    }
+
     public void setLocationLifecycle(ZLinkLocationLifecycle lifecycle) {
         spotLocations.setLifecycle(lifecycle);
     }
@@ -5691,7 +5695,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 });
     }
 
-    private void rememberRecoveredSpot(
+    void rememberRecoveredSpot(
             systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot snapshot,
             String spotId) {
         var allocation = snapshot.allocation();
@@ -7512,7 +7516,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return reason + " for packet '" + packetName + "'";
     }
 
-    /** Parses an inbound SPOT route message from its ChannelHeader or internal Actor packet. */
+    /** Parses an inbound SPOT route message from its ChannelHeader. */
     static ParsedPacket parsePacket(List<Message> parts) {
         return parsePacket(parts, false);
     }
@@ -7522,13 +7526,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "SPOT route envelope payload is missing");
-        }
-        if (parts.getFirst().size() > 0 && parts.getFirst().dataBuffer().get(0) == '_') {
-            String internalPacket = parts.getFirst().toUtf8String();
-            if (ZLinkActorSpotRoutePackets.BOUND_SESSION_SEND_PACKET_NAME.equals(internalPacket)
-                    || ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(internalPacket)) {
-                return new ParsedPacket(internalPacket, parts.get(1), null);
-            }
         }
         var decoded =
                 systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(

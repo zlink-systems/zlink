@@ -1,4 +1,6 @@
 #pragma once
+#include <iostream>
+#include <syncstream>
 #include "player.hpp"
 #include <zlink/json.hpp>
 #include <set>
@@ -65,6 +67,7 @@ class Zone final : public fx::spot_t<Player>
     fx::task_t<void> on_actor_joined (Player &actor) override
     {
         player_ids_.insert (std::string (actor.context ().actor_id ().value ()));
+        std::osyncstream (std::cout) << "GAME Player entered channel" << std::endl;
         co_await actors_.send (actor.context ().actor_id (), view (actor)).async ();
         co_await publish_players ();
     }

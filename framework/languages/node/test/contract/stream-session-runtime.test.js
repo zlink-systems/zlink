@@ -3,6 +3,7 @@ const { once } = require('node:events');
 const net = require('node:net');
 const test = require('node:test');
 const deferred = require('./helpers/deferred.cjs');
+const { FakeLivenessClock } = require('./helpers/stream-liveness-clock');
 const { logs, SeverityNumber } = require('@opentelemetry/api-logs');
 const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 const observation = require('./fixtures/message-flow-observation.cjs')(
@@ -1035,32 +1036,24 @@ test('inbound heartbeat control frames release their application job permits', a
 
 test('stream ingress acquires managed queue capacity before pulling a Core packet', async () => {
   const socket = new FakeStreamSocket();
-  let releaseAcquire;
-  const acquireGate = new Promise((resolve) => { releaseAcquire = resolve; });
-  const permit = {
-    origin: 'remote',
-    markApplicationQueued() {},
-    releaseAfterInternalProcessing() {}
-  };
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n })
+  );
   const runtime = createStreamRuntime({
     socket,
-    applicationJobQueue: {
-      async acquire() {
-        await acquireGate;
-        return permit;
-      }
-    },
+    applicationJobQueue: queue,
     sessionFactory(context) {
       return { context, async onDispatch() {} };
     }
   });
   socket.emitPacket('permit-before-pull', fakeHeader({ name: 'PermitFirst' }), fakeJsonMessage('body'));
 
+  const held = await queue.acquire(undefined, 'remote');
   runtime.start();
-  await new Promise((resolve) => setImmediate(resolve));
+  await waitForCondition(() => queue.snapshot().capacityWaiters === 1n, 'reader waiting for permit');
   assert.equal(socket.recvCalls, 0);
 
-  releaseAcquire();
+  held.releaseAfterInternalProcessing();
   await waitForCondition(() => socket.recvCalls > 0, 'permit-gated packet pull');
   await runtime.dispose();
 });
@@ -1393,6 +1386,57 @@ test('stream session runtime closes without a first inbound frame at the heartbe
   assert.deepEqual(socket.disconnects, ['heartbeat-timeout-session']);
   await runtime.dispose();
 });
+
+for (const complete of [true, false]) {
+  test(`STREAM reader expiry with a ${complete ? 'complete' : 'partial'} ping`, async (t) => {
+    const socket = new FakeStreamSocket();
+    const clock = new FakeLivenessClock();
+    const runtime = createStreamRuntime({
+      socket,
+      livenessClock: clock,
+      heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 5000,
+      readablePoller: {
+        ...idlePoller(),
+        wait() { return socket.received.length > 0; }
+      },
+      sessionFactory(context) { return { context }; }
+    });
+    t.after(() => runtime.dispose());
+    runtime.start();
+    runtime.markConnected('peer');
+    await clock.flush();
+    await clock.advance(4999);
+
+    const header = fakeHeader({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      name: '$zlink.heartbeat.ping'
+    });
+    const frame = rawStreamFrame(header.data(), []);
+    header.close();
+    // Leave the reader parked until the deadline timer runs.
+    socket.emitRaw('peer', [complete ? frame : frame.subarray(0, -1)]);
+    assert.equal(socket.received.length, complete ? 1 : 0);
+    await clock.advance(1);
+
+    const names = socket.sent.map((sent) => controlHeader(sent).name);
+    t.diagnostic(JSON.stringify({
+      names,
+      closeReason: names.includes('session-closing')
+        ? decodeSessionClosing(socket.sent.at(-1)).payload[1]
+        : undefined
+    }));
+    if (complete) {
+      assert.deepEqual(socket.disconnects, []);
+      assert.ok(names.includes('$zlink.heartbeat.pong'));
+    } else {
+      assert.deepEqual(socket.disconnects, ['peer']);
+      assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1],
+        streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
+    }
+  });
+}
 
 for (const inboundKind of ['data', 'pong']) {
   test(`stream heartbeat stays connected with inbound ${inboundKind} before each timeout`, async (t) => {
@@ -3291,47 +3335,6 @@ function idlePoller() {
   };
 }
 
-class FakeLivenessClock {
-  constructor() {
-    this.current = 0;
-    this.nextTimer = 1;
-    this.timers = new Map();
-  }
-
-  now = () => this.current;
-
-  setTimer = (callback, delayMs) => {
-    const id = this.nextTimer++;
-    this.timers.set(id, { callback, due: this.current + delayMs });
-    return id;
-  };
-
-  clearTimer = (id) => {
-    this.timers.delete(id);
-  };
-
-  async advance(delayMs) {
-    const target = this.current + delayMs;
-    for (;;) {
-      const next = [...this.timers.entries()]
-        .filter(([, timer]) => timer.due <= target)
-        .sort((left, right) => left[1].due - right[1].due)[0];
-      if (next === undefined) break;
-      const [id, timer] = next;
-      this.timers.delete(id);
-      this.current = Math.max(this.current, timer.due);
-      timer.callback();
-      await this.flush();
-    }
-    this.current = target;
-    await this.flush();
-  }
-
-  async flush() {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-}
-
 function controlHeader(sent) {
   return decodeSessionClosing(sent).header;
 }
@@ -3570,12 +3573,10 @@ function admissionMetrics(enabled) {
 }
 
 function instrumentAdmissionPermits(queue, socket, counts, onQueued) {
-  const acquire = queue.acquire.bind(queue);
-  queue.acquire = async (...args) => {
-    const permit = await acquire(...args);
+  const acquireOrResume = queue.acquireOrResume.bind(queue);
+  const instrument = (permit) => {
     const release = permit.releaseAfterInternalProcessing.bind(permit);
     const markQueued = permit.markApplicationQueued.bind(permit);
-    // The receive loop may reserve before a readiness check that finds no packet.
     // Attribute the real permit operations only to the packet pulled with this permit.
     const received = socket.received[0];
     if (received !== undefined && received.admissionRequestId !== undefined) {
@@ -3592,6 +3593,10 @@ function instrumentAdmissionPermits(queue, socket, counts, onQueued) {
       };
     }
     return permit;
+  };
+  queue.acquireOrResume = (resume, reject, signal, origin) => {
+    const permit = acquireOrResume((granted) => resume(instrument(granted)), reject, signal, origin);
+    return permit === undefined ? undefined : instrument(permit);
   };
 }
 
@@ -3638,6 +3643,7 @@ for (const { name, given, steps, expectedEffectiveLimit } of loginAdmission.serv
     const startListener = () => {
       const listener = createStreamRuntime({
         socket,
+        readablePoller: { ...readyPoller(), wait: () => socket.received.length > 0 },
         authenticationAdmission: admission,
         applicationJobQueue,
         livenessClock: clock,

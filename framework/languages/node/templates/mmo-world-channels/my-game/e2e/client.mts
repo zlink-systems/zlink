@@ -55,9 +55,8 @@ class PlayerClient {
       this.views.push(message.payload);
       appendFileSync(
         log,
-        JSON.stringify(
-          { name: PacketNames.playerView, payload: message.payload },
-          (_, value) => (typeof value === 'bigint' ? value.toString() : value)
+        JSON.stringify({ name: PacketNames.playerView, payload: message.payload }, (_, value) =>
+          typeof value === 'bigint' ? value.toString() : value
         ) + '\n'
       );
       this.changed.emit('change');
@@ -66,9 +65,8 @@ class PlayerClient {
       this.channelViews.push(message.payload);
       appendFileSync(
         log,
-        JSON.stringify(
-          { name: PacketNames.channelView, payload: message.payload },
-          (_, value) => (typeof value === 'bigint' ? value.toString() : value)
+        JSON.stringify({ name: PacketNames.channelView, payload: message.payload }, (_, value) =>
+          typeof value === 'bigint' ? value.toString() : value
         ) + '\n'
       );
       this.changed.emit('change');
@@ -207,7 +205,7 @@ export async function scenario(
   accounts: string,
   runId: string,
   logDir: string,
-  control: NodeControl
+  control?: NodeControl
 ): Promise<void> {
   const clients: PlayerClient[] = [];
   const create = (world: string, suffix: string, playerId = `${name}-${runId}`): PlayerClient => {
@@ -317,14 +315,17 @@ export async function scenario(
           retryAfterMs: 0
         });
 
-        const oldAtA = a.waitChannelView(a.markChannelViews(), (view) =>
-          view.playerIds.join() === [a.playerId, same.playerId].sort().join()
+        const oldAtA = a.waitChannelView(
+          a.markChannelViews(),
+          (view) => view.playerIds.join() === [a.playerId, same.playerId].sort().join()
         );
-        const oldAtSame = same.waitChannelView(same.markChannelViews(), (view) =>
-          view.playerIds.join() === [a.playerId, same.playerId].sort().join()
+        const oldAtSame = same.waitChannelView(
+          same.markChannelViews(),
+          (view) => view.playerIds.join() === [a.playerId, same.playerId].sort().join()
         );
-        const movedAtDestination = moving.waitChannelView(moving.markChannelViews(), (view) =>
-          view.channelId === Test.secondChannel && view.playerIds.length === 1
+        const movedAtDestination = moving.waitChannelView(
+          moving.markChannelViews(),
+          (view) => view.channelId === Test.secondChannel && view.playerIds.length === 1
         );
         const movedMoving = await moving.change(Test.secondChannel);
         assert.deepEqual(movedMoving, {
@@ -342,15 +343,17 @@ export async function scenario(
         assert.deepEqual(oldSameView.playerIds, [a.playerId, same.playerId].sort());
         assert.deepEqual(destinationView.playerIds, [moving.playerId]);
 
-        const afterDisconnect = a.waitChannelView(a.markChannelViews(), (view) =>
-          view.playerIds.length === 1 && view.playerIds[0] === a.playerId
+        const afterDisconnect = a.waitChannelView(
+          a.markChannelViews(),
+          (view) => view.playerIds.length === 1 && view.playerIds[0] === a.playerId
         );
         await same.close();
         assert.deepEqual((await afterDisconnect).playerIds, [a.playerId]);
       }
 
-      const movedAtDestination = a.waitChannelView(a.markChannelViews(), (view) =>
-        view.channelId === Test.secondChannel && view.playerIds[0] === a.playerId
+      const movedAtDestination = a.waitChannelView(
+        a.markChannelViews(),
+        (view) => view.channelId === Test.secondChannel && view.playerIds[0] === a.playerId
       );
       const moved = await a.change(Test.secondChannel);
       assert.deepEqual(moved, {
@@ -383,10 +386,13 @@ export async function scenario(
         assert.equal(again.disconnects, 0);
       }
     } else if (name === 'update') {
-      await a.waitChannelView(initialChannelMark, (view) =>
-        view.channelId === Game.firstChannel &&
-        view.playerIds.length === 1 &&
-        view.playerIds[0] === a.playerId
+      assert(control, 'update requires an isolated run');
+      await a.waitChannelView(
+        initialChannelMark,
+        (view) =>
+          view.channelId === Game.firstChannel &&
+          view.playerIds.length === 1 &&
+          view.playerIds[0] === a.playerId
       );
       const b = create('B', 'b', a.playerId),
         worldB = await b.enter(),

@@ -1,8 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import { zlinkEntrySpotActorSendHandler, zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
+import {
+  zlinkEntrySpotActorSendHandler,
+  zlinkSpotActorRequestHandler,
+  zlinkSpotActorSendHandler
+} from '@zlink-systems/nestjs';
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
 import { Game, PacketNames, Rejection } from '../../../shared/constants';
 import {
+  RegionLeft,
   EnterRegionRequest,
   RegionFull,
   RegionView,
@@ -43,7 +48,11 @@ export class NextRegion {
     request: RegionFull
   ): Promise<void> {
     if (request.reason !== Rejection.regionFull) throw new Error('Unknown region rejection');
-    await entry.select(actor, request.region, Math.min(Game.maxReplicasPerRegion + 1, request.index + 1));
+    await entry.select(
+      actor,
+      request.region,
+      Math.min(Game.maxReplicasPerRegion + 1, request.index + 1)
+    );
   }
 }
 @Injectable()
@@ -131,5 +140,18 @@ export class Delivery {
     if (!type) throw new Error(`Unregistered region push: ${context.packetName}`);
     // Restore the declared public DTO class before forwarding (#1731).
     await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
+  }
+}
+
+@Injectable()
+@zlinkSpotActorRequestHandler({
+  spot: () => Region,
+  actor: () => Player,
+  packetName: PacketNames.leaveRegionRequest
+})
+export class LeaveRegion {
+  async handle(spot: Region, actor: Player): Promise<RegionLeft> {
+    await spot.context.leaveActor(actor);
+    return new RegionLeft();
   }
 }

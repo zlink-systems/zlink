@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ConnectResult;
+import systems.zlink.contracts.errors.ZlinkConnectException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.eventing.MonitorEventFlags;
 import systems.zlink.contracts.eventing.MonitorEventType;
@@ -122,7 +124,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         this.meshNode = meshNode;
         this.boundSessionSink = boundSessionSink;
         this.boundSessionLifecycle = boundSessionLifecycle;
-        this.receivePoller = new ZLinkJavaSocketReceivePoller(socket);
+        this.receivePoller = ZLinkJavaSocketReceivePoller.wakeable(socket);
         this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
     }
 
@@ -176,7 +178,33 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     @Override
     public boolean waitForReadable(Duration timeout) {
-        return receivePoller.waitForReadable(timeout);
+        int ready = receivePoller.waitForOwnerReady(timeout);
+        if ((ready & ZLinkJavaSocketReceivePoller.OWNER_WAKE) != 0) {
+            inStateLane(
+                    () -> {
+                        if (!closed.get()) {
+                            receivePoller.consumeOwnerWake();
+                        }
+                        return null;
+                    });
+        }
+        return (ready & ZLinkJavaSocketReceivePoller.READABLE) != 0;
+    }
+
+    @Override
+    public boolean waitForReceive() {
+        return waitForReadable(ZLinkBackendSocketMonitor.WAIT_UNTIL_EVENT);
+    }
+
+    @Override
+    public void wakeReceive() {
+        inStateLane(
+                () -> {
+                    if (!closed.get()) {
+                        receivePoller.signal();
+                    }
+                    return null;
+                });
     }
 
     @Override
@@ -233,7 +261,12 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                 return CompletableFuture.completedFuture(null);
                             return stateLane.runAsync(
                                     () -> {
-                                        socket.disconnectRid(routingId);
+                                        try {
+                                            socket.disconnectRid(routingId);
+                                        } catch (ZlinkConnectException failure) {
+                                            if (failure.getResult() != ConnectResult.NOT_FOUND)
+                                                throw failure;
+                                        }
                                         return null;
                                     });
                         },

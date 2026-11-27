@@ -44,6 +44,9 @@ const observation = require('../fixtures/message-flow-observation.cjs')(require(
 module.exports = {
   observed: observation.observed,
   close: observation.close,
+  stderrRecords: observation.fallbackRecords,
   records,
-  reset() { records.length = 0; }
+  reset() {
+    records.length = 0;
+  }
 };

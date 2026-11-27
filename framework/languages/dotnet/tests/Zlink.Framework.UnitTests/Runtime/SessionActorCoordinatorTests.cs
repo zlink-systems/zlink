@@ -2102,14 +2102,14 @@ public sealed partial class SessionActorCoordinatorTests
             "target-owner-canonical-push",
             TimeSpan.FromMinutes(5)
         );
-        _ = Assert.IsType<ZLinkAuthoritySnapshot>(
+        var previousTarget = Assert.IsType<ZLinkAuthoritySnapshot>(
             await AuthorityLocationTestFixture.PublishActorAsync(
                 store,
                 new ZLinkResolvedActorLocation(
                     "actors",
-                    "actor-route-canonical-primer",
+                    "actor-route-canonical",
                     "player",
-                    new ActorRef("actor-route-canonical-primer", 1, "actors", targetNode),
+                    new ActorRef("actor-route-canonical", 1, "actors", targetNode),
                     targetNode,
                     targetNodeGeneration,
                     "entry:canonical-target",
@@ -2121,6 +2121,13 @@ public sealed partial class SessionActorCoordinatorTests
                     default,
                     0
                 )
+            )
+        );
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
+            await store.CompareExchangeAuthorityAsync(
+                ZLinkAuthorityKeyCodec.EncodeActor("actor-route-canonical"),
+                previousTarget.StoreVersion,
+                new ZLinkAuthorityMutation.Delete()
             )
         );
         var targetAuthoritySnapshot = Assert.IsType<ZLinkAuthoritySnapshot>(

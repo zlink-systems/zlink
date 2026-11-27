@@ -26,6 +26,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   const run = object(s.run),
     commands = object(run.commands);
   assert.deepEqual(Object.keys(commands).sort(), ['powershell', 'sh']);
+  assert.equal(array(commands.sh)[0], './run-server.sh');
+  assert.equal(array(commands.powershell)[0], '.\\run-server.cmd');
   for (const command of Object.values(commands)) {
     const a = array(command);
     assert(a.length);
@@ -64,6 +66,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     if (node.role !== 'location-store') {
       const cfg = object(JSON.parse(readFileSync(file, 'utf8')));
       assert.equal(cfg.id, node.id, 'Config ID mismatch');
+      if (node.role === 'session')
+        assert.equal(new URL(text(cfg.streamEndpoint)).protocol, 'ws:', 'Session STREAM endpoint');
     }
   }
   const channels = array(s.channels).map(object);
@@ -96,7 +100,9 @@ export function checkStructure(path = 'zlink.structure.json'): void {
       assert(!('dynamic' in spot) && !('logicalId' in spot));
     } else {
       assert.equal(spot.kind, 'user');
-      assert([Names.field, Names.party, Names.dungeon].includes(text(spot.type) as typeof Names.field));
+      assert(
+        [Names.field, Names.party, Names.dungeon].includes(text(spot.type) as typeof Names.field)
+      );
       if (spot.type === Names.dungeon || spot.type === Names.party) {
         assert.equal(host.role, spot.type === Names.dungeon ? 'instance' : 'field');
         assert.equal(spot.dynamic, true);

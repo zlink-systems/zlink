@@ -7,6 +7,15 @@ import { EventEmitter } from 'node:events';
 import { finished } from 'node:stream/promises';
 import { inspect } from 'node:util';
 import { checkStructure } from './structure';
+import {
+  attachedScenarios,
+  captureMessageFlow,
+  keepRunning,
+  reportFailure,
+  scenarioStart,
+  type Endpoints,
+  type Foreground
+} from './run-support';
 import { checkDomain } from './domain-checks';
 import {
   Game,
@@ -22,6 +31,8 @@ import type { NodeConfig } from '../server/shared/config';
 // Scenario failures are nested AggregateErrors; print every level so the cause reaches the CI log (#5312).
 inspect.defaultOptions.depth = null;
 
+const markers = Object.values(Control).filter((marker) => typeof marker === 'string');
+
 class NodeProcess {
   readonly child: ChildProcess;
   private readonly out: ReturnType<typeof createWriteStream>;
@@ -36,23 +47,39 @@ class NodeProcess {
     command: string,
     args: string[],
     logDir: string,
-    sequence: number
+    sequence: number,
+    foreground: boolean
   ) {
     this.out = createWriteStream(`${logDir}/${config.id}-${sequence}.out.log`);
     const err = createWriteStream(`${logDir}/${config.id}-${sequence}.err.log`);
     this.child = spawn(command, args, {
+      detached: foreground,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
+    console.log(`[${config.id}] Starting`);
     this.child.once('spawn', () => this.logDiagnostic('process-spawn'));
+    const flow = captureMessageFlow(
+      this.child.stderr!,
+      `${logDir}/${config.id}-${sequence}.flow.log`,
+      config.id,
+      foreground
+    );
+    // The exit promise reports a log failure after all streams close.
+    void flow.catch(() => {});
     this.child.stdout!.pipe(this.out);
     this.child.stderr!.pipe(err);
     const reader = createInterface({ input: this.child.stdout! });
     reader.on('line', (line) => {
       const at = new Date().toISOString();
-      this.lines.push(line);
+      if (markers.some((marker) => line.startsWith(marker))) this.lines.push(line);
+      else if (foreground) console.log(`[${config.id}] ${line}`);
       this.lastLine = { at, line };
-      if (line.startsWith(Control.ready)) this.logDiagnostic('ready-line-received', { line }, at);
+      if (line.startsWith(Control.ready)) {
+        this.logDiagnostic('ready-line-received', { line }, at);
+        const { endpoint } = JSON.parse(line.slice(Control.ready.length)) as { endpoint: string };
+        console.log(`[${config.id}] Ready ${endpoint}`);
+      }
       this.changed.emit('change');
     });
     this.exit = new Promise<Error | undefined>((resolve) => {
@@ -61,7 +88,8 @@ class NodeProcess {
         this.exited = true;
         this.changed.emit('change');
         reader.close();
-        Promise.all([finished(this.out), finished(err)]).then(
+        console.log(`[${config.id}] Stopped (exit=${code ?? signal})`);
+        Promise.all([finished(this.out), finished(err), flow]).then(
           () =>
             code === 0
               ? resolve(undefined)
@@ -76,7 +104,9 @@ class NodeProcess {
     details: Record<string, string | null> = {},
     at = new Date().toISOString()
   ): void {
-    this.out.write(`ZLINK_E2E_DIAG ${JSON.stringify({ at, event, node: this.config.id, ...details })}\n`);
+    this.out.write(
+      `ZLINK_E2E_DIAG ${JSON.stringify({ at, event, node: this.config.id, ...details })}\n`
+    );
   }
   async wait(prefix: string, timeoutMs: number): Promise<string> {
     if (prefix.startsWith(Control.ready)) this.logDiagnostic('ready-wait-start');
@@ -111,9 +141,8 @@ class NodeProcess {
     });
   }
   async ready(): Promise<{ id: string; endpoint: string }> {
-    return JSON.parse(
-      (await this.wait(Control.ready, Limits.startupMs)).slice(Control.ready.length)
-    ) as {
+    const line = await this.wait(Control.ready, Limits.startupBudgetMs + Limits.shutdownMs);
+    return JSON.parse(line.slice(Control.ready.length)) as {
       id: string;
       endpoint: string;
     };
@@ -151,23 +180,23 @@ async function main(): Promise<void> {
     checkDomain();
     return;
   }
-  let selected: readonly string[] = Scenarios;
-  if (args.length) {
-    assert.equal(args.length, 2);
-    assert.equal(args[0], '--scenario');
-    const requested = args[1].split(',');
-    assert.equal(new Set(requested).size, requested.length, 'Duplicate scenario');
-    for (const name of requested)
-      assert(Scenarios.includes(name as (typeof Scenarios)[number]), `Unknown scenario ${name}`);
-    selected = Scenarios.filter((s) => requested.includes(s));
-  }
+  const selected = selectScenarios(args);
   checkStructure();
   checkDomain();
   const runId = randomUUID();
   const logDir = `.logs/run-${runId}`;
   mkdirSync(logDir, { recursive: true });
+  process.exitCode = (await runCluster(selected, runId, logDir)) ? 0 : 1;
+}
+
+async function runCluster(
+  selected: readonly string[],
+  runId: string,
+  logDir: string,
+  foreground?: Foreground
+): Promise<boolean> {
   const project = `my-game-${runId}`;
-  const dockerProject = process.env.MY_GAME_DOCKER_PROJECT;
+  const dockerProject = foreground ? undefined : process.env.MY_GAME_DOCKER_PROJECT;
   const containers: string[] = [];
   const nodes = new Map<string, NodeProcess>();
   const all: NodeProcess[] = [];
@@ -202,7 +231,7 @@ async function main(): Promise<void> {
     writeFileSync(path, JSON.stringify(config, null, 2));
     const entrypoint = `dist/${NodeEntrypoints[role].replace(/\.ts$/, '.js')}`;
     let command = process.execPath;
-    let args = [entrypoint, path];
+    let args = ['--require', './dist/server/shared/diagnostics.js', entrypoint, path];
     if (dockerProject) {
       const container = `${dockerProject}-${config.id.toLowerCase()}-${runId}-${all.length}`;
       const image = process.env.MY_GAME_NODE_IMAGE;
@@ -219,7 +248,7 @@ async function main(): Promise<void> {
           '--network',
           `container:${runner}`,
           image,
-          entrypoint,
+          ...args.slice(0, -1),
           '/template/node.json'
         ],
         `${config.id}-create-${all.length}`
@@ -232,13 +261,18 @@ async function main(): Promise<void> {
       command = 'docker';
       args = ['start', '-a', '-i', container];
     }
-    const node = new NodeProcess(config, role, command, args, logDir, all.length);
+    const node = new NodeProcess(config, role, command, args, logDir, all.length, !!foreground);
     all.push(node);
     nodes.set(config.id, node);
     return node;
   }
   try {
-    if (!dockerProject) await compose(['up', '-d', '--wait'], 'up');
+    if (!dockerProject) {
+      console.log('[redis] Starting');
+      await compose(['up', '-d', '--wait'], 'up');
+      console.log('[redis] Ready');
+    }
+    foreground?.signal.throwIfAborted();
     const redis = dockerProject ? 'redis:6379' : await compose(['port', 'redis', '6379'], 'port');
     const structure = JSON.parse(readFileSync('zlink.structure.json', 'utf8')) as {
       nodes: { role: string; config: string | null }[];
@@ -248,6 +282,7 @@ async function main(): Promise<void> {
     const startupOrder = ['zone', 'instance', 'session'];
     applicationNodes.sort((a, b) => startupOrder.indexOf(a.role) - startupOrder.indexOf(b.role));
     for (const node of applicationNodes) {
+      foreground?.signal.throwIfAborted();
       if (node.role !== 'session' && node.role !== 'zone' && node.role !== 'instance') continue;
       assert(node.config);
       const cfg = JSON.parse(readFileSync(node.config, 'utf8')) as NodeConfig;
@@ -264,62 +299,137 @@ async function main(): Promise<void> {
     const session = [...nodes.values()].find((n) => n.role === 'session');
     assert(session);
     const endpoint = ready.find((r) => r.id === session.config.id)!.endpoint;
-    const { scenario } = await import('./client.mjs');
-    const control = {
-      async drain(id: string): Promise<void> {
-        const node = nodes.get(id);
-        assert(node, `Unknown host ${id}`);
-        await node.drain();
-      },
-      async replace(id: string): Promise<void> {
-        const node = nodes.get(id);
-        assert(node);
-        await node.stop();
-        const replacement = await start(node.config, node.role);
-        await replacement.ready();
-      }
-    };
-    for (const name of selected) {
-      try {
-        await scenario(name, endpoint, runId, logDir, control);
-        passed++;
-        console.log(`✓ ${name}`);
-      } catch (error) {
-        failed = true;
-        console.error(`✗ ${name}`, error);
+    if (foreground) {
+      await keepRunning(
+        foreground,
+        { stream: endpoint },
+        logDir,
+        all.map((node) => node.exit.then((error) => error ?? new Error(`${node.config.id} exited`)))
+      );
+    } else {
+      const { scenario } = await import('./client.mjs');
+      const control = {
+        async drain(id: string): Promise<void> {
+          const node = nodes.get(id);
+          assert(node, `Unknown host ${id}`);
+          await node.drain();
+        },
+        async replace(id: string): Promise<void> {
+          const node = nodes.get(id);
+          assert(node);
+          await node.stop();
+          const replacement = await start(node.config, node.role);
+          await replacement.ready();
+        }
+      };
+      for (const name of selected) {
+        scenarioStart(name, selected);
+        try {
+          await scenario(name, endpoint, runId, logDir, control);
+          passed++;
+          console.log(`✓ ${name}`);
+        } catch (error) {
+          failed = true;
+          reportFailure(`✗ ${name}`, error, logDir, name);
+        }
       }
     }
   } catch (error) {
-    failed = true;
-    console.error('Startup failed', error);
+    if (!foreground || error !== foreground.signal.reason) {
+      failed = true;
+      reportFailure(foreground ? 'Server failed' : 'Startup failed', error, logDir, 'startup');
+    }
   } finally {
     for (const node of all.reverse())
       try {
         await node.stop();
       } catch (error) {
         failed = true;
-        console.error('Node cleanup failed', error);
+        reportFailure('Node cleanup failed', error, logDir, node.config.id + '-cleanup');
       }
     for (const container of containers) {
       try {
         await docker(['rm', '-f', container], `${container}-remove`);
       } catch (error) {
         failed = true;
-        console.error('Container cleanup failed', error);
+        reportFailure('Container cleanup failed', error, logDir, container + '-cleanup');
       }
     }
     try {
-      if (!dockerProject) await compose(['down', '--volumes', '--remove-orphans'], 'down');
+      if (!dockerProject) await compose(['logs', '--no-color'], 'redis');
     } catch (error) {
       failed = true;
-      console.error('Redis cleanup failed', error);
+      reportFailure('Redis log collection failed', error, logDir, 'redis-logs');
+    }
+    try {
+      if (!dockerProject) {
+        await compose(['down', '--volumes', '--remove-orphans'], 'down');
+        console.log('[redis] Stopped');
+      }
+    } catch (error) {
+      failed = true;
+      reportFailure('Redis cleanup failed', error, logDir, 'redis-cleanup');
+    }
+  }
+  if (!foreground) console.log(`Scenarios: ${passed}/${selected.length} passed`);
+  if (!foreground || failed) console.log(`Logs: ${logDir}`);
+  return !failed;
+}
+function selectScenarios(args: string[]): readonly string[] {
+  let selected: readonly string[] = Scenarios;
+  if (args.length) {
+    assert.equal(args.length, 2);
+    assert.equal(args[0], '--scenario');
+    const requested = args[1].split(',');
+    assert.equal(new Set(requested).size, requested.length, 'Duplicate scenario');
+    for (const name of requested)
+      assert(Scenarios.includes(name as (typeof Scenarios)[number]), `Unknown scenario ${name}`);
+    selected = Scenarios.filter((s) => requested.includes(s));
+  }
+  return selected;
+}
+
+export async function serve(
+  runId: string,
+  logDir: string,
+  signal: AbortSignal,
+  publish: Foreground['publish']
+): Promise<void> {
+  checkStructure();
+  process.exitCode = (await runCluster([], runId, logDir, { signal, publish })) ? 0 : 1;
+}
+
+export async function attach(args: string[], endpoints: Endpoints): Promise<void> {
+  const selected = attachedScenarios(selectScenarios(args), ['update']);
+  const runId = randomUUID();
+  const logDir = `.logs/run-${runId}`;
+  mkdirSync(logDir, { recursive: true });
+  console.log(`Logs: ${logDir}`);
+  if (!selected.length) {
+    console.log('Scenarios: 0/0 passed');
+    return;
+  }
+  const { scenario } = await import('./client.mjs');
+  let passed = 0;
+  for (const name of selected) {
+    scenarioStart(name, selected);
+    const scenarioLog = `${logDir}/${name}`;
+    mkdirSync(scenarioLog);
+    try {
+      await scenario(name, endpoints.stream, runId, scenarioLog);
+      console.log(`✓ ${name}`);
+      passed++;
+    } catch (error) {
+      reportFailure(`✗ ${name}`, error, logDir, name);
     }
   }
   console.log(`Scenarios: ${passed}/${selected.length} passed`);
-  console.log(`Logs: ${logDir}`);
-  process.exitCode = failed ? 1 : 0;
+  process.exitCode = passed === selected.length ? 0 : 1;
 }
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

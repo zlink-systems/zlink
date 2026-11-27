@@ -44,7 +44,7 @@ internal sealed class ZLinkActorRuntimeState(
     private ZLinkActorBoundSession? _boundSession;
     private ZLinkPendingActorSessionRoute? _pendingSessionRoute;
     private ZLinkSourceSessionRelocation? _sourceSessionRelocation;
-    private TaskCompletionSource<Exception?>? _teardownAttempt;
+    private TeardownAttempt? _teardownAttempt;
     private readonly IServiceProvider _services = services ?? EmptyServices;
     private ZLinkActorHandlerActivation? _handlerActivation;
     private bool _handlerActivationClosed;
@@ -181,11 +181,14 @@ internal sealed class ZLinkActorRuntimeState(
         return RunState(() =>
         {
             CloseHandlerActivationCore();
-            var barrier = _dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier();
+            var previous = _terminalLifecycleCompletion;
+            var barrier = previous is null
+                ? _dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier()
+                : null;
             Task<T> completion;
             using (ExecutionContext.SuppressFlow())
                 completion = Task.Run(() =>
-                    CompleteHandlerActivationAsyncCoreAsync(barrier, terminalTransition)
+                    CompleteHandlerActivationAsyncCoreAsync(barrier, previous, terminalTransition)
                 );
             _terminalLifecycleCompletion = completion;
             return new ZLinkActorHandlerTerminalCompletion<T>(completion, requiresDispatchRelease);
@@ -225,7 +228,8 @@ internal sealed class ZLinkActorRuntimeState(
     }
 
     private async Task<T> CompleteHandlerActivationAsyncCoreAsync<T>(
-        ZLinkActorSerialExecutor.BarrierReservation barrier,
+        ZLinkActorSerialExecutor.BarrierReservation? barrier,
+        Task? previous,
         Func<ValueTask<T>> terminalTransition
     )
     {
@@ -234,15 +238,21 @@ internal sealed class ZLinkActorRuntimeState(
         // must not run while the managed Actor mailbox turn remains claimed.
         try
         {
-            using (await barrier.ClaimAsync().ConfigureAwait(false)) { }
-            await barrier.Completion.ConfigureAwait(false);
+            if (barrier is not null)
+            {
+                using (await barrier.ClaimAsync().ConfigureAwait(false)) { }
+                await barrier.Completion.ConfigureAwait(false);
+            }
+            else
+                await previous!.ConfigureAwait(false);
             var result = await terminalTransition().ConfigureAwait(false);
             await DisposeHandlerActivationAsync().ConfigureAwait(false);
             return result;
         }
         finally
         {
-            await _dispatchMailbox.ReleaseExecutionPlacementAsync().ConfigureAwait(false);
+            if (barrier is not null)
+                await _dispatchMailbox.ReleaseExecutionPlacementAsync().ConfigureAwait(false);
         }
     }
 
@@ -368,8 +378,7 @@ internal sealed class ZLinkActorRuntimeState(
     private volatile bool _reservedCreationPending;
     internal int _deferredJoinPending;
 
-    public bool IsDispatchBlocked =>
-        _destroyPhase != ZLinkActorDestroyPhase.None || _reservedCreationPending;
+    public bool IsDispatchBlocked => DispatchBlockKind() is not null;
 
     public bool IsTeardownPending => _destroyPhase != ZLinkActorDestroyPhase.None;
 
@@ -1330,7 +1339,8 @@ internal sealed class ZLinkActorRuntimeState(
         var teardownAttempt = _teardownAttempt;
         Handoff.AbortRuntimeGeneration(failure);
         _ = TransitionLocalInstanceCore(ZLinkActorTerminalTransition.Destroyed, null);
-        teardownAttempt?.TrySetResult(failure);
+        teardownAttempt?.Closing?.TrySetResult(failure);
+        teardownAttempt?.Terminal.TrySetResult(failure);
     }
 
     public void RetireMigratedActorInstance(ZLinkBackendActorRef sourceActor) =>
@@ -1477,8 +1487,29 @@ internal sealed class ZLinkActorRuntimeState(
             RetiredLocalActorRef = null;
     }
 
+    internal async ValueTask WaitForPriorDestroyAsync(
+        ulong generation,
+        CancellationToken cancellationToken
+    )
+    {
+        var terminal = await ExecuteLockedAsync(
+                () =>
+                    NativeActorRef is { } current && current.Generation != generation
+                        ? _teardownAttempt?.Terminal.Task
+                        : null,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        if (
+            terminal is not null
+            && await terminal.WaitAsync(cancellationToken).ConfigureAwait(false) is { } failure
+        )
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
     internal ZLinkActorTeardownOperation BeginOrJoinTeardownAttemptOnLane(
-        ZLinkBackendActorRef nativeActor
+        ZLinkBackendActorRef nativeActor,
+        bool publishClosing = false
     )
     {
         // Actor model §6.8: an absent incarnation is idempotent; a replacement
@@ -1491,16 +1522,24 @@ internal sealed class ZLinkActorRuntimeState(
                 $"Actor '{ActorId}' teardown does not match the current incarnation."
             );
         if (_teardownAttempt is { } existing)
-            return new ZLinkActorTeardownOperation(existing.Task, false, false);
+            return new ZLinkActorTeardownOperation(
+                existing.Terminal.Task,
+                false,
+                false,
+                existing.Closing?.Task
+            );
 
-        CloseHandlerActivationCore();
-        FenceRuntimeGeneration(ZLinkObjectExecutionStatus.Stopped);
+        var closingPending = publishClosing && _destroyPhase == ZLinkActorDestroyPhase.None;
+        if (!closingPending)
+            FenceTeardownExecution();
         var nativeAlreadyDestroyed = false;
         switch (_destroyPhase)
         {
             case ZLinkActorDestroyPhase.None:
             case ZLinkActorDestroyPhase.DestroyingNative:
-                _destroyPhase = ZLinkActorDestroyPhase.DestroyingNative;
+                _destroyPhase = closingPending
+                    ? ZLinkActorDestroyPhase.PublishingClosing
+                    : ZLinkActorDestroyPhase.DestroyingNative;
                 break;
             case ZLinkActorDestroyPhase.NativeDestroyed:
                 _destroyPhase = ZLinkActorDestroyPhase.ReleasingOwnership;
@@ -1512,10 +1551,46 @@ internal sealed class ZLinkActorRuntimeState(
                 );
         }
 
-        _teardownAttempt = new TaskCompletionSource<Exception?>(
-            TaskCreationOptions.RunContinuationsAsynchronously
+        _teardownAttempt = new TeardownAttempt(closingPending);
+        return new ZLinkActorTeardownOperation(
+            _teardownAttempt.Terminal.Task,
+            true,
+            nativeAlreadyDestroyed,
+            _teardownAttempt.Closing?.Task
         );
-        return new ZLinkActorTeardownOperation(_teardownAttempt.Task, true, nativeAlreadyDestroyed);
+    }
+
+    internal void FinishClosingOnLane(ZLinkActorTeardownOperation operation, Exception? failure)
+    {
+        EnsureCurrentTeardownAttempt(operation);
+        var attempt = _teardownAttempt!;
+        if (failure is null)
+        {
+            FenceTeardownExecution();
+            _destroyPhase = ZLinkActorDestroyPhase.DestroyingNative;
+        }
+        else
+        {
+            _destroyPhase = ZLinkActorDestroyPhase.None;
+            _teardownAttempt = null;
+            attempt.Terminal.TrySetResult(failure);
+        }
+        attempt.Closing!.TrySetResult(failure);
+    }
+
+    private void FenceTeardownExecution()
+    {
+        CloseHandlerActivationCore();
+        FenceRuntimeGeneration(ZLinkObjectExecutionStatus.Stopped);
+    }
+
+    private sealed class TeardownAttempt(bool closingPending)
+    {
+        public TaskCompletionSource<Exception?> Terminal { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<Exception?>? Closing { get; } =
+            closingPending ? new(TaskCreationOptions.RunContinuationsAsynchronously) : null;
     }
 
     public void MarkNativeDestroyed(ZLinkActorTeardownOperation operation)
@@ -1529,7 +1604,8 @@ internal sealed class ZLinkActorRuntimeState(
     public void FailTeardownAttempt(
         ZLinkActorTeardownOperation operation,
         bool nativeDestroyed,
-        Exception failure
+        Exception failure,
+        bool keepTerminal = false
     )
     {
         EnsureCurrentTeardownAttempt(operation);
@@ -1537,8 +1613,9 @@ internal sealed class ZLinkActorRuntimeState(
             _destroyPhase = ZLinkActorDestroyPhase.NativeDestroyed;
         else
             _destroyPhase = ZLinkActorDestroyPhase.DestroyingNative;
-        var completion = _teardownAttempt!;
-        _teardownAttempt = null;
+        var completion = _teardownAttempt!.Terminal;
+        if (!keepTerminal)
+            _teardownAttempt = null;
         completion.TrySetResult(failure);
     }
 
@@ -1551,7 +1628,7 @@ internal sealed class ZLinkActorRuntimeState(
     )
     {
         EnsureCurrentTeardownAttempt(operation);
-        var completion = _teardownAttempt!;
+        var completion = _teardownAttempt!.Terminal;
         var boundSession = ClearAfterDestroyOnLane();
         completion.TrySetResult(null);
         return boundSession;
@@ -1561,7 +1638,7 @@ internal sealed class ZLinkActorRuntimeState(
     {
         if (
             _teardownAttempt is null
-            || !ReferenceEquals(_teardownAttempt.Task, operation.Completion)
+            || !ReferenceEquals(_teardownAttempt.Terminal.Task, operation.Completion)
         )
             throw new InvalidOperationException(
                 $"Actor '{ActorId}' teardown operation is no longer current."
@@ -1805,7 +1882,7 @@ internal sealed class ZLinkActorRuntimeState(
         CancellationToken cancellationToken
     )
     {
-        EnsureReusable();
+        EnsureDispatchNotBlocked();
         using var turn = await _dispatchMailbox.EnterAsync(cancellationToken).ConfigureAwait(false);
         EnsureDispatchAvailable();
         using var dispatch = EnterDispatch();
@@ -1820,7 +1897,7 @@ internal sealed class ZLinkActorRuntimeState(
         ZLinkSpotRelocationActorQueueReservation? replayReservation = null
     )
     {
-        EnsureReusable();
+        EnsureDispatchNotBlocked();
         if (replayReservation is not null)
         {
             T result = default!;
@@ -1904,17 +1981,38 @@ internal sealed class ZLinkActorRuntimeState(
 
     private void EnsureDispatchAvailable(bool allowRelocationReplay = false)
     {
-        if (
-            IsLocationExecutionAllowed
-            && !IsDispatchBlocked
-            && (allowRelocationReplay || !Handoff.BlocksLocalDispatch)
-        )
+        EnsureDispatchNotBlocked();
+        if (IsLocationExecutionAllowed && (allowRelocationReplay || !Handoff.BlocksLocalDispatch))
             return;
 
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.NotFound,
             $"Actor '{ActorId}' is not available while its lifecycle transition is active."
         );
+    }
+
+    internal ZLinkFrameworkException? DispatchBlockFailure(ulong? requestedGeneration = null) =>
+        DispatchBlockKind(requestedGeneration) is { } kind
+            ? new ZLinkFrameworkException(kind, $"Actor '{ActorId}' is not accepting dispatch.")
+            : null;
+
+    private ZLinkFrameworkErrorKind? DispatchBlockKind(ulong? requestedGeneration = null)
+    {
+        var phase = _destroyPhase;
+        if (phase == ZLinkActorDestroyPhase.None && !_reservedCreationPending)
+            return null;
+
+        return
+            phase == ZLinkActorDestroyPhase.PublishingClosing
+            && (requestedGeneration is null || NativeActorRef?.Generation == requestedGeneration)
+            ? ZLinkFrameworkErrorKind.Unavailable
+            : ZLinkFrameworkErrorKind.NotFound;
+    }
+
+    private void EnsureDispatchNotBlocked()
+    {
+        if (DispatchBlockFailure() is { } failure)
+            throw failure;
     }
 
     private void EnsureReusable()
@@ -2025,6 +2123,7 @@ internal sealed class ZLinkActorRuntimeState(
 internal enum ZLinkActorDestroyPhase
 {
     None,
+    PublishingClosing,
     DestroyingNative,
     NativeDestroyed,
     ReleasingOwnership,
@@ -2033,7 +2132,8 @@ internal enum ZLinkActorDestroyPhase
 internal readonly record struct ZLinkActorTeardownOperation(
     Task<Exception?> Completion,
     bool OwnsExecution,
-    bool NativeAlreadyDestroyed
+    bool NativeAlreadyDestroyed,
+    Task<Exception?>? Closing = null
 );
 
 internal readonly record struct ZLinkActorHandlerTerminalCompletion<T>(

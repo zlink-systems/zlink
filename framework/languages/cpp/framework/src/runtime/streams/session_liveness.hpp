@@ -3,6 +3,7 @@
 
 #include <zlink/framework/contracts/streams/stream.hpp>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -12,6 +13,35 @@ namespace zlink::framework::runtime
 struct session_liveness_t
 {
     using clock_t = std::chrono::steady_clock;
+    class reader_t
+    {
+      public:
+        reader_t () noexcept : _resumed_at (clock_t::time_point::min ()) {}
+
+        void observe_permit (bool acquired) noexcept
+        {
+            if (!acquired)
+                _resumed_at.store (waiting, std::memory_order_relaxed);
+            else if (_resumed_at.load (std::memory_order_relaxed) == waiting)
+                _resumed_at.store (clock_t::now (), std::memory_order_relaxed);
+        }
+
+        clock_t::time_point inbound_due (clock_t::time_point last_activity,
+                                         std::chrono::milliseconds timeout) const noexcept
+        {
+            if (timeout.count () <= 0)
+                return clock_t::time_point::max ();
+            const auto resumed_at = _resumed_at.load (std::memory_order_relaxed);
+            return resumed_at == waiting ? clock_t::time_point::max ()
+                                         : due_at (std::max (last_activity, resumed_at), timeout);
+        }
+
+      private:
+        static constexpr auto waiting = clock_t::time_point::max ();
+        // Only the reader writes. Core test-created sessions can read from the test thread.
+        std::atomic<clock_t::time_point> _resumed_at;
+    };
+
     clock_t::time_point last_application_inbound;
     clock_t::time_point last_ping_phase;
     clock_t::time_point last_inbound;
@@ -53,19 +83,18 @@ struct session_liveness_t
             last_application_inbound = std::max (last_application_inbound, now);
     }
 
-    decision_t evaluate (clock_t::time_point now = clock_t::now ())
+    decision_t evaluate (clock_t::time_point now = clock_t::now (), const reader_t &reader = {})
     {
         if (forced_reason) {
             return decision_t::none;
         }
-        if (std::chrono::duration_cast<std::chrono::milliseconds> (now - last_inbound)
-            >= options.heartbeat_timeout) {
+        const auto expired = [now] (clock_t::time_point due) {
+            return due != clock_t::time_point::max () && now >= due;
+        };
+        if (expired (reader.inbound_due (last_inbound, options.heartbeat_timeout))) {
             return decision_t::heartbeat_timeout;
         }
-        if (options.idle_timeout.count () > 0
-            && std::chrono::duration_cast<std::chrono::milliseconds> (now
-                                                                      - last_application_inbound)
-                 >= options.idle_timeout) {
+        if (expired (reader.inbound_due (last_application_inbound, options.idle_timeout))) {
             return decision_t::idle_timeout;
         }
         if (std::chrono::duration_cast<std::chrono::milliseconds> (now - last_ping_phase)
@@ -78,20 +107,13 @@ struct session_liveness_t
         return decision_t::none;
     }
 
-    clock_t::time_point next_due () const noexcept
+    clock_t::time_point next_due (const reader_t &reader = {}) const noexcept
     {
         if (forced_reason)
             return clock_t::time_point::max ();
-        const auto due_at = [] (clock_t::time_point baseline, std::chrono::milliseconds timeout) {
-            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
-              clock_t::time_point::max () - baseline);
-            return timeout >= remaining ? clock_t::time_point::max () : baseline + timeout;
-        };
-        const auto heartbeat_due = std::min (due_at (last_ping_phase, options.heartbeat_interval),
-                                             due_at (last_inbound, options.heartbeat_timeout));
-        return options.idle_timeout.count () > 0
-                 ? std::min (heartbeat_due, due_at (last_application_inbound, options.idle_timeout))
-                 : heartbeat_due;
+        return std::min ({due_at (last_ping_phase, options.heartbeat_interval),
+                          reader.inbound_due (last_inbound, options.heartbeat_timeout),
+                          reader.inbound_due (last_application_inbound, options.idle_timeout)});
     }
 
     // The connection execution owner records facts and makes terminal decisions.
@@ -105,6 +127,15 @@ struct session_liveness_t
     }
 
     std::optional<stream_close_reason_t> forced () { return forced_reason; }
+
+  private:
+    static clock_t::time_point due_at (clock_t::time_point baseline,
+                                       std::chrono::milliseconds timeout) noexcept
+    {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+          clock_t::time_point::max () - baseline);
+        return timeout >= remaining ? clock_t::time_point::max () : baseline + timeout;
+    }
 };
 
 }

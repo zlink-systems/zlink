@@ -920,10 +920,7 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
             await repository.CommitAsync(reserved.Reservation, readyPayload)
         );
 
-        // Single-row proof: enumerate the Redis keyspace under this test's
-        // isolated prefix and confirm exactly one opaque record key exists
-        // for this authority row's identity -- not a meta+payload(+
-        // generation) triple.
+        // The authority envelope and ID-specific issuance counters have separate keys.
         await using var connection = await ConnectionMultiplexer.ConnectAsync(
             fixture.ConnectionString
         );
@@ -941,8 +938,7 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
             )
             .ToArray();
 
-        JsonElement? authorityJson = null;
-        var matchingKeyCount = 0;
+        var identityRecords = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (var recordKey in recordKeys)
         {
             var members = await database.SortedSetRangeByScoreWithScoresAsync(recordKey);
@@ -952,22 +948,23 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
                 continue;
             var offset = 1;
             _ = ReadArrayHead(bytes, ref offset);
-            var originalKey = System.Text.Encoding.UTF8.GetString(ReadStr(bytes, ref offset));
-            if (!originalKey.Contains("authority-envelope-actor", StringComparison.Ordinal))
-                continue;
-            matchingKeyCount++;
-            var rawBytes = ReadStr(bytes, ref offset);
-            using var parsed = JsonDocument.Parse(rawBytes);
-            authorityJson = parsed.RootElement.Clone();
+            var originalKey = Encoding.UTF8.GetString(ReadStr(bytes, ref offset));
+            if (originalKey.Contains("authority-envelope-actor", StringComparison.Ordinal))
+                identityRecords.Add(originalKey, ReadStr(bytes, ref offset));
         }
 
-        // Single-row proof (checklist C-2b): in the old split scheme, the
-        // meta, payload, and generation keys all embedded the actor id in
-        // their original-key string, so this count would have been 3.
-        // Collapsed to one opaque row, it's 1.
-        Assert.Equal(1, matchingKeyCount);
-        Assert.NotNull(authorityJson);
-        var json = authorityJson!.Value;
+        const string identity = "\0actor\0authority-envelope-actor";
+        Assert.Equal(3, identityRecords.Count);
+        Assert.Equal(
+            "2",
+            Encoding.UTF8.GetString(identityRecords[$"zlink:v12:object-counter{identity}"])
+        );
+        Assert.Equal(
+            "2",
+            Encoding.UTF8.GetString(identityRecords[$"zlink:v12:authority-owner-counter{identity}"])
+        );
+        using var parsed = JsonDocument.Parse(identityRecords[$"authority{identity}"]);
+        var json = parsed.RootElement;
         Assert.Equal(1, json.GetProperty("recordVersion").GetInt32());
         Assert.Equal(Convert.ToBase64String(readyPayload), json.GetProperty("payload").GetString());
         Assert.Matches("^[0-9]+$", json.GetProperty("objectGeneration").GetString()!);

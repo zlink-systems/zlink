@@ -48,12 +48,15 @@ export enum MatchPhase {
 }
 const MessageFollowMs = 30_000;
 const RelocationMs = 25_000;
+const startupMs = 30_000;
 export const Limits = {
   messageFollowMs: MessageFollowMs,
   safeMs: MessageFollowMs + RelocationMs,
   observationCapacity: 64,
   messageMs: 10_000,
-  startupMs: 30_000,
+  startupMs,
+  // The server waits for runtime serving and mesh readiness in sequence.
+  startupBudgetMs: 2 * startupMs,
   relocationMs: RelocationMs,
   shutdownMs: 10_000
 } as const;

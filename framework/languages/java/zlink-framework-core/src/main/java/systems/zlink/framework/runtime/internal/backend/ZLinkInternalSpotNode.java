@@ -632,6 +632,31 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                 Consumer<List<Message>> reply,
                 Consumer<Throwable> failure);
 
+        default boolean handleSpot(
+                ZLinkInternalMeshNode.PeerAuthorityFence source,
+                ZLinkServiceM6BWireCodec.SpotMessage header,
+                byte[] metadata,
+                Supplier<byte[]> acceptedJournalRecord,
+                int acceptedJournalRecordSizeHint,
+                List<Message> parts,
+                String contentType,
+                Consumer<List<Message>> reply,
+                Consumer<Throwable> failure,
+                Runnable admitted) {
+            if (!handleSpot(
+                    source,
+                    header,
+                    metadata,
+                    acceptedJournalRecord,
+                    acceptedJournalRecordSizeHint,
+                    parts,
+                    contentType,
+                    reply,
+                    failure)) return false;
+            if (admitted != null) admitted.run();
+            return true;
+        }
+
         boolean handleActor(
                 ZLinkInternalMeshNode.PeerAuthorityFence source,
                 ZLinkServiceM6BWireCodec.ActorMessage header,
@@ -640,6 +665,22 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                 String contentType,
                 Consumer<List<Message>> reply,
                 Consumer<Throwable> failure);
+
+        default boolean handleActor(
+                ZLinkInternalMeshNode.PeerAuthorityFence source,
+                ZLinkServiceM6BWireCodec.ActorMessage header,
+                Supplier<byte[]> acceptedJournalRecord,
+                List<Message> parts,
+                String contentType,
+                Consumer<List<Message>> reply,
+                Consumer<Throwable> failure,
+                Runnable admitted) {
+            if (!handleActor(
+                    source, header, acceptedJournalRecord, parts, contentType, reply, failure))
+                return false;
+            if (admitted != null) admitted.run();
+            return true;
+        }
     }
 
     CompletionStage<ZLinkBackendReceived> requestToNode(

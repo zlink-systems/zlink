@@ -93,8 +93,14 @@ public sealed class PartyDelivery : IZLinkSpotActorSendHandler<PartySpot, Player
     }
 }
 
-public sealed class RejectionDelivery : IZLinkSpotActorSendHandler<PartySpot, PlayerActor, ActionRejected>
+public sealed class RejectionDelivery
+    : IZLinkSpotActorSendHandler<PartySpot, PlayerActor, ActionRejected>
 {
-    public ValueTask HandleAsync(PartySpot spot, PlayerActor actor, IZLinkMessageContext context, ActionRejected request, CancellationToken ct)
-        => actor.DeliverAsync(request);
+    public ValueTask HandleAsync(
+        PartySpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        ActionRejected request,
+        CancellationToken ct
+    ) => actor.DeliverAsync(request);
 }

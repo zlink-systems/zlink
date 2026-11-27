@@ -27,6 +27,16 @@ The API node may read and write the database per request, but it holds no game s
 
 Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
+## New game projects
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference. Keep this template intact as you build the new project.
+
+## Server and e2e commands
+
+Run one scenario with `./run-e2e.sh --scenario lobby`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
+Use `./run-server.sh` in Bash or `.\run-server.cmd` on Windows to build and start Redis and the nodes. The foreground process prints the client address and stops its children on Ctrl+C. In another terminal, use `./run-e2e.sh` or `.\run-e2e.cmd` to attach through `.logs/server.json` or start an isolated Docker run. The runner reports which scenarios require isolation. Each run writes node stdout, stderr, Framework message-flow and failure details under `.logs/run-<id>/`. See [README](README.md) for prerequisites and options.
+
 ## Project and development
 
 Extend this C++20 FPS template with the game rules in this project. It runs an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, creates a Room ID from the configured prefix and a UUID, and waits for `RoomPrepared` before returning the Room ID and Session endpoint. Session accepts `JoinRoomRequest` as the first game packet; `RoomRoster` owns admission. Public Framework and connector packages are pinned to 0.34.1 in `bootstrap.cmake`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes topology and scenario order.
@@ -52,6 +62,10 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 For host-process debugging, install a C++20 compiler (GCC 13 or later, or Visual Studio 2022 17.4 or later in a developer shell on Windows), CMake 3.24 or later and Ninja. Add `--local` or `-Local`; after a local build, `--no-build` or `-NoBuild` skips compilation. The runner executes 46 game-domain checks and 19 lobby-domain checks before scenarios. After a local build, `ctest --test-dir build --output-on-failure` runs both domain targets.
 
 ## Modules and extension points
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use `std::optional<T>` in the DTO for nullable fields. To allow omission, separately mark the field `zlink::json::defaulted` in `dto_traits`.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/cpp/guide/server/20-channel-messaging/#12-message-value-rules)
 
 - `server/shared/contracts.hpp` and `server/match/domain.hpp`: game contracts, limits, geometry, map, spawns, player boxes and `RoomState`. Keep the entry and HTTP template copies byte-identical.
 - `server/shared/http_lobby_contracts.hpp`: HTTP and server-only preparation contracts. `server/shared/hosting.hpp` publishes HTTP readiness without adding it to the client packet allowlist.

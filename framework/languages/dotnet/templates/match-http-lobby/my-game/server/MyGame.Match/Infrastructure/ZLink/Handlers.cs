@@ -88,7 +88,8 @@ public sealed class MatchEndedDelivery
 }
 
 [ZLinkSpotRequestHandler(nameof(PrepareRoom))]
-public sealed class PrepareRoomHandler : IZLinkSpotRequestHandler<RoomSpot, PrepareRoom, RoomPrepared>
+public sealed class PrepareRoomHandler
+    : IZLinkSpotRequestHandler<RoomSpot, PrepareRoom, RoomPrepared>
 {
     public ValueTask<RoomPrepared> HandleAsync(
         RoomSpot spot,

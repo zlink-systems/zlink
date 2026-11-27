@@ -25,9 +25,13 @@ GameHosting.Configure(
                 GameNames.PlayerType,
                 factory => factory.PreserveStateWith<PlayerRelocation>()
             )
-            .AddSpotFactory<PartySpot>(GameNames.PartyType, factory => factory
-                .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
-                .PreserveStateWith<PartyRelocation>())
+            .AddSpotFactory<PartySpot>(
+                GameNames.PartyType,
+                factory =>
+                    factory
+                        .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
+                        .PreserveStateWith<PartyRelocation>()
+            )
             .AddSpotFactory<FieldSpot>(
                 GameNames.FieldType,
                 factory =>

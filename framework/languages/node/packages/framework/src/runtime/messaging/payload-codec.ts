@@ -104,20 +104,30 @@ export function encodeFrameworkPayloadMessage(
     );
   }
 
-  return rememberContentType(
-    RuntimeMessage.fromOwned(
-      Buffer.from(
-        stringifyFrameworkJsonV1(
-          payload,
-          (resolveFrameworkPacketJsonContract(payload, packetName) ??
-            (packetName === undefined ? undefined : readZLinkPacketJsonContract(packetName)))?.[
-            contractPart
-          ]
-        )
-      )
-    ),
-    JSON_CONTENT_TYPE
-  );
+  let encoded: string;
+  try {
+    encoded = stringifyFrameworkJsonV1(
+      payload,
+      (resolveFrameworkPacketJsonContract(payload, packetName) ??
+        (packetName === undefined ? undefined : readZLinkPacketJsonContract(packetName)))?.[
+        contractPart
+      ]
+    );
+  } catch (error) {
+    if (
+      !(error instanceof TypeError || error instanceof RangeError) ||
+      !isFrameworkJsonDiagnostic(error)
+    ) {
+      throw error;
+    }
+    const type = declaredType ?? outboundBusinessType(payload);
+    const message = describeFrameworkJsonError(type?.name ?? packetName, error);
+    const options = { cause: error.cause };
+    throw error instanceof RangeError
+      ? new RangeError(message, options)
+      : new TypeError(message, options);
+  }
+  return rememberContentType(RuntimeMessage.fromOwned(Buffer.from(encoded)), JSON_CONTENT_TYPE);
 }
 
 export function encodeFrameworkPayload(
@@ -177,12 +187,7 @@ function decodeFrameworkPayload<T>(
   try {
     value = parseFrameworkJsonV1(message.getString('utf8'), undefined, schema);
   } catch (error) {
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
-      'PayloadDecodeFailed: framework payload is not valid JSON.',
-      false,
-      error
-    );
+    throw frameworkJsonDecodeError(type?.name ?? packetName, error);
   }
   return materializeZLinkMessageValue(value as T, type);
 }
@@ -221,13 +226,34 @@ function decodeFrameworkEncodedPayload<T>(
       type
     );
   } catch (error) {
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
-      'PayloadDecodeFailed: framework payload is not valid JSON.',
-      false,
-      error
-    );
+    throw frameworkJsonDecodeError(type?.name ?? packetName, error);
   }
+}
+
+function frameworkJsonDecodeError(messageName: string | undefined, error: unknown): Error {
+  return createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
+    isFrameworkJsonDiagnostic(error)
+      ? `PayloadDecodeFailed: framework payload is not valid JSON. ${describeFrameworkJsonError(messageName, error)}`
+      : 'PayloadDecodeFailed: framework payload is not valid JSON.',
+    false,
+    error
+  );
+}
+
+function isFrameworkJsonDiagnostic(error: unknown): error is Error {
+  return error instanceof Error && error.message.startsWith('framework-json-v1 ');
+}
+
+function describeFrameworkJsonError(messageName: string | undefined, error: Error): string {
+  const detail = error.message;
+  const correction =
+    error instanceof TypeError && detail.startsWith("framework-json-v1 value '")
+      ? ' Declare a field nullable in the packet schema if it accepts null.'
+      : '';
+  return messageName === undefined
+    ? detail + correction
+    : `Message '${messageName}': ${detail}${correction}`;
 }
 
 function receiveCodecFor(

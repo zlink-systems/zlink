@@ -17,7 +17,13 @@ import type {
 } from '@zlink-systems/framework';
 import type { ZlinkStreamEncodedPayload } from '@zlink-systems/stream-connector';
 import { Game } from '../server/shared/constants';
-import { ActionRejected, MoveRequest, PlayerPosition, RegionView, SessionInfoRequest } from '../server/shared/messages';
+import {
+  ActionRejected,
+  MoveRequest,
+  PlayerPosition,
+  RegionView,
+  SessionInfoRequest
+} from '../server/shared/messages';
 
 @Injectable()
 class WireSessionFactory implements ZLinkSessionFactory {
@@ -26,7 +32,9 @@ class WireSessionFactory implements ZLinkSessionFactory {
       context,
       async onDispatch(): Promise<void> {
         await context.client.send(new MoveRequest(10, Game.maxSafeInteger)).submit();
-        await context.client.send(new RegionView('forest-1', 'regionA', [new PlayerPosition('p1', 10, 4n)])).submit();
+        await context.client
+          .send(new RegionView('forest-1', 'regionA', [new PlayerPosition('p1', 10, 4n)]))
+          .submit();
         await context.client.send(new ActionRejected('move-budget', 120)).submit();
       }
     };
@@ -60,7 +68,8 @@ export async function runWireChecks(): Promise<void> {
   try {
     const expected: Record<string, string> = {
       MoveRequest: '{"delta":10,"sequence":"9007199254740991"}',
-      RegionView: '{"regionId":"forest-1","nodeId":"regionA","players":[{"playerId":"p1","x":10,"sequence":"4"}]}',
+      RegionView:
+        '{"regionId":"forest-1","nodeId":"regionA","players":[{"playerId":"p1","x":10,"sequence":"4"}]}',
       ActionRejected: '{"reason":"move-budget","retryAfterMs":120}'
     };
     const received: Promise<void>[] = [];

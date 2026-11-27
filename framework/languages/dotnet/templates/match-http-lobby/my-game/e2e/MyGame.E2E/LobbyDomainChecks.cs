@@ -17,7 +17,8 @@ internal static class LobbyDomainChecks
             checkedCount++;
         }
 
-        static bool Equal<T>(T a, T b) => JsonSerializer.Serialize(a) == JsonSerializer.Serialize(b);
+        static bool Equal<T>(T a, T b) =>
+            JsonSerializer.Serialize(a) == JsonSerializer.Serialize(b);
 
         bool Rejects(Action action)
         {
@@ -37,13 +38,25 @@ internal static class LobbyDomainChecks
         }
 
         var roster = new RoomRoster();
-        Check(!roster.CanAdmit("a") && !roster.CanAdmit("outsider"), "unprepared Room rejects admission");
-        Check(Rejects(() => roster.Prepare("room", new("other", ["a", "b"]))), "wrong match identity");
-        Check(Rejects(() => roster.Prepare("room", new("room", ["a", "a"]))), "duplicate roster member");
+        Check(
+            !roster.CanAdmit("a") && !roster.CanAdmit("outsider"),
+            "unprepared Room rejects admission"
+        );
+        Check(
+            Rejects(() => roster.Prepare("room", new("other", ["a", "b"]))),
+            "wrong match identity"
+        );
+        Check(
+            Rejects(() => roster.Prepare("room", new("room", ["a", "a"]))),
+            "duplicate roster member"
+        );
         Check(Rejects(() => roster.Prepare("room", new("room", ["a"]))), "incomplete roster");
 
         var members = new[] { "a", "b" };
-        Check(roster.Prepare("room", new("room", members)).MatchId == "room", "preparation acknowledges identity");
+        Check(
+            roster.Prepare("room", new("room", members)).MatchId == "room",
+            "preparation acknowledges identity"
+        );
         members[0] = "outsider";
         Check(
             roster.CanAdmit("a") && roster.CanAdmit("b") && !roster.CanAdmit("outsider"),
@@ -75,7 +88,10 @@ internal static class LobbyDomainChecks
         Check(
             envelopeWire.RootElement.TryGetProperty(nameof(HttpRoomSnapshot.Game), out var gameWire)
                 && gameWire.ValueKind == JsonValueKind.Object
-                && envelopeWire.RootElement.TryGetProperty(nameof(HttpRoomSnapshot.Roster), out var rosterWire)
+                && envelopeWire.RootElement.TryGetProperty(
+                    nameof(HttpRoomSnapshot.Roster),
+                    out var rosterWire
+                )
                 && rosterWire.ValueKind == JsonValueKind.Object
                 && restoredRoster.CanAdmit("a")
                 && restoredRoster.CanAdmit("b")
@@ -88,7 +104,10 @@ internal static class LobbyDomainChecks
             Rejects(() => restoredRoster.Prepare("room", new("room", ["a", "outsider"]))),
             "relocated roster cannot be replaced"
         );
-        Check(Rejects(() => new RoomRoster().Restore(new(null, ["a"]))), "unprepared snapshot with members");
+        Check(
+            Rejects(() => new RoomRoster().Restore(new(null, ["a"]))),
+            "unprepared snapshot with members"
+        );
 
         var request = JsonSerializer.Deserialize<MatchRequest>(
             "{\"playerId\":\"default\"}",
@@ -101,7 +120,10 @@ internal static class LobbyDomainChecks
         var rankedA = firstProcess.MatchAsync(new("ra", "ranked"), default);
         var casualA = firstProcess.MatchAsync(new("ca", "casual"), default);
         var rankedB = firstProcess.MatchAsync(new("rb", "ranked"), default);
-        Check(!casualA.IsCompleted && await rankedA == await rankedB, "interleaved modes pair only matching members");
+        Check(
+            !casualA.IsCompleted && await rankedA == await rankedB,
+            "interleaved modes pair only matching members"
+        );
         var casualB = firstProcess.MatchAsync(new("cb", "casual"), default);
         Check(
             await casualA == await casualB && (await casualA).RoomId != (await rankedA).RoomId,
@@ -109,7 +131,10 @@ internal static class LobbyDomainChecks
         );
         Check(
             provisioner.Calls[0].Members.ToHashSet(StringComparer.Ordinal).SetEquals(["ra", "rb"])
-                && provisioner.Calls[1].Members.ToHashSet(StringComparer.Ordinal).SetEquals(["ca", "cb"]),
+                && provisioner
+                    .Calls[1]
+                    .Members.ToHashSet(StringComparer.Ordinal)
+                    .SetEquals(["ca", "cb"]),
             "provisioner receives each matched roster"
         );
 
@@ -124,10 +149,9 @@ internal static class LobbyDomainChecks
             "restarted lobby creates a new Room ID"
         );
         Check(
-            provisioner.Calls.All(
-                call =>
-                    call.RoomId.StartsWith(GameNames.RoomPrefix, StringComparison.Ordinal)
-                    && Guid.TryParseExact(call.RoomId[GameNames.RoomPrefix.Length..], "N", out _)
+            provisioner.Calls.All(call =>
+                call.RoomId.StartsWith(GameNames.RoomPrefix, StringComparison.Ordinal)
+                && Guid.TryParseExact(call.RoomId[GameNames.RoomPrefix.Length..], "N", out _)
             ),
             "Room ID uses a hyphen-free GUID"
         );
@@ -139,8 +163,10 @@ internal static class LobbyDomainChecks
         var held = new Matchmaker(waiting);
         var heldA = held.MatchAsync(new("held-a"), default);
         var heldB = held.MatchAsync(new("held-b"), default);
-        Check(!heldA.IsCompleted && !heldB.IsCompleted && waiting.Calls.Count == 1,
-            "HTTP assignments wait for RoomPrepared");
+        Check(
+            !heldA.IsCompleted && !heldB.IsCompleted && waiting.Calls.Count == 1,
+            "HTTP assignments wait for RoomPrepared"
+        );
         waiting.Completion.SetResult(
             new MatchResponse(waiting.Calls[0].RoomId, RecordingProvisioner.SessionEndpoint)
         );
@@ -155,7 +181,11 @@ internal static class LobbyDomainChecks
         internal List<(string RoomId, string[] Members)> Calls { get; } = [];
         internal TaskCompletionSource<MatchResponse>? Completion { get; init; }
 
-        public Task<MatchResponse> PrepareAsync(string roomId, string[] members, CancellationToken ct)
+        public Task<MatchResponse> PrepareAsync(
+            string roomId,
+            string[] members,
+            CancellationToken ct
+        )
         {
             Calls.Add((roomId, members));
             return Completion?.Task ?? Task.FromResult(new MatchResponse(roomId, SessionEndpoint));

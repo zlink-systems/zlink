@@ -18,7 +18,10 @@ export class RegionFull {
   ) {}
 }
 export class RegionUnavailable {
-  constructor(readonly region: string, readonly reason: string) {}
+  constructor(
+    readonly region: string,
+    readonly reason: string
+  ) {}
 }
 export class MoveRequest {
   constructor(
@@ -27,7 +30,10 @@ export class MoveRequest {
   ) {}
 }
 export class ActionRejected {
-  constructor(readonly reason: string, readonly retryAfterMs: number = 0) {}
+  constructor(
+    readonly reason: string,
+    readonly retryAfterMs: number = 0
+  ) {}
 }
 export class PlayerPosition {
   constructor(
@@ -54,6 +60,8 @@ export class DungeonOpened {
     readonly nodeId: string = ''
   ) {}
 }
+export class LeaveRegionRequest {}
+export class RegionLeft {}
 export class SessionInfoRequest {}
 export class SessionInfo {
   constructor(

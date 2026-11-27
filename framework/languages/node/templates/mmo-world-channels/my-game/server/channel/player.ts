@@ -11,7 +11,12 @@ import { NODE_CONFIG, type NodeConfig } from '../shared/config';
 import { zoneId, Control } from '../shared/constants';
 import { PlayerData } from './data';
 import { GoldBalance, type GoldSnapshot } from './domain';
-import { PlayerView, restoreNotification, type Notification, ActionRejected } from '../shared/messages';
+import {
+  PlayerView,
+  restoreNotification,
+  type Notification,
+  ActionRejected
+} from '../shared/messages';
 export class Player implements ZLinkActor {
   async deliver(packetName: string, payload: Notification, visible = true): Promise<void> {
     const message = restoreNotification(packetName, payload);

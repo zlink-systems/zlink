@@ -58,6 +58,7 @@ user-spot-join 12칸 행렬은 원격 Actor 생성 경로를 지나가지 않는
 | flow-wire | `.NET` / Node.js | C++ | fanout `<topic>:<value>` |
 | codec | C++ | `.NET` | STREAM 프레임 + JSON payload |
 | codec | `.NET` / Node.js | C++ | STREAM 프레임 + LZ4 압축 payload |
+| login admission (`login-admission`) | C++ / `.NET` / Java / Node.js 서버 | raw wire probe와 네 언어 connector | 한도를 넘은 인증 요청이 handler 전에 거절되고, connector는 `retry` 지연 뒤 같은 session으로 다시 보낸다 |
 
 ## 계약 메모
 

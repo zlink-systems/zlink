@@ -23,6 +23,10 @@ flowchart LR
   channelB -->|game data| dbB
 ```
 
+[한국어](README.ko.md)
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
 ## Prerequisites
 
 Docker with Compose v2 and Linux containers, network access to Maven Central and the Gradle Plugin Portal, and PowerShell 7 on Windows. JDK 25 is required only for local process debugging. The Gradle wrapper is included; public package versions are pinned in `build.gradle.kts`.
@@ -35,8 +39,26 @@ Bash:
 ```
 PowerShell:
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
+
+## Local server and e2e
+
+Run the first command from this directory to build and start Redis and the application nodes. Run the second command from a separate terminal to connect the scenarios to that deployment. When the server is ready, `Server ready` shows the WebSocket address for game clients. Press Ctrl+C in the server terminal to stop its processes and Redis. On Windows the `.cmd` files use PowerShell 7 (`pwsh`).
+
+```bash
+./run-server.sh
+./run-e2e.sh
+```
+
+```powershell
+.\run-server.cmd
+.\run-e2e.cmd
+```
+
+With no running server, `run-e2e` creates and removes an isolated Docker deployment. The `update` scenario replaces a play node and requires an isolated run. Use `--isolated` (`-Isolated` on Windows) to force isolation while a server is running.
+
+The server publishes its endpoints in `.logs/server.json`. Each run keeps node stdout, stderr, Framework message-flow records and failure details under `.logs/run-<id>/`. For an attached run, find the node logs under the directory printed by `run-server` and the scenario details under the directory printed by `run-e2e`. Docker build and cleanup logs are under `.logs/docker-<project>/`.
 
 ## Client connection
 
@@ -124,11 +146,11 @@ suspend fun connectOnce(endpoint: String, playerId: String) {
 }
 ```
 
-## Docker e2e
+## Scenario selection and validation
 
 Docker builds a shared node image for all roles and a runner image. The pinned Eclipse Temurin JDK/JRE bases are defined by the Dockerfile ARGs. The runner uses the Docker socket to create sibling nodes sharing its network namespace, preserving loopback listeners and stdin/stdout control. Each invocation removes its containers, network and image tags; cleanup errors return exit 1. Logs remain in `.logs/`.
 
-For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Local mode uses JDK 25 and Compose Redis. Scenario and structure options work in both modes.
+For local process debugging, run `./run-e2e.sh --local` or `.\run-e2e.cmd -Local`. Local mode uses JDK 25 and Compose Redis. Scenario and structure options work in both modes.
 
 Bash:
 ```sh
@@ -138,9 +160,9 @@ Bash:
 ```
 PowerShell:
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario worlds,channel,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario worlds,channel,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 The runner checks `zlink.structure.json`, starts its own two Redis containers and six application processes, and records logs under `.logs/run-<id>/`. Ports, Compose project names, and Redis key prefixes are unique per run. Cleanup failures fail the run. `--check-structure` (PowerShell `-CheckStructure`) validates files without starting infrastructure.
@@ -163,6 +185,8 @@ The runner checks `zlink.structure.json`, starts its own two Redis containers an
 - **READY and Serving** — The Framework host prints `READY` after observing runtime `Serving`; the Accounts process prints `READY` without a Framework runtime. [Guide](https://docs.zlink.systems/kotlin/guide/server/12-operations/#wait-for-serving). [server/shared/src/main/kotlin/MyGame/Hosting.kt:84](server/shared/src/main/kotlin/MyGame/Hosting.kt); [server/shared/src/main/kotlin/MyGame/Hosting.kt:117](server/shared/src/main/kotlin/MyGame/Hosting.kt); [server/accounts/src/main/kotlin/MyGame/accounts/Program.kt:26](server/accounts/src/main/kotlin/MyGame/accounts/Program.kt); [server/accounts/src/main/kotlin/MyGame/accounts/Program.kt:29](server/accounts/src/main/kotlin/MyGame/accounts/Program.kt). The accounts HTTP process prints `READY` after its server starts, without observing Framework runtime `Serving`:  .
 
 ## Known issues
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
 Validated against the published Framework 0.34.2 packages.
 

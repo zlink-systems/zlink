@@ -21,4 +21,7 @@
     <Protobuf Include="$(EtcdProtoRoot)/**/*.proto" ProtoRoot="$(EtcdProtoRoot)" GrpcServices="Both" />
     <None Include="../../../../runtime/protocol/golden/location-store-etcd-v1.json" Link="location-store-etcd-v1.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+    <ItemGroup>
+        <Compile Include="../Common/LocationStoreCounterContract.cs" Link="Common/LocationStoreCounterContract.cs"/>
+    </ItemGroup>
 </Project>

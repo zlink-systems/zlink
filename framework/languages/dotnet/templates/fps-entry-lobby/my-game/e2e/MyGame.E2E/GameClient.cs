@@ -108,9 +108,14 @@ internal sealed class GameClient(
         await SendAsync(request, ct);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(ResponseTimeout);
-        try { return await actions.Reader.ReadAsync(deadline.Token); }
+        try
+        {
+            return await actions.Reader.ReadAsync(deadline.Token);
+        }
         catch (OperationCanceledException error) when (!ct.IsCancellationRequested)
-        { throw new TimeoutException($"Player {PlayerId}: action response timed out.", error); }
+        {
+            throw new TimeoutException($"Player {PlayerId}: action response timed out.", error);
+        }
     }
 
     public Task SendAsync<T>(T message, CancellationToken ct) =>

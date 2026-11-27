@@ -554,7 +554,12 @@ std::optional<pending_wait_t> take_matching_wait (connector_state_t &state,
         lock.unlock ();
         std::optional<std::uint64_t> matched;
         for (const auto &candidate : candidates) {
-            if (!candidate.predicate || candidate.predicate (packet)) {
+            if (!candidate.predicate) {
+                matched = candidate.wait_id;
+                break;
+            }
+            callback_scope_t scope (state);
+            if (candidate.predicate (packet)) {
                 matched = candidate.wait_id;
                 break;
             }
@@ -619,9 +624,12 @@ take_matching_queued_packet (connector_state_t &state,
         candidates.swap (state.dispatch_queue);
         lock.unlock ();
         for (auto &candidate : candidates) {
-            if (!matched && name_matches (candidate) && predicate (candidate.packet)) {
-                matched = std::move (candidate.packet);
-                continue;
+            if (!matched && name_matches (candidate)) {
+                callback_scope_t scope (state);
+                if (predicate (candidate.packet)) {
+                    matched = std::move (candidate.packet);
+                    continue;
+                }
             }
             untaken.push_back (std::move (candidate));
         }

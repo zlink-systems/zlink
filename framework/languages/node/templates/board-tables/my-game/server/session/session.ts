@@ -9,10 +9,12 @@ import type {
   ZLinkSessionFactory
 } from '@zlink-systems/framework';
 import { Names, PacketNames, Reasons } from '../shared/constants';
-import { ActionRejected, JoinTableRequest, SessionInfo } from '../shared/messages';
+import { ActionRejected, FindMatch, JoinTableRequest, SessionInfo } from '../shared/messages';
 
 const clientPackets = new Set<string>([
   PacketNames.joinTableRequest,
+  PacketNames.findMatch,
+  PacketNames.cancelMatch,
   PacketNames.tableViewRequest,
   PacketNames.startHandRequest,
   PacketNames.betRequest,
@@ -26,25 +28,28 @@ export class Session implements ZLinkSession {
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
     if (!clientPackets.has(dispatch.packetName)) {
-      await this.context.client
-        .send(new ActionRejected(Reasons.packetNotAllowed, 0))
-        .submit();
+      await this.context.client.send(new ActionRejected(Reasons.packetNotAllowed, 0)).submit();
       return;
     }
-    if (dispatch.packetName === PacketNames.joinTableRequest) {
-      if (this.context.actors.bound.length) throw new Error('JoinTableRequest must be first');
-      const request = payload.decode(JoinTableRequest);
+    let actor = this.context.actors.bound[0];
+    if (dispatch.packetName === PacketNames.joinTableRequest && actor)
+      throw new Error('JoinTableRequest must be first');
+    if (!actor) {
+      const playerId =
+        dispatch.packetName === PacketNames.joinTableRequest
+          ? payload.decode(JoinTableRequest).playerId
+          : dispatch.packetName === PacketNames.findMatch
+            ? payload.decode(FindMatch).playerId
+            : undefined;
+      if (!playerId)
+        throw new Error('JoinTableRequest or FindMatch with a player ID must be first');
       const ensured = await this.actors
-        .getOrCreate(request.playerId, Names.actor)
+        .getOrCreate(playerId, Names.actor)
         .inMesh(Names.mesh)
         .submit();
       if (ensured.status === 'rejected') throw new Error('Actor creation rejected');
-      const bound = await this.context.actors.bindOrGet(ensured.actor);
-      await bound.relay(payload);
-      return;
+      actor = await this.context.actors.bindOrGet(ensured.actor);
     }
-    const actor = this.context.actors.bound[0];
-    if (!actor) throw new Error('JoinTableRequest must be first');
     if (dispatch.packetName === PacketNames.sessionInfoRequest) {
       await this.context.client
         .reply(

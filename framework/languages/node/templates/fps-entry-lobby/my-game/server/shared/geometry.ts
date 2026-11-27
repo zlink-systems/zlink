@@ -93,7 +93,11 @@ export const ArenaMap = {
   playerBox(feet: Vec3Like): Aabb {
     return new Aabb(
       new Vec3(feet.x - Game.playerHalfWidth, feet.y, feet.z - Game.playerHalfWidth),
-      new Vec3(feet.x + Game.playerHalfWidth, feet.y + Game.playerHeight, feet.z + Game.playerHalfWidth)
+      new Vec3(
+        feet.x + Game.playerHalfWidth,
+        feet.y + Game.playerHeight,
+        feet.z + Game.playerHalfWidth
+      )
     );
   }
 } as const;

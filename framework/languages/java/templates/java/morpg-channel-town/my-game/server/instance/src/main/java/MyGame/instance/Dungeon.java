@@ -39,13 +39,18 @@ public final class Dungeon implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
-        CompletionStage<Void> started = state.join(actor.context().actorId())
-                ? context.outbound().sendToSpot(state.ownerSpotId, new RunStarted(state.runId)).submit()
-                : CompletableFuture.completedFuture(null);
+        System.out.println("Player entered Dungeon " + context.spotId());
+        CompletionStage<Void> started =
+                state.join(actor.context().actorId())
+                        ? context.outbound()
+                                .sendToSpot(state.ownerSpotId, new RunStarted(state.runId))
+                                .submit()
+                        : CompletableFuture.completedFuture(null);
         return started.thenCompose(ignored -> broadcast());
     }
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
+        System.out.println("Player left " + context.spotId());
         return CompletableFuture.completedFuture(null);
     }
 
@@ -83,11 +88,16 @@ public final class Dungeon implements ZLinkSpot<Player> {
         String reason = state.advance();
         if (reason != null)
             return actor.context().boundSession().send(new ActionRejected(reason)).submit();
-        return broadcast().thenCompose(
-                ignored -> state.phase == RunPhase.Completed
-                        ? context.outbound()
-                                .sendToSpot(state.ownerSpotId, new RunCompleted(state.runId))
-                                .submit()
-                        : CompletableFuture.completedFuture(null));
+        System.out.println("Dungeon " + context.spotId() + " advanced to stage " + state.stage);
+        return broadcast()
+                .thenCompose(
+                        ignored ->
+                                state.phase == RunPhase.Completed
+                                        ? context.outbound()
+                                                .sendToSpot(
+                                                        state.ownerSpotId,
+                                                        new RunCompleted(state.runId))
+                                                .submit()
+                                        : CompletableFuture.completedFuture(null));
     }
 }

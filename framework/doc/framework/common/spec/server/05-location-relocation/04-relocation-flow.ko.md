@@ -222,6 +222,8 @@ application dispatch를 열지 않은 상태에서 relay를 받을 준비를 끝
 `relay 수신 준비 완료` reply는 이 준비가 끝났다는 뜻이며 owner 변경이나 queue 개방을 뜻하지
 않는다.
 
+Target은 Restore 요청을 받을 때 source owner lease를 Location Store에서 따로 읽지 않는다. Source가 아직 유효한 owner인지는 §4.5의 CAS가 판정한다. 이 CAS는 source가 봉인한 inventory의 Store version을 조건으로 쓴다. Source lease가 끝났으면 CAS가 실패하거나 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 `Preserve` fence로 owner가 확정된다. (#4718)
+
 ### 4.4 Ordered relay와 one-way cutover
 
 Source는 target의 relay 수신 준비 reply를 받은 뒤, capture 뒤 ingress hold가 수락한 message만

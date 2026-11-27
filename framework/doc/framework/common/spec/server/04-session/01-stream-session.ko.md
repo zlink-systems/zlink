@@ -243,6 +243,8 @@ Session reader가 다음 frame을 읽기 전에 host의 application job permit�
 [application job queue §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서))은 그 session의 무수신 기한과
 idle 기한을 판정하지 않는다. 기다리는 원인이 peer가 아니라 host이기 때문이다. Permit을 받으면 두 기한을 그 시각부터
 다시 잰다. 기다리는 동안에도 서버의 heartbeat ping 송신은 interval대로 계속한다. (#5583)
+
+무수신 기한과 idle 기한의 만료는 그 session의 frame을 읽는 reader가 확정한다. Timer는 기한이 된 것을 reader에 알리기만 하고 session을 직접 닫지 않는다. Reader는 판정 시점에 이미 수신해 처리할 수 있는 완전한 frame을 먼저 반영한 뒤 만료를 확정하므로, host 지연 때문에 아직 읽지 않은 ping이나 packet이 있는 session을 무수신으로 닫지 않는다. 이 반영은 현재 수신 회전 하나까지이며 회전 상한은 [application job queue §4](../01-execution/04-application-job-queue-and-backpressure.ko.md#4-소켓에서-여러-건-읽기-구현)의 건수 한도(회전 하나당 64개)를 따른다. 따라서 다른 session의 연속 입력이 한 session의 만료 확정을 한 회전보다 오래 미루지 않는다. 일부만 도착한 frame은 기한을 갱신하지 않는다. (#5637)
 Session마다 ping 시각은 연결이 성립한 시각에 interval의 배수를 더한 시각이다. 첫 ping은 연결 시각 + interval에 보낸다. 실행이 늦어 여러 시각을 지나쳤으면 ping을 한 번만 보내고, 다음 ping은 같은 배수 위의 다음 미래 시각에 보낸다.
 
 애플리케이션 유휴 종료는 Stream node의 idle timeout을 양수로 설정했을 때만 동작한다. 기본값은 0이며 0은 유휴 종료를 하지 않음을 뜻한다. 켜면 마지막 애플리케이션 packet을 받은 뒤 idle timeout이 지난 session을 `idle_timeout`으로 닫는다. Heartbeat control frame은 애플리케이션 활동으로 세지 않는다. 무수신 기한과 idle 기한이 함께 지났으면 `heartbeat_timeout`으로 닫는다.

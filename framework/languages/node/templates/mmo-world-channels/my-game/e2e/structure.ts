@@ -27,6 +27,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   const run = object(s.run),
     commands = object(run.commands);
   assert.deepEqual(Object.keys(commands).sort(), ['powershell', 'sh']);
+  assert.equal(array(commands.sh)[0], './run-server.sh');
+  assert.equal(array(commands.powershell)[0], '.\\run-server.cmd');
   for (const command of Object.values(commands)) {
     const a = array(command);
     assert(a.length);
@@ -70,6 +72,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     realpathSync(resolve(root, NodeEntrypoints[node.role]));
     const cfg = readConfig(file);
     assert.equal(cfg.id, node.id, 'Config ID mismatch');
+    if (node.role === 'session')
+      assert.equal(new URL(text(cfg.streamEndpoint)).protocol, 'ws:', 'Session STREAM endpoint');
     configs.set(cfg.id, cfg);
   }
   const channels = array(s.channels).map(object);

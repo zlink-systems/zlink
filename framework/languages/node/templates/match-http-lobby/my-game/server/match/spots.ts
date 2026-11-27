@@ -74,7 +74,9 @@ export class Room implements ZLinkSpot<Player> {
     if (rejection) await actor.context.boundSession.send(rejection).submit();
     else {
       const player = this.state.view().find((p) => p.playerId === actor.context.actorId)!;
-      await actor.context.boundSession.send(new MoveResult(player.x, player.y, request.sequence)).submit();
+      await actor.context.boundSession
+        .send(new MoveResult(player.x, player.y, request.sequence))
+        .submit();
       await this.broadcast(this.view());
     }
   }
@@ -84,7 +86,9 @@ export class Room implements ZLinkSpot<Player> {
       await actor.context.boundSession.send(rejection).submit();
       return;
     }
-    await actor.context.boundSession.send(new ShotResult('hit', request.targetId, request.sequence)).submit();
+    await actor.context.boundSession
+      .send(new ShotResult('hit', request.targetId, request.sequence))
+      .submit();
     await this.broadcast(this.view());
     if (this.state.Winner !== null) await this.broadcast(new MatchEnded(this.state.Winner));
   }

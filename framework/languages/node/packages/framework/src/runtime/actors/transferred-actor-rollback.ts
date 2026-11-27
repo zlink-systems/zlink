@@ -70,8 +70,10 @@ export class ZLinkTransferredActorRollbackCoordinator {
     if (this.states.get(actor.context.actorId) !== state) {
       return;
     }
-    await state.getOrStartDestroy(createActorMembership(actor).actor.nodeRid, () =>
-      this.finalize(actor.context.actorId, state)
-    );
+    const operation = state.getOrStartDestroy(createActorMembership(actor).actor.nodeRid, () => ({
+      accepted: Promise.resolve(),
+      terminal: Promise.resolve().then(() => this.finalize(actor.context.actorId, state))
+    }));
+    await operation.terminal;
   }
 }

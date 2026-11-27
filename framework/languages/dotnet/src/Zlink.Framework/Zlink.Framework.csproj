@@ -64,4 +64,8 @@
         <Compile Include="../Shared/ZLinkJsonSerializerOptions.cs" Link="Internal/ZLinkJsonSerializerOptions.cs"/>
         <Compile Include="../Shared/ZLinkFrameworkJsonDocument.cs" Link="Internal/ZLinkFrameworkJsonDocument.cs"/>
     </ItemGroup>
+    <ItemGroup>
+        <Compile Include="../Shared/ZLinkStoreBatchKeys.cs" Link="Internal/ZLinkStoreBatchKeys.cs"/>
+        <Compile Include="../Shared/ZLinkStoreCounter.cs" Link="Internal/ZLinkStoreCounter.cs"/>
+    </ItemGroup>
 </Project>

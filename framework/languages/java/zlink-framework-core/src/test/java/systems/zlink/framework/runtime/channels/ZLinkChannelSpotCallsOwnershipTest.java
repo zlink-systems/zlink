@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.channels;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -7,6 +9,8 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -21,9 +25,55 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkChannelSpotCallsOwnershipTest {
+    @Test
+    void spotRequestWithNullTimeoutUsesDefaultWhenHostIsAbsent() throws Exception {
+        Duration defaultTimeout = Duration.ofMillis(200);
+        CompletableFuture<Optional<SpotTransportAddress>> heldResolution =
+                new CompletableFuture<>();
+        ZLinkChannelCallRuntime runtime = new ZLinkChannelCallRuntime(flow(), null, null, null);
+        ZLinkFrameworkMultipartView payload =
+                ZLinkFrameworkMultipartView.snapshot(new byte[] {1, 2, 3});
+        RouteSpotRequestCall call =
+                new RouteSpotRequestCall(
+                        runtime,
+                        "channel",
+                        "mesh",
+                        ignored -> heldResolution,
+                        null,
+                        "spot",
+                        payload,
+                        Optional.of("Packet"),
+                        defaultTimeout,
+                        defaultTimeout,
+                        "application/json",
+                        null,
+                        null,
+                        false,
+                        null,
+                        null,
+                        systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata.empty());
+
+        try {
+            var request = call.timeout(null).submit(String.class);
+            ExecutionException failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> request.toCompletableFuture().get(3, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        } finally {
+            heldResolution.cancel(false);
+            payload.close();
+            runtime.beginClose();
+        }
+    }
+
     @Test
     void spotSendClosesRetainedPayloadAndEnvelopeOnSuccessOneHundredTimes() {
         assertSpotSendCloses(true);
@@ -72,6 +122,7 @@ final class ZLinkChannelSpotCallsOwnershipTest {
                             "spot",
                             payload,
                             Optional.of("Packet"),
+                            Duration.ofSeconds(1),
                             Duration.ofSeconds(1),
                             "application/json",
                             null,

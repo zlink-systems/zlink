@@ -5,23 +5,34 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 local_mode=false
 no_build=false
 build_only=false
+attach=false
 arguments=()
 for argument in "$@"; do
   case "$argument" in
     --local) local_mode=true ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
+    --attach) attach=true ;;
     *) arguments+=("$argument") ;;
   esac
 done
 cd "$ROOT"
 mkdir -p "$ROOT/.logs"
+case "${arguments[0]:-}" in
+  --check-structure|--domain-checks-only) scenario_run=false ;;
+  *) scenario_run=true ;;
+esac
+if $attach || { ! $local_mode && ! $build_only && ! $no_build && $scenario_run &&
+  [[ -f .logs/server.json ]] && node scripts/run-server.mjs --status; }; then
+  if $build_only || ! $scenario_run; then
+    echo '--attach requires a scenario run.' >&2
+    exit 1
+  fi
+  exec node scripts/run-server.mjs --attach "${arguments[@]}"
+fi
 if $local_mode; then
   if ! $no_build; then
-    if ! (npm ci && npm run build) >"$ROOT/.logs/build.log" 2>&1; then
-      tail -n 20 "$ROOT/.logs/build.log" >&2
-      exit 1
-    fi
+    node scripts/run-server.mjs --build
   fi
   if $build_only; then
     exec node dist/e2e/runner.js --domain-checks-only
@@ -73,7 +84,7 @@ if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
   tail -n 30 "$logs/build.log" >&2
   exit 1
 fi
-if $build_only; then
+if $build_only || [[ "${arguments[0]:-}" == "--domain-checks-only" ]]; then
   "${compose[@]}" run --rm --no-deps -T --name "$project-domain" runner --domain-checks-only
   exit 0
 fi

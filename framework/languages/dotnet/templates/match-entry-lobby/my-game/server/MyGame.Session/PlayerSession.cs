@@ -72,9 +72,10 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
     }
 
     private static bool IsClientPacket(string packetName) =>
-        packetName is nameof(QueueRequest)
-            or nameof(RoomViewRequest)
-            or nameof(MoveRequest)
-            or nameof(ShootRequest)
-            or nameof(SessionInfoRequest);
+        packetName
+            is nameof(QueueRequest)
+                or nameof(RoomViewRequest)
+                or nameof(MoveRequest)
+                or nameof(ShootRequest)
+                or nameof(SessionInfoRequest);
 }

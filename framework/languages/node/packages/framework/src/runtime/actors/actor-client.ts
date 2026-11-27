@@ -2,6 +2,14 @@ import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import { RequestRuntime } from '../foundation/request-runtime';
 import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import { isUtf8 } from 'node:buffer';
+import {
+  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
+  ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
+import { runWithOutboundFlow } from '../diagnostics/flow-context';
 import { channelErrorKindFromCode } from '../channels/channel-envelope';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
@@ -102,6 +110,7 @@ export interface ZLinkActorClientOptions {
     onAdmitted?: () => void,
     requestOperation?: PendingOperation<unknown>
   ) => Promise<unknown> | undefined;
+  readonly dispatchErrors?: () => ZLinkDispatchErrorReporter;
   readonly sendErrorReporter?: (error: unknown) => void;
   readonly transportDeliveryGate?: () => ZLinkInternalActorTransportDeliveryGate | undefined;
 }
@@ -153,6 +162,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     const { meshName, actorRef: actor } = route;
     this.throwIfKnownStale(route);
     const parts = this.createPacketParts(
+      route,
       ZLinkStreamMessageKind.Send,
       undefined,
       explicitPacketName,
@@ -235,6 +245,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
           const correlationId = createMessageFollowId();
           const requestSequence = BigInt(`0x${operationId.slice(16)}`);
           const parts = this.createPacketParts(
+            route,
             ZLinkStreamMessageKind.Request,
             requestSequence === 0n ? 1n : requestSequence,
             explicitPacketName,
@@ -353,7 +364,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
   }
 
   private createPacketParts(
-    kind: ZLinkStreamMessageKind,
+    route: ZLinkResolvedActorRoute,
+    kind: ZLinkStreamMessageKind.Send | ZLinkStreamMessageKind.Request,
     requestSeq: bigint | undefined,
     explicitPacketName: string | undefined,
     message: unknown,
@@ -369,12 +381,31 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       (correlationId === undefined
         ? ZLinkStreamHeaderFlags.None
         : ZLinkStreamHeaderFlags.HasCorrelationId);
-    const encoded = encodeFrameworkPayload(
-      message,
-      this.options.messageSerializers,
-      packetName,
-      'payload'
-    );
+    let encoded: ReturnType<typeof encodeFrameworkPayload>;
+    try {
+      encoded = encodeFrameworkPayload(message, this.options.messageSerializers, packetName);
+    } catch (error) {
+      const reporter = this.options.dispatchErrors?.();
+      if (reporter?.captureEnabled() === true) {
+        runWithOutboundFlow(reporter.flow.flowCreationEnabled(), () =>
+          reporter.report({
+            surface: ZLinkDispatchErrorSurface.SpotActor,
+            messageKind:
+              kind === ZLinkStreamMessageKind.Request
+                ? ZLinkDispatchMessageKind.ActorRequest
+                : ZLinkDispatchMessageKind.ActorSend,
+            reason: ZLinkDispatchErrorReason.PayloadEncodeFailed,
+            action: ZLinkDispatchErrorAction.FailCaller,
+            actorId: route.actorRef.actorId,
+            meshName: route.meshName,
+            packetName,
+            correlationId,
+            error
+          })
+        );
+      }
+      throw error;
+    }
     try {
       const header = encodeStreamHeader({
         kind,

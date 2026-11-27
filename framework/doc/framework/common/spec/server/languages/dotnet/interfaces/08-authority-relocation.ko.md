@@ -57,6 +57,12 @@ public abstract record ZLinkStoreCondition
         ZLinkStoreKey Key,
         ReadOnlyMemory<byte> Expected)
         : ZLinkStoreCondition;
+
+    public sealed record SumAtMost(
+        IReadOnlyList<ZLinkStoreKey> Keys,
+        long Delta,
+        long Limit)
+        : ZLinkStoreCondition;
 }
 
 public abstract record ZLinkStoreMutation
@@ -70,6 +76,11 @@ public abstract record ZLinkStoreMutation
         : ZLinkStoreMutation;
 
     public sealed record Delete(ZLinkStoreKey Key)
+        : ZLinkStoreMutation;
+
+    public sealed record Add(
+        ZLinkStoreKey Key,
+        long Delta)
         : ZLinkStoreMutation;
 }
 
@@ -87,6 +98,9 @@ public abstract record ZLinkStoreWriteResult
         : ZLinkStoreWriteResult;
 
     public sealed record Conflict(DateTimeOffset StoreNow)
+        : ZLinkStoreWriteResult;
+
+    public sealed record Corrupt(DateTimeOffset StoreNow)
         : ZLinkStoreWriteResult;
 }
 

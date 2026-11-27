@@ -612,7 +612,22 @@ function serializeContracts(contracts) {
 }
 
 function renderCommonJs(serialized) {
-  return `'use strict';\n\nconst packetContracts = Object.freeze(${serialized});\n\nfunction register(registerPacket) {\n  for (const [packetName, contract] of Object.entries(packetContracts)) {\n    registerPacket(packetName, contract)(class GeneratedZLinkPacket {});\n  }\n}\n\nconst framework = require('@zlink-systems/framework');\nregister(framework.ZLinkPacket);\nmodule.exports = Object.freeze({ packetContracts, register });\n`;
+  return `'use strict';
+
+const packetTypes = require('./server/shared/messages.js');
+const packetContracts = Object.freeze(${serialized});
+
+function register(registerPacket) {
+  for (const [packetName, contract] of Object.entries(packetContracts)) {
+    const packetType = packetTypes[packetName] ?? class GeneratedZLinkPacket {};
+    registerPacket(packetName, contract)(packetType);
+  }
+}
+
+const framework = require('@zlink-systems/framework');
+register(framework.ZLinkPacket);
+module.exports = Object.freeze({ packetContracts, register });
+`;
 }
 
 function writeOutput(filePath, content) {
