@@ -74,7 +74,7 @@ export class RelocationCompletionStore {
     }
     const root = await this.requireBlob(completion.reference, signal);
     const manifest = completionManifest(root.bytes, relocation.sourceInventorySha256);
-    const chunks: Buffer[] = [];
+    let length = 0;
     for (const [index, entry] of manifest.chunks.entries()) {
       if (
         entry.order !== index ||
@@ -82,6 +82,13 @@ export class RelocationCompletionStore {
         (index + 1 < manifest.chunks.length && entry.length !== BigInt(CHUNK_BYTES))
       )
         completionDataLost('Invalid completion chunk order or length.');
+      length += Number(entry.length);
+    }
+    if (BigInt(length) !== manifest.totalLength)
+      completionDataLost('Invalid completion chunk order or length.');
+    const bytes = Buffer.allocUnsafe(length);
+    let offset = 0;
+    for (const entry of manifest.chunks) {
       const stored = await this.requireBlob(entry.reference, signal);
       let chunk: ReturnType<typeof decodeRelocationDataChunkV1>;
       try {
@@ -91,12 +98,13 @@ export class RelocationCompletionStore {
         return completionDataLost('Completion chunk is corrupt.');
       }
       if (
-        chunk.order !== index ||
+        chunk.order !== entry.order ||
         BigInt(chunk.data.length) !== entry.length ||
         crc32c(chunk.data) !== entry.checksumCrc32c
       )
         completionDataLost('Completion chunk checksum differs.');
-      chunks.push(Buffer.from(chunk.data));
+      bytes.set(chunk.data, offset);
+      offset += chunk.data.length;
       if (
         completion.pendingDeliveries > 0n &&
         stored.expiresAt.getTime() - stored.storeNow.getTime() <= RETENTION_MS / 2
@@ -108,9 +116,7 @@ export class RelocationCompletionStore {
           completionDataLost('Completion chunk disappeared during renew.');
       }
     }
-    const bytes = Buffer.concat(chunks);
     if (
-      BigInt(bytes.length) !== manifest.totalLength ||
       crc32c(bytes) !== manifest.totalChecksumCrc32c ||
       sha256(bytes) !== completion.sha256
     )
