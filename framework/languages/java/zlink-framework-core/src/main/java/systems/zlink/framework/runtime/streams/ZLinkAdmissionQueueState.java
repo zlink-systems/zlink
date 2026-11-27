@@ -129,7 +129,10 @@ final class ZLinkAdmissionQueueState {
         List<Delivery> pushes = new ArrayList<>();
         int position = 0;
         for (Entry entry : waiters.values()) {
-            position++;
+            // position counts the ticketless waiters ahead plus one (§3.5.3).
+            if (entry.ticket == null) {
+                position++;
+            }
             if (!entry.node().equals(key)) {
                 continue;
             }
@@ -246,6 +249,30 @@ final class ZLinkAdmissionQueueState {
                                         && permit.leaseGeneration() == leaseGeneration);
     }
 
+    /**
+     * Owner leases to check in the Store while handling this report: only when the global cap keeps
+     * a ticket from a waiting connection of the reporting node (§3.5.3), never otherwise.
+     */
+    synchronized Set<Map.Entry<String, Long>> ownersToCheckForReport(NodeReport report) {
+        if (globalLimit == null || permits.isEmpty()) {
+            return Set.of();
+        }
+        NodeKey key = new NodeKey(report.nodeRid(), report.nodeLifecycleGeneration());
+        Set<Connection> gone = new HashSet<>();
+        report.usedTickets().forEach(ref -> gone.add(waiter(key, ref)));
+        report.endedSessions().forEach(ref -> gone.add(waiter(key, ref)));
+        long ticketless =
+                waiters.values().stream()
+                        .filter(
+                                entry ->
+                                        entry.node().equals(key)
+                                                && entry.ticket == null
+                                                && !gone.contains(entry.waiter))
+                        .count();
+        long nodeBudget = Math.max(0, report.limit() - report.inFlight());
+        return globalCap() < Math.min(nodeBudget, ticketless) ? permitOwners() : Set.of();
+    }
+
     /** Owner leases that currently hold at least one permit, for the liveness sweep. */
     synchronized Set<Map.Entry<String, Long>> permitOwners() {
         Set<Map.Entry<String, Long>> owners = new HashSet<>();
@@ -266,9 +293,11 @@ final class ZLinkAdmissionQueueState {
 
     synchronized long positionOf(Connection waiter) {
         long position = 0;
-        for (Connection candidate : waiters.keySet()) {
-            position++;
-            if (candidate.equals(waiter)) {
+        for (Entry candidate : waiters.values()) {
+            if (candidate.ticket == null) {
+                position++;
+            }
+            if (candidate.waiter.equals(waiter)) {
                 return position;
             }
         }

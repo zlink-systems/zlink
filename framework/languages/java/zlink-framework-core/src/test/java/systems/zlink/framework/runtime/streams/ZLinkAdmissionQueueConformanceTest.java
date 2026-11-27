@@ -32,7 +32,7 @@ final class ZLinkAdmissionQueueConformanceTest {
     private static final String STREAM = "login";
 
     static Stream<Arguments> queueScenarios() throws Exception {
-        return AdmissionQueueFixture.scenarios("queueScenarios", 20);
+        return AdmissionQueueFixture.scenarios("queueScenarios", 22);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -53,6 +53,8 @@ final class ZLinkAdmissionQueueConformanceTest {
         private ZLinkAdmissionQueueState state;
         private long nextSeededPermit = 1000;
         private long lastPermit;
+        private int ownerLeaseChecks;
+        private final Map<String, int[]> reportedNodes = new HashMap<>();
         private final java.util.Set<String> invalidated = new java.util.HashSet<>();
 
         Run(JsonNode given) {
@@ -73,18 +75,28 @@ final class ZLinkAdmissionQueueConformanceTest {
             for (String field : List.of("waiting", "waiters")) {
                 if (given.has(field) && given.get(field).isArray()) {
                     for (JsonNode session : given.get(field)) {
-                        state.enqueue(
+                        var connection =
                                 session.isObject()
                                         ? waiter(
                                                 session.required("node").asText(),
                                                 1,
                                                 session.required("sessionRid").asText())
-                                        : waiter("n", 1, session.asText()));
+                                        : waiter("n", 1, session.asText());
+                        state.enqueue(connection);
+                        if (session.isObject() && session.path("ticket").asBoolean(false)) {
+                            state.seedTicket(connection);
+                        }
                     }
                 }
             }
             if (given.has("reports")) {
                 for (JsonNode report : given.get("reports")) {
+                    reportedNodes.put(
+                            report.required("node").asText(),
+                            new int[] {
+                                report.required("limit").asInt(),
+                                report.required("inFlight").asInt()
+                            });
                     state.seedNode(
                             AdmissionQueueFixture.id(report.required("node").asText()),
                             1,
@@ -256,16 +268,41 @@ final class ZLinkAdmissionQueueConformanceTest {
             for (JsonNode alias : step.path("heldPermits")) {
                 held.add(permitAliases.get(alias.asText()));
             }
-            state.report(
+            int[] reported = reportedNodes.getOrDefault(node, new int[] {0, 0});
+            var report =
                     new NodeReport(
                             AdmissionQueueFixture.id(node),
                             generation,
-                            0,
-                            0,
+                            reported[0],
+                            reported[1],
                             used,
                             ended,
                             held,
-                            AdmissionQueueFixture.number(step, "resolvedRequestSeq", 0)));
+                            AdmissionQueueFixture.number(step, "resolvedRequestSeq", 0));
+            for (var owner : state.ownersToCheckForReport(report)) {
+                ownerLeaseChecks++;
+                if (given.path("ownerLeases")
+                        .path(owner.getKey() + ":" + owner.getValue())
+                        .asText("live")
+                        .equals("ended")) {
+                    state.ownerLeaseEnded(owner.getKey(), owner.getValue());
+                }
+            }
+            state.report(report);
+            if (expect.has("ownerLeaseChecks")) {
+                assertEquals(expect.get("ownerLeaseChecks").asInt(), ownerLeaseChecks);
+            }
+            if (expect.has("ticketSessions")) {
+                List<String> holders = new ArrayList<>();
+                for (Connection holder : state.waitersInOrder()) {
+                    if (state.ticketOf(holder) != null) {
+                        holders.add(name(holder.sessionRid()));
+                    }
+                }
+                List<String> expectedHolders = new ArrayList<>();
+                expect.get("ticketSessions").forEach(s -> expectedHolders.add(s.asText()));
+                assertEquals(expectedHolders, holders);
+            }
             if (expect.has("runningPermits")) {
                 assertEquals(expect.get("runningPermits").asInt(), state.runningPermits());
             }

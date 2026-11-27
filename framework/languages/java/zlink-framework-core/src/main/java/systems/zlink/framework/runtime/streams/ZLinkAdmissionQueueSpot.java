@@ -47,12 +47,13 @@ public final class ZLinkAdmissionQueueSpot implements ZLinkInstanceSpot {
     }
 
     /** Reclaims permits whose node owner lease ended before a permit is refused (§3.5.3). */
-    private CompletionStage<Void> reclaimEndedLeases() {
-        if (!host.atLimit(state.runningPermits())) {
+    private CompletionStage<Void> reclaimEndedLeases(
+            java.util.Collection<java.util.Map.Entry<String, Long>> owners) {
+        if (owners.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
         List<CompletableFuture<Void>> checks = new ArrayList<>();
-        for (var owner : state.permitOwners()) {
+        for (var owner : owners) {
             checks.add(
                     host.ownerLeaseLive(owner.getKey(), owner.getValue())
                             .handle(
@@ -73,7 +74,9 @@ public final class ZLinkAdmissionQueueSpot implements ZLinkInstanceSpot {
         @Override
         public CompletionStage<NodeReportReply> handle(
                 ZLinkAdmissionQueueSpot spot, NodeReport request) {
-            return CompletableFuture.completedFuture(spot.state.report(request));
+            // The same liveness check as the admit path, only when the cap blocks a ticket.
+            return spot.reclaimEndedLeases(spot.state.ownersToCheckForReport(request))
+                    .thenApply(ignored -> spot.state.report(request));
         }
     }
 
@@ -91,7 +94,11 @@ public final class ZLinkAdmissionQueueSpot implements ZLinkInstanceSpot {
         @Override
         public CompletionStage<AdmitPermitReply> handle(
                 ZLinkAdmissionQueueSpot spot, AdmitPermit request) {
-            return spot.reclaimEndedLeases()
+            var owners =
+                    spot.host.atLimit(spot.state.runningPermits())
+                            ? spot.state.permitOwners()
+                            : java.util.Set.<java.util.Map.Entry<String, Long>>of();
+            return spot.reclaimEndedLeases(owners)
                     .thenCompose(
                             ignored -> {
                                 var result = spot.state.admitPermit(request);
