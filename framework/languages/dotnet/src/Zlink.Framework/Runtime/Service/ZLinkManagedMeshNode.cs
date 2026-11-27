@@ -1162,7 +1162,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 _deadlineTimeProvider.GetTimestamp(),
                 timeout,
                 cancellationToken,
-                static reply => reply,
+                static (reply, _) => reply,
+                0,
                 static failure =>
                     failure is null
                         ? null
@@ -5192,11 +5193,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 requestStarted,
                 timeout,
                 cancellationToken,
-                reply =>
+                static (reply, state) =>
                 {
-                    Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
-                    return DecodeDirectApplicationReply(operationId.Low, reply);
+                    state.Node.Publish(
+                        MeshMonitorEventKind.MessageSubmitted,
+                        peerRid: state.Target
+                    );
+                    return DecodeDirectApplicationReply(state.Correlation, reply);
                 },
+                (Node: this, Target: targetRid, Correlation: operationId.Low),
                 static failure => failure,
                 requestAdmission: requestAdmission,
                 absoluteDeadline: requestDeadline,
@@ -11194,11 +11199,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 started,
                 timeout,
                 cancellationToken,
-                reply =>
+                (reply, _) =>
                 {
                     Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
                     return decodeReply(DecodeDirectApplicationReply(operationId.Low, reply));
                 },
+                0,
                 receive,
                 requestAdmission: requestAdmission,
                 absoluteDeadline: requestDeadline
@@ -11998,7 +12004,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             started,
             timeout,
             cancellationToken,
-            static reply => reply,
+            static (reply, _) => reply,
+            0,
             static failure => failure,
             pendingToken,
             requestAdmission,
@@ -12007,14 +12014,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             suppliedLifetime
         );
 
-    private async ValueTask<TReply> RequestNativeDurableWireAsync<TReply>(
+    private async ValueTask<TReply> RequestNativeDurableWireAsync<TReply, TState>(
         RoutingId target,
         ulong targetNodeGeneration,
         IReadOnlyList<Message> wire,
         long started,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        Func<IReadOnlyList<Message>, TReply> decodeReply,
+        Func<IReadOnlyList<Message>, TState, TReply> decodeReply,
+        TState decodeState,
         Func<Exception?, Exception?> receive,
         CancellationToken pendingToken = default,
         ZLinkRequestAdmission? requestAdmission = null,
@@ -12248,7 +12256,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TReply DecodePhysicalReply(IReadOnlyList<Message> parts)
         {
             replyAdmission?.RecordReceived(Stopwatch.GetTimestamp());
-            return decodeReply(parts);
+            return decodeReply(parts, decodeState);
         }
     }
 
