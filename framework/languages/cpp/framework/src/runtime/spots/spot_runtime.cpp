@@ -3072,7 +3072,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                             finish_handler (result);
                         } else if (kind == spot_handler_kind_t::packet) {
                             finish_handler (detail::result_access_t::failure<zlink::message_t> (
-                              spot_application_failure (result)));
+                              detail::spot_application_failure (result)));
                         } else {
                             finish_handler (result_t<zlink::message_t>::failure (
                               result.error_kind (),
