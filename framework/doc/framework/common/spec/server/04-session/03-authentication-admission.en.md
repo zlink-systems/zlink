@@ -231,7 +231,7 @@ error at startup. When it's `false`, the other stage 2 settings aren't read.
 
 - Every node with stage 2 on sends the queue Spot a `NodeReport` Spot request once per second. It carries the node RID,
   the stage 1 limit, the current in-flight count, the SessionRids whose tickets were used since the previous report,
-  the SessionRids of waiting sessions that ended since the previous report, and, with a global limit, the permit IDs it holds. The Spot returns the current epoch in
+  the SessionRids of waiting sessions that ended since the previous report, and, with a global limit, the permit IDs it holds and the largest permit ID it has received. The Spot returns the current epoch in
   the Response. These reports are Framework-internal Spot messages, not client wire.
 - The Spot treats only reports received within the last 3 seconds as valid. It issues no tickets to sessions on a node
   without a valid report.
@@ -250,10 +250,12 @@ error at startup. When it's `false`, the other stage 2 settings aren't read.
     waits again per §3.5.5.
   - When the handler ends (success, failure, or cancellation), the node returns the permit with a `ReleasePermit` Spot send. The
     Spot treats repeated returns of the same permit as idempotent.
-  - The Spot records the node owner lease of each permit and reclaims every permit of a node whose lease ended. It also reclaims
-    permits missing from that node's next report (§3.5.3); the report carries the permit IDs the node holds.
-  - If `AdmitPermit` fails or the Spot doesn't answer within the authentication request deadline, the handler doesn't run and
-    the request ends with `unavailable`. With a global limit, nothing is let past the limit when the Spot is absent.
+  - The Spot records the node owner lease of each permit and reclaims every permit of a node whose lease ended. Permit IDs increase
+    monotonically within a Spot incarnation. A node report (§3.5.3) carries the permit IDs the node holds and the largest
+    permit ID it has received; the Spot reclaims only permits at or below that value that are missing from the list. A grant
+    that arrives after the report isn't reclaimed.
+  - `AdmitPermit` waits for the Framework Spot request's default timeout (no new setting or timer). If it fails or no answer
+    arrives in that time, the handler doesn't run and the request ends with `unavailable`. With a global limit, nothing is let past the limit when the Spot is absent.
   - Ticket reuse, delayed use reports, report expiry, and epoch changes don't affect the permit count. The cost, with stage 2 and
     the global limit on, is one Spot round trip and one return send per authentication.
   - Every node is set to the same value. The Spot uses the value of the node its incarnation runs on. A new incarnation starts at
