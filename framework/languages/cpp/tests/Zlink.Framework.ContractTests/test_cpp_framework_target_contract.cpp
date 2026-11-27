@@ -142,7 +142,8 @@ int main ()
       read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp")
       + read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.cpp");
     const auto provider_location_repository =
-      read_text_file (root / "framework/src/runtime/locations/provider_location_repository.hpp");
+      read_text_file (root / "framework/src/runtime/locations/provider_location_repository.hpp")
+      + read_text_file (root / "framework/src/runtime/locations/provider_location_repository.cpp");
     const auto public_store_adapters =
       read_text_file (root / "framework/src/runtime/stateful/public_store_adapters.hpp");
     const auto actor_client =

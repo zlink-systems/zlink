@@ -226,6 +226,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/mesh/service_mailbox.cpp
   framework/src/runtime/mesh/service_topology_registry.cpp
   framework/src/runtime/locations/location_store_format.cpp
+  framework/src/runtime/locations/provider_location_repository.cpp
   framework/src/runtime/locations/service_descriptor_registry.cpp
   framework/src/runtime/fanout/raw_fanout_owner.cpp
   framework/src/runtime/fanout/fanout_subscription.cpp
