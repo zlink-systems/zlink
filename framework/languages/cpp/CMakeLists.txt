@@ -3084,6 +3084,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_authority_turns.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_return_join.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_join_failure.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_late_ingress.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_entry_placement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relocation_settlement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_deferred_join_reservation.cpp
