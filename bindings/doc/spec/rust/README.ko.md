@@ -200,8 +200,9 @@ bindings/rust/
 이 바인딩은 네이티브 런타임 위의 안전한 Rust crate처럼 느껴져야 한다.
 
 - 공개 리소스 타입은 네이티브 lifetime을 소유하고 `Drop`을 통해 리소스를 해제한다.
-- 실패 가능한 작업은 `Result<T, ZlinkError>`를 반환하거나, 명확성이 더 좋아질
-  경우 더 구체적인 typed result를 반환한다.
+- 실패 가능한 작업은 기본적으로 `Result<T, E>`의 `E`에 함수군별 구체 오류를 사용한다. Send 제출은
+  `SubmitError`를 사용하며, 제출과 요청 완료 오류를 함께 전달하는 `RequestOp` terminal은 `ZlinkError`를
+  사용한다.
 - 메시지, routing id, received metadata, topic message, snapshot, option, enum,
   error 같은 구체값은 구체 타입으로 유지한다.
 - Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요할 때만 사용한다.
@@ -314,7 +315,7 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   stream packet 데이터, builder payload 헬퍼.
 - `sockets/`: socket 동작, socket family, typed option, request/reply,
   publish/subscribe 표면.
-- `eventing/`: monitor, monitor snapshot/event, poller, poll event, timer, 공개
+- `eventing/`: monitor, monitor status/event, poller, poll event, timer, 공개
   poll 헬퍼.
 - `errors/`: typed error/result 도메인.
 - Enum, flag, result 타입은 그 의미를 정의하는 카테고리에 둔다. 구문으로 선언을
@@ -382,8 +383,8 @@ Crate는 명확한 공개 모듈 또는 re-export를 노출해야 한다.
 - Messaging: message, routing id, received metadata, topic message,
   subscription event, stream packet 데이터.
 - Sockets: pair, dealer, router, pub, sub, xpub, xsub, stream, typed option,
-  콜백, request/reply, publish/subscribe, stream packet API.
-- Eventing: monitor, monitor snapshot/event, poller, poll event, timer.
+  request/reply, publish/subscribe, stream packet API.
+- Eventing: monitor, monitor status/event, poller, poll event, timer.
 - Error: core 의미를 보존하는 typed error/result 도메인.
 
 공개 crate는 자주 쓰이는 타입을 crate root에서 re-export할 수 있지만, private
@@ -441,7 +442,7 @@ Socket의 공통 option facade에 있는
 - Context lifecycle, option, shutdown, auto-HWM 재계산, version, capability 조회,
   strerror.
 - Message ownership, multipart payload, routing id, received metadata, topic
-  message, subscription event, stream packet 콜백.
+  message, subscription event, pull 수신에 사용하는 `StreamPacket` 값.
 - 모든 socket family와 그 typed option. `SubSocket::subscription_at(index)`와
   `XSubSocket::subscription_at(index)`는 해당 인덱스의 subscription filter와
   pattern 여부를 반환한다. 해당 인덱스가 없으면 `None`을 반환한다.
@@ -449,6 +450,60 @@ Socket의 공통 option facade에 있는
 
 Rust 이름과 ownership 모델은 C와 다를 수 있지만, 동작은 core 능력의 의미와
 일치해야 한다.
+
+### 소켓별 능력
+
+소켓별 공통 계약은 [Socket Capability Matrix](../README.ko.md#socket-capability-matrix)를 따른다.
+
+| 소켓 | 제출 | 수신 |
+|---|---|---|
+| PAIR | `send` | `recv` |
+| DEALER | `send`, `request` | `recv` |
+| ROUTER | `send(routing_id)`, `request`, `reply` | `recv` |
+| PUB | `publish` | — |
+| SUB | — | `subscribe` |
+| XPUB | `publish` | `receive_subscription_event` |
+| XSUB | — | `subscribe` |
+| STREAM | `send(routing_id)` | `recv`, `recv_packet` |
+
+모든 raw 소켓은 `bind`와 `unbind`로 endpoint를 열고 닫으며, `disconnect_rid`로 routing ID에 해당하는 peer
+연결을 끊는다. STREAM을 제외한 소켓은 `connect`로 outbound 연결을 등록하고 `disconnect`로 해제한다.
+
+`set_tls_server(&self, cert: &str, key: &str, require_client_cert: bool) -> Result<(), ConfigError>`는 bind
+전에 인증서·키와 client 인증 요구를 설정한다.
+`set_tls_client(&self, ca_cert: &str, hostname: &str, trust_system: bool) -> Result<(), ConfigError>`는
+connect 전에 CA·서버 이름과 시스템 CA 사용 여부를 설정한다. 두 메서드는 모든 raw 소켓에 공통이다.
+
+연결 메서드는 `Result<(), E>`를 반환한다. `bind`는 `BindError`, 나머지는 `ConnectError`를 사용한다.
+Endpoint 인자는 `&str`이며 `disconnect_rid`는 `&RoutingId`를 받는다. SUB·XSUB는 `set_subscription`과
+`unset_subscription`으로 filter를 설정·해제한다.
+
+`common_options()`는 모든 소켓에 공통이다. `router_options()`, `dealer_options()`, `stream_options()`는
+해당 소켓에, `pub_options()`는 PUB·XPUB에, `sub_options()`는 SUB·XSUB에 적용한다.
+
+### 소켓 readiness snapshot
+
+`RouterSocket::routes_snapshot(&self) -> Result<Vec<RouterRoute>, ConfigError>`는 Core가 선택한 route를
+routing ID마다 한 행으로 반환한다. `RouterRoute`는 `routing_id`, `route_generation`을 제공한다. Route
+generation은 0이 아닌 opaque token이며 동등성만 비교한다. `POLLROUTE`는 선택 route 변경을 알린다.
+
+연결 시도 snapshot은 outbound 연결 등록마다 한 행을 반환한다. 목표 표면은 STREAM을 제외한 raw 소켓의
+`connection_attempts_snapshot(&self) -> Result<Vec<ConnectionAttempt>, ConfigError>`과 Poller의
+`POLLCONNECT`다. `ConnectionAttempt`는 `endpoint`, `intent_id`, `revision`, `last_failure_id`, `state`,
+`last_failure`를 담는다. `ConnectionFailure`의 필드는 `kind`, `stage`, `normalized_errno`,
+`disconnect_reason`다. 상태, 실패 원인, 단계는 각각 닫힌 `ConnectionAttemptState`, `ConnectionFailureKind`,
+`ConnectionFailureStage` enum으로 Core 값을 보존한다.
+
+`endpoint`는 UTF-8 endpoint를 담은 `String`이며, `last_failure`는 복구 뒤에도 최근
+실패를 보존하는 `ConnectionFailure`다. `normalized_errno` (`i32`)와 `disconnect_reason` (`u32`)은
+진단값이다.
+
+`intent_id`와 `revision`은 0이 아닌 `u64` opaque token이다. `last_failure_id`는 같은 타입이며
+실패 이력이 없을 때 0이다. 토큰은 동등성만 비교한다. 연결 실패는 snapshot 행에 담고 조회 자체의
+실패만 `ConfigError`로 전달한다. 바인딩은 monitor 이력이나 timer polling으로 연결 결과를 추정하지 않는다.
+
+성공한 snapshot은 반영한 변경의 readiness를 해제한다. Snapshot 종류마다 소켓당 observer를 하나 둔다.
+[공통 snapshot 계약](../README.ko.md#socket-readiness-snapshots)이 두 readiness의 의미를 정한다.
 
 ## Spot Get-Or-Create
 
@@ -467,12 +522,19 @@ Rust 이름과 ownership 모델은 C와 다를 수 있지만, 동작은 core 능
 - 반환된 메시지 데이터는 명확한 ownership과 lifetime을 가진다. borrowed 데이터는
   네이티브 owner보다 오래 살아남지 않는다.
 
+[공통 MonitorStatus 계약](../README.ko.md#monitorstatus)에 따라 `MonitorStatus`는 Core ABI v4를 반영한다.
+`abi_version`와 `struct_size`는 반환된 layout을 확인하는 진단값이다. `MonitorEvent`의 `event`, `value`,
+`routing_id`, `local_addr`, `remote_addr`, `connection_id`, `transport_lane`, `flags`는
+[공통 MonitorEvent 계약](../README.ko.md#monitorevent)의 필드 의미와 native layout을 따른다.
+
 ## 에러 및 검증 정책
+
+함수군별 오류는 [공통 오류 코드 표](../README.ko.md#error-code-표)의 66개 non-OK 코드를 보존한다.
 
 - 네이티브 고정 크기 id와 문자열은 FFI 경계를 넘기 전에 검증한다.
 - routing id, endpoint, channel 이름, topic을 조용히 자르지 않는다.
-- submit, request, recv, handler, close, bind, connect, config 에러 도메인을
-  보존한다.
+- 함수군별 오류 타입은 `SubmitError`, `RequestError`, `RecvError`, `HandlerError`, `CloseError`,
+  `BindError`, `ConnectError`, `ConfigError`다.
 - 공개 에러는 문자열 파싱이 아니라 Rust 타입으로 검사할 수 있어야 한다.
 
 ## 성능 정책

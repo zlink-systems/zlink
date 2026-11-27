@@ -11,10 +11,8 @@ title: "Go Bindings Public Contract"
 > **What this chapter defines** — the public type, ownership, and error
 > contract the Go binding provides on top of the Core raw C API.
 
-This document defines the Go binding's public contract. Features that exist only in other languages
-are not part of this contract. Confirm the exact Go
-identifiers and method signatures against `bindings/go/contracts/` and the
-matching projection at the module root.
+This document defines how Go exposes the socket capabilities in the common spec. The public declarations in
+`bindings/go/contracts/` and the module root define the exact names and signatures.
 
 | Section | Covers |
 |---|---|
@@ -75,6 +73,11 @@ budget. The profile is passed as
 `CoreHwmBudgetSnapshot() (CoreHwmBudgetSnapshot, error)` and
 `ResetCoreHwmBudgetMetrics() error`.
 
+`Context.Shutdown() error` requests context shutdown, and `Context.RecalculateAutoHwm() error` requests a
+Core Auto-HWM recalculation. Package functions `RuntimeVersion() Version`,
+`Has(capability string) (bool, error)`, and `Proxy(frontend, backend, capture SocketTarget) error` expose
+the Core version, capability check, and proxy.
+
 A socket or timer a poller has registered borrows that resource's handle.
 The source must therefore be removed from the poller before it is
 `Close`d, and the caller serializes add, modify, remove, and wait calls
@@ -90,10 +93,10 @@ the monitor through the same slot and source kind as a socket.
 
 ## Byte HWM and Auto-HWM
 
-Core owns [HWM](../../../../core/doc/spec/core/glossary.en.md#hwm) (the queue byte threshold) calculation and queue admission. The Go binding validates the
-`uint64` passed to `SetSendHighWaterMark(uint64)` and
-`SetReceiveHighWaterMark(uint64)`, then preserves it in Core's 8-byte
-`uint64_t` option. Getters return Core's full range as `uint64`. `0` means
+Core owns [HWM](../../../../core/doc/spec/core/glossary.en.md#hwm) (the queue byte threshold) calculation
+and queue admission. The Go binding passes the full `uint64` range from
+`SetSendHighWaterMark(uint64)` and `SetReceiveHighWaterMark(uint64)` to Core's
+8-byte `uint64_t` option. Getters return Core's full range as `uint64`. `0` means
 unlimited.
 
 Pass the byte-valued context memory limit and Core budget, and the profile option, to Core.
@@ -114,6 +117,14 @@ by Core. The input bytes to `NewMessage` are copied into native storage.
 `Message.Data` returns a native payload view that is valid only while the
 message stays open. When the lifetime needs to extend beyond the message,
 `Message.Bytes` makes a snapshot.
+
+`NewMessageString` copies the bytes of a Go string. `Message.Clone()` and `Copy()` return a new message
+that can be closed independently. `CopyTo(destination)` and `TryCopyTo(destination)` copy into caller
+storage. `Size()` and `IsEmpty()` report payload size and emptiness, `String()` and `Text()` return a Go
+string, and `RefCount()` reports the storage reference count.
+
+Routing ID constructors are `NewRoutingID`, `NewRoutingIDString`, `NewRoutingIDUint32`,
+`NewRoutingIDUUIDBytes`, and `NewRoutingIDFromHex`.
 
 | Builder path | Ownership rule |
 |---|---|
@@ -155,21 +166,70 @@ publish provides `Flags(SendFlags)`, on a separate `PublishOp`. The
 
 ### Per-socket operations
 
-| Socket | Operations |
-|---|---|
-| PAIR | `Send()` |
-| PUB, XPUB | `Publish(topic)`, returning a separate `PublishOp` |
-| DEALER | `Send()`, `Request()` |
-| ROUTER | `SendTo(RoutingID)`, `Request(RoutingID)`, `Reply(RoutingID, ReplyToken)` |
-| STREAM | `SendTo(RoutingID)`, RAW `Recv`, PACKET `RecvPacket` |
+The [Socket Capability Matrix](../README.en.md#socket-capability-matrix) defines the common per-socket contract.
 
-| Socket | Receive API |
-|---|---|
-| PAIR, DEALER, ROUTER, STREAM | `Recv` filling `Received` storage |
-| SUB, XSUB | `Subscribe` filling `TopicMessage` storage |
+| Socket | Submission | Receive |
+|---|---|---|
+| PAIR | `Send` | `Recv` |
+| DEALER | `Send`, `Request` | `Recv` |
+| ROUTER | `SendTo`, `Request`, `Reply` | `Recv` |
+| PUB | `Publish` | — |
+| SUB | — | `Subscribe` |
+| XPUB | `Publish` | `ReceiveSubscriptionEvent` |
+| XSUB | — | `Subscribe` |
+| STREAM | `SendTo` | `Recv`, `RecvPacket` |
 
-The binding implements these multipart receive APIs with one Core whole-message
-receive call. Native array and capacity handling are not exposed as public Go methods.
+Every raw socket opens and closes an endpoint with `Bind` and `Unbind`, and disconnects a peer by routing
+ID with `DisconnectRID`. Sockets other than STREAM register outbound connections with `Connect` and remove
+them with `Disconnect`.
+
+Connection methods return `error`. `Bind` uses `*BindError` and the other connection methods use `*ConnectError`.
+
+`SetTLSServer(certPath, keyPath string, requireClientCert bool) error` configures the certificate, key, and
+client authentication requirement before bind.
+`SetTLSClient(caCertPath, hostname string, trustSystem bool) error` configures the CA, server name, and use
+of the system CA store before connect. Every raw socket exposes both methods. Core configuration
+failures return `*ConfigError`.
+
+`SubSocket` and `XSubSocket` provide `SetSubscription(filter string) error`,
+`UnsetSubscription(filter string) error`, and `SubscriptionAt(index int) (string, bool, error)`. The query
+returns the filter and whether it is a pattern.
+`XPubSocket.ReceiveSubscriptionEvent(out *SubscriptionEvent, flags RecvFlags) (bool, error)` fills
+caller-provided storage.
+
+`CommonOptions()` returns `CommonSocketOptions` for PAIR, DEALER, ROUTER, PUB, SUB, XPUB, and XSUB.
+`PubOptions()` returns `PubSocketOptions` for PUB and XPUB. The other socket-specific options are methods
+on the socket, including ROUTER `SetMandatory`, `SetHandover`, `SetProbe`, and `SetConnectRoutingID`,
+DEALER `SetProbe`, STREAM `SetNotify` and `SetReceiveMode`, and SUB and XSUB `TopicsCount`.
+
+Receive methods fill caller-provided storage from Core whole-message results and keep the native array and
+capacity private.
+
+### Socket readiness snapshots
+
+`(*RouterSocket).RoutesSnapshot() ([]RouterRoute, error)` returns one row per routing ID for the routes
+Core currently selects. `RouterRoute` exposes `RoutingID`, `RouteGeneration`. The route generation is a
+nonzero opaque token. Compare it only for equality. `PollRoute` signals a change in a selected route.
+
+A connection-attempt snapshot returns one row per outbound connect registration. The target surface is
+`ConnectionAttemptsSnapshot() ([]ConnectionAttempt, error)` on raw sockets other than STREAM, with Poller
+readiness `PollConnect`. `ConnectionAttempt` contains `Endpoint`, `IntentID`, `Revision`, `LastFailureID`,
+`State`, `LastFailure`. `ConnectionFailure` contains `Kind`, `Stage`, `NormalizedErrno`,
+`DisconnectReason`. The closed enums `ConnectionAttemptState`, `ConnectionFailureKind`, and
+`ConnectionFailureStage` preserve Core states, failure kinds, and stages.
+
+`Endpoint` is a UTF-8 endpoint in a `string`. `LastFailure` is a
+`ConnectionFailure` that retains the latest failure after recovery. `NormalizedErrno` (`int32`)
+and `DisconnectReason` (`uint32`) are diagnostic values.
+
+`IntentID` and `Revision` are nonzero opaque `uint64` tokens. `LastFailureID` has the same
+type and is zero before the first failure. Compare tokens only for equality. Connection failures
+appear in snapshot rows. Only query failures use `*ConfigError`. The binding does not infer
+connection results from monitor history or timer polling.
+
+A successful snapshot clears readiness for the changes it reflects. Use one observer per socket for each
+snapshot type. The [common snapshot contract](../README.en.md#socket-readiness-snapshots) defines both
+readiness signals.
 
 ## Receive and eventing
 
@@ -208,6 +268,13 @@ A poller reports the readiness of a socket, file descriptor, or timer source as 
 is used to receive an interval event either via a poller or directly. Public pull methods on monitor and
 timer return events and fire counts.
 
+`MonitorStatus` reflects Core ABI v4 under the
+[common MonitorStatus contract](../README.en.md#monitorstatus). `ABIVersion` and `StructSize` are
+diagnostic values for verifying the returned layout. The
+[common MonitorEvent contract](../README.en.md#monitorevent) defines the meaning and native layout of the
+`MonitorEvent` fields `Event`, `Value`, `RoutingID`, `LocalAddr`, `RemoteAddr`, `ConnectionID`,
+`TransportLane`, `Flags`.
+
 ## Receive flow state
 
 The `ReceiveFlowState` type provides `ReceiveFlowRunning` and `ReceiveFlowPaused`.
@@ -217,6 +284,9 @@ carrying the native result and errno on failure. A nil or closed handle is rejec
 State, result, and monitor projection follow the [common receive-flow contract](../README.en.md#receive-flow-projection).
 
 ## Error contract
+
+Function-family errors preserve the 66 non-OK codes in the
+[common error code table](../README.en.md#error-code-table).
 
 Every per-function-family error implements `error` and satisfies the
 following public interface.
