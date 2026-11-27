@@ -5213,6 +5213,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             state.releaseDeferredJoin(claim);
         }
 
+        void sealDeferredJoin(Object claim) {
+            state.sealDeferredJoin(claim);
+        }
+
+        void requireApplicationExecution() {
+            state.requireApplicationExecution();
+        }
+
         void beginMove() {
             state.beginMove();
         }

@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 final class ZLinkActorContextState {
+    private static final Object JOIN_COMPLETION_SEALED = new Object();
     private ZLinkActor actor;
     private final String actorId;
     private final String meshName;
@@ -157,6 +158,16 @@ final class ZLinkActorContextState {
     void releaseDeferredJoin(Object claim) {
         if (claim != null) {
             deferredJoinClaim.compareAndSet(claim, null);
+        }
+    }
+
+    void sealDeferredJoin(Object claim) {
+        deferredJoinClaim.compareAndSet(claim, JOIN_COMPLETION_SEALED);
+    }
+
+    void requireApplicationExecution() {
+        if (deferredJoinClaim.get() == JOIN_COMPLETION_SEALED) {
+            throw new ZLinkActorJoinCompletionSealedException(actorId);
         }
     }
 
