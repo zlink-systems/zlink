@@ -48,6 +48,25 @@ class _SocketContract(Protocol):
         ...
 
 
+@runtime_checkable
+class _DisconnectRidContract(_SocketContract, Protocol):
+    """Sockets that can disconnect a peer by its routing id."""
+
+    def disconnect_rid(self, peer_rid):
+        """Disconnect the peer identified by ``peer_rid`` rather than by
+        address."""
+        ...
+
+
+@runtime_checkable
+class _RoutingIdContract(_SocketContract, Protocol):
+    """Sockets whose own routing id can be set and read."""
+
+    def set_routing_id(self, routing_id): ...
+
+    def get_routing_id(self): ...
+
+
 def __getattr__(name):
     if name in {"PairSocket", "DealerSocket"}:
         from . import message_socket_contracts

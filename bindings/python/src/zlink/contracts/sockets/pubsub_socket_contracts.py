@@ -7,7 +7,7 @@ from .operations import PublishOp
 
 
 @runtime_checkable
-class PubSocket(_socket_contract._SocketContract, Protocol):
+class PubSocket(_socket_contract._DisconnectRidContract, Protocol):
     """PUB socket: topic-filtered publish that drops messages with no matching
     subscriber."""
 
@@ -24,7 +24,6 @@ class PubSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
-    def disconnect_rid(self, peer_rid): ...
 
     def publish(self, topic) -> PublishOp:
         """Begin publishing under ``topic``; parts are consumed on a successful
@@ -33,7 +32,7 @@ class PubSocket(_socket_contract._SocketContract, Protocol):
 
 
 @runtime_checkable
-class SubSocket(_socket_contract._SocketContract, Protocol):
+class SubSocket(_socket_contract._DisconnectRidContract, Protocol):
     """SUB socket: a receive-only subscriber filtered by its subscriptions."""
 
     @property
@@ -49,7 +48,6 @@ class SubSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
-    def disconnect_rid(self, peer_rid): ...
 
     def set_subscription(self, topic):
         """Add a subscription for ``topic`` (an exact topic or pattern);
@@ -72,7 +70,7 @@ class SubSocket(_socket_contract._SocketContract, Protocol):
 
 
 @runtime_checkable
-class XPubSocket(_socket_contract._SocketContract, Protocol):
+class XPubSocket(_socket_contract._DisconnectRidContract, Protocol):
     """XPUB socket: like PUB, but also surfaces subscriber subscription and
     unsubscription events."""
 
@@ -89,7 +87,6 @@ class XPubSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
-    def disconnect_rid(self, peer_rid): ...
 
     def publish(self, topic) -> PublishOp:
         """Begin publishing under ``topic``; parts are consumed on a successful
@@ -103,7 +100,7 @@ class XPubSocket(_socket_contract._SocketContract, Protocol):
 
 
 @runtime_checkable
-class XSubSocket(_socket_contract._SocketContract, Protocol):
+class XSubSocket(_socket_contract._DisconnectRidContract, Protocol):
     """XSUB socket: a subscriber whose subscriptions are carried as messages."""
 
     @property
@@ -119,7 +116,6 @@ class XSubSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
-    def disconnect_rid(self, peer_rid): ...
 
     def set_subscription(self, topic):
         """Add a subscription for ``topic``; subscriptions accumulate."""

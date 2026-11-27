@@ -7,7 +7,7 @@ from .operations import RequestOp, SendOp
 
 
 @runtime_checkable
-class PairSocket(_socket_contract._SocketContract, Protocol):
+class PairSocket(_socket_contract._DisconnectRidContract, Protocol):
     """PAIR socket: an exclusive one-to-one peering with no routing."""
 
     def connect(self, endpoint):
@@ -30,14 +30,9 @@ class PairSocket(_socket_contract._SocketContract, Protocol):
         available."""
         ...
 
-    def disconnect_rid(self, peer_rid):
-        """Disconnect the peer identified by ``peer_rid`` rather than by
-        address."""
-        ...
-
 
 @runtime_checkable
-class DealerSocket(_socket_contract._SocketContract, Protocol):
+class DealerSocket(_socket_contract._DisconnectRidContract, _socket_contract._RoutingIdContract, Protocol):
     """DEALER socket: load-balances sends across its connected peers and can
     issue routed requests."""
 
@@ -54,11 +49,6 @@ class DealerSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
-    def disconnect_rid(self, peer_rid): ...
-
-    def set_routing_id(self, routing_id): ...
-
-    def get_routing_id(self): ...
 
     def send(self) -> SendOp:
         """Begin a multipart send; parts are consumed on a successful submit."""
