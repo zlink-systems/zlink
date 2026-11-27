@@ -211,6 +211,138 @@ function deferred() {
   });
   return { promise, resolve };
 }
+
+for (const kind of ['Actor', 'Spot']) {
+  test(
+    `generationShutdownCompletes${kind}DiscardAfterBackendClose`,
+    { timeout: 15000 },
+    async (t) => {
+      class Entry {}
+      class Room {}
+      Injectable({ scope: Scope.TRANSIENT })(Room);
+      class Factory {
+        async create(context) {
+          return { context };
+        }
+      }
+      class Adapter {
+        async capture() {
+          return new Uint8Array();
+        }
+        async restore() {}
+      }
+      const provider = new internal.ZLinkInMemoryProviderLocationStore();
+      const store = new internal.ZLinkLocationStoreRepository(provider);
+      const builder = nestjs.zlinkFramework().addLocationStore(provider);
+      builder.configureDispatch().messageFlow('detailed');
+      builder
+        .addRouteMesh('discarded')
+        .listen('tcp://127.0.0.1:0')
+        .objects()
+        .server()
+        .addEntrySpot(Entry, 'player')
+        .addActorFactory('player', Factory, (factory) => factory.preserveStateWith(Adapter))
+        .addSpotFactory('room', Room, (factory) => factory.preserveStateWith(Adapter));
+      class App {}
+      Module({
+        imports: [nestjs.ZLinkModule.forRoot(builder.build())],
+        providers: [Factory, Adapter, Room]
+      })(App);
+      t.after(() => flow.close());
+      const app = await NestFactory.createApplicationContext(App, {
+        logger: false,
+        abortOnError: false
+      });
+      t.after(() => app.close());
+      const host = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
+      const actors = app.get(nestjs.ZLINK_ACTOR_MANAGER);
+      const spots = host.spotManager;
+      const location = host.locationOwner.currentRuntime;
+      const node = host.spotNodeRuntime.meshNode('discarded');
+      const failures = [];
+      host.errorSink.onRuntimeTaskException((failure) => failures.push(failure));
+      const discardStarted = deferred();
+      const trackExecution = location.trackExecution;
+      t.mock.method(location, 'trackExecution', function (owner, steadyReady, discard, recovery) {
+        trackExecution.call(
+          this,
+          owner,
+          steadyReady,
+          (error) => {
+            const disposal = discard(error);
+            discardStarted.resolve({ disposal });
+            return disposal;
+          },
+          recovery
+        );
+      });
+      const objectId = 'shutdown-discard';
+      const created =
+        kind === 'Actor'
+          ? await actors.getOrCreate(objectId, 'player').inMesh('discarded').submit()
+          : await app
+              .get(nestjs.ZLINK_SPOT_MANAGER)
+              .getOrCreate(objectId, 'room')
+              .inMesh('discarded')
+              .submit();
+      assert.ok(created.actor ?? created.spot);
+      const owner = location.currentOwnerToken;
+      async function loseOwnerLease() {
+        await store.releaseOwnerLease(owner);
+        assert.equal(await location.renewOwnerLeaseOnce(), true);
+      }
+
+      const resumeSpotDiscard = deferred();
+      let disposal;
+      let disposalSettled = false;
+      if (kind === 'Spot') {
+        const discardSpot = spots.activationLifecycle.discard;
+        t.mock.method(spots.activationLifecycle, 'discard', async function (activation) {
+          await resumeSpotDiscard.promise;
+          await discardSpot.call(this, activation);
+        });
+        const drain = spots.drainForShutdown;
+        t.mock.method(spots, 'drainForShutdown', async function (...args) {
+          await loseOwnerLease();
+          assert.equal(await spots.find('discarded', created.spotId), null);
+          const draining = drain.apply(this, args);
+          disposal = (await discardStarted.promise).disposal;
+          assert.ok(disposal);
+          void disposal.then(
+            () => (disposalSettled = true),
+            () => (disposalSettled = true)
+          );
+          setTimeout(resumeSpotDiscard.resolve, 20);
+          await draining;
+        });
+      }
+      const shutdown = node.shutdown;
+      t.mock.method(node, 'shutdown', async function (...args) {
+        if (kind === 'Actor') {
+          assert.equal(host.actorManager.getState(objectId), undefined);
+          const result = await shutdown.apply(this, args);
+          await loseOwnerLease();
+          return result;
+        }
+        assert.equal(disposalSettled, true);
+        return await shutdown.apply(this, args);
+      });
+
+      if (kind === 'Actor') {
+        await host.stop();
+      } else {
+        const result = await host.shutdown();
+        assert.equal(result.outcome, internal.ZLinkFrameworkTerminationOutcome.Stopped);
+      }
+      assert.equal(location.isStarted, false);
+      if (kind === 'Spot') {
+        assert.ok(disposal);
+        await disposal;
+      }
+      assert.deepEqual(failures, []);
+    }
+  );
+}
 async function cleanupFixture(
   t,
   provider,
