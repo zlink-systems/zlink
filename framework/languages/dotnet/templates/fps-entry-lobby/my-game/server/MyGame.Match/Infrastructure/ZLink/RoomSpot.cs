@@ -33,11 +33,10 @@ public sealed class RoomSpot(
         CancellationToken ct
     )
     {
-        var admission = request.Decode<RoomAdmission>();
-        if (admission.PlayerId != id || admission.RoomId != Context.SpotId)
-            throw new InvalidDataException("Room admission identity mismatch.");
         return ValueTask.FromResult(
-            state.Admit(id) ? ZLinkSpotActorJoinResult.Accept() : ZLinkSpotActorJoinResult.Reject()
+            state.Admit(id, Context.SpotId, request.Decode<RoomAdmission>())
+                ? ZLinkSpotActorJoinResult.Accept()
+                : ZLinkSpotActorJoinResult.Reject()
         );
     }
 
@@ -51,7 +50,7 @@ public sealed class RoomSpot(
         ValueTask.CompletedTask;
 
     private RoomView View() =>
-        new(Context.SpotId, settings.Id, state.View(), state.Phase, state.Winner);
+        state.View(Context.SpotId, settings.Id);
 
     public ValueTask ViewAsync(PlayerActor actor) =>
         actor.Context.BoundSession.Send(View()).Async();
@@ -73,7 +72,7 @@ public sealed class RoomSpot(
             await actor
                 .Context.BoundSession.Send(
                     new MoveResult(
-                        state.Players.Single(p => p.PlayerId == actor.Context.ActorId).Position,
+                        state.Player(actor.Context.ActorId).Position,
                         request.Sequence
                     )
                 )

@@ -1,0 +1,93 @@
+name: Network Sync Unity EditMode
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/network-sync-unity.yml"
+      - "plugins/network-sync/connector/unity/**"
+      - "framework/languages/dotnet/src/Systems.Zlink.Stream.Connector/**"
+      - "framework/languages/dotnet/src/Shared/**"
+      - "framework/languages/dotnet/Directory.*.props"
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_PATH: plugins/network-sync/connector/unity/network-sync-fps-demo
+
+jobs:
+  editmode:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build the managed demo and stage STREAM dependencies
+        run: dotnet build "${PROJECT_PATH}/Managed~/Demo.Managed.csproj" -c Release
+
+      - name: Check for a Unity licence
+        id: license
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+        shell: bash
+        run: |
+          if [[ -n "${UNITY_LICENSE}" && -n "${UNITY_EMAIL}" ]]; then
+            echo "licensed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "licensed=false" >> "${GITHUB_OUTPUT}"
+            echo "::warning title=Unity EditMode skipped::UNITY_LICENSE/UNITY_EMAIL are unavailable."
+          fi
+
+      - name: Run the Network Sync consumer tests
+        if: steps.license.outputs.licensed == 'true'
+        uses: game-ci/unity-test-runner@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          unityVersion: auto
+          projectPath: ${{ env.PROJECT_PATH }}
+          testMode: editmode
+          customParameters: "-nographics -assemblyNames Zlink.NetworkSync.EditorTests"
+          coverageEnabled: false
+          githubToken: ""
+          artifactsPath: unity-editmode-results
+          runAsHostUser: true
+
+      - name: Verify ConsumerTests ran
+        if: steps.license.outputs.licensed == 'true'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          name = "Zlink.NetworkSync.Tests.ConsumerTests.AttachesToManagedConnector"
+          cases = [
+              case
+              for path in Path("unity-editmode-results").rglob("*.xml")
+              for case in ET.parse(path).iter("test-case")
+              if case.get("fullname") == name
+          ]
+          if len(cases) != 1 or cases[0].get("result") != "Passed":
+              raise SystemExit(f"Expected a passing EditMode test: {name}")
+          print(f"Passed: {name}")
+          PY
+
+      - name: Upload Unity EditMode results
+        if: always() && steps.license.outputs.licensed == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: network-sync-unity-editmode
+          path: unity-editmode-results
+          if-no-files-found: warn

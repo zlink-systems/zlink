@@ -176,3 +176,20 @@ server/config/*.json에 접근 가능한 Redis, mesh, STREAM 주소와 배포별
 ## 알려진 문제
 
 drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.
+
+## Network Sync 프로필
+
+저장소 checkout에서 `./run-server.sh --network-sync` 또는
+`run-server.cmd --network-sync`를 실행합니다. 출력에 표시되는 STREAM endpoint를
+[네이티브 Unity 데모](../../../../../../plugins/network-sync/connector/unity/network-sync-fps-demo)에 입력합니다.
+
+서로 다른 player ID로 같은 duel에 참가합니다. match Room은 30 Hz로 진행하며
+20 Hz로 전체 snapshot을 보냅니다. match Room에는 relocation을 적용하지 않습니다.
+클라이언트는 이동 방향과 사격할 때의 조준 방향을 입력으로 보냅니다.
+서버는 시뮬레이션 틱에서 이동과 사격을 적용합니다.
+
+격리 시나리오는 `./run-e2e.sh --local --scenario network-sync` 또는
+`pwsh -NoProfile -File ./run-e2e.ps1 -Local -Scenario network-sync`로 실행합니다.
+Checkout에서는 서버 플러그인 소스를 사용합니다. 템플릿을 복사한 경우 NuGet에서
+`Zlink.NetworkSync.Server` 0.35.0을 사용할 수 있게 설정하고 스크립트 실행 환경에
+`EnableNetworkSync=true`를 지정합니다.
