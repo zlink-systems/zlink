@@ -62,6 +62,7 @@ export interface ZLinkFrameworkRegistration {
   readonly routeChannels: ReadonlySet<string>;
   readonly routeChannelOptions: ReadonlyMap<string, ZLinkRouteChannelOptions>;
   readonly streamNodes: ReadonlyMap<string, ZLinkStreamNodeOptions>;
+  readonly admissionQueueRoute?: { readonly meshName: string; readonly spotId: string };
   readonly streamCompression?: ZLinkStreamCompressionOptions;
   readonly spotNodes: ReadonlyMap<string, ZLinkSpotNodeOptions>;
   readonly spotPublisherClients: ReadonlySet<string>;
@@ -237,6 +238,11 @@ export interface ZLinkStreamNodeOptions {
   readonly authenticationPacketName?: string;
   readonly maxConcurrentAuthentications?: number;
   readonly authenticationRetryDelayMs?: number;
+  readonly admissionQueueEnabled?: boolean;
+  readonly admissionQueueKey?: string;
+  readonly admissionQueuePreviousKey?: string;
+  readonly admissionQueueMeshName?: string;
+  readonly admissionGlobalLimit?: number;
   readonly heartbeatIntervalMs?: number;
   readonly heartbeatTimeoutMs?: number;
   readonly idleTimeoutMs?: number;

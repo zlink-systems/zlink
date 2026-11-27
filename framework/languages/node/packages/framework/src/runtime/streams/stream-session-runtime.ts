@@ -21,7 +21,13 @@ import {
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { awaitWithAbort, createAbortError, isAbortError, isPromiseLike } from '../abort';
+import {
+  awaitWithAbort,
+  createAbortError,
+  isAbortError,
+  isPromiseLike,
+  throwIfAborted
+} from '../abort';
 import { type ZLinkApplicationWorkClaim, shouldCompactBackingArray } from '../admission';
 
 import {
@@ -64,6 +70,18 @@ import {
 } from '../framework-errors-internal';
 import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
 import type { ZLinkAuthenticationAdmission } from './authentication-admission';
+import type { AdmissionQueueNode, AdmissionResult } from './admission-queue-node';
+import type { ZLinkSerialWorkPreparation } from '../execution/serial-execution-queue';
+import { encodeRoutingIdStorageHex, toBackendRoutingId } from '../routing-id';
+import {
+  admissionUpdate,
+  enqueuePacketName,
+  positionPacketName,
+  ticketPacketName,
+  type AdmissionConnection,
+  type AdmissionDelivery,
+  type AdmissionUpdate
+} from './admission-queue-messages';
 import { boundSessionErrorPayload } from './bound-session-response-target';
 import {
   streamSessionIdFromRoutingId,
@@ -164,6 +182,8 @@ export interface ZLinkStreamSessionNodeRuntimeOptions extends ZLinkStreamSession
   readonly monitor?: ZLinkBackendSocketMonitor;
   readonly applicationJobQueue: ApplicationJobQueuePort;
   readonly authenticationAdmission?: ZLinkAuthenticationAdmission;
+  readonly admissionQueue?: AdmissionQueueNode;
+  readonly enqueueAdmission?: (connection: AdmissionConnection) => Promise<AdmissionUpdate>;
 }
 
 class ZLinkStreamReaderLiveness {
@@ -213,6 +233,7 @@ class ZLinkStreamReaderLiveness {
 
 export class ZLinkStreamSessionRuntime {
   readonly stream: ZLinkManagedStream;
+  admissionQueueConnection?: AdmissionConnection;
   readonly context: DefaultZLinkSessionContext;
   private creation: ZLinkStreamSessionCreation;
   private readonly serial = new ZLinkSessionSerialExecutor();
@@ -442,7 +463,12 @@ export class ZLinkStreamSessionRuntime {
     decodedHeader: ZLinkStreamFrameHeader,
     terminalOwner?: ZLinkRetainedStreamOwner,
     applicationJobPermit?: ApplicationJobPermitPort,
-    releaseAuthentication?: () => void
+    releaseAuthentication?: () => void,
+    queueAdmission?: {
+      admit?: () => Promise<AdmissionResult>;
+      reject: (reason: 'queueRequired' | 'unavailable') => Promise<void>;
+      used: () => void;
+    }
   ): void {
     this.recordInbound();
     this.lastApplicationActivityAt = this.lastInboundFrameAt;
@@ -450,11 +476,36 @@ export class ZLinkStreamSessionRuntime {
       releaseAuthentication === undefined
         ? undefined
         : this.trackAuthentication(releaseAuthentication);
+    let request: Promise<AdmissionResult> | undefined;
+    let decision: AdmissionResult | undefined;
+    const admit = queueAdmission?.admit;
+    const preparation: ZLinkSerialWorkPreparation | undefined =
+      admit === undefined
+        ? undefined
+        : {
+            // The Spot request belongs to this ingress record through lifecycle rearbitration.
+            prepare: async (signal) => {
+              if (request === undefined) {
+                throwIfAborted(signal);
+                request = admit();
+              }
+              decision = await request;
+            },
+            cancel: () => {}
+          };
     let terminalReleased = false;
     const releaseTerminal = (): void => {
       if (terminalReleased) return;
       terminalReleased = true;
       completeAdmission?.();
+      if (request !== undefined) {
+        void request.then(
+          (result) => {
+            if (result.kind === 'admitted') result.release();
+          },
+          (error) => this.options.onError?.(error)
+        );
+      }
       terminalOwner?.close();
     };
     if (
@@ -481,7 +532,26 @@ export class ZLinkStreamSessionRuntime {
     this.enqueueApplication(
       async () => {
         try {
-          const dispatch = () => this.dispatchPacket(payload, decodedHeader, completeAdmission);
+          if (queueAdmission !== undefined && this.stream.shutdownTransportClosed) {
+            applicationJobPermit?.releaseAfterInternalProcessing();
+            payload.close();
+            return;
+          }
+          if (decision !== undefined && decision.kind !== 'admitted') {
+            applicationJobPermit?.releaseAfterInternalProcessing();
+            payload.close();
+            await queueAdmission!.reject(decision.kind);
+            return;
+          }
+          const releasePermit = decision?.release;
+          const dispatch = () =>
+            this.dispatchPacket(
+              payload,
+              decodedHeader,
+              completeAdmission,
+              queueAdmission?.used,
+              releasePermit
+            );
           if (applicationJobPermit === undefined) await dispatch();
           else await runWithApplicationJobPermit(applicationJobPermit, dispatch);
         } finally {
@@ -498,7 +568,8 @@ export class ZLinkStreamSessionRuntime {
           });
         }
       },
-      () => this.traceShutdownDrop(decodedHeader)
+      () => this.traceShutdownDrop(decodedHeader),
+      preparation
     );
   }
 
@@ -700,7 +771,9 @@ export class ZLinkStreamSessionRuntime {
   private async dispatchPacket(
     payload: Message,
     decodedHeader: ZLinkStreamFrameHeader,
-    completeAdmission?: () => void
+    completeAdmission?: () => void,
+    ticketUsed?: () => void,
+    releasePermit?: () => void
   ): Promise<void> {
     let dispatchPayload = payload;
     let enteredDispatch = false;
@@ -820,7 +893,12 @@ export class ZLinkStreamSessionRuntime {
               inboundHeader.name
             );
             releaseApplicationJobPermitBeforeHandler();
-            await session.onDispatch(sessionDispatchContext, frameworkPayload);
+            ticketUsed?.();
+            try {
+              await session.onDispatch(sessionDispatchContext, frameworkPayload);
+            } finally {
+              releasePermit?.();
+            }
           }
           if (streamKind === ZLinkDispatchMessageKind.Send) {
             flowIfEnabled(
@@ -1129,7 +1207,8 @@ export class ZLinkStreamSessionRuntime {
   private enqueueApplication(
     work: () => Promise<void>,
     onRejected?: (error?: unknown) => void,
-    onShutdownRejected?: () => void
+    onShutdownRejected?: () => void,
+    preparation?: ZLinkSerialWorkPreparation
   ): void {
     let claim: ZLinkApplicationWorkClaim | undefined;
     try {
@@ -1152,7 +1231,8 @@ export class ZLinkStreamSessionRuntime {
           claim?.close();
           if (isAbortError(error) && this.stream.isShutdownForced()) onShutdownRejected?.();
           onRejected?.();
-        }
+        },
+        preparation
       )
     ) {
       claim?.close();
@@ -1544,17 +1624,50 @@ export class ZLinkStreamSessionNodeRuntime {
         throw error;
       }
       const admission = this.options.authenticationAdmission;
+      const queue = this.options.admissionQueue;
+      const socket = this.options.socket;
+      let queueAdmission: Parameters<ZLinkStreamSessionRuntime['enqueuePacket']>[5];
+      if (queue !== undefined && decodedHeader.name === enqueuePacketName) {
+        if (decodedHeader.kind === ZLinkStreamMessageKind.Request) {
+          session = this.getOrCreateSession(routingId, decodedHeader);
+          if (session !== undefined && !session.stream.shutdownTransportClosed) {
+            session.recordInbound();
+            void this.enqueueAdmission(session, routingId, decodedHeader).catch((error) =>
+              this.options.onError?.(error)
+            );
+          }
+        }
+        return bytes;
+      }
       if (admission?.isAuthentication(decodedHeader) === true) {
+        if (queue !== undefined) {
+          const connection = this.admissionConnection(queue, routingId);
+          const epoch =
+            connection === undefined
+              ? undefined
+              : queue.verify(connection, decodedHeader.admissionTicket);
+          if (connection === undefined || epoch === undefined) {
+            this.findSession(routingId)?.recordInbound();
+            void admission
+              .replyRejected(socket, routingId, decodedHeader, 'queueRequired')
+              .catch((error) => this.options.onError?.(error));
+            return bytes;
+          }
+          queueAdmission = {
+            admit: queue.globalLimitEnabled ? () => queue.admit(connection, epoch) : undefined,
+            reject: (reason) =>
+              admission
+                .replyRejected(socket, routingId, decodedHeader, reason)
+                .catch((error) => this.options.onError?.(error)),
+            used: () => queue.ticketUsed(connection)
+          };
+        }
         releaseAuthentication = admission.tryAcquire();
         if (releaseAuthentication === undefined) {
           this.findSession(routingId)?.recordInbound();
-          permit.releaseAfterInternalProcessing();
-          releasePermitOnFailure = false;
           void admission
-            .replyRejected(this.options.socket, routingId, decodedHeader)
-            .catch((error) => {
-              this.options.onError?.(error);
-            });
+            .replyRejected(socket, routingId, decodedHeader)
+            .catch((error) => this.options.onError?.(error));
           return bytes;
         }
       }
@@ -1599,7 +1712,8 @@ export class ZLinkStreamSessionNodeRuntime {
         decodedHeader,
         owner,
         applicationPermit,
-        releaseAuthentication
+        releaseAuthentication,
+        queueAdmission
       );
       releaseAuthentication = undefined;
       releasePermitOnFailure = false;
@@ -1630,6 +1744,53 @@ export class ZLinkStreamSessionNodeRuntime {
         this.recyclePacket(packet);
       }
     }
+  }
+
+  private admissionConnection(
+    queue: AdmissionQueueNode,
+    routingId: unknown
+  ): AdmissionConnection | undefined {
+    const rid = encodeRoutingIdStorageHex(toBackendRoutingId(routingId));
+    return queue.connection(this.options.nodeName!, Buffer.from(rid, 'hex').toString('base64url'));
+  }
+
+  private async enqueueAdmission(
+    session: ZLinkStreamSessionRuntime,
+    routingId: unknown,
+    header: ZLinkStreamFrameHeader
+  ): Promise<void> {
+    const admission = this.options.authenticationAdmission!;
+    const connection = this.admissionConnection(this.options.admissionQueue!, routingId);
+    let update: AdmissionUpdate | undefined;
+    if (connection !== undefined) {
+      session.admissionQueueConnection = connection;
+      try {
+        update = await this.options.enqueueAdmission!(connection);
+      } catch (error) {
+        this.options.onError?.(error);
+      }
+    }
+    if (session.stream.shutdownTransportClosed) return;
+    if (update === undefined) {
+      await admission.replyRejected(this.options.socket, routingId, header, 'unavailable');
+    } else {
+      await admission.replyEnqueue(this.options.socket, routingId, header, update);
+    }
+  }
+
+  async deliverAdmission(delivery: AdmissionDelivery): Promise<void> {
+    const sessionRid = Buffer.from(delivery.sessionRid, 'base64url').toString('hex');
+    const session = this.getActiveSession(sessionRid);
+    if (session?.admissionQueueConnection === undefined || session.stream.shutdownTransportClosed) {
+      return;
+    }
+    const name = delivery.kind === 'ticket' ? ticketPacketName : positionPacketName;
+    await this.options.authenticationAdmission!.push(
+      this.options.socket,
+      session.stream.actorBindingRoutingId,
+      name,
+      admissionUpdate(delivery)
+    );
   }
 
   private takePacket(): ZLinkBackendStreamPacket {
@@ -1987,6 +2148,9 @@ export class ZLinkStreamSessionNodeRuntime {
   ): void {
     if (this.sessions.get(sessionId) !== session) return;
     this.sessions.delete(sessionId);
+    if (session.admissionQueueConnection !== undefined) {
+      this.options.admissionQueue?.sessionEnded(session.admissionQueueConnection);
+    }
     if (!creationFailed) return;
 
     // Keep failed attempts after close because ready events and packets can

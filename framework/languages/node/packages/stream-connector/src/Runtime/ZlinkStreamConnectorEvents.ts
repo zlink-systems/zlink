@@ -5,6 +5,7 @@ import type {
   ZlinkStreamError
 } from '../Contracts';
 import { ZlinkStreamErrorCode } from '../Contracts';
+import type { AdmissionPosition } from './Protocol/ZlinkStreamAdmissionQueue';
 import {
   currentRegistrations,
   registerHandler,
@@ -36,6 +37,40 @@ export class ZlinkStreamConnectorEvents {
       (context: ZlinkStreamAdmissionWaitingContext, signal?: AbortSignal) => Promise<void> | void
     >
   >();
+  private readonly admissionQueuedHandlers = new Set<
+    HandlerRegistration<(signal?: AbortSignal) => Promise<void> | void>
+  >();
+  private readonly admissionPositionHandlers = new Set<
+    HandlerRegistration<
+      (position: number, estimatedWaitMs: number, signal?: AbortSignal) => Promise<void> | void
+    >
+  >();
+
+  onAdmissionQueued(handler: (signal?: AbortSignal) => Promise<void> | void): Disposable {
+    return registerHandler(this.admissionQueuedHandlers, handler);
+  }
+
+  onAdmissionPosition(
+    handler: (
+      position: number,
+      estimatedWaitMs: number,
+      signal?: AbortSignal
+    ) => Promise<void> | void
+  ): Disposable {
+    return registerHandler(this.admissionPositionHandlers, handler);
+  }
+
+  publishAdmissionQueued(): void {
+    if (this.admissionQueuedHandlers.size === 0) return;
+    this.publish(this.admissionQueuedHandlers, (handler) => handler());
+  }
+
+  publishAdmissionPosition(value: AdmissionPosition): void {
+    if (this.admissionPositionHandlers.size === 0) return;
+    this.publish(this.admissionPositionHandlers, (handler) =>
+      handler(value.position, value.estimatedWaitMs)
+    );
+  }
 
   onAdmissionWaiting(
     handler: (

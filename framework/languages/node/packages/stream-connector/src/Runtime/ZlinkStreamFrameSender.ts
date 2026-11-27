@@ -158,9 +158,9 @@ export class ZlinkStreamFrameSender {
     compress: boolean,
     correlationId: string,
     actorSlot?: number
-  ): (requestSeq: bigint, options: ZlinkStreamWriteOptions) => Promise<void> {
+  ): (requestSeq: bigint, options: ZlinkStreamWriteOptions, ticket?: string) => Promise<void> {
     let firstFrame: Uint8Array | undefined;
-    return async (requestSeq, options) => {
+    return async (requestSeq, options, ticket) => {
       throwIfAborted(options.signal);
       const frame =
         firstFrame === undefined
@@ -174,7 +174,7 @@ export class ZlinkStreamFrameSender {
               correlationId,
               actorSlot
             ))
-          : this.protocol.reencodeRequest(firstFrame, requestSeq);
+          : this.protocol.reencodeRequest(firstFrame, requestSeq, ticket);
       await this.write(connection, frame, options);
     };
   }

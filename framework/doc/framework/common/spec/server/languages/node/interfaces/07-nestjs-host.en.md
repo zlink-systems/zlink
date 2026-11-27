@@ -353,6 +353,11 @@ export interface ZLinkNestStreamNodeBuilder extends ZLinkNestFrameworkOptionsBui
  setHeartbeat(intervalMs: number, timeoutMs: number): this;
  setIdleTimeout(timeoutMs: number): this;
     setAuthenticationAdmission(packetName: string, maxConcurrentAuthentications?: number, authenticationRetryDelayMs?: number): this;
+    setAdmissionQueueEnabled(enabled: boolean): this;
+    setAdmissionQueueKey(key: string): this;
+    setAdmissionQueuePreviousKey(key: string): this;
+    setAdmissionQueueMeshName(meshName: string): this;
+    setAdmissionGlobalLimit(limit: number): this;
  setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
  registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
 }
