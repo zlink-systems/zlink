@@ -956,14 +956,18 @@ final class ZLinkProviderAuthorityRepository {
                                         .thenApply(ZLinkObjectConflict::new);
                             }
                             return requireLiveOwner(
-                                            request.targetOwner(), new ArrayList<>(), opaqueCancellation)
+                                            request.targetOwner(),
+                                            new ArrayList<>(),
+                                            opaqueCancellation)
                                     .thenCompose(
                                             live -> {
                                                 if (!live) {
                                                     return completed(
-                                                            new ZLinkObjectConflict(toRead(current)));
+                                                            new ZLinkObjectConflict(
+                                                                    toRead(current)));
                                                 }
-                                                return capacityAvailable(conditions, opaqueCancellation)
+                                                return capacityAvailable(
+                                                                conditions, opaqueCancellation)
                                                         .thenCompose(
                                                                 available ->
                                                                         available
