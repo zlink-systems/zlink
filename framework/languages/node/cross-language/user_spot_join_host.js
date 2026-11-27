@@ -94,7 +94,7 @@ function errorKindName(kind) {
   return framework.ZLinkFrameworkErrorKind[kind] ?? String(kind ?? 'InternalFailure');
 }
 
-function installMessageFlowCapture() {
+function installMessageFlowCapture(label = 'node-user-spot-join') {
   if (!args['event-file']) return undefined;
   fs.writeFileSync(`${args['event-file']}.flow`, '');
   const provider = new LoggerProvider({
@@ -102,13 +102,17 @@ function installMessageFlowCapture() {
       onEmit(record) {
         const fields = record.attributes;
         appendFlow(
-          `zlink flow: label=node-user-spot-join`
+          `zlink flow: label=${label}`
           + ` phase=${fields.phase ?? '<null>'}`
           + ` surface=${fields.surface ?? '<null>'}`
           + ` kind=${fields.message_kind ?? '<null>'}`
           + ` packet=${fields.packet_name ?? '<null>'}`
           + ` flow=${fields.flow_id ?? '<null>'}`
           + ` origin=${fields.flow_origin ?? '<null>'}`
+          + (label === 'node-actor-destroy'
+            ? ` corr=${fields.correlation_id ?? '<null>'} message_flow_outcome=${fields.outcome ?? '<null>'}`
+              + ` errorType=${fields.error_type ?? '<null>'} errorMessage=${JSON.stringify(fields.error_message ?? null)}`
+            : '')
         );
       },
       forceFlush: async () => undefined,
@@ -847,6 +851,16 @@ async function runOutageTarget(app, actorClient, targetNodeRid) {
 }
 
 async function main() {
+  if (mode === 'actor-destroy-owner' || mode === 'actor-destroy-caller') {
+    const { actorDestroyHost } = require('./actor-destroy-host');
+    const flowProvider = installMessageFlowCapture('node-actor-destroy');
+    try {
+      await actorDestroyHost(mode === 'actor-destroy-owner', args, require_, appendEvent, writeReady);
+    } finally {
+      await flowProvider?.shutdown();
+    }
+    return;
+  }
   if (mode !== 'user-spot-join-source'
     && mode !== 'user-spot-join-source-multiattempt'
     && mode !== 'user-spot-target') {
@@ -863,7 +877,9 @@ main().catch(error => {
   const kind = error instanceof framework.ZLinkFrameworkException
     ? errorKindName(error.kind)
     : 'InternalFailure';
-  appendEvent(`user-spot-join-failed|kind=${kind}|message=${String(error?.message ?? error)}`);
-  console.error(`Node User-Spot Join source failed: ${error?.stack ?? error}`);
+  if (mode !== 'actor-destroy-owner' && mode !== 'actor-destroy-caller') {
+    appendEvent(`user-spot-join-failed|kind=${kind}|message=${String(error?.message ?? error)}`);
+  }
+  console.error(`Node cross-language host '${mode}' failed: ${error?.stack ?? error}`);
   process.exit(1);
 });
