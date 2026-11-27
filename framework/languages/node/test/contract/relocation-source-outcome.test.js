@@ -1,3 +1,4 @@
+const { relocationInventoryStore } = require('./fixtures/relocation-authority-store');
 const { MessageChannel } = require('node:worker_threads');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -190,6 +191,7 @@ for (const path of ['coordinator', 'shell', 'wide']) {
           completeRelocationSource: async () => {}
         }),
         locationStore: () => ({
+          ...relocationInventoryStore(),
           readAuthority: async () => storedAuthority,
           async compareExchangeAuthority(_key, expected, mutation) {
             assert.equal(expected.value, storedAuthority.storeVersion.value);

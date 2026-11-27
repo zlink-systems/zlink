@@ -57,9 +57,7 @@ const {
 const {
   ZLinkActorLocationClaims
 } = require('../../packages/framework/dist/runtime/locations/actor-location-claims');
-const {
-  ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/internal');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 const {
   encodeServiceUserSpotAuthorityPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-authority-payload-codec');
@@ -835,17 +833,43 @@ for (const membership of [
             : primary.objectGeneration
       });
     }
+    const primaryKey = encodeAuthorityKey('user_spot', 'table').value;
+    const actorKey = encodeAuthorityKey('actor', 'player').value;
+    const aggregateId = '12345678-1234-4123-8123-123456789abc';
+    const aggregateHex = aggregateId.replaceAll('-', '');
+    const wireRelocation = {
+      high: BigInt(`0x${aggregateHex.slice(0, 16)}`),
+      low: BigInt(`0x${aggregateHex.slice(16)}`)
+    };
+    const relocation = {
+      relocationId: aggregateId,
+      phase: 'captured',
+      sourceInventorySha256: '1'.repeat(64),
+      coordinator: { expectedStoreVersion: primary.storeVersion.value }
+    };
     const runtime = new ZLinkHostServiceRelocationRuntime({
       spotManager: () => ({}),
       locationStore: () => ({
-        async readAuthority() {
-          return primary;
+        async readAuthority(key) {
+          return key.value === primaryKey ? { ...primary, relocation } : f.snapshot;
         },
-        async listAuthorities() {
-          return {
-            kind: 'page',
-            items: [{ key: encodeAuthorityKey('actor', 'player'), snapshot: f.snapshot }]
-          };
+        async readAggregateInventory() {
+          return [
+            ...(membership === 'current' || membership === 'stale root incarnation'
+              ? [
+                  {
+                    authorityKey: actorKey,
+                    ownerTransition: 'newOwner',
+                    expectedStoreVersion: f.snapshot.storeVersion.value
+                  }
+                ]
+              : []),
+            {
+              authorityKey: primaryKey,
+              ownerTransition: 'newOwner',
+              expectedStoreVersion: primary.storeVersion.value
+            }
+          ];
         }
       })
     });
@@ -863,12 +887,13 @@ for (const membership of [
       runtime.resolveTargetParticipantInventory(
         'play',
         {
+          relocation: wireRelocation,
           object: { kind: 'userSpot', spotId: 'table', objectGeneration: primary.objectGeneration }
         },
-        { participants: [{ participantId: 1n }, root] }
+        { aggregateId, aggregateGeneration: 1n, participants: [{ participantId: 1n }, root] }
       );
     if (membership === 'current') {
-      const result = await resolve();
+      const { envelope: result } = await resolve();
       assert.equal(result.participants.length, 2);
       assert.equal(result.memberships.length, 1);
       assert.equal(result.memberships[0].spotObjectGeneration, primary.objectGeneration);
@@ -1073,13 +1098,7 @@ async function membershipFailureFixture(backend) {
           },
           () => new Date(now)
         )
-      : new ZLinkLocationStoreRepository(
-          provider,
-          () => new Date(now),
-          undefined,
-          undefined,
-          0
-        );
+      : new ZLinkLocationStoreRepository(provider, () => new Date(now), undefined, undefined, 0);
   const targets = {};
   for (const name of ['actor', 'spot']) {
     const ownerId = `${name}-owner`;
@@ -1218,10 +1237,9 @@ async function membershipFailureFixture(backend) {
             expectedStoreVersion: spot.storeVersion,
             ownerTransition: 'newOwner',
             authorityPayload: spot.payload,
-            membershipMutation: Buffer.alloc(0)
+            membershipMutation: Buffer.from('[]')
           }
         ],
-        inventoryDigest: Buffer.alloc(32, 7),
         targetDescriptor: { meshName: 'play', rid: targets.actor.nodeRid },
         targetDescriptorLifecycleGeneration: 7n,
         targetOwner: targets.actor.owner,
@@ -1397,11 +1415,18 @@ for (const outcome of ['stored', 'same-version conflict', 'new-version conflict'
   const changed = stored || outcome === 'new-version conflict';
   test(`membership authority observation updates the Actor route cache after ${outcome}`, async () => {
     const f = authorityFixture();
-    const { ZLinkStoreLocationResolvers } = require('../../packages/framework/dist/runtime/locations/resolvers');
-    const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
+    const {
+      ZLinkStoreLocationResolvers
+    } = require('../../packages/framework/dist/runtime/locations/resolvers');
+    const {
+      inspectRuntime
+    } = require('../../packages/framework/dist/runtime/internal-observation');
     let current = f.snapshot;
     const store = {
-      async readAuthority(key) { assert.deepEqual(key, encodeAuthorityKey('actor', 'player')); return current; },
+      async readAuthority(key) {
+        assert.deepEqual(key, encodeAuthorityKey('actor', 'player'));
+        return current;
+      },
       async compareExchangeAuthority(_key, version, mutation) {
         assert.equal(version.value, 'v1');
         if (outcome === 'same-version conflict') return { kind: 'conflict', current };
@@ -1411,13 +1436,34 @@ for (const outcome of ['stored', 'same-version conflict', 'new-version conflict'
     };
     const resolver = new ZLinkStoreLocationResolvers({
       stores: { authorityStore: store },
-      leaseTracker: { async ownerTokenLeaseDeadlineMs() { return performance.now() + 60_000; } }
+      leaseTracker: {
+        async ownerTokenLeaseDeadlineMs() {
+          return performance.now() + 60_000;
+        }
+      }
     });
     await resolver.resolveDirectActorRoute('player');
     const observed = [];
-    const claims = new ZLinkActorLocationClaims({ currentOwnerToken: f.owner }, {}, 'play', store,
-      (actorId, version) => { observed.push(version); resolver.observeActorAuthorityVersion(actorId, version); });
-    const commit = () => claims.commitMembership('Player', f.actor, 5n, 'table', 11n, framework.ZLinkSpotKind.User, 7n);
+    const claims = new ZLinkActorLocationClaims(
+      { currentOwnerToken: f.owner },
+      {},
+      'play',
+      store,
+      (actorId, version) => {
+        observed.push(version);
+        resolver.observeActorAuthorityVersion(actorId, version);
+      }
+    );
+    const commit = () =>
+      claims.commitMembership(
+        'Player',
+        f.actor,
+        5n,
+        'table',
+        11n,
+        framework.ZLinkSpotKind.User,
+        7n
+      );
     if (stored) await commit();
     else await assert.rejects(commit, /conflict/);
     assert.deepEqual(observed, ['v1', changed ? 'v2' : 'v1']);
@@ -1426,9 +1472,17 @@ for (const outcome of ['stored', 'same-version conflict', 'new-version conflict'
     assert.equal(route.spotId, changed ? 'table' : undefined);
     if (stored) {
       claims.confirmAuthority('player', current);
-      assert.deepEqual(resolver[inspectRuntime]().directActorRouteKeys, ['player'], 'the same confirmed version stays cached');
+      assert.deepEqual(
+        resolver[inspectRuntime]().directActorRouteKeys,
+        ['player'],
+        'the same confirmed version stays cached'
+      );
       claims.confirmAuthority('player', f.snapshot, 'unmatched-version');
-      assert.deepEqual(resolver[inspectRuntime]().directActorRouteKeys, ['player'], 'an old confirmation cannot remove the current route');
+      assert.deepEqual(
+        resolver[inspectRuntime]().directActorRouteKeys,
+        ['player'],
+        'an old confirmation cannot remove the current route'
+      );
     }
   });
 }

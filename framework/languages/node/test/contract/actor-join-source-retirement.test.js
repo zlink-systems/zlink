@@ -1,3 +1,4 @@
+const { relocationInventoryStore } = require('./fixtures/relocation-authority-store');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
@@ -154,6 +155,7 @@ for (const notification of ['delayed', 'lost']) {
         { rid: 'target', lifecycleGeneration: 11n, applicationVersion: 1n }
       ],
       locationStore: () => ({
+        ...relocationInventoryStore(),
         readAuthority: async () => storedAuthority,
         async compareExchangeAuthority(_key, expected, mutation) {
           assert.equal(expected.value, storedAuthority.storeVersion.value);
