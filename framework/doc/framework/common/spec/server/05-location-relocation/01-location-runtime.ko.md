@@ -1507,6 +1507,8 @@ Source와 Session owner는 target 선택 결과나 timeout을 근거로 Location
 | `Prepared` | Source가 owner다. Target 시도 번호, target owner lease와 target node가 모두 있어야 한다. 별도 relocation capacity reservation은 기록하지 않는다. |
 | `Committed`부터 `Completed`까지 | 정확히 기록된 target이 owner다. 같은 target 시도 번호를 유지한다. |
 
+Aggregate에 속한 participant의 owner는 aggregate 기록의 commit 하나로 정한다. Aggregate 기록([§8.3](#83-aggregate-기록과-이동-대상-목록의-저장-형식))의 `state`가 `committed`가 된 뒤에는 participant record의 `aggregate.relocation.phase`가 아직 `prepared`여도 그 participant에 기록된 target이 owner다. Reader는 participant phase를 따로 판정하지 않으며, writer는 aggregate commit과 같은 batch에서 participant phase를 `committed`로 바꾼다.
+
 User Spot membership을 바꾸지 않는 Actor 이동은 `NewOwner` CAS 한 번으로 owner를 바꾼다.
 같은 target process에서 준비를 다시 하면 target 시도 번호와 준비 정보만 교체한다. 다른
 target으로 교체하지 않는다. 이전 시도는 owner를 바꿀 수 없다.
