@@ -7,7 +7,7 @@ from .operations import PublishOp
 
 
 @runtime_checkable
-class PubSocket(_socket_contract._DisconnectRidContract, Protocol):
+class PubSocket(_socket_contract._ConnectSocketContract, Protocol):
     """PUB socket: topic-filtered publish that drops messages with no matching
     subscriber."""
 
@@ -32,7 +32,7 @@ class PubSocket(_socket_contract._DisconnectRidContract, Protocol):
 
 
 @runtime_checkable
-class SubSocket(_socket_contract._DisconnectRidContract, Protocol):
+class SubSocket(_socket_contract._ConnectSocketContract, Protocol):
     """SUB socket: a receive-only subscriber filtered by its subscriptions."""
 
     @property
@@ -70,7 +70,7 @@ class SubSocket(_socket_contract._DisconnectRidContract, Protocol):
 
 
 @runtime_checkable
-class XPubSocket(_socket_contract._DisconnectRidContract, Protocol):
+class XPubSocket(_socket_contract._ConnectSocketContract, Protocol):
     """XPUB socket: like PUB, but also surfaces subscriber subscription and
     unsubscription events."""
 
@@ -100,7 +100,7 @@ class XPubSocket(_socket_contract._DisconnectRidContract, Protocol):
 
 
 @runtime_checkable
-class XSubSocket(_socket_contract._DisconnectRidContract, Protocol):
+class XSubSocket(_socket_contract._ConnectSocketContract, Protocol):
     """XSUB socket: a subscriber whose subscriptions are carried as messages."""
 
     @property

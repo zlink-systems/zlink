@@ -6,8 +6,6 @@ namespace zlink::framework::runtime::location_record_fields
 inline constexpr char activationConcurrency[] = "activationConcurrency";
 inline constexpr char active[] = "active";
 inline constexpr char actors[] = "actors";
-inline constexpr char actorsActive[] = "actorsActive";
-inline constexpr char actorsPending[] = "actorsPending";
 inline constexpr char aggregate[] = "aggregate";
 inline constexpr char aggregateGeneration[] = "aggregateGeneration";
 inline constexpr char aggregateId[] = "aggregateId";
@@ -77,8 +75,6 @@ inline constexpr char sourceInventorySha256[] = "sourceInventorySha256";
 inline constexpr char spotType[] = "spotType";
 inline constexpr char spotTypes[] = "spotTypes";
 inline constexpr char spots[] = "spots";
-inline constexpr char spotsActive[] = "spotsActive";
-inline constexpr char spotsPending[] = "spotsPending";
 inline constexpr char stableType[] = "stableType";
 inline constexpr char startIndex[] = "startIndex";
 inline constexpr char state[] = "state";

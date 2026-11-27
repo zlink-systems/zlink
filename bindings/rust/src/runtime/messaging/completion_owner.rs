@@ -15,53 +15,21 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Poll, Waker};
 
-use crate::error::{
+use crate::contracts::errors::errors::{
     ConfigError, ConfigResult, RecvError, RequestError, RequestResult, SubmitError, SubmitResult,
     ZlinkError,
 };
-use crate::ffi;
-use crate::message::Message;
-use crate::native_errors::{check_recv_rc, request_error_from_result};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CompletionEntryKind {
-    SendRetry,
-    Request,
-}
-
-enum CompletionOutcome {
-    Writable {
-        completion_id: u64,
-        result: Result<(), SubmitError>,
-    },
-    Request(Result<Vec<Message>, RequestError>),
-}
+use crate::contracts::messaging::message::Message;
+use crate::internal::{
+    CompletionEntry, CompletionEntryKind, CompletionOutcome, CompletionOwner, EntryState,
+    OwnerState,
+};
+use crate::native::ffi;
+use crate::runtime::errors::native_errors::{check_recv_rc, request_error_from_result};
 
 struct CaptureResult {
     detached: bool,
     wakers: [Option<Waker>; 2],
-}
-
-struct EntryState {
-    completion_id: u64,
-    published: bool,
-    captured: bool,
-    settled: bool,
-    detached: bool,
-    owner_shutdown: bool,
-    awaiting_writable: bool,
-    admission_failure: Option<SubmitError>,
-    reply_detached: bool,
-    outcome: Option<CompletionOutcome>,
-    writable_waker: Option<Waker>,
-    request_waker: Option<Waker>,
-}
-
-/// One provisional send or request operation.
-pub(crate) struct CompletionEntry {
-    kind: CompletionEntryKind,
-    state: Mutex<EntryState>,
-    changed: Condvar,
 }
 
 impl CompletionEntry {
@@ -352,28 +320,6 @@ impl CompletionEntry {
     }
 }
 
-struct OwnerState {
-    entries: HashMap<usize, Arc<CompletionEntry>>,
-    public_owner: Option<usize>,
-}
-
-/// The single drain owner and provisional registry for one native socket.
-pub(crate) struct CompletionOwner {
-    socket: usize,
-    state: Mutex<OwnerState>,
-    /// Serializes completion pulls (public drain and inline blocking request)
-    /// with owner changes. Submits never take it: an entry is registered before
-    /// the native call and a completion that arrives first joins the submit
-    /// result inside the entry.
-    completion_gate: Mutex<()>,
-    /// Set once Core accepted the close. Registration checks it under `state`.
-    closed: AtomicBool,
-    next_context: AtomicUsize,
-}
-
-unsafe impl Send for CompletionOwner {}
-unsafe impl Sync for CompletionOwner {}
-
 impl CompletionOwner {
     pub(crate) fn new(socket: *mut c_void) -> Arc<Self> {
         Arc::new(Self {
@@ -504,10 +450,10 @@ impl CompletionOwner {
                     ffi::ZLINK_RECV_DONTWAIT,
                 )
             };
-            if rc == crate::error::RecvResult::NoData as i32 {
+            if rc == crate::contracts::errors::errors::RecvResult::NoData as i32 {
                 break;
             }
-            if rc != crate::error::RecvResult::Ok as i32 {
+            if rc != crate::contracts::errors::errors::RecvResult::Ok as i32 {
                 failure = Some(check_recv_rc(rc).expect_err("failed completion receive"));
                 break;
             }
@@ -553,7 +499,7 @@ impl CompletionOwner {
             let rc = unsafe {
                 ffi::zlink_completion_recv(self.socket as *mut c_void, &mut completion, 0)
             };
-            if rc == crate::error::RecvResult::NoData as i32 {
+            if rc == crate::contracts::errors::errors::RecvResult::NoData as i32 {
                 continue;
             }
             if let Err(error) = check_recv_rc(rc) {
@@ -812,7 +758,7 @@ fn request_result_from_native(result: ffi::zlink_request_result_t) -> RequestRes
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::RoutingId;
+    use crate::contracts::messaging::message::RoutingId;
     use std::task::Waker;
 
     #[test]
@@ -874,7 +820,7 @@ mod tests {
             .err()
             .expect("invalid native source");
         assert_eq!(error.code(), RequestResult::InternalError);
-        assert_eq!(error.native_errno(), libc::EFAULT);
+        assert_eq!(error.internal_errno(), libc::EFAULT);
         // The first source was adopted then dropped on error; the last source
         // remains owned by the completion, together with its empty prefix.
         assert_eq!(original.ref_count(), 2);
@@ -989,7 +935,7 @@ mod tests {
             entry.poll_writable(waker),
             Poll::Ready(Err(error))
                 if error.code() == SubmitResult::InternalError
-                    && error.native_errno() == libc::EPROTO
+                    && error.internal_errno() == libc::EPROTO
         ));
     }
 
@@ -1046,13 +992,13 @@ mod tests {
             entry.poll_request(waker),
             Poll::Ready(Err(ZlinkError::Submit(error)))
                 if error.code() == SubmitResult::Terminated
-                    && error.native_errno() == libc::ESHUTDOWN
+                    && error.internal_errno() == libc::ESHUTDOWN
         ));
         assert!(matches!(
             entry.poll_writable(waker),
             Poll::Ready(Err(error))
                 if error.code() == SubmitResult::Terminated
-                    && error.native_errno() == libc::ESHUTDOWN
+                    && error.internal_errno() == libc::ESHUTDOWN
         ));
     }
 
@@ -1091,7 +1037,7 @@ mod tests {
                     entry.poll_writable(waker),
                     Poll::Ready(Err(error))
                         if error.code() == expected
-                            && error.native_errno() == if expected == SubmitResult::InternalError { libc::EPROTO } else { errno }
+                            && error.internal_errno() == if expected == SubmitResult::InternalError { libc::EPROTO } else { errno }
                 ));
             }
         }

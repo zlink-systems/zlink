@@ -30,18 +30,6 @@ impl RoutedHandle {
         self.handle.load(Ordering::Acquire)
     }
 
-    pub(crate) fn close_native(&self) -> i32 {
-        let handle = self.handle();
-        if handle.is_null() {
-            return 0;
-        }
-        let rc = unsafe { crate::ffi::zlink_close(handle) };
-        if rc == 0 {
-            self.handle.store(std::ptr::null_mut(), Ordering::Release);
-        }
-        rc
-    }
-
     pub(crate) fn detach(&self) {
         self.handle.store(std::ptr::null_mut(), Ordering::Release);
     }

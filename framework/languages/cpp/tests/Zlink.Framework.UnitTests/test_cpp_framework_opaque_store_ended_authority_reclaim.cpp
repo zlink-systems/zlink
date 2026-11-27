@@ -947,8 +947,10 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
       scenario == "memberOnlyAggregatePrepared" || scenario == "memberOnlyAggregateReplaced";
     const bool aggregate_race = scenario == "memberAggregatePrepared" || member_only_race;
     const bool separate_aggregate_spot = scenario == "aggregate" || member_only_race;
-    // Shared owner and node use five fixed keys. Each member adds its authority key.
-    const auto fitting_members = location_store_limits::write_keys - 5u;
+    // The provider batch shares four authority, owner and descriptor keys and
+    // three active counters. Each member adds its authority key.
+    const auto shared_keys = use_provider ? 7u : 5u;
+    const auto fitting_members = location_store_limits::write_keys - shared_keys;
     const std::size_t members_wanted = scenario == "batchFits"    ? fitting_members
                                        : scenario == "batchBound" ? fitting_members + 1u
                                                                   : 1u;
@@ -1155,8 +1157,7 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
             target_descriptor.mesh_name = target.mesh_name;
             target_descriptor.rid =
               zlink::routing_id_t::from (std::string (target.node_rid.value ()));
-            // No allocation has used this target. Missing capacity is zero pending usage
-            // (provider read_capacity_async), before either new reservation is created.
+            // No allocation has used this target, so its capacity counter is absent.
             ASSERT_TRUE (std::holds_alternative<store_missing_t> (
               opaque.inner.read (capacity_key (target_descriptor)).result ().value ()));
         }
@@ -1164,22 +1165,19 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
     if (scenario == "memberCapacityCorrupt") {
         const auto current =
           std::get<store_found_t> (opaque.inner.read (opaque.before_read_key).result ().value ());
-        auto capacity =
-          nlohmann::json::parse (current.value.bytes.begin (), current.value.bytes.end ());
-        capacity.at (location_record_fields::active).at (location_record_fields::actors) = 0;
         ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
           opaque.inner
             .write ({{store_version_condition_t{opaque.before_read_key, current.value.version}},
-                     {store_put_t{opaque.before_read_key, bytes (capacity.dump ()), std::nullopt}}})
+                     {store_put_t{opaque.before_read_key, bytes ("0"), std::nullopt}}})
             .result ()
             .value ()));
         corrupted_capacity =
           std::get<store_found_t> (opaque.inner.read (opaque.before_read_key).result ().value ());
     }
     if (scenario == "memberReclaimed") {
-        // The Spot has already captured the old member in its snapshot when it reads
-        // source capacity. Reclaim that member independently before returning capacity.
-        opaque.before_read = [&] () -> task_t<void> {
+        // Reclaim the member after the Spot has built its release batch, before the
+        // provider checks the captured authority versions and applies the counter deltas.
+        opaque.before_write = [&] () -> task_t<void> {
             object_reserve_request_t concurrent;
             concurrent.key = {placement_object_kind_t::actor, "member-a"};
             concurrent.intent.stable_type = "player";
@@ -1244,8 +1242,8 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
             aggregate_sources.emplace_back (
               key,
               std::get<authority_snapshot_t> (repository.read_authority (key).result ().value ()));
-        // Reclaim has read the authority rows before its first source-capacity read.
-        opaque.before_read = [&, aggregate] () -> task_t<void> {
+        // Publish the aggregate marker after reclaim has captured the authority versions.
+        opaque.before_write = [&, aggregate] () -> task_t<void> {
             raced_aggregate = co_await repository.prepare_aggregate (aggregate);
         };
     }
