@@ -1,0 +1,923 @@
+{
+  "fixture": "zlink.framework.login-admission-queue",
+  "version": 1,
+  "status": "approved-design-fixture-runtime-not-yet-implemented",
+  "contract": {
+    "ticketFormat": "version(1) || expiresAtUnixMs(8 BE) || epoch(8 BE) || HMAC-SHA256(32)",
+    "ticketLifetimeMs": 30000,
+    "clockSkewMs": 2000,
+    "nodeReportValidityMs": 3000,
+    "reregisterAfterMs": 15000
+  },
+  "ticketVectors": [
+    {
+      "name": "current-key",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "expect": {
+        "accept": true,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "expired",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000032001,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "expect": {
+        "accept": false,
+        "reason": "expired"
+      }
+    },
+    {
+      "name": "skew-boundary",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000032000,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "expect": {
+        "accept": true,
+        "reason": "skewAccepted"
+      }
+    },
+    {
+      "name": "wrong-session",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1i",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "expect": {
+        "accept": false,
+        "reason": "wrongSession"
+      }
+    },
+    {
+      "name": "wrong-epoch",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationEpoch": 43
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "expect": {
+        "accept": false,
+        "reason": "wrongEpoch"
+      }
+    },
+    {
+      "name": "previous-key",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACoWJ0doAwUaJ4UVFk6fvB1oRc3kjk7SUHTTW8ThsOXQnA",
+      "expect": {
+        "accept": true,
+        "reason": "previousKeyOk"
+      }
+    },
+    {
+      "name": "short-ticket",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7",
+      "expect": {
+        "accept": false,
+        "reason": "badLength"
+      }
+    },
+    {
+      "name": "wrong-version",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationEpoch": 42
+      },
+      "ticket": "AgAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "expect": {
+        "accept": false,
+        "reason": "badVersion"
+      }
+    },
+    {
+      "name": "short-key",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHg",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpkd-u3yih1dIog4S6zkov_tIe5kI5BZpnfdXmWl3x7kQ",
+      "expect": {
+        "accept": false,
+        "reason": "keyTooShort"
+      }
+    }
+  ],
+  "queueScenarios": [
+    {
+      "name": "enqueue-idempotent",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:213",
+      "given": {
+        "sessionRid": "a",
+        "nodeRid": "n",
+        "position": 2
+      },
+      "steps": [
+        {
+          "action": "enqueue",
+          "expect": {
+            "position": 2,
+            "newWaiters": 0
+          }
+        },
+        {
+          "action": "issueTicket",
+          "expect": {
+            "ticket": "T"
+          }
+        },
+        {
+          "action": "enqueue",
+          "ticketUnused": true,
+          "ticketUnexpired": true,
+          "expect": {
+            "ticket": "T",
+            "newWaiters": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "node-budget-and-fifo",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:195",
+      "given": {
+        "reports": [
+          {
+            "node": "n",
+            "limit": 5,
+            "inFlight": 2,
+            "issuedSinceReport": 1
+          }
+        ],
+        "waiting": [
+          "a",
+          "b",
+          "c"
+        ]
+      },
+      "steps": [
+        {
+          "action": "calculateBudget",
+          "expect": {
+            "budget": 2
+          }
+        },
+        {
+          "action": "issue",
+          "expect": {
+            "ticketSessions": [
+              "a",
+              "b"
+            ],
+            "remaining": [
+              "c"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "stale-report-no-issuance",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:195",
+      "given": {
+        "reportAgeMs": 3001,
+        "waiting": [
+          "a"
+        ]
+      },
+      "steps": [
+        {
+          "action": "issue",
+          "expect": {
+            "ticketSessions": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "global-limit-blocks-and-report-releases",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:200",
+      "given": {
+        "globalLimit": 3,
+        "reports": [
+          {
+            "node": "n",
+            "limit": 10,
+            "inFlight": 2,
+            "issuedSinceReport": 1
+          }
+        ],
+        "unreportedUnexpiredTickets": 1,
+        "waiting": [
+          "a"
+        ]
+      },
+      "steps": [
+        {
+          "action": "issue",
+          "expect": {
+            "nodeBudget": 7,
+            "globalCount": 3,
+            "ticketSessions": []
+          }
+        },
+        {
+          "action": "nodeReport",
+          "inFlight": 2,
+          "usedTicketSessions": [
+            "old"
+          ],
+          "expect": {
+            "globalCount": 2
+          }
+        },
+        {
+          "action": "issue",
+          "expect": {
+            "ticketSessions": [
+              "a"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "global-limit-expiration-releases",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:200",
+      "given": {
+        "globalLimit": 1,
+        "reports": [
+          {
+            "node": "n",
+            "limit": 5,
+            "inFlight": 0,
+            "issuedSinceReport": 0
+          }
+        ],
+        "unreportedUnexpiredTickets": 1,
+        "waiting": [
+          "a"
+        ]
+      },
+      "steps": [
+        {
+          "action": "issue",
+          "expect": {
+            "ticketSessions": []
+          }
+        },
+        {
+          "action": "ticketExpires",
+          "sessionRid": "old",
+          "expect": {
+            "globalCount": 0
+          }
+        },
+        {
+          "action": "issue",
+          "expect": {
+            "ticketSessions": [
+              "a"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "estimated-wait",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:211",
+      "given": {},
+      "steps": [
+        {
+          "action": "estimate",
+          "position": 2,
+          "ticketsLast30Seconds": 20,
+          "expect": {
+            "estimatedWaitMs": 3000
+          }
+        },
+        {
+          "action": "estimate",
+          "position": 2,
+          "ticketsLast30Seconds": 0,
+          "expect": {
+            "estimatedWaitMs": 2000
+          }
+        },
+        {
+          "action": "estimate",
+          "position": 2147483647,
+          "ticketsLast30Seconds": 0,
+          "expect": {
+            "estimatedWaitMs": 2147483647
+          }
+        }
+      ]
+    },
+    {
+      "name": "delete-waiters",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:213",
+      "given": {
+        "waiters": [
+          "used",
+          "ended",
+          "expired"
+        ]
+      },
+      "steps": [
+        {
+          "action": "nodeReport",
+          "usedTicketSessions": [
+            "used"
+          ],
+          "expect": {
+            "waiters": [
+              "ended",
+              "expired"
+            ]
+          }
+        },
+        {
+          "action": "nodeReport",
+          "endedSessions": [
+            "ended"
+          ],
+          "expect": {
+            "waiters": [
+              "expired"
+            ]
+          }
+        },
+        {
+          "action": "ticketExpires",
+          "sessionRid": "expired",
+          "unused": true,
+          "expect": {
+            "waiters": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "new-incarnation",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:170",
+      "given": {
+        "epoch": 42,
+        "waiting": [
+          "a"
+        ]
+      },
+      "steps": [
+        {
+          "action": "reinitialize",
+          "expect": {
+            "epoch": 43,
+            "waiting": []
+          }
+        },
+        {
+          "action": "verifyOldTicket",
+          "ticketEpoch": 42,
+          "expect": {
+            "accept": false
+          }
+        }
+      ]
+    }
+  ],
+  "nodeScenarios": [
+    {
+      "name": "invalid-ticket-missing",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:137",
+      "given": {
+        "queueEnabled": true,
+        "ticketState": "missing",
+        "reportedEpoch": 42
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "stageOneInFlightDelta": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid-ticket-bad-signature",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:137",
+      "given": {
+        "queueEnabled": true,
+        "ticketState": "bad-signature",
+        "reportedEpoch": 42
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "stageOneInFlightDelta": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid-ticket-expired",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:137",
+      "given": {
+        "queueEnabled": true,
+        "ticketState": "expired",
+        "reportedEpoch": 42
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "stageOneInFlightDelta": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid-ticket-wrong-epoch",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:137",
+      "given": {
+        "queueEnabled": true,
+        "ticketState": "wrong-epoch",
+        "reportedEpoch": 42
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "stageOneInFlightDelta": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "no-report-response",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:170",
+      "given": {
+        "queueEnabled": true,
+        "reportedEpoch": null,
+        "ticketState": "valid"
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "stageOneInFlightDelta": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "valid-ticket-stage-one",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:102",
+      "given": {
+        "queueEnabled": true,
+        "reportedEpoch": 42,
+        "ticketState": "valid"
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "decision": "stageOne",
+            "handlerCallsBeforeStageOne": 0
+          }
+        }
+      ]
+    }
+  ],
+  "connectorScenarios": [
+    {
+      "name": "shared-enqueue-and-callback-order",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:227",
+      "given": {
+        "requests": [
+          "a",
+          "b"
+        ],
+        "cachedTicket": "old"
+      },
+      "steps": [
+        {
+          "action": "queueRequired",
+          "request": "a",
+          "expect": {
+            "cachedTicket": null,
+            "enqueueCount": 1,
+            "callbacks": [
+              "OnAdmissionQueued"
+            ]
+          }
+        },
+        {
+          "action": "queueRequired",
+          "request": "b",
+          "expect": {
+            "enqueueCount": 1
+          }
+        },
+        {
+          "action": "positionResponse",
+          "position": 2,
+          "estimatedWaitMs": 2000,
+          "expect": {
+            "callbacks": [
+              "OnAdmissionPosition"
+            ]
+          }
+        },
+        {
+          "action": "positionSend",
+          "position": 1,
+          "estimatedWaitMs": 1000,
+          "expect": {
+            "callbacks": [
+              "OnAdmissionPosition"
+            ]
+          }
+        },
+        {
+          "action": "ticketSend",
+          "ticket": "T",
+          "expiresInMs": 30000,
+          "expect": {
+            "retriedRequests": [
+              "a",
+              "b"
+            ]
+          }
+        },
+        {
+          "action": "stageOneReject",
+          "request": "a",
+          "retryAfterMs": "500",
+          "expect": {
+            "callbacks": [
+              "OnAdmissionWaiting"
+            ]
+          }
+        },
+        {
+          "action": "complete",
+          "request": "a",
+          "expect": {
+            "callbacks": [
+              "requestComplete"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "ticket-before-response-and-late-position",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:229",
+      "given": {
+        "requests": [
+          "a"
+        ]
+      },
+      "steps": [
+        {
+          "action": "queueRequired",
+          "expect": {
+            "enqueueCount": 1,
+            "callbacks": [
+              "OnAdmissionQueued"
+            ]
+          }
+        },
+        {
+          "action": "ticketSend",
+          "ticket": "T",
+          "expiresInMs": 30000,
+          "expect": {
+            "retriedRequests": [
+              "a"
+            ]
+          }
+        },
+        {
+          "action": "positionResponse",
+          "position": 1,
+          "estimatedWaitMs": 1000,
+          "expect": {
+            "positionCallbacks": 0
+          }
+        },
+        {
+          "action": "positionSend",
+          "position": 1,
+          "estimatedWaitMs": 1000,
+          "expect": {
+            "positionCallbacks": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "reregister-after-silence",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:219",
+      "given": {
+        "requests": [
+          "a"
+        ]
+      },
+      "steps": [
+        {
+          "action": "queueRequired",
+          "atMs": 0,
+          "expect": {
+            "enqueueCount": 1,
+            "queuedCallbacks": 1
+          }
+        },
+        {
+          "action": "silence",
+          "atMs": 15000,
+          "expect": {
+            "enqueueCount": 2,
+            "queuedCallbacks": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "conflicting-metadata",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:241",
+      "given": {
+        "requests": [
+          "a",
+          "b"
+        ]
+      },
+      "steps": [
+        {
+          "action": "error",
+          "request": "a",
+          "code": "unavailable",
+          "metadata": {
+            "$zlink.admission.queueRequired": "1",
+            "$zlink.admission.retryAfterMs": "500"
+          },
+          "expect": {
+            "a": "FrameDecodeFailed",
+            "b": "pending",
+            "connectionClosed": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "malformed-response",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:157",
+      "given": {
+        "requests": [
+          "a",
+          "b"
+        ]
+      },
+      "steps": [
+        {
+          "action": "enqueueResponse",
+          "request": "a",
+          "payload": {
+            "position": "bad"
+          },
+          "expect": {
+            "a": "FrameDecodeFailed",
+            "b": "pending",
+            "connectionClosed": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "malformed-position-send",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:232",
+      "given": {
+        "requests": [
+          "a",
+          "b"
+        ]
+      },
+      "steps": [
+        {
+          "action": "send",
+          "packet": "$zlink.admission.position",
+          "payload": {},
+          "expect": {
+            "a": "FrameDecodeFailed",
+            "b": "FrameDecodeFailed",
+            "connectionClosed": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "unsolicited-position-send",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:232",
+      "given": {
+        "requests": []
+      },
+      "steps": [
+        {
+          "action": "send",
+          "packet": "$zlink.admission.position",
+          "payload": {},
+          "expect": {
+            "discarded": true,
+            "connectionClosed": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "malformed-ticket-send",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:232",
+      "given": {
+        "requests": [
+          "a",
+          "b"
+        ]
+      },
+      "steps": [
+        {
+          "action": "send",
+          "packet": "$zlink.admission.ticket",
+          "payload": {},
+          "expect": {
+            "a": "FrameDecodeFailed",
+            "b": "FrameDecodeFailed",
+            "connectionClosed": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "unsolicited-ticket-send",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:232",
+      "given": {
+        "requests": []
+      },
+      "steps": [
+        {
+          "action": "send",
+          "packet": "$zlink.admission.ticket",
+          "payload": {},
+          "expect": {
+            "discarded": true,
+            "connectionClosed": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "deadline-original",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:150",
+      "given": {
+        "originalDeadlineMs": 400,
+        "firstRejectionMs": 10,
+        "maxAdmissionWaitMs": 2000
+      },
+      "steps": [
+        {
+          "action": "wait",
+          "atMs": 400,
+          "expect": {
+            "deadlineMs": 400,
+            "result": "RequestTimeout",
+            "sendAfterDeadline": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "deadline-admission",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:150",
+      "given": {
+        "originalDeadlineMs": 3000,
+        "firstRejectionMs": 10,
+        "maxAdmissionWaitMs": 300
+      },
+      "steps": [
+        {
+          "action": "wait",
+          "atMs": 310,
+          "expect": {
+            "deadlineMs": 310,
+            "result": "RequestTimeout",
+            "sendAfterDeadline": false
+          }
+        }
+      ]
+    }
+  ]
+}
