@@ -733,33 +733,19 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         auto release = std::exchange (preparation->release_aliases, {});
         if (!release)
             return preparation->terminal.task ();
-        // The terminal is published after the lifecycle barrier has completed. Barrier
-        // completion releases the node and schedules the next drain on the executors, so a
-        // waiter that resumes at the terminal (the host closing its executors after a
-        // failed startup) must not run ahead of that tail.
-        auto settle = [preparation, release = std::move (release)] (
-                        result_t<void> result, const auto &complete_barrier) mutable {
+        auto settle = [preparation, release = std::move (release)] (result_t<void> result) mutable {
             std::atomic_store (&preparation->admission,
                                std::shared_ptr<const preparation_t::admission_t>{});
             // The terminal publisher consumes this operation's alias chain once;
             // every other publisher waits for the same task.
             result = release (std::move (result));
-            try {
-                complete_barrier (result);
-            }
-            catch (...) {
-                preparation->terminal.complete (result);
-                throw;
-            }
             preparation->terminal.complete (result);
             return result;
         };
         const auto activated = preparation->lifecycle->activate_async (
           [self = shared_from_this (), cleanup = std::move (cleanup), settle] (auto complete) {
               auto finish = [settle, complete] (result_t<void> result) mutable {
-                  (void) settle (std::move (result), [&complete] (const result_t<void> &settled) {
-                      complete (settled);
-                  });
+                  complete (settle (std::move (result)));
               };
               if (!cleanup) {
                   finish (result_t<void>::success ());
@@ -774,7 +760,7 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
               }
           });
         if (!activated)
-            (void) settle (activated, [] (const result_t<void> &) {});
+            settle (activated);
         return preparation->terminal.task ();
     }
 
@@ -2045,7 +2031,7 @@ class spot_node_runtime_t
       const spot_id_t &spot_id,
       std::string packet_name,
       std::string content_type,
-      std::vector<std::uint8_t> payload,
+      zlink::message_t payload,
       std::map<std::string, std::string> metadata,
       bool request,
       std::string correlation_id,
