@@ -2010,6 +2010,11 @@ int main (int argc, char **argv)
         }
     }
 
+    if (mode == "login-admission-queue-server" || mode == "login-admission-queue-connector") {
+        std::cout << "SKIP login-admission-queue: C++ phase 2 host pending" << std::endl;
+        return 77;
+    }
+
     try {
         if (mode == "login-admission-connector") {
             return login_admission::run_connector (require ("stream-endpoint"));

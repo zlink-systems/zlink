@@ -131,9 +131,8 @@ REDIS_PIDS=()
 REDIS_CONTAINERS=()
 RESULTS=()
 
-stop_all() {
-  local container pid
-  # Location Store must remain available until every role has finished teardown.
+stop_roles() {
+  local pid
   for pid in "${PIDS[@]}"; do
     kill "$pid" >/dev/null 2>&1 || true
   done
@@ -141,6 +140,12 @@ stop_all() {
     wait "$pid" >/dev/null 2>&1 || true
   done
   PIDS=()
+}
+
+stop_all() {
+  local container pid
+  # Location Store must remain available until every role has finished teardown.
+  stop_roles
   for container in "${REDIS_CONTAINERS[@]}"; do
     docker rm -f "${container}" >/dev/null 2>&1 || true
   done
@@ -183,6 +188,7 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-dotnet-java" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-java-node" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "login-admission" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "login-admission-queue" ]] \
   && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
   echo "build it with: cmake --build ${BUILD_DIR} --target zlink_cpp_cross_language_host" >&2
@@ -2184,6 +2190,11 @@ run_java_cross_stages() {
 }
 
 case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
+  login-admission-queue)
+    source "${SCRIPT_DIR}/login_admission_queue.sh"
+    stage_login_admission_queue
+    exit 0
+    ;;
   login-admission)
     source "${SCRIPT_DIR}/login_admission.sh"
     stage_login_admission

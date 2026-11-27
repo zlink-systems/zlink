@@ -87,11 +87,19 @@ public final class Program {
             LoginAdmission.connect(parsed.require("stream-endpoint"));
             return;
         }
+        if ("login-admission-queue-connector".equals(parsed.mode())) {
+            LoginAdmissionQueue.connect(
+                    parsed.require("stream-endpoint"), parsed.require("peer-stream-endpoint"));
+            return;
+        }
         ConfigurableApplicationContext context = new SpringApplicationBuilder(Program.class)
             .web(WebApplicationType.NONE)
             .initializers(applicationContext ->
                 applicationContext.getBeanFactory().registerSingleton("hostArgs", parsed))
             .run();
+        if ("login-admission-queue-server".equals(parsed.mode())) {
+            awaitServing(context.getBean(ZLinkFrameworkLifecycle.class).runtimeBean());
+        }
         writeReadyFile(parsed);
         watchStopFile(parsed, context);
     }
@@ -178,6 +186,10 @@ public final class Program {
                 locations.setStoreFailureGrace(OutageLeaseProfile.duration("storeFailureGraceMs"));
             }
             String mode = args.mode();
+            if ("login-admission-queue-server".equals(mode)) {
+                LoginAdmissionQueue.configure(options, args, locationStore, relocationStore);
+                return;
+            }
             if ("login-admission-server".equals(mode)) {
                 options.addStreamNode("stream.login-admission")
                     .bind(args.require("stream-endpoint"))

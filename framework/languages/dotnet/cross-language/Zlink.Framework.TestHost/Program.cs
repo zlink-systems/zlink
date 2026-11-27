@@ -16,6 +16,12 @@ internal sealed class Program
     private static async Task Main(string[] args)
     {
         var options = TestHostOptions.Parse(args);
+        if (options.Mode is "login-admission-queue-server" or "login-admission-queue-connector")
+        {
+            Console.WriteLine("SKIP login-admission-queue: .NET phase 2 host pending");
+            Environment.ExitCode = 77;
+            return;
+        }
         if (options.Mode == "login-admission-connector")
         {
             await LoginAdmission.ConnectAsync(
