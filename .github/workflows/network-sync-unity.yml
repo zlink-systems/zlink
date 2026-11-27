@@ -1,15 +1,10 @@
 name: Network Sync Unity EditMode
 
 on:
+  # 사용자 결정(11-27): Actions는 C++ 빌드 검증과 릴리스·데일리만. PR 검증은 로컬 실행.
+  schedule:
+    - cron: "37 18 * * *"
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    paths:
-      - ".github/workflows/network-sync-unity.yml"
-      - "plugins/network-sync/connector/unity/**"
-      - "framework/languages/dotnet/src/Systems.Zlink.Stream.Connector/**"
-      - "framework/languages/dotnet/src/Shared/**"
-      - "framework/languages/dotnet/Directory.*.props"
 
 permissions:
   contents: read
