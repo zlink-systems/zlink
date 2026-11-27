@@ -1058,6 +1058,86 @@
       ]
     }
   ],
+  "startupScenarios": [
+    {
+      "name": "single-mesh-name-omitted",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [
+          "game"
+        ],
+        "queueMeshName": null
+      },
+      "expect": {
+        "started": true,
+        "queueMesh": "game",
+        "queueSpotId": "$zlink.admission-queue/game"
+      }
+    },
+    {
+      "name": "multiple-meshes-name-given",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:184",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [
+          "game",
+          "chat"
+        ],
+        "queueMeshName": "chat"
+      },
+      "expect": {
+        "started": true,
+        "queueMesh": "chat",
+        "queueSpotId": "$zlink.admission-queue/chat"
+      }
+    },
+    {
+      "name": "multiple-meshes-name-missing",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:179",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [
+          "game",
+          "chat"
+        ],
+        "queueMeshName": null
+      },
+      "expect": {
+        "started": false,
+        "configurationError": "Mesh selection is required"
+      }
+    },
+    {
+      "name": "no-mesh-node",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:179",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [],
+        "queueMeshName": null
+      },
+      "expect": {
+        "started": false,
+        "configurationError": true
+      }
+    },
+    {
+      "name": "queue-disabled-ignores-mesh",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "given": {
+        "queueEnabled": false,
+        "meshNodes": [
+          "game",
+          "chat"
+        ],
+        "queueMeshName": null
+      },
+      "expect": {
+        "started": true,
+        "queueMesh": null
+      }
+    }
+  ],
   "connectorScenarios": [
     {
       "name": "shared-enqueue-and-callback-order",
