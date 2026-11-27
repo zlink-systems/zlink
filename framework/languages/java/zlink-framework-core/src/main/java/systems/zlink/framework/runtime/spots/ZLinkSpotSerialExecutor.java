@@ -459,19 +459,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     <T> CompletionStage<T> prepareRelocationTarget(Supplier<CompletionStage<T>> operation) {
-        return spotQueue.prepareActivation(
-                () ->
-                        spotQueue
-                                .trySealRelocation(
-                                        spotQueue.captureActiveTurnSealHandle().orElseThrow())
-                                .thenCompose(
-                                        seal -> {
-                                            if (seal.isEmpty())
-                                                return CompletableFuture.failedFuture(
-                                                        new IllegalStateException(
-                                                                "relocation target preparation could not be sealed"));
-                                            return operation.get();
-                                        }));
+        return spotQueue.prepareRelocationTarget(operation);
     }
 
     CompletionStage<Void> continueActivationPreparation(Supplier<CompletionStage<Void>> operation) {

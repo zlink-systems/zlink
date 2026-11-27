@@ -52,7 +52,8 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
                     spot.expectedAuthorityOwnerGeneration());
         }
         if (value instanceof ServiceWirePilotCodec.RelocationInstanceSpotIdentity instance) {
-            return new ObjectIdentity(3, instance.spotId(), instance.objectGeneration(), 0);
+            return new ObjectIdentity(
+                    3, instance.spotId(), instance.objectGeneration(), 0, instance.instanceType());
         }
         throw invalid("object identity");
     }
@@ -174,7 +175,16 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
             int kind,
             String objectId,
             long objectGeneration,
-            long expectedAuthorityOwnerGeneration) {}
+            long expectedAuthorityOwnerGeneration,
+            String stableType) {
+        public ObjectIdentity(
+                int kind,
+                String objectId,
+                long objectGeneration,
+                long expectedAuthorityOwnerGeneration) {
+            this(kind, objectId, objectGeneration, expectedAuthorityOwnerGeneration, "");
+        }
+    }
 
     public record ApplicationState(long participantId, boolean hasState, byte[] payload) {
         public ApplicationState {

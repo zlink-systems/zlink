@@ -59,6 +59,7 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotAggregateStagingOwner.PreparedSpot;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -415,7 +416,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             targetDescriptor.lifecycleGeneration(),
                             coordinator,
                             unusedSpotStaging(),
-                            ignored -> null,
+                            (kind, stableType) -> null,
                             (lane, queued) -> {
                                 assertEquals("actor:" + ACTOR_ID, lane);
                                 assertTrue(
@@ -1440,7 +1441,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
                     @Override
                     public CompletionStage<Void> enqueueIngress(
-                            Object spot,
+                            PreparedSpot spot,
                             List<QueuedTurn> dispatches,
                             String lane,
                             byte[] record,
@@ -1459,14 +1460,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     }
 
                     @Override
-                    public CompletionStage<Object> prepareSpot(
+                    public CompletionStage<PreparedSpot> prepareSpot(
                             ZLinkUserSpotAggregateStagingOwner.Request request) {
                         return unused();
                     }
 
                     @Override
                     public CompletionStage<Void> restoreSpot(
-                            Object spot,
+                            PreparedSpot spot,
                             ZLinkUserSpotAggregateStagingOwner.Request request,
                             ZLinkRelocationCancellation cancellation) {
                         return unused();
@@ -1480,7 +1481,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     }
 
                     @Override
-                    public CompletionStage<Void> publishSpot(Object spot) {
+                    public CompletionStage<Void> publishSpot(PreparedSpot spot) {
                         fail();
 
                         return CompletableFuture.completedFuture(null);
@@ -1488,7 +1489,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
                     @Override
                     public void publishActor(
-                            Object preparedSpot,
+                            PreparedSpot preparedSpot,
                             Object actor,
                             String targetSpotId,
                             Long targetOwnerGeneration) {
@@ -1501,7 +1502,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     }
 
                     @Override
-                    public void publishTimers(Object spot) {
+                    public void publishTimers(PreparedSpot spot) {
                         fail();
                     }
 
@@ -1511,7 +1512,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     }
 
                     @Override
-                    public CompletionStage<Void> discardSpot(Object spot) {
+                    public CompletionStage<Void> discardSpot(PreparedSpot spot) {
                         fail();
 
                         return CompletableFuture.completedFuture(null);

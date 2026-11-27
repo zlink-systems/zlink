@@ -690,6 +690,17 @@ public final class ZLinkSerialExecutionQueue {
             Supplier<CompletionStage<Void>> operation,
             Runnable release,
             CompletableFuture<Void> admission) {
+        return enqueueMessage(message, retains, null, payloadBytes, operation, release, admission);
+    }
+
+    public CompletionStage<Void> enqueueMessage(
+            Object message,
+            Predicate<Object> retains,
+            Supplier<byte[]> acceptedRecord,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable release,
+            CompletableFuture<Void> admission) {
         EnqueueResult result;
         synchronized (this) {
             Objects.requireNonNull(message, "message");
@@ -701,7 +712,16 @@ public final class ZLinkSerialExecutionQueue {
                             (ignored, failure) -> admission.completeExceptionally(failure));
                 return rejected;
             }
-            result = enqueueAccepted(null, payloadBytes, operation, release, message, admission);
+            result =
+                    enqueueAcceptedRecord(
+                            null,
+                            acceptedRecord,
+                            payloadBytes,
+                            operation,
+                            release,
+                            message,
+                            admission,
+                            null);
         }
         scheduleDrainIfNeeded(result);
         return result.result();
@@ -960,6 +980,20 @@ public final class ZLinkSerialExecutionQueue {
         this.timerOwner = timerOwner;
         this.lifecycleBurstLimit = lifecycleBurstLimit;
         this.ownerTimeBudgetNanos = ownerTimeBudget.toNanos();
+    }
+
+    public <T> CompletionStage<T> prepareRelocationTarget(Supplier<CompletionStage<T>> operation) {
+        return prepareActivation(
+                () ->
+                        trySealRelocation(captureActiveTurnSealHandle().orElseThrow())
+                                .thenCompose(
+                                        seal -> {
+                                            if (seal.isEmpty())
+                                                return CompletableFuture.failedFuture(
+                                                        new IllegalStateException(
+                                                                "relocation target preparation could not be sealed"));
+                                            return operation.get();
+                                        }));
     }
 
     public CompletionStage<Optional<RelocationSeal>> relocationPreparationSeal() {
@@ -1853,6 +1887,26 @@ public final class ZLinkSerialExecutionQueue {
             Object message,
             CompletableFuture<Void> admission,
             CompletableFuture<Void> terminal) {
+        return enqueueAcceptedRecord(
+                record,
+                null,
+                payloadBytes,
+                operation,
+                relocationRelease,
+                message,
+                admission,
+                terminal);
+    }
+
+    private EnqueueResult enqueueAcceptedRecord(
+            byte[] record,
+            Supplier<byte[]> lazyRecord,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            Object message,
+            CompletableFuture<Void> admission,
+            CompletableFuture<Void> terminal) {
         Objects.requireNonNull(operation, "operation");
         validatePayloadBytes(payloadBytes);
         if (relocated) {
@@ -1864,14 +1918,21 @@ public final class ZLinkSerialExecutionQueue {
         }
         if (relocation != null) {
             return new EnqueueResult(
-                    holdRelocationIngress(
-                            record, operation, relocationRelease, message, admission, terminal),
+                    holdRelocationIngressRecord(
+                            record,
+                            lazyRecord,
+                            operation,
+                            relocationRelease,
+                            message,
+                            admission,
+                            terminal),
                     false);
         }
         Entry entry =
                 new Entry(
                         nextSequence++,
                         record,
+                        lazyRecord,
                         operation,
                         relocationRelease,
                         terminal,
@@ -1903,10 +1964,23 @@ public final class ZLinkSerialExecutionQueue {
             Object message,
             CompletableFuture<Void> admission,
             CompletableFuture<Void> terminal) {
+        return holdRelocationIngressRecord(
+                record, null, operation, relocationRelease, message, admission, terminal);
+    }
+
+    private Entry holdRelocationIngressRecord(
+            byte[] record,
+            Supplier<byte[]> lazyRecord,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            Object message,
+            CompletableFuture<Void> admission,
+            CompletableFuture<Void> terminal) {
         Entry entry =
                 new Entry(
                         nextSequence++,
                         record,
+                        lazyRecord,
                         operation,
                         relocationRelease,
                         terminal,
@@ -1926,21 +2000,8 @@ public final class ZLinkSerialExecutionQueue {
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> admission) {
-        Entry entry =
-                new Entry(
-                        nextSequence++,
-                        record,
-                        operation,
-                        relocationRelease,
-                        null,
-                        ZLinkFlowContext.current(),
-                        null,
-                        Lane.APPLICATION,
-                        false,
-                        admission);
-        incrementOutstanding();
-        holdRelocationEntry(entry);
-        return entry;
+        return holdRelocationIngressRecord(
+                null, record, operation, relocationRelease, null, admission, null);
     }
 
     private void holdRelocationEntry(Entry entry) {
@@ -2746,6 +2807,9 @@ public final class ZLinkSerialExecutionQueue {
                 synchronized (this) {
                     decrementOutstanding();
                 }
+            }
+            if (failure == null && entry.operation instanceof LifecycleTransition) {
+                failure = new RelocatedOwnerException();
             }
             if (failure == null) {
                 entry.result.complete(null);
@@ -3579,9 +3643,35 @@ public final class ZLinkSerialExecutionQueue {
                 Lane lane,
                 boolean continuation,
                 CompletableFuture<Void> admission) {
+            this(
+                    sequence,
+                    record,
+                    null,
+                    operation,
+                    relocationRelease,
+                    result,
+                    flow,
+                    relocationBoundary,
+                    lane,
+                    continuation,
+                    admission);
+        }
+
+        private Entry(
+                long sequence,
+                byte[] record,
+                Supplier<byte[]> lazyRecord,
+                Supplier<CompletionStage<Void>> operation,
+                Runnable relocationRelease,
+                CompletableFuture<Void> result,
+                ZLinkFlowContext.State flow,
+                RelocationBoundary relocationBoundary,
+                Lane lane,
+                boolean continuation,
+                CompletableFuture<Void> admission) {
             this.sequence = sequence;
             this.record = record;
-            this.lazyRecord = null;
+            this.lazyRecord = lazyRecord;
             this.operation = operation;
             this.relocationRelease = relocationRelease;
             this.applicationJobOwnership = ZLinkApplicationJobContext.transferQueuedOwnership();
@@ -3627,18 +3717,18 @@ public final class ZLinkSerialExecutionQueue {
                 Lane lane,
                 boolean continuation,
                 CompletableFuture<Void> admission) {
-            this.sequence = sequence;
-            this.record = null;
-            this.lazyRecord = Objects.requireNonNull(lazyRecord, "lazyRecord");
-            this.operation = operation;
-            this.relocationRelease = relocationRelease;
-            this.applicationJobOwnership = ZLinkApplicationJobContext.transferQueuedOwnership();
-            this.result = result == null ? acceptedResult() : result;
-            this.admission = admission;
-            this.flow = flow;
-            this.relocationBoundary = relocationBoundary;
-            this.lane = lane;
-            this.continuation = continuation;
+            this(
+                    sequence,
+                    null,
+                    Objects.requireNonNull(lazyRecord, "lazyRecord"),
+                    operation,
+                    relocationRelease,
+                    result,
+                    flow,
+                    relocationBoundary,
+                    lane,
+                    continuation,
+                    admission);
         }
 
         private CompletableFuture<Void> acceptedResult() {

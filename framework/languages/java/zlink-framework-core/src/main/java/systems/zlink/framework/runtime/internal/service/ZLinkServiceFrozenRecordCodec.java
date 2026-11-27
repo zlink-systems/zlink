@@ -17,6 +17,7 @@ import java.util.Optional;
 
 /** Canonical service-wire-v1 frozen Spot and Actor operation encoder. */
 public final class ZLinkServiceFrozenRecordCodec {
+    public static final int ACCEPTED_RECORD_OVERHEAD_BYTES = 512;
 
     private ZLinkServiceFrozenRecordCodec() {}
 
@@ -123,6 +124,58 @@ public final class ZLinkServiceFrozenRecordCodec {
             ZLinkServiceM6BWireCodec.SpotMessage operation,
             byte[] metadataFrame,
             byte[] applicationPayloadEnvelope) {
+        return encodeSpot(
+                source,
+                targetOwner.ownerLeaseGeneration(),
+                operation,
+                metadataFrame,
+                applicationPayloadEnvelope);
+    }
+
+    public static byte[] encodeInstanceSpot(
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            ZLinkServiceM6BWireCodec.InstanceSpotMessage operation,
+            ZLinkServiceM6BWireCodec.InstanceRouteFence target,
+            byte[] metadataFrame,
+            byte[] applicationPayloadEnvelope) {
+        // Ready one-way has no operation identity on the wire. The frozen record does.
+        long high = operation.operationHigh();
+        long low = operation.operationLow();
+        if (high == 0 && low == 0) {
+            var accepted = ZLinkServiceOperationIds.next();
+            high = accepted.getMostSignificantBits();
+            low = accepted.getLeastSignificantBits();
+        }
+        var route =
+                new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                        target.targetSpotId(),
+                        target.objectGeneration(),
+                        target.targetNodeRid(),
+                        target.targetNodeGeneration(),
+                        target.authorityOwnerGeneration(),
+                        target.leaseGeneration());
+        return encodeSpot(
+                source,
+                target.leaseGeneration(),
+                new ZLinkServiceM6BWireCodec.SpotMessage(
+                        operation.request(),
+                        operation.flags(),
+                        operation.replyRouteId(),
+                        high,
+                        low,
+                        0,
+                        operation.sourceSpotId(),
+                        route),
+                metadataFrame,
+                applicationPayloadEnvelope);
+    }
+
+    private static byte[] encodeSpot(
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            long targetLeaseGeneration,
+            ZLinkServiceM6BWireCodec.SpotMessage operation,
+            byte[] metadataFrame,
+            byte[] applicationPayloadEnvelope) {
         return encode(
                 operation.request()
                         ? (int) ServiceWireCodec.MeshRecordKind.SPOT_REQUEST.wire
@@ -141,7 +194,7 @@ public final class ZLinkServiceFrozenRecordCodec {
                     writeRid(output, operation.target().targetNodeRid());
                     output.writeLong(operation.target().targetNodeGeneration());
                     output.writeLong(operation.target().authorityOwnerGeneration());
-                    output.writeLong(targetOwner.ownerLeaseGeneration());
+                    output.writeLong(targetLeaseGeneration);
                     output.write(applicationPayloadEnvelope);
                 });
     }

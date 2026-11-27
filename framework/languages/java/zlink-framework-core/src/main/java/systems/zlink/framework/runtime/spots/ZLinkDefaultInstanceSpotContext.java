@@ -192,6 +192,28 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                                         discard));
     }
 
+    ZLinkUserSpotRelocationBarrier relocationBarrier() {
+        return new ZLinkUserSpotRelocationBarrier(this);
+    }
+
+    <T> CompletionStage<T> prepareRelocationTarget(Supplier<CompletionStage<T>> operation) {
+        return dispatchQueue.prepareRelocationTarget(() -> runLifecycleExecution(operation));
+    }
+
+    CompletionStage<Void> initializeRelocation(ZLinkInstanceSpot spot) {
+        return dispatchQueue.continueActivationPreparation(
+                () ->
+                        runLifecycleExecution(
+                                () -> timers.runRelocationInitialization(spot::onInitialize)));
+    }
+
+    void stageTimerRelocationEnvelope(byte[] envelope) {
+        ClassLoader loader = spot.getClass().getClassLoader();
+        timers.stageRestore(
+                ZLinkSpotTimerRelocationEnvelope.decode(
+                        envelope, name -> DefaultSpotContext.loadTimerHandler(loader, name)));
+    }
+
     CompletionStage<Void> confirmReady() {
         return execution == null ? CompletableFuture.completedFuture(null) : execution.ready();
     }
@@ -363,6 +385,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         return dispatchQueue.enqueueMessage(
                 received,
                 DefaultInstanceSpotContext::hasInstanceIntent,
+                received.acceptedJournalRecordSize() == 0 ? null : received::acceptedJournalRecord,
                 systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget.bytesOf(
                         received.parts(),
                         received.applicationMetadataSize(),

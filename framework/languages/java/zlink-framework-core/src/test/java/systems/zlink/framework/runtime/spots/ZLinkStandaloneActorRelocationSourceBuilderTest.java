@@ -25,6 +25,7 @@ import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapte
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotAggregateStagingOwner.PreparedSpot;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -698,7 +699,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
 
                     @Override
                     public CompletionStage<Void> enqueueIngress(
-                            Object spot,
+                            PreparedSpot spot,
                             List<QueuedTurn> dispatches,
                             String lane,
                             byte[] record,
@@ -717,14 +718,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     }
 
                     @Override
-                    public CompletionStage<Object> prepareSpot(
+                    public CompletionStage<PreparedSpot> prepareSpot(
                             ZLinkUserSpotAggregateStagingOwner.Request request) {
                         return CompletableFuture.failedFuture(unused());
                     }
 
                     @Override
                     public CompletionStage<Void> restoreSpot(
-                            Object spot,
+                            PreparedSpot spot,
                             ZLinkUserSpotAggregateStagingOwner.Request request,
                             ZLinkRelocationCancellation cancellation) {
                         return CompletableFuture.failedFuture(unused());
@@ -738,13 +739,13 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     }
 
                     @Override
-                    public CompletionStage<Void> publishSpot(Object spot) {
+                    public CompletionStage<Void> publishSpot(PreparedSpot spot) {
                         throw unused();
                     }
 
                     @Override
                     public void publishActor(
-                            Object preparedSpot,
+                            PreparedSpot preparedSpot,
                             Object actor,
                             String targetSpotId,
                             Long targetOwnerGeneration) {
@@ -757,7 +758,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     }
 
                     @Override
-                    public void publishTimers(Object spot) {
+                    public void publishTimers(PreparedSpot spot) {
                         throw unused();
                     }
 
@@ -767,7 +768,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     }
 
                     @Override
-                    public CompletionStage<Void> discardSpot(Object spot) {
+                    public CompletionStage<Void> discardSpot(PreparedSpot spot) {
                         throw unused();
                     }
                 });
