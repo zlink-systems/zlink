@@ -27,6 +27,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMappi
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
@@ -35,6 +36,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReadResult;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
@@ -3624,37 +3626,50 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         ZLinkInternalSpotNode.SpotAdmissionResolver resolver = spotAdmissionResolver;
         if (resolver == null) {
             return enqueueRemoteInstanceSpotAdmitted(
-                    sourceNodeRid, header, metadata, parts, contentType, reply, failure);
+                    sourceNodeRid, header, metadata, parts, contentType, reply, failure, null);
         }
+        var route = (ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route();
         resolver.resolve(
-                        header.route().targetSpotId(),
-                        ((ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route())
-                                .authorityOwnerGeneration(),
+                        route.targetSpotId(),
+                        route.authorityOwnerGeneration(),
                         header.instanceIntent(),
                         false,
-                        (ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route())
+                        route)
                 .whenComplete(
-                        (rejection, readFailure) -> {
-                            if (readFailure != null || rejection != null) {
-                                closeRemoteInstancePayload(parts);
-                                failure.accept(readFailure == null ? rejection : readFailure);
-                            } else if (!enqueueRemoteInstanceSpotAdmitted(
-                                    sourceNodeRid,
-                                    header,
-                                    metadata,
-                                    parts,
-                                    contentType,
-                                    reply,
-                                    failure)) {
-                                // The release ended after the admission read: this node no longer
-                                // holds the route's owner fence, so the message was never accepted.
+                        (rejection, admissionFailure) -> {
+                            if (admissionFailure != null || rejection != null) {
                                 closeRemoteInstancePayload(parts);
                                 failure.accept(
-                                        systems.zlink.framework.runtime.messaging
-                                                .ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
-                                                "Spot owner fence has changed: "
-                                                        + header.route().targetSpotId()));
+                                        admissionFailure == null ? rejection : admissionFailure);
+                                return;
                             }
+                            owner.resolveSourceAuthority(
+                                            sourceNodeRid, header.sourceNodeGeneration())
+                                    .whenComplete(
+                                            (source, readFailure) -> {
+                                                if (readFailure == null
+                                                        && source.isPresent()
+                                                        && enqueueRemoteInstanceSpotAdmitted(
+                                                                sourceNodeRid,
+                                                                header,
+                                                                metadata,
+                                                                parts,
+                                                                contentType,
+                                                                reply,
+                                                                failure,
+                                                                source.orElseThrow())) {
+                                                    return;
+                                                }
+                                                closeRemoteInstancePayload(parts);
+                                                failure.accept(
+                                                        readFailure != null
+                                                                ? readFailure
+                                                                : ZLinkFrameworkErrorOrigin
+                                                                        .ownerFenceRefusal(
+                                                                                "Spot owner fence has changed: "
+                                                                                        + route
+                                                                                                .targetSpotId()));
+                                            });
                         });
         return true;
     }
@@ -3666,31 +3681,52 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             List<Message> parts,
             String contentType,
             InstanceReply reply,
-            Consumer<Throwable> failure) {
-        InstanceAuthority authority = instanceAuthorities.get(header.route().targetSpotId());
+            Consumer<Throwable> failure,
+            ZLinkInternalMeshNode.PeerAuthorityFence sourceAuthority) {
+        var route = (ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route();
+        InstanceAuthority authority = instanceAuthorities.get(route.targetSpotId());
         if (authority == null
-                || header.followed()
-                        && !authority
-                                .route()
-                                .spotFence()
-                                .equals(
-                                        ((ZLinkServiceM6BWireCodec.InstanceRouteFence)
-                                                        header.route())
-                                                .spotFence())) {
+                || header.followed() && !authority.route().spotFence().equals(route.spotFence())) {
             return false;
         }
         try {
             owner.executeApplication(
                     () -> {
                         ZLinkBackendReceived received =
-                                reply.progress()
-                                        .receiveInstance(
-                                                sourceNodeRid,
-                                                header,
-                                                metadata,
-                                                parts,
-                                                reply,
-                                                contentType);
+                                sourceAuthority == null
+                                        ? reply.progress()
+                                                .receiveInstance(
+                                                        sourceNodeRid,
+                                                        header,
+                                                        metadata,
+                                                        parts,
+                                                        reply,
+                                                        contentType)
+                                        : reply.progress()
+                                                .receiveInstance(
+                                                        sourceNodeRid,
+                                                        header,
+                                                        metadata,
+                                                        parts,
+                                                        reply,
+                                                        contentType,
+                                                        () ->
+                                                                owner.encodeAcceptedInstanceSpot(
+                                                                        sourceAuthority,
+                                                                        header,
+                                                                        route,
+                                                                        metadata,
+                                                                        parts),
+                                                        (int)
+                                                                Math.min(
+                                                                        Integer.MAX_VALUE,
+                                                                        ZLinkReceiveBatchBudget
+                                                                                .bytesOf(
+                                                                                        parts,
+                                                                                        metadata.length,
+                                                                                        ZLinkServiceFrozenRecordCodec
+                                                                                                .instanceAcceptedRecordOverhead(
+                                                                                                        route))));
                         if (header.instanceIntent()) received.retainActivationMessage(header);
                         CompletionStage<Void> retained;
                         try {

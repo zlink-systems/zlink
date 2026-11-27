@@ -568,23 +568,7 @@ public final class ZLinkServiceM6BWireCodec {
                                 new ServiceWireCodec.NonzeroU64(cold.deadlineUnixMs()));
             } else {
                 var route = (InstanceRouteFence) message.route();
-                generated =
-                        new ServiceWireCodec.InstanceRouteV1Ready(
-                                ServiceWireCodec.InstanceRouteKind.READY,
-                                new ServiceWireCodec.Rid(route.targetNodeRid().toBytes()),
-                                new ServiceWireCodec.NonzeroU64(route.targetNodeGeneration()),
-                                new ServiceWireCodec.Text8(route.targetSpotId()),
-                                new ServiceWireCodec.AuthorityGenerationFence(
-                                        new ServiceWireCodec.NonzeroU64(route.objectGeneration()),
-                                        new ServiceWireCodec.Text8(route.ownerId()),
-                                        new ServiceWireCodec.NonzeroU64(
-                                                route.authorityOwnerGeneration()),
-                                        new ServiceWireCodec.NonzeroU64(route.leaseGeneration()),
-                                        new ServiceWireCodec.AuthorityStoreVersion(
-                                                route.storeVersion())),
-                                message.instanceIntent()
-                                        ? ServiceWireCodec.Bool8.TRUE
-                                        : ServiceWireCodec.Bool8.FALSE);
+                generated = generatedReadyInstanceRoute(route, message.instanceIntent());
             }
             routeBytes = ServiceWireCodec.encodeInstanceRouteV1(generated, null);
         } catch (IOException failure) {
@@ -606,6 +590,22 @@ public final class ZLinkServiceM6BWireCodec {
             writer.opaqueNonzero(message.replyRouteId(), "replyRouteId");
         }
         return writer.toByteArray();
+    }
+
+    static ServiceWireCodec.InstanceRouteV1Ready generatedReadyInstanceRoute(
+            InstanceRouteFence route, boolean instanceIntent) {
+        return new ServiceWireCodec.InstanceRouteV1Ready(
+                ServiceWireCodec.InstanceRouteKind.READY,
+                new ServiceWireCodec.Rid(route.targetNodeRid().toBytes()),
+                new ServiceWireCodec.NonzeroU64(route.targetNodeGeneration()),
+                new ServiceWireCodec.Text8(route.targetSpotId()),
+                new ServiceWireCodec.AuthorityGenerationFence(
+                        new ServiceWireCodec.NonzeroU64(route.objectGeneration()),
+                        new ServiceWireCodec.Text8(route.ownerId()),
+                        new ServiceWireCodec.NonzeroU64(route.authorityOwnerGeneration()),
+                        new ServiceWireCodec.NonzeroU64(route.leaseGeneration()),
+                        new ServiceWireCodec.AuthorityStoreVersion(route.storeVersion())),
+                instanceIntent ? ServiceWireCodec.Bool8.TRUE : ServiceWireCodec.Bool8.FALSE);
     }
 
     public InstanceSpotMessage decodeInstanceSpotHeader(byte[] frame) {

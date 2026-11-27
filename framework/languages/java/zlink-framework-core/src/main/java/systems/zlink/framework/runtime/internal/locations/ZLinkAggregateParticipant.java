@@ -10,7 +10,29 @@ public record ZLinkAggregateParticipant(
         ZLinkAuthorityGenerationTransition ownerTransition,
         byte[] authorityPayload,
         byte[] membershipMutation,
-        ZLinkAuthorityRelocation relocation) {
+        ZLinkAuthorityRelocation relocation,
+        String casStoreVersion) {
+    public ZLinkAggregateParticipant(
+            String authorityKey,
+            long objectGeneration,
+            long sourceAuthorityOwnerGeneration,
+            String expectedStoreVersion,
+            ZLinkAuthorityGenerationTransition ownerTransition,
+            byte[] authorityPayload,
+            byte[] membershipMutation,
+            ZLinkAuthorityRelocation relocation) {
+        this(
+                authorityKey,
+                objectGeneration,
+                sourceAuthorityOwnerGeneration,
+                expectedStoreVersion,
+                ownerTransition,
+                authorityPayload,
+                membershipMutation,
+                relocation,
+                expectedStoreVersion);
+    }
+
     public ZLinkAggregateParticipant(
             String authorityKey,
             long objectGeneration,
@@ -37,6 +59,7 @@ public record ZLinkAggregateParticipant(
                     "aggregate participant generations must be positive");
         }
         Objects.requireNonNull(expectedStoreVersion, "expectedStoreVersion");
+        Objects.requireNonNull(casStoreVersion, "casStoreVersion");
         Objects.requireNonNull(ownerTransition, "ownerTransition");
         authorityPayload = Objects.requireNonNull(authorityPayload, "authorityPayload").clone();
         membershipMutation =

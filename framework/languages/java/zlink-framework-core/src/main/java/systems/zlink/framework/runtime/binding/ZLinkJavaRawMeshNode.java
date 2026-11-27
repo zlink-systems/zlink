@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.binding;
 
+import static systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec.ACCEPTED_RECORD_OVERHEAD_BYTES;
+
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkConfigException;
@@ -791,6 +793,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         var local = localAuthorityFence;
         return ZLinkServiceFrozenRecordCodec.encodeSpot(
                 local, local, message, metadata, wire.encodeFrameworkMultipartFrame(parts));
+    }
+
+    byte[] encodeAcceptedInstanceSpot(
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            ZLinkServiceM6BWireCodec.InstanceSpotMessage header,
+            ZLinkServiceM6BWireCodec.InstanceRouteFence target,
+            byte[] metadata,
+            List<Message> parts) {
+        return ZLinkServiceFrozenRecordCodec.encodeInstanceSpot(
+                source, header, target, metadata, wire.encodeFrameworkMultipartFrame(parts));
     }
 
     ZLinkServiceM6BWireCodec.SpotMessage localSpotMessage(
@@ -7188,7 +7200,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                     Integer.MAX_VALUE,
                                                     applicationPayloadBytes(messages)
                                                             + metadata.length
-                                                            + 512L);
+                                                            + ACCEPTED_RECORD_OVERHEAD_BYTES);
                             boolean accepted =
                                     ((ZLinkJavaRawSpotNode) spotNode())
                                             .enqueueRemoteSpotLazy(
@@ -8508,8 +8520,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
-    private CompletionStage<Optional<ZLinkInternalMeshNode.PeerAuthorityFence>>
-            resolveSourceAuthority(RoutingId source, long sourceLifecycle) {
+    CompletionStage<Optional<ZLinkInternalMeshNode.PeerAuthorityFence>> resolveSourceAuthority(
+            RoutingId source, long sourceLifecycle) {
         ZLinkInternalMeshNode.PeerAuthorityResolver resolver = peerAuthorityResolver;
         if (resolver == null) {
             return CompletableFuture.completedFuture(Optional.empty());

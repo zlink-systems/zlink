@@ -65,11 +65,14 @@ internal abstract partial class ZLinkSpotActivation
     public ValueTask DisposeAsync() =>
         StartFinalization(AwaitStateLane(_lane.RunAsync(BeginFinalizationOnLane)), null);
 
-    internal async ValueTask DiscardLocationExecutionAsync(Func<ValueTask> discardMembers)
+    internal async ValueTask DiscardLocationExecutionAsync(
+        Func<ValueTask> discardMembers,
+        CancellationToken generationShutdown = default
+    )
     {
         FenceLocationExecution();
         var state = await _lane.RunAsync(BeginFinalizationOnLane).ConfigureAwait(false);
-        await StartFinalization(state, discardMembers).ConfigureAwait(false);
+        await StartFinalization(state, discardMembers, generationShutdown).ConfigureAwait(false);
     }
 
     private (Task, TaskCompletionSource?) BeginFinalizationOnLane()
@@ -93,13 +96,16 @@ internal abstract partial class ZLinkSpotActivation
 
     private ValueTask StartFinalization(
         (Task, TaskCompletionSource?) state,
-        Func<ValueTask>? discardMembers
+        Func<ValueTask>? discardMembers,
+        CancellationToken generationShutdown = default
     )
     {
         if (state.Item2 is not null)
         {
             _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
-                Task.Run(() => CompleteFinalizationAsync(state.Item2, discardMembers))
+                Task.Run(() =>
+                    CompleteFinalizationAsync(state.Item2, discardMembers, generationShutdown)
+                )
             );
         }
         return new ValueTask(state.Item1);
@@ -175,12 +181,13 @@ internal abstract partial class ZLinkSpotActivation
 
     private async Task CompleteFinalizationAsync(
         TaskCompletionSource completion,
-        Func<ValueTask>? discardedMembers
+        Func<ValueTask>? discardedMembers,
+        CancellationToken generationShutdown
     )
     {
         try
         {
-            await FinalizeAsync(discardedMembers).ConfigureAwait(false);
+            await FinalizeAsync(discardedMembers, generationShutdown).ConfigureAwait(false);
             completion.TrySetResult();
         }
         catch (Exception exception)
@@ -189,7 +196,10 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
-    private async Task FinalizeAsync(Func<ValueTask>? discardedMembers)
+    private async Task FinalizeAsync(
+        Func<ValueTask>? discardedMembers,
+        CancellationToken generationShutdown
+    )
     {
         var failures = new List<Exception>();
         Capture(CancelActiveOperations);
@@ -201,7 +211,8 @@ internal abstract partial class ZLinkSpotActivation
                 await publication.ConfigureAwait(false);
             })
             .ConfigureAwait(false);
-        await CaptureAsync(DrainNativeRoutesAsync).ConfigureAwait(false);
+        await CaptureAsync(() => DrainFinalizingNativeRoutesAsync(generationShutdown))
+            .ConfigureAwait(false);
         // Closing callbacks have finished with membership intact. Actor terminal
         // barriers still need this parent's gate before its executor can end.
         await CaptureAsync(() =>
@@ -566,11 +577,25 @@ internal abstract partial class ZLinkSpotActivation
     // the queue order. The turn awaits the runtime inbound admission instead of
     // blocking the dispatch worker that raised the event.
     private ValueTask DrainNativeRoutesAsync() =>
-        _serial.RunIngressAsync(async () =>
+        _serial.RunIngressAsync(AdmitPendingNativeRoutesOnLaneAsync);
+
+    private ValueTask DrainFinalizingNativeRoutesAsync(CancellationToken generationShutdown) =>
+        _serial.RunIngressAsync(() =>
         {
+            if (!generationShutdown.IsCancellationRequested)
+                return AdmitPendingNativeRoutesOnLaneAsync();
+
+            // After the generation stops, the peer observes the transport closing.
             while (NativeSpot.RecvRoute(RecvFlags.DontWait) is { } received)
-                await AdmitNativeRouteOnLaneAsync(received).ConfigureAwait(false);
+                received.Dispose();
+            return ValueTask.CompletedTask;
         });
+
+    private async ValueTask AdmitPendingNativeRoutesOnLaneAsync()
+    {
+        while (NativeSpot.RecvRoute(RecvFlags.DontWait) is { } received)
+            await AdmitNativeRouteOnLaneAsync(received).ConfigureAwait(false);
+    }
 
     private ValueTask AdmitNativeRouteAsync(ZLinkBackendRouteReceived received) =>
         _serial.RunIngressAsync(() => AdmitNativeRouteOnLaneAsync(received));

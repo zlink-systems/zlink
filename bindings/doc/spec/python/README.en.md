@@ -13,9 +13,9 @@ title: "Python Bindings Public Contract"
 > messaging.
 
 - This document defines the Core raw messaging contract the `zlink` Python package provides.
-- A feature not defined by this document and the public header is not part of the Python binding contract.
+- The Python surface follows the common Core raw binding contract.
 - Python 3.9-and-later support and the package version follow the [distribution metadata](../../../python/pyproject.toml).
-- The current native package target is Linux x86_64; other targets are outside this contract's supported scope until a separate candidate payload and clean-consumer verification exist.
+- Native packages support Linux x86_64 and Windows x86_64.
 
 | Section | Covers |
 |---|---|
@@ -56,9 +56,75 @@ type or compatibility alias outside the Core raw contract.
 The main factories are `create_context()`, `create_pair_socket()`,
 `create_dealer_socket()`, `create_router_socket()`,
 `create_stream_socket()`, `create_pub_socket()`, `create_sub_socket()`,
-`create_poller()`, `create_timer()`, `create_received()`, and the
-`create_message` family. The exact Python signatures are governed jointly
-by the contract module in the same directory and the public header.
+`create_xpub_socket()`, `create_xsub_socket()`, `create_poller()`, `create_poll_events()`,
+`create_timer()`, and `create_received()`. Create a message with `allocate_message(size)` or
+`Message.from_(value)`.
+
+`Context.shutdown()` requests context shutdown, and `Context.recalculate_auto_hwm()` requests a Core
+Auto-HWM recalculation. The package exposes `version()`, `has(capability)`, and `strerror(code)` for Core
+version, capability, and error-text lookup.
+
+## Per-socket capabilities
+
+The [Socket Capability Matrix](../README.en.md#socket-capability-matrix) defines the common per-socket contract.
+
+| Socket | Submission | Receive |
+|---|---|---|
+| PAIR | `send` | `recv_into` |
+| DEALER | `send`, `request` | `recv_into` |
+| ROUTER | `send(routing_id)`, `request`, `reply` | `recv_into` |
+| PUB | `publish` | — |
+| SUB | — | `subscribe_into` |
+| XPUB | `publish` | `receive_subscription_event_into` |
+| XSUB | — | `subscribe_into` |
+| STREAM | `send(routing_id)` | `recv_into`, `recv_packet_into` |
+
+Every raw socket opens and closes an endpoint with `bind` and `unbind`, and disconnects a peer by routing
+ID with `disconnect_rid`. Sockets other than STREAM register outbound connections with `connect` and remove
+them with `disconnect`.
+
+`set_tls_server(cert: str, key: str, require_client_cert: bool = False)` configures the certificate, key,
+and client authentication requirement before bind.
+`set_tls_client(ca_cert: Optional[str], hostname: Optional[str], trust_system: bool = False)` configures
+the CA, server name, and use of the system CA store before connect. Every raw socket exposes both methods.
+
+Connection methods return `None` on success. A Core bind failure raises `BindError`, other connection failures
+raise `ConnectError`, and TLS configuration failures raise `ConfigError`.
+
+SUB and XSUB configure and remove filters with `set_subscription(topic)` and `unset_subscription(topic)`.
+`subscription_at(index)` returns the filter and whether it is a pattern, or `None` if the index has no
+entry. XPUB uses `receive_subscription_event_into(event: SubscriptionEvent, *, flags: int = 0) -> bool` to
+fill storage created with `create_subscription_event()`.
+
+Every socket exposes the `options` property. Use `router_options`, `dealer_options`, and `stream_options`
+on their respective sockets, `pub_options` on PUB and XPUB, and `sub_options` on SUB and XSUB.
+
+### Socket readiness snapshots
+
+`RouterSocket.routes_snapshot() -> List[RouterRoute]` returns one row per routing ID for the routes Core
+currently selects. `RouterRoute` exposes `routing_id`, `route_generation`. The route generation is a
+nonzero opaque token. Compare it only for equality. `PollEventFlag.POLLROUTE` signals a change in a
+selected route.
+
+A connection-attempt snapshot returns one row per outbound connect registration. The target surface (**not implemented yet**, #5752) is
+`connection_attempts_snapshot() -> List[ConnectionAttempt]` on raw sockets other than STREAM, with Poller
+readiness `PollEventFlag.POLLCONNECT`. `ConnectionAttempt` contains `endpoint`, `intent_id`, `revision`,
+`last_failure_id`, `state`, `last_failure`. `ConnectionFailure` contains `kind`, `stage`,
+`normalized_errno`, `disconnect_reason`. The closed enums `ConnectionAttemptState`,
+`ConnectionFailureKind`, and `ConnectionFailureStage` preserve Core states, failure kinds, and stages.
+
+`endpoint` is a UTF-8 endpoint in a `str`. `last_failure` is a
+`ConnectionFailure` that retains the latest failure after recovery. `normalized_errno` (`int`)
+and `disconnect_reason` (`int`) are diagnostic values.
+
+`intent_id` and `revision` are nonzero opaque `int` tokens. `last_failure_id` has the same
+type and is zero before the first failure. Compare tokens only for equality. Connection failures
+appear in snapshot rows. Only query failures use `ConfigError`. The binding does not infer
+connection results from monitor history or timer polling.
+
+A successful snapshot clears readiness for the changes it reflects. Use one observer per socket for each
+snapshot type. The [common snapshot contract](../README.en.md#socket-readiness-snapshots) defines both
+readiness signals.
 
 ## Byte HWM and Auto-HWM
 
@@ -107,6 +173,7 @@ gauges, rebases both peaks to current, clears epoch counters, and increments
 - `Context` owns the native context and releases it via `close()` or context-manager exit.
 - A socket, monitor, poller, or timer owns the native handle it creates. A call that uses the handle after a successful `close()` is not allowed.
 - `Message.from_(value)` creates a native message independent of the caller's value. After a successful send submit, native ownership of the message part moves to the Core send path.
+- `Message.copy()` returns a message that can be closed independently of the source.
 - `Received` is a receive storage the caller creates. On a successful `recv_into(received)`, the parts and routing metadata are recorded into `Received`; native parts are released on `close()` or context-manager exit.
 - The native view `Received`'s `parts` provides is valid only while its owner stays open. If it must outlive that, copy the value with `to_bytes()` or `to_bytes_list()`.
 
@@ -134,6 +201,21 @@ DEALER and ROUTER request/reply preserve Core routing metadata and `ReplyToken`.
 type. The single-part accessor is named `single_part_or_throw()`, matching the implementation and
 contract tests.
 
+### Poller and monitor
+
+`Poller` uses `add_socket`, `modify_socket`, and `remove_socket` for sockets, `add_fd`, `modify_fd`, and
+`remove_fd` for file descriptors, and `add_timer` and `remove_timer` for timers. Use `add_monitor`,
+`modify_monitor`, and `remove_monitor` for monitors. `wait(events, timeout_ms)` fills the `PollEvents`
+created by `create_poll_events(capacity)`. `events.event(index)` returns a `PollEvent` with `source_kind`,
+`slot`, `revents`, and `fd`.
+
+`MonitorStatus` reflects Core ABI v4 under the
+[common MonitorStatus contract](../README.en.md#monitorstatus). `abi_version` and `struct_size` are
+diagnostic values for verifying the returned layout. The
+[common MonitorEvent contract](../README.en.md#monitorevent) defines the meaning and native layout of the
+`MonitorEvent` fields `event`, `value`, `routing_id`, `local_addr`, `remote_addr`, `connection_id`,
+`transport_lane`, `flags`.
+
 ## Receive flow state
 
 `ReceiveFlowState` is an `IntEnum` with `RUNNING = 0` and `PAUSED = 1`.
@@ -142,6 +224,10 @@ the failed native `ConfigResult` and errno.
 State, result, and monitor projection follow the [common receive-flow contract](../README.en.md#receive-flow-projection).
 
 ## Error
+
+Function-family errors preserve the 66 non-OK codes in the
+[common error code table](../README.en.md#error-code-table). Each function family has a `*Result` enum for
+these codes. `ErrorCode` enumerates Core-specific errno values.
 
 A call that returns a Core result gives its matching Python error `result`,
 `code`, and `native_errno`. An input-format error can be checked before the
@@ -281,7 +367,7 @@ class Received:
 class StreamSocket:
     def send(self, routing_id: RoutingId) -> SendOp: ...
     def recv_into(
-        self, out: Received, *, flags: RecvFlags = RecvFlags.NONE
+        self, received: Received, *, flags: int = 0
     ) -> bool: ...
     def recv_packet_into(
         self, out: StreamPacket, *, flags: RecvFlags = RecvFlags.NONE

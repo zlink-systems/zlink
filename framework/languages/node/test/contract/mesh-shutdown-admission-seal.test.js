@@ -5,7 +5,7 @@ const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/
 const framework = require('../../packages/framework/dist/internal');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 
-test('discovery resumes pending HELLO when owner lease admission reopens', async (t) => {
+test('discovery sends HELLO while Location Store admission is closed', async (t) => {
   const meshName = `peer-discovery-${process.pid}`;
   const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
     builder.addRouteMesh(meshName).listen(`inproc://${meshName}`).routingId('discovering-node');
@@ -31,11 +31,13 @@ test('discovery resumes pending HELLO when owner lease admission reopens', async
     };
     await raw.observeSelectedRoutes();
     backend.expectPeer(discovered);
-    assert.deepEqual(sent, [], 'owner lease admission blocks the first HELLO');
+    assert.equal(admission.accepts(meshName), false);
+    assert.deepEqual(sent, [wire.M6aServiceWireCommand.hello]);
     ownerOpen = true;
     backend.expectPeer(discovered);
+    assert.equal(admission.accepts(meshName), true);
     assert.deepEqual(sent, [wire.M6aServiceWireCommand.hello],
-      'the existing discovery observation resumes the pending first HELLO');
+      'opening application admission leaves the transport exchange in progress');
     admission.seal(meshName);
     backend.expectPeer(discovered);
     assert.deepEqual(sent, [wire.M6aServiceWireCommand.hello],
@@ -96,6 +98,7 @@ for (const withChannel of [true, false]) {
         incoming.push({ sourceRid: peer.nodeRoutingId, routeGeneration: 1n, parts, close() {} });
         return raw.pumpOne();
       };
+      await raw.observeSelectedRoutes();
       assert.equal(
         await receive(admitted, [
           wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, admitted)

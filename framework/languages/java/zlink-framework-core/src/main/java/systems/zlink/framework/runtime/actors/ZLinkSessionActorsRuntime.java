@@ -463,7 +463,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     List<HeldIngress> held = new ArrayList<>();
                     ingressGates.values().forEach(gate -> held.addAll(gate.detachHeld()));
                     ingressGates.clear();
-                    bindingRoutes.clear();
                     bindingTransitions.clear();
                     List<SealTerminal> seals = List.copyOf(sealTerminals.values());
                     List<RouteFlight> routes = List.copyOf(routeFlights.values());
@@ -471,8 +470,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     sealTerminals.clear();
                     routeTerminals.clear();
                     List<ZLinkSessionActor> disconnected = List.copyOf(bound);
+                    // On ordinary disconnect, removeBinding retires each route after its tombstone.
                     if (relocationFailed) {
                         bound.clear();
+                        bindingRoutes.clear();
                     }
                     return new StopRelocationState(held, seals, routes, disconnected);
                 });
