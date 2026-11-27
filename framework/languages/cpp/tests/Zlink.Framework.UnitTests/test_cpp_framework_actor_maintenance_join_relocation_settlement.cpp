@@ -521,9 +521,8 @@ void settlement_after_target_destroy (bool drain)
         std::rethrow_exception (infrastructure->value ());
     }
     catch (const fw::framework_exception_t &error) {
-        EXPECT_EQ (error.kind (), drain ? fw::framework_error_kind_t::internal_failure
-                                        : fw::framework_error_kind_t::unavailable)
-          << error.what ();
+        // Host relocation §14: an unsettled unit at the stop deadline is Unavailable to the caller.
+        EXPECT_EQ (error.kind (), fw::framework_error_kind_t::unavailable) << error.what ();
         if (drain)
             EXPECT_NE (
               std::string_view (error.what ()).find ("authority unsettled at stop deadline"),

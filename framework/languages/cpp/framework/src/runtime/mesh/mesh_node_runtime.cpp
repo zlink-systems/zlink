@@ -3533,9 +3533,12 @@ task_t<void> mesh_node_runtime_t::settle_remote_application_actor_join_source (
             co_await spot.release_source_actor_leave_reservations (s->actor);
         }
         throw framework_exception_t (
-          data_lost        ? framework_error_kind_t::data_lost
-          : authority_lost ? framework_error_kind_t::unavailable
-                           : framework_error_kind_t::internal_failure,
+          data_lost ? framework_error_kind_t::data_lost
+          // Host relocation §14: the Join caller of a unit still unsettled at
+          // the stop deadline gets Unavailable, the stopping node's retry signal.
+          : authority_lost || authority_unsettled_at_stop
+            ? framework_error_kind_t::unavailable
+            : framework_error_kind_t::internal_failure,
           "canonical Actor Join relocation did not complete (terminal="
             + std::to_string (static_cast<int> (relocated.terminal))
             + ", reason=" + std::to_string (static_cast<int> (relocated.reason)) + ")"
