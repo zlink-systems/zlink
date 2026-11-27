@@ -67,11 +67,18 @@ int main ()
       root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp");
     const auto redis_cpp =
       read_text_file (root / "extensions/framework-locations-redis/src/redis.cpp");
-    const auto spot_runtime =
-      read_text_file (root / "framework/src/runtime/spots/spot_runtime.cpp");
-    const auto spot_runtime_header =
-      read_text_file (root / "framework/src/runtime/spots/spot_runtime.hpp");
-    const auto spot_runtime_surface = spot_runtime + spot_runtime_header;
+    const auto spot_runtime_dir = root / "framework/src/runtime/spots";
+    std::string spot_runtime;
+    for (const auto &entry : std::filesystem::directory_iterator (spot_runtime_dir)) {
+        const auto &path = entry.path ();
+        if (path.extension () == ".cpp" && path.stem ().string ().starts_with ("spot_runtime")) {
+            spot_runtime += read_text_file (path) + '\n';
+        }
+    }
+    const auto spot_runtime_header = read_text_file (spot_runtime_dir / "spot_runtime.hpp");
+    const auto spot_runtime_surface =
+      spot_runtime + spot_runtime_header
+      + read_text_file (spot_runtime_dir / "spot_runtime_internal.hpp");
     const auto actor_serial_executor =
       read_text_file (root / "framework/src/runtime/actors/actor_serial_executor.hpp");
     const auto spot_route_packets =
