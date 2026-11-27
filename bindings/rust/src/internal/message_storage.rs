@@ -1,4 +1,4 @@
-use crate::ffi;
+use crate::runtime::native::ffi;
 
 pub(crate) struct MessageStorage {
     pub(crate) raw: ffi::zlink_msg_t,

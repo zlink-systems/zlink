@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::RecvError;
-use crate::domain::recv_state_error;
-use crate::error::CloseError;
-use crate::message::{Message, RoutingId};
+use crate::contracts::errors::errors::CloseError;
+use crate::contracts::messaging::message::{Message, RoutingId};
+use crate::contracts::messaging::received::recv_state_error;
 
 /// A received publish: its topic, source routing id, and message parts.
 ///

@@ -1,14 +1,14 @@
 use std::ptr;
 
 use super::{SocketInner, recv_whole_message};
-use crate::core_context::Context;
-use crate::domain::Received;
-use crate::error::{ConfigError, RecvError};
-use crate::ffi;
-use crate::message::RoutingId;
-use crate::native_errors::check_config_rc;
-use crate::routed_socket_contracts::RouterRoute;
-use crate::socket_contracts::RouterSocket;
+use crate::contracts::core::context::Context;
+use crate::contracts::errors::errors::{ConfigError, RecvError};
+use crate::contracts::messaging::message::RoutingId;
+use crate::contracts::messaging::received::Received;
+use crate::contracts::sockets::router_socket::RouterRoute;
+use crate::contracts::sockets::router_socket::RouterSocket;
+use crate::runtime::errors::native_errors::check_config_rc;
+use crate::runtime::native::ffi;
 
 impl RouterSocket {
     pub(crate) fn new(ctx: &Context) -> Result<Self, ConfigError> {

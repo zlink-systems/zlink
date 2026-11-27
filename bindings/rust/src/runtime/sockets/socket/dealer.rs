@@ -1,7 +1,7 @@
-use crate::core_context::Context;
-use crate::error::ConfigError;
-use crate::ffi;
-use crate::socket_contracts::DealerSocket;
+use crate::contracts::core::context::Context;
+use crate::contracts::errors::errors::ConfigError;
+use crate::contracts::sockets::dealer_socket::DealerSocket;
+use crate::runtime::native::ffi;
 
 use super::SocketInner;
 

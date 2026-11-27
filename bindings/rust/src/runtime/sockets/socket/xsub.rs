@@ -1,8 +1,8 @@
 use super::SocketInner;
-use crate::core_context::Context;
-use crate::error::ConfigError;
-use crate::ffi;
-use crate::socket_contracts::XSubSocket;
+use crate::contracts::core::context::Context;
+use crate::contracts::errors::errors::ConfigError;
+use crate::contracts::sockets::pubsub_sockets::XSubSocket;
+use crate::runtime::native::ffi;
 
 impl XSubSocket {
     pub(crate) fn new(ctx: &Context) -> Result<Self, ConfigError> {

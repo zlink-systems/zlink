@@ -6,14 +6,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::error::{SubmitError, SubmitResult};
-use crate::ffi;
-use crate::internal::MessageParts;
-use crate::internal::{CompletionEntry, CompletionOwner, RoutedHandle};
-use crate::messaging_operations::{
+use crate::contracts::errors::errors::{SubmitError, SubmitResult};
+use crate::contracts::messaging::operations::{
     Empty, PublishOp, PublishOpStorage, SendOp, SendOpStorage, SendSubmission,
 };
-use crate::native_errors::submit_error_from_rc;
+use crate::internal::MessageParts;
+use crate::internal::{CompletionEntry, CompletionOwner, RoutedHandle};
+use crate::runtime::errors::native_errors::submit_error_from_rc;
+use crate::runtime::native::ffi;
 
 impl crate::internal::SocketStorage {
     pub(crate) fn socket_send_op(&self) -> SendOp<Empty> {

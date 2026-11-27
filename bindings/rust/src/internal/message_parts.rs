@@ -1,17 +1,17 @@
-use crate::message::Message;
+use crate::contracts::messaging::message::Message;
 
 pub(crate) struct MessageParts {
-    inline: [crate::ffi::zlink_msg_t; 2],
+    inline: [crate::runtime::native::ffi::zlink_msg_t; 2],
     inline_len: usize,
-    heap: Option<Vec<crate::ffi::zlink_msg_t>>,
+    heap: Option<Vec<crate::runtime::native::ffi::zlink_msg_t>>,
 }
 
 impl Default for MessageParts {
     fn default() -> Self {
         Self {
             inline: [
-                crate::ffi::zlink_msg_t::recv_slot(),
-                crate::ffi::zlink_msg_t::recv_slot(),
+                crate::runtime::native::ffi::zlink_msg_t::recv_slot(),
+                crate::runtime::native::ffi::zlink_msg_t::recv_slot(),
             ],
             inline_len: 0,
             heap: None,
@@ -36,7 +36,7 @@ impl MessageParts {
         for slot in self.inline.iter_mut().take(self.inline_len) {
             parts.push(std::mem::replace(
                 slot,
-                crate::ffi::zlink_msg_t::recv_slot(),
+                crate::runtime::native::ffi::zlink_msg_t::recv_slot(),
             ));
         }
         self.inline_len = 0;
@@ -54,11 +54,13 @@ impl MessageParts {
             .map_or(self.inline_len, |parts| parts.len())
     }
 
-    pub(crate) fn iter_mut(&mut self) -> std::slice::IterMut<'_, crate::ffi::zlink_msg_t> {
+    pub(crate) fn iter_mut(
+        &mut self,
+    ) -> std::slice::IterMut<'_, crate::runtime::native::ffi::zlink_msg_t> {
         self.as_mut_slice().iter_mut()
     }
 
-    pub(crate) fn as_mut_ptr(&mut self) -> *mut crate::ffi::zlink_msg_t {
+    pub(crate) fn as_mut_ptr(&mut self) -> *mut crate::runtime::native::ffi::zlink_msg_t {
         self.as_mut_slice().as_mut_ptr()
     }
 
@@ -70,7 +72,7 @@ impl MessageParts {
         }
     }
 
-    fn as_mut_slice(&mut self) -> &mut [crate::ffi::zlink_msg_t] {
+    fn as_mut_slice(&mut self) -> &mut [crate::runtime::native::ffi::zlink_msg_t] {
         match self.heap.as_mut() {
             Some(parts) => parts.as_mut_slice(),
             None => &mut self.inline[..self.inline_len],

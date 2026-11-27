@@ -1,11 +1,11 @@
 use std::ptr;
 
-use crate::core_context::Context;
-use crate::error::{ConfigError, RecvError, RecvResult};
-use crate::ffi;
-use crate::message::{Message, RoutingId};
-use crate::native_errors::check_recv_rc;
-use crate::stream_socket_contract::{StreamPacket, StreamSocket};
+use crate::contracts::core::context::Context;
+use crate::contracts::errors::errors::{ConfigError, RecvError, RecvResult};
+use crate::contracts::messaging::message::{Message, RoutingId};
+use crate::contracts::sockets::stream_socket::{StreamPacket, StreamSocket};
+use crate::runtime::errors::native_errors::check_recv_rc;
+use crate::runtime::native::ffi;
 
 use super::SocketInner;
 

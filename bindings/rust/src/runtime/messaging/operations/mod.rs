@@ -15,3 +15,5 @@ pub(crate) fn topic_or_panic(value: &str, label: &str) -> smol_str::SmolStr {
     assert!(!value.as_bytes().contains(&0), "invalid {label}");
     smol_str::SmolStr::new(value)
 }
+
+mod contract_impl;

@@ -1,44 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::internal::SocketStorage;
 use crate::{
-    BindError, CommonSocketOptions, ConfigError, ConnectError, PubSocketOptions, RecvError,
-    RecvFlags, SubSocketOptions, SubscriptionEvent, TopicMessage,
+    BindError, CommonSocketOptions, ConfigError, ConnectError, Empty, PubSocket, PubSocketOptions,
+    PublishOp, RecvError, RecvFlags, SubSocket, SubSocketOptions, SubscriptionEvent, TopicMessage,
+    XPubSocket, XSubSocket,
 };
-use crate::{Empty, PublishOp};
-
-macro_rules! define_pubsub_socket {
-    ($name:ident, $doc:literal) => {
-        #[doc = $doc]
-        pub struct $name {
-            pub(crate) inner: Box<SocketStorage>,
-        }
-
-        impl std::panic::UnwindSafe for $name {}
-        impl std::panic::RefUnwindSafe for $name {}
-    };
-}
-
-define_pubsub_socket!(
-    PubSocket,
-    "PUB socket: topic-filtered publish that drops messages with no matching subscriber."
-);
-define_pubsub_socket!(
-    SubSocket,
-    "SUB socket: a receive-only subscriber filtered by its subscriptions."
-);
-define_pubsub_socket!(
-    XPubSocket,
-    "XPUB socket: like PUB, but also surfaces subscriber subscription and unsubscription events."
-);
-define_pubsub_socket!(
-    XSubSocket,
-    "XSUB socket: a subscriber whose subscriptions are carried as messages."
-);
 
 impl PubSocket {
     /// Begins publishing under `topic`: add parts on the returned builder, then
-    /// submit. A part is consumed on a successful submit (see [`SendOp`]).
+    /// submit. A part is consumed on a successful submit (see [`crate::SendOp`]).
     pub fn publish(&self, topic: &str) -> PublishOp<Empty> {
         self.inner.socket_publish_op(topic)
     }
@@ -53,9 +23,6 @@ impl PubSocket {
         PubSocketOptions::new(&self.inner)
     }
 }
-
-impl_socket_common_base!(PubSocket);
-impl_socket_connections!(PubSocket);
 
 impl SubSocket {
     /// Receives the next matching topic message into caller-provided `out`
@@ -95,12 +62,9 @@ impl SubSocket {
     }
 }
 
-impl_socket_common_base!(SubSocket);
-impl_socket_connections!(SubSocket);
-
 impl XPubSocket {
     /// Begins publishing under `topic`: add parts on the returned builder, then
-    /// submit. A part is consumed on a successful submit (see [`SendOp`]).
+    /// submit. A part is consumed on a successful submit (see [`crate::SendOp`]).
     pub fn publish(&self, topic: &str) -> PublishOp<Empty> {
         self.inner.socket_publish_op(topic)
     }
@@ -128,9 +92,6 @@ impl XPubSocket {
         PubSocketOptions::new(&self.inner)
     }
 }
-
-impl_socket_common_base!(XPubSocket);
-impl_socket_connections!(XPubSocket);
 
 impl XSubSocket {
     /// Receives the next matching topic message into caller-provided `out`
@@ -170,5 +131,18 @@ impl XSubSocket {
     }
 }
 
+impl_socket_common_base!(PubSocket);
+
+impl_socket_connections!(PubSocket);
+
+impl_socket_common_base!(SubSocket);
+
+impl_socket_connections!(SubSocket);
+
+impl_socket_common_base!(XPubSocket);
+
+impl_socket_connections!(XPubSocket);
+
 impl_socket_common_base!(XSubSocket);
+
 impl_socket_connections!(XSubSocket);

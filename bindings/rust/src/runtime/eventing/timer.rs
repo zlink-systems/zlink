@@ -1,16 +1,16 @@
 use crate::Timer;
-use crate::error::{ConfigError, RecvError, RecvResult};
-use crate::ffi;
+use crate::contracts::errors::errors::{ConfigError, RecvError, RecvResult};
 use crate::internal::TimerStorage;
-use crate::native_errors::{check_config_rc, check_recv_rc, last_errno};
+use crate::runtime::errors::native_errors::{check_config_rc, check_recv_rc, last_errno};
+use crate::runtime::native::ffi;
 use std::sync::Arc;
 
 impl TimerStorage {
     pub(crate) fn new_timer() -> Result<Timer, ConfigError> {
         let handle = unsafe { ffi::zlink_timer_new() };
         if handle.is_null() {
-            return Err(crate::error::ConfigError::new(
-                crate::error::ConfigResult::InvalidArgument,
+            return Err(crate::contracts::errors::errors::ConfigError::new(
+                crate::contracts::errors::errors::ConfigResult::InvalidArgument,
                 last_errno(),
             ));
         }

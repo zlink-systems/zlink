@@ -2,9 +2,8 @@ use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::error::{CloseError, RecvError, RecvResult};
-use crate::message::{Message, RoutingId};
-use crate::messaging_operations::{Empty, ReplyOp, SendOp};
+use crate::contracts::errors::errors::{CloseError, RecvError, RecvResult};
+use crate::contracts::messaging::message::{Message, RoutingId};
 
 /// Opaque capability for replying to one ROUTER request.
 #[derive(Clone)]
@@ -167,12 +166,6 @@ impl Received {
             part.close_now();
         }
         Ok(())
-    }
-    pub fn reply(&self) -> ReplyOp<Empty> {
-        self.runtime_reply()
-    }
-    pub fn send(&self) -> SendOp<Empty> {
-        self.runtime_send()
     }
 
     pub(crate) fn set_stream_send_context(

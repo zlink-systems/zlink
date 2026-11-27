@@ -1,16 +1,18 @@
 use std::ffi::{CStr, c_void};
 use std::mem::MaybeUninit;
 
-use crate::core_context::AutoHwmRecalcReason;
-use crate::error::{CloseError, ConfigError, RecvError};
-use crate::ffi;
-use crate::internal::MonitorStorage;
-use crate::message::RoutingId;
-use crate::monitor_contracts::{
+use crate::contracts::core::context::AutoHwmRecalcReason;
+use crate::contracts::errors::errors::{CloseError, ConfigError, RecvError};
+use crate::contracts::eventing::monitor::{
     MonitorEvent, MonitorEventFlags, MonitorEventType, MonitorSourceKind, MonitorStatus,
     Monitorable, SocketMonitor, SocketMonitorOpenOptions,
 };
-use crate::native_errors::{check_close_rc, check_config_rc, check_recv_rc, last_errno};
+use crate::contracts::messaging::message::RoutingId;
+use crate::internal::MonitorStorage;
+use crate::runtime::errors::native_errors::{
+    check_close_rc, check_config_rc, check_recv_rc, last_errno,
+};
+use crate::runtime::native::ffi;
 
 // ---------------------------------------------------------------------------
 // MonitorEvent – typed socket monitor event
@@ -162,8 +164,8 @@ impl MonitorStorage {
         };
         let handle = unsafe { ffi::zlink_socket_monitor_open(target, &opts) };
         if handle.is_null() {
-            return Err(crate::error::ConfigError::new(
-                crate::error::ConfigResult::InvalidArgument,
+            return Err(crate::contracts::errors::errors::ConfigError::new(
+                crate::contracts::errors::errors::ConfigResult::InvalidArgument,
                 last_errno(),
             ));
         }
@@ -176,18 +178,23 @@ impl MonitorStorage {
 impl MonitorStorage {
     /// Blocking receive of a monitor event.
     pub(crate) fn recv(&self) -> Result<MonitorEvent, RecvError> {
-        self.recv_with_flags(crate::flags::RecvFlags::NONE)
+        self.recv_with_flags(crate::contracts::sockets::socket_options::RecvFlags::NONE)
             .and_then(|opt| {
-                opt.ok_or_else(|| RecvError::new(crate::error::RecvResult::NoData, libc::EAGAIN))
+                opt.ok_or_else(|| {
+                    RecvError::new(
+                        crate::contracts::errors::errors::RecvResult::NoData,
+                        libc::EAGAIN,
+                    )
+                })
             })
     }
 
     /// Non-blocking receive of a monitor event. Returns `Ok(None)` when no event is available.
     pub(crate) fn recv_with_flags(
         &self,
-        flags: crate::flags::RecvFlags,
+        flags: crate::contracts::sockets::socket_options::RecvFlags,
     ) -> Result<Option<MonitorEvent>, RecvError> {
-        use crate::error::RecvResult;
+        use crate::contracts::errors::errors::RecvResult;
         let mut raw = MaybeUninit::<ffi::zlink_socket_monitor_event_t>::uninit();
         let rc =
             unsafe { ffi::zlink_socket_monitor_recv(self.handle, raw.as_mut_ptr(), flags.bits()) };
@@ -232,7 +239,7 @@ impl Drop for MonitorStorage {
 fn monitorable_handle(source: &dyn Monitorable) -> Result<*mut c_void, ConfigError> {
     let any = source.as_any();
     if let Some(socket) = any.downcast_ref::<crate::PairSocket>() {
-        return Ok(crate::socket::pair_handle(socket));
+        return Ok(crate::runtime::sockets::socket::pair_handle(socket));
     }
     macro_rules! downcast_socket {
         ($ty:ident, $inner:path) => {
@@ -241,22 +248,22 @@ fn monitorable_handle(source: &dyn Monitorable) -> Result<*mut c_void, ConfigErr
             }
         };
     }
-    downcast_socket!(PubSocket, crate::socket::pub_inner);
-    downcast_socket!(SubSocket, crate::socket::sub_inner);
-    downcast_socket!(DealerSocket, crate::socket::dealer_inner);
-    downcast_socket!(RouterSocket, crate::socket::router_inner);
-    downcast_socket!(XPubSocket, crate::socket::xpub_inner);
-    downcast_socket!(XSubSocket, crate::socket::xsub_inner);
-    downcast_socket!(StreamSocket, crate::socket::stream_inner);
+    downcast_socket!(PubSocket, crate::runtime::sockets::socket::pub_inner);
+    downcast_socket!(SubSocket, crate::runtime::sockets::socket::sub_inner);
+    downcast_socket!(DealerSocket, crate::runtime::sockets::socket::dealer_inner);
+    downcast_socket!(RouterSocket, crate::runtime::sockets::socket::router_inner);
+    downcast_socket!(XPubSocket, crate::runtime::sockets::socket::xpub_inner);
+    downcast_socket!(XSubSocket, crate::runtime::sockets::socket::xsub_inner);
+    downcast_socket!(StreamSocket, crate::runtime::sockets::socket::stream_inner);
     Err(ConfigError::new(
-        crate::error::ConfigResult::InvalidArgument,
+        crate::contracts::errors::errors::ConfigResult::InvalidArgument,
         libc::EINVAL,
     ))
 }
 
 macro_rules! impl_monitorable {
     ($ty:ident) => {
-        impl crate::monitor_contracts::private::Sealed for crate::$ty {}
+        impl crate::contracts::eventing::monitor::private::Sealed for crate::$ty {}
 
         impl Monitorable for crate::$ty {
             fn as_any(&self) -> &dyn std::any::Any {
@@ -274,7 +281,7 @@ impl_monitorable!(XPubSocket);
 impl_monitorable!(XSubSocket);
 impl_monitorable!(StreamSocket);
 
-impl crate::monitor_contracts::private::Sealed for crate::PairSocket {}
+impl crate::contracts::eventing::monitor::private::Sealed for crate::PairSocket {}
 
 impl Monitorable for crate::PairSocket {
     fn as_any(&self) -> &dyn std::any::Any {

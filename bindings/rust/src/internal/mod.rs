@@ -8,7 +8,7 @@ mod message_parts;
 mod message_storage;
 mod routed_handle;
 
-pub(crate) use crate::runtime_completion::{CompletionEntry, CompletionOwner};
+pub(crate) use crate::runtime::messaging::completion_owner::{CompletionEntry, CompletionOwner};
 pub(crate) use handle_storage::{
     ContextStorage, MonitorStorage, PollerSocketRegistration, PollerStorage, SocketStorage,
     TimerStorage,

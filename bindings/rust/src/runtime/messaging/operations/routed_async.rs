@@ -7,13 +7,15 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use crate::error::{SubmitError, SubmitResult, ZlinkError};
-use crate::ffi;
+use crate::contracts::errors::errors::{SubmitError, SubmitResult, ZlinkError};
+use crate::contracts::messaging::message::{Message, RoutingId};
+use crate::contracts::messaging::operations::{
+    Empty, RequestOp, RequestOpStorage, RequestSubmission,
+};
 use crate::internal::MessageParts;
 use crate::internal::{CompletionEntry, CompletionOwner};
-use crate::message::{Message, RoutingId};
-use crate::messaging_operations::{Empty, RequestOp, RequestOpStorage, RequestSubmission};
-use crate::native_errors::submit_error_from_rc;
+use crate::runtime::errors::native_errors::submit_error_from_rc;
+use crate::runtime::native::ffi;
 
 use super::send_ops::{check_submit_result, is_writable_wait, submit_shared_message};
 

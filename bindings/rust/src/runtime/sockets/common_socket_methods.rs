@@ -5,7 +5,7 @@ macro_rules! impl_socket_common_base {
         impl $ty {
             /// Closes the socket and releases its native resources; further
             /// operations fail.
-            pub fn close(&mut self) -> Result<(), crate::error::CloseError> {
+            pub fn close(&mut self) -> Result<(), crate::contracts::errors::errors::CloseError> {
                 self.inner.close()
             }
 
@@ -102,7 +102,7 @@ macro_rules! impl_socket_connections {
             /// address.
             pub fn disconnect_rid(
                 &self,
-                peer_rid: &crate::message::RoutingId,
+                peer_rid: &crate::contracts::messaging::message::RoutingId,
             ) -> Result<(), ConnectError> {
                 self.inner.disconnect_rid(peer_rid)
             }

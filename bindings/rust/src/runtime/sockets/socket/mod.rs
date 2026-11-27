@@ -22,18 +22,20 @@ use std::mem::MaybeUninit;
 use std::ptr;
 use std::time::Duration;
 
-use crate::ctx::{context_handle, duration_to_millis};
-use crate::domain::Received;
-use crate::error::{BindError, CloseError, ConfigError, ConnectError, RecvError, RecvResult};
-use crate::ffi;
-use crate::flags::RecvFlags;
-use crate::message::{Message, RoutingId};
-use crate::messaging_subscription_event::SubscriptionEvent;
-use crate::native_errors::{
+use crate::contracts::errors::errors::{
+    BindError, CloseError, ConfigError, ConnectError, RecvError, RecvResult,
+};
+use crate::contracts::messaging::message::{Message, RoutingId};
+use crate::contracts::messaging::received::Received;
+use crate::contracts::messaging::subscription_event::SubscriptionEvent;
+use crate::contracts::messaging::topic_message::TopicMessage;
+use crate::contracts::sockets::socket_options::RecvFlags;
+use crate::runtime::errors::native_errors::{
     check_bind_rc, check_close_rc, check_config_rc, check_connect_rc, check_recv_rc,
     config_validation_error, last_errno,
 };
-use crate::topic_message_contract::TopicMessage;
+use crate::runtime::handles::ctx::{context_handle, duration_to_millis};
+use crate::runtime::native::ffi;
 
 mod socket_inner_runtime;
 mod socket_parts_runtime;

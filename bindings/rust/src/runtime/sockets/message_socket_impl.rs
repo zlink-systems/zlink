@@ -1,27 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::internal::SocketStorage;
 use crate::{
-    BindError, CommonSocketOptions, ConfigError, ConnectError, DealerSocketOptions, Received,
-    RecvError, RecvFlags,
+    BindError, CommonSocketOptions, ConfigError, ConnectError, DealerSocket, DealerSocketOptions,
+    Empty, PairSocket, Received, RecvError, RecvFlags, RequestOp, RoutingId, SendOp,
 };
-use crate::{Empty, RequestOp, RoutingId, SendOp};
-
-/// PAIR socket, a bidirectional one-to-one messaging socket.
-pub struct PairSocket {
-    pub(crate) inner: Box<SocketStorage>,
-}
-
-impl std::panic::UnwindSafe for PairSocket {}
-impl std::panic::RefUnwindSafe for PairSocket {}
-
-/// DEALER socket, the asynchronous request/reply client-side socket.
-pub struct DealerSocket {
-    pub(crate) inner: Box<SocketStorage>,
-}
-
-impl std::panic::UnwindSafe for DealerSocket {}
-impl std::panic::RefUnwindSafe for DealerSocket {}
 
 impl PairSocket {
     /// Begins a multipart send: add parts on the returned builder, then submit.
@@ -90,7 +72,9 @@ impl DealerSocket {
 }
 
 impl_socket_common_base!(PairSocket);
+
 impl_socket_connections!(PairSocket);
 
 impl_socket_common_base!(DealerSocket);
+
 impl_socket_connections!(DealerSocket);

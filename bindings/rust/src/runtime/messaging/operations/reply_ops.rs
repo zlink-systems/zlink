@@ -3,11 +3,11 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use crate::error::{SubmitError, SubmitResult};
-use crate::ffi;
+use crate::contracts::errors::errors::{SubmitError, SubmitResult};
+use crate::contracts::messaging::message::RoutingId;
+use crate::contracts::messaging::operations::{Empty, ReplyOp, ReplyOpStorage};
 use crate::internal::MessageParts;
-use crate::message::RoutingId;
-use crate::messaging_operations::{Empty, ReplyOp, ReplyOpStorage};
+use crate::runtime::native::ffi;
 
 use super::send_ops::{check_submit_result, submit_owned_message};
 

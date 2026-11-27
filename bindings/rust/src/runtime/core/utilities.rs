@@ -1,6 +1,6 @@
-use crate::core_utilities::{AtomicCounter, Stopwatch, Thread};
-use crate::error::{ConfigError, ConfigResult};
-use crate::ffi;
+use crate::contracts::core::utilities::{AtomicCounter, Stopwatch, Thread};
+use crate::contracts::errors::errors::{ConfigError, ConfigResult};
+use crate::runtime::native::ffi;
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::ptr;

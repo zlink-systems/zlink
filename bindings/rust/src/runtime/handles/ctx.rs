@@ -1,11 +1,15 @@
 use std::ffi::{CStr, CString, c_void};
 use std::time::Duration;
 
-use crate::core_context::{AutoHwmProfile, AutoHwmRecalcReason, Context, CoreHwmBudgetSnapshot};
-use crate::error::{CloseError, ConfigError};
-use crate::ffi;
+use crate::contracts::core::context::{
+    AutoHwmProfile, AutoHwmRecalcReason, Context, CoreHwmBudgetSnapshot,
+};
+use crate::contracts::errors::errors::{CloseError, ConfigError};
 use crate::internal::ContextStorage;
-use crate::native_errors::{check_close_rc, check_config_rc, config_validation_error, last_errno};
+use crate::runtime::errors::native_errors::{
+    check_close_rc, check_config_rc, config_validation_error, last_errno,
+};
+use crate::runtime::native::ffi;
 
 impl AutoHwmProfile {
     pub(crate) fn to_raw(self) -> i32 {
@@ -62,7 +66,7 @@ impl ContextStorage {
         let handle = unsafe { ffi::zlink_ctx_new() };
         if handle.is_null() {
             return Err(ConfigError::new(
-                crate::error::ConfigResult::InvalidHandle,
+                crate::contracts::errors::errors::ConfigResult::InvalidHandle,
                 last_errno(),
             ));
         }
@@ -292,7 +296,7 @@ impl ContextStorage {
 
     /// Set the auto HWM recalculation debounce interval.
     pub(crate) fn set_auto_hwm_recalc_debounce(&self, value: Duration) -> Result<(), ConfigError> {
-        let ms = crate::ctx::duration_to_millis(value)?;
+        let ms = crate::runtime::handles::ctx::duration_to_millis(value)?;
         self.set_int_option(
             ffi::zlink_ctx_option_t::ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS as i32,
             ms,

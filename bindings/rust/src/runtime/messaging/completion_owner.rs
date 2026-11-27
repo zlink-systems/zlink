@@ -15,13 +15,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Poll, Waker};
 
-use crate::error::{
+use crate::contracts::errors::errors::{
     ConfigError, ConfigResult, RecvError, RequestError, RequestResult, SubmitError, SubmitResult,
     ZlinkError,
 };
-use crate::ffi;
-use crate::message::Message;
-use crate::native_errors::{check_recv_rc, request_error_from_result};
+use crate::contracts::messaging::message::Message;
+use crate::runtime::errors::native_errors::{check_recv_rc, request_error_from_result};
+use crate::runtime::native::ffi;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompletionEntryKind {
@@ -504,10 +504,10 @@ impl CompletionOwner {
                     ffi::ZLINK_RECV_DONTWAIT,
                 )
             };
-            if rc == crate::error::RecvResult::NoData as i32 {
+            if rc == crate::contracts::errors::errors::RecvResult::NoData as i32 {
                 break;
             }
-            if rc != crate::error::RecvResult::Ok as i32 {
+            if rc != crate::contracts::errors::errors::RecvResult::Ok as i32 {
                 failure = Some(check_recv_rc(rc).expect_err("failed completion receive"));
                 break;
             }
@@ -553,7 +553,7 @@ impl CompletionOwner {
             let rc = unsafe {
                 ffi::zlink_completion_recv(self.socket as *mut c_void, &mut completion, 0)
             };
-            if rc == crate::error::RecvResult::NoData as i32 {
+            if rc == crate::contracts::errors::errors::RecvResult::NoData as i32 {
                 continue;
             }
             if let Err(error) = check_recv_rc(rc) {
@@ -812,7 +812,7 @@ fn request_result_from_native(result: ffi::zlink_request_result_t) -> RequestRes
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::RoutingId;
+    use crate::contracts::messaging::message::RoutingId;
     use std::task::Waker;
 
     #[test]

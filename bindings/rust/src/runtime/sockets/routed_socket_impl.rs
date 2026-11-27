@@ -1,32 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::internal::SocketStorage;
 use crate::{
-    BindError, CommonSocketOptions, ConfigError, ConnectError, Received, RecvError, RecvFlags,
-    RouterSocketOptions,
+    BindError, CommonSocketOptions, ConfigError, ConnectError, Empty, Received, RecvError,
+    RecvFlags, ReplyOp, ReplyToken, RequestOp, RouterRoute, RouterSocket, RouterSocketOptions,
+    RoutingId, SendOp,
 };
-use crate::{Empty, ReplyOp, ReplyToken, RequestOp, RoutingId, SendOp};
-
-/// One row of a ROUTER selected-route snapshot: the peer routing id and the
-/// generation of the route Core currently selects for it.
-///
-/// `route_generation` is a nonzero opaque equality token; it changes whenever
-/// Core selects a different route for the same routing id. Compare it only
-/// for equality.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct RouterRoute {
-    pub routing_id: RoutingId,
-    pub route_generation: u64,
-}
-
-/// ROUTER socket: routes messages to peers addressed by routing id, the
-/// server side of asynchronous request/reply.
-pub struct RouterSocket {
-    pub(crate) inner: Box<SocketStorage>,
-}
-
-impl std::panic::UnwindSafe for RouterSocket {}
-impl std::panic::RefUnwindSafe for RouterSocket {}
 
 impl RouterSocket {
     /// Begins a multipart send addressed to `target`: add parts on the returned
@@ -34,7 +12,7 @@ impl RouterSocket {
     /// [`SendOp`]).
     pub fn send(&self, target: &RoutingId) -> SendOp<Empty> {
         let inner = &self.inner;
-        crate::messaging_operations::SendOpStorage::routed_send_op(
+        crate::contracts::messaging::operations::SendOpStorage::routed_send_op(
             inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
             inner
                 .completion_owner
@@ -72,7 +50,7 @@ impl RouterSocket {
     /// then submit. Parts are consumed on a successful submit (see [`SendOp`]).
     pub fn reply(&self, rid: &RoutingId, reply_token: ReplyToken) -> ReplyOp<Empty> {
         let inner = &self.inner;
-        crate::messaging_operations::ReplyOpStorage::router_reply_op(
+        crate::contracts::messaging::operations::ReplyOpStorage::router_reply_op(
             inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
             inner
                 .reply_owner
@@ -107,4 +85,5 @@ impl RouterSocket {
 }
 
 impl_socket_common_base!(RouterSocket);
+
 impl_socket_connections!(RouterSocket);

@@ -1,12 +1,12 @@
 use std::mem::MaybeUninit;
 use std::slice;
 
-use crate::error::ConfigError;
-use crate::ffi;
+use crate::contracts::errors::errors::ConfigError;
+use crate::runtime::native::ffi;
 
+use crate::contracts::messaging::message::Message;
 use crate::internal::{MessageParts, MessageStorage};
-use crate::message::Message;
-use crate::native_errors::check_config_rc;
+use crate::runtime::errors::native_errors::check_config_rc;
 
 impl MessageParts {
     pub(crate) fn close_parts(&mut self) {

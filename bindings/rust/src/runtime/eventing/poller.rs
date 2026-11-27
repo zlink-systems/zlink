@@ -5,23 +5,23 @@ use std::os::fd::RawFd;
 use std::os::windows::io::RawSocket as RawFd;
 use std::sync::Arc;
 
-use crate::error::{CloseError, ConfigError, ZlinkError};
-use crate::ffi;
-use crate::internal::{PollerSocketRegistration, PollerStorage};
-use crate::native_errors::{
-    check_close_rc, check_config_rc, config_result_from_native, last_errno,
-};
-use crate::poller_contracts::{
+use crate::contracts::errors::errors::{CloseError, ConfigError, ZlinkError};
+use crate::contracts::eventing::poller::{
     POLLCOMPLETION, PollEvent, PollItem, PollSourceKind, Pollable, Poller,
 };
+use crate::internal::{PollerSocketRegistration, PollerStorage};
+use crate::runtime::errors::native_errors::{
+    check_close_rc, check_config_rc, config_result_from_native, last_errno,
+};
+use crate::runtime::native::ffi;
 use crate::{SocketMonitor, Timer};
 
 impl PollerStorage {
     pub(crate) fn new_poller() -> Result<Poller, ConfigError> {
         let handle = unsafe { ffi::zlink_poller_new() };
         if handle.is_null() {
-            return Err(crate::error::ConfigError::new(
-                crate::error::ConfigResult::InvalidArgument,
+            return Err(crate::contracts::errors::errors::ConfigError::new(
+                crate::contracts::errors::errors::ConfigResult::InvalidArgument,
                 last_errno(),
             ));
         }
@@ -395,7 +395,7 @@ fn pollable_registration(
 ) -> Result<(*mut c_void, Option<Arc<crate::internal::CompletionOwner>>), ConfigError> {
     let any = source.as_any();
     if let Some(socket) = any.downcast_ref::<crate::PairSocket>() {
-        let inner = crate::socket::pair_inner(socket);
+        let inner = crate::runtime::sockets::socket::pair_inner(socket);
         return Ok((inner.handle, inner.completion_owner.clone()));
     }
     macro_rules! downcast_socket {
@@ -406,22 +406,22 @@ fn pollable_registration(
             }
         };
     }
-    downcast_socket!(PubSocket, crate::socket::pub_inner);
-    downcast_socket!(SubSocket, crate::socket::sub_inner);
-    downcast_socket!(DealerSocket, crate::socket::dealer_inner);
-    downcast_socket!(RouterSocket, crate::socket::router_inner);
-    downcast_socket!(XPubSocket, crate::socket::xpub_inner);
-    downcast_socket!(XSubSocket, crate::socket::xsub_inner);
-    downcast_socket!(StreamSocket, crate::socket::stream_inner);
+    downcast_socket!(PubSocket, crate::runtime::sockets::socket::pub_inner);
+    downcast_socket!(SubSocket, crate::runtime::sockets::socket::sub_inner);
+    downcast_socket!(DealerSocket, crate::runtime::sockets::socket::dealer_inner);
+    downcast_socket!(RouterSocket, crate::runtime::sockets::socket::router_inner);
+    downcast_socket!(XPubSocket, crate::runtime::sockets::socket::xpub_inner);
+    downcast_socket!(XSubSocket, crate::runtime::sockets::socket::xsub_inner);
+    downcast_socket!(StreamSocket, crate::runtime::sockets::socket::stream_inner);
     Err(ConfigError::new(
-        crate::error::ConfigResult::InvalidArgument,
+        crate::contracts::errors::errors::ConfigResult::InvalidArgument,
         libc::EINVAL,
     ))
 }
 
 macro_rules! impl_pollable {
     ($ty:ident) => {
-        impl crate::poller_contracts::private::Sealed for crate::$ty {}
+        impl crate::contracts::eventing::poller::private::Sealed for crate::$ty {}
 
         impl Pollable for crate::$ty {
             fn as_any(&self) -> &dyn std::any::Any {
@@ -439,7 +439,7 @@ impl_pollable!(XPubSocket);
 impl_pollable!(XSubSocket);
 impl_pollable!(StreamSocket);
 
-impl crate::poller_contracts::private::Sealed for crate::PairSocket {}
+impl crate::contracts::eventing::poller::private::Sealed for crate::PairSocket {}
 
 impl Pollable for crate::PairSocket {
     fn as_any(&self) -> &dyn std::any::Any {
