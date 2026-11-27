@@ -293,11 +293,11 @@ class _CompletionEntry:
         self._deliver(deliver)
 
     def shutdown(self):
-        native_errno = getattr(errno, "ESHUTDOWN", errno.ECANCELED)
+        internal_errno = getattr(errno, "ESHUTDOWN", errno.ECANCELED)
         error = (
-            SubmitError(SubmitResult.TERMINATED, native_errno)
+            SubmitError(SubmitResult.TERMINATED, internal_errno)
             if self.kind == ZLINK_COMPLETION_SEND
-            else RequestError(RequestResult.TERMINATED, native_errno)
+            else RequestError(RequestResult.TERMINATED, internal_errno)
         )
         with self.condition:
             if self._settled:
@@ -617,7 +617,7 @@ class CompletionOwner:
         if self._entries_by_id.get(completion_id) is entry:
             self._entries_by_id.pop(completion_id, None)
 
-    def _fail_drain_wait(self, native_errno):
+    def _fail_drain_wait(self, internal_errno):
         with self._lock:
             entries = list(self._entries.values())
         for entry in entries:
@@ -627,14 +627,14 @@ class CompletionOwner:
                 entry.fail(
                     SubmitError(
                         SubmitResult.INTERNAL_ERROR,
-                        int(native_errno) or errno.EIO,
+                        int(internal_errno) or errno.EIO,
                     )
                 )
             else:
                 entry.fail(
                     RequestError(
                         RequestResult.INTERNAL_ERROR,
-                        int(native_errno) or errno.EIO,
+                        int(internal_errno) or errno.EIO,
                     )
                 )
             if entry.releasable:
@@ -672,12 +672,12 @@ class CompletionOwner:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
 
     @staticmethod
-    def _submit_error(result, native_errno):
+    def _submit_error(result, internal_errno):
         try:
             typed_result = SubmitResult(int(result))
         except ValueError:
             typed_result = int(result)
-        return SubmitError(typed_result, int(native_errno))
+        return SubmitError(typed_result, int(internal_errno))
 
     def _capture_writable(self, entry, completion):
         record = (
@@ -877,8 +877,8 @@ class CompletionOwner:
         except BaseException:
             self._close_unsubmitted(native_parts)
             raise
-        native_errno = lib().zlink_errno() if rc != int(SubmitResult.OK) else 0
-        return int(rc), native_errno, int(completion_id.value)
+        internal_errno = lib().zlink_errno() if rc != int(SubmitResult.OK) else 0
+        return int(rc), internal_errno, int(completion_id.value)
 
     def _attempt_send(self, entry):
         with self._lock:
@@ -905,7 +905,7 @@ class CompletionOwner:
         if native_parts is None:
             return None
         try:
-            rc, native_errno, completion_id = self._submit_parts(
+            rc, internal_errno, completion_id = self._submit_parts(
                 entry.target, native_parts, ZLINK_DONTWAIT, entry
             )
         except BaseException as error:
@@ -918,7 +918,7 @@ class CompletionOwner:
                 initial_attempt
                 and self._public_owner is None
                 and rc == int(SubmitResult.BACKPRESSURED)
-                and native_errno == errno.EAGAIN
+                and internal_errno == errno.EAGAIN
                 and completion_id != 0
             )
             # A successful SEND never enters either completion registry.
@@ -934,12 +934,12 @@ class CompletionOwner:
                 if ownerless_wait:
                     entry.fail(SubmitError(SubmitResult.INVALID_STATE, 0))
                     rc = int(SubmitResult.INVALID_STATE)
-                elif native_errno != errno.EAGAIN or completion_id == 0:
+                elif internal_errno != errno.EAGAIN or completion_id == 0:
                     entry.fail(SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO))
             else:
                 if completion_id != 0:
                     self._publish_writable_locked(entry, completion_id)
-                entry.fail(self._submit_error(rc, native_errno))
+                entry.fail(self._submit_error(rc, internal_errno))
 
             if entry.releasable:
                 if self._entries.get(entry.context) is entry:
@@ -972,7 +972,7 @@ class CompletionOwner:
                 self._close_unsubmitted(native_parts)
                 return
         try:
-            rc, native_errno, completion_id = self._submit_parts(
+            rc, internal_errno, completion_id = self._submit_parts(
                 entry.target,
                 native_parts,
                 ZLINK_DONTWAIT,
@@ -993,14 +993,14 @@ class CompletionOwner:
                     self._track_native_wait_locked(entry)
             elif (
                 rc == int(SubmitResult.BACKPRESSURED)
-                and native_errno == errno.EAGAIN
+                and internal_errno == errno.EAGAIN
                 and completion_id != 0
             ):
                 resubmit = self._publish_writable_locked(entry, completion_id)
             else:
                 if completion_id != 0:
                     self._publish_writable_locked(entry, completion_id)
-                entry.fail(self._submit_error(rc, native_errno))
+                entry.fail(self._submit_error(rc, internal_errno))
 
             if entry.releasable:
                 self._unregister(entry)
@@ -1042,9 +1042,9 @@ class CompletionOwner:
 
     def submit_send_sync(self, target, payload):
         native_parts = _materialize_native_parts(payload)
-        rc, native_errno, completion_id = self._submit_parts(target, native_parts, 0)
+        rc, internal_errno, completion_id = self._submit_parts(target, native_parts, 0)
         if rc != int(SubmitResult.OK):
-            _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
+            _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
         if completion_id != 0:
             raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
 
@@ -1084,7 +1084,7 @@ class CompletionOwner:
                     )
                 self._entries[entry.context] = entry
             try:
-                rc, native_errno, completion_id = self._submit_parts(
+                rc, internal_errno, completion_id = self._submit_parts(
                     target, native_parts, ZLINK_DONTWAIT, entry, int(timeout_ms)
                 )
             except BaseException:
@@ -1101,7 +1101,7 @@ class CompletionOwner:
                     self._finish_request_submit(entry, completion_id)
                 elif (
                     rc == int(SubmitResult.BACKPRESSURED)
-                    and native_errno == errno.EAGAIN
+                    and internal_errno == errno.EAGAIN
                     and completion_id != 0
                 ):
                     resubmit = self._publish_writable_locked(entry, completion_id)
@@ -1114,12 +1114,12 @@ class CompletionOwner:
                 else:
                     if completion_id != 0:
                         self._publish_writable_locked(entry, completion_id)
-                        entry.fail(self._submit_error(rc, native_errno))
+                        entry.fail(self._submit_error(rc, internal_errno))
                     else:
                         entry.fail_submit()
                         self._unregister(entry)
                         _raise_result_error(
-                            SubmitError, SubmitResult, rc, native_errno
+                            SubmitError, SubmitResult, rc, internal_errno
                         )
             if resubmit:
                 self._defer_retry(entry)
@@ -1139,7 +1139,7 @@ class CompletionOwner:
         entry = _CompletionEntry(ZLINK_COMPLETION_REQUEST)
         self._register(entry)
         try:
-            rc, native_errno, completion_id = self._submit_parts(
+            rc, internal_errno, completion_id = self._submit_parts(
                 target, native_parts, 0, entry, int(timeout_ms)
             )
         except BaseException:
@@ -1149,7 +1149,7 @@ class CompletionOwner:
         if rc != int(SubmitResult.OK):
             entry.fail_submit()
             self._unregister(entry)
-            _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
+            _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
         if completion_id == 0:
             entry.fail_submit()
             self._unregister(entry)
@@ -1173,10 +1173,10 @@ class CompletionOwner:
                     if rc == int(RecvResult.NO_DATA):
                         continue
                     if rc != int(RecvResult.OK):
-                        native_errno = lib().zlink_errno()
-                        self._fail_drain_wait(native_errno)
+                        internal_errno = lib().zlink_errno()
+                        self._fail_drain_wait(internal_errno)
                         _raise_result_error(
-                            RecvError, RecvResult, rc, native_errno
+                            RecvError, RecvResult, rc, internal_errno
                         )
                     retry_entries = []
                     with self._drain_lock:

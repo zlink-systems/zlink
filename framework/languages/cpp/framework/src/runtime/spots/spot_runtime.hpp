@@ -733,19 +733,33 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         auto release = std::exchange (preparation->release_aliases, {});
         if (!release)
             return preparation->terminal.task ();
-        auto settle = [preparation, release = std::move (release)] (result_t<void> result) mutable {
+        // The terminal is published after the lifecycle barrier has completed. Barrier
+        // completion releases the node and schedules the next drain on the executors, so a
+        // waiter that resumes at the terminal (the host closing its executors after a
+        // failed startup) must not run ahead of that tail.
+        auto settle = [preparation, release = std::move (release)] (
+                        result_t<void> result, const auto &complete_barrier) mutable {
             std::atomic_store (&preparation->admission,
                                std::shared_ptr<const preparation_t::admission_t>{});
             // The terminal publisher consumes this operation's alias chain once;
             // every other publisher waits for the same task.
             result = release (std::move (result));
+            try {
+                complete_barrier (result);
+            }
+            catch (...) {
+                preparation->terminal.complete (result);
+                throw;
+            }
             preparation->terminal.complete (result);
             return result;
         };
         const auto activated = preparation->lifecycle->activate_async (
           [self = shared_from_this (), cleanup = std::move (cleanup), settle] (auto complete) {
               auto finish = [settle, complete] (result_t<void> result) mutable {
-                  complete (settle (std::move (result)));
+                  (void) settle (std::move (result), [&complete] (const result_t<void> &settled) {
+                      complete (settled);
+                  });
               };
               if (!cleanup) {
                   finish (result_t<void>::success ());
@@ -760,7 +774,7 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
               }
           });
         if (!activated)
-            settle (activated);
+            (void) settle (activated, [] (const result_t<void> &) {});
         return preparation->terminal.task ();
     }
 
@@ -2142,6 +2156,7 @@ class spot_node_runtime_t
      * (graceful-drain-handoff §5.2). */
     std::vector<actor_ref_t> local_actor_refs () const;
     task_t<bool> relocation_ready_async () const;
+    task_t<relocation_units_t> read_relocation_units () const;
     task_t<relocation_units_t> relocation_units () const;
     void begin_relocation_readiness ();
     task_t<void> begin_relocation_readiness_async ();
@@ -2371,7 +2386,9 @@ class spot_node_runtime_t
     // markers instead of allocating a second ID.
     std::optional<std::string> reserved_actor_transfer_id (const actor_ref_t &actor_ref) const;
     result_t<std::shared_ptr<deferred_barrier_t>>
-    reserve_actor_join_barrier (const actor_ref_t &actor_ref);
+    reserve_actor_join_barrier (const actor_ref_t &actor_ref,
+                                bool pending_relocation_request = false);
+    bool reserved_with_pending_relocation_request (const actor_ref_t &actor_ref) const;
     std::pair<std::uint64_t, std::uint64_t>
     actor_join_operation_id (std::string_view transfer_id) const;
     task_t<result_t<void>>
@@ -2439,8 +2456,9 @@ class spot_node_runtime_t
                                   const runtime::stateful::object_ref_t &target,
                                   const std::optional<runtime::stateful::object_ref_t> &target_spot,
                                   std::stop_token cancellation = {});
-    bool
-    commit_relocation_materialization (const std::vector<runtime::stateful::object_ref_t> &targets);
+    bool commit_relocation_materialization (
+      const std::vector<runtime::stateful::object_ref_t> &targets,
+      const std::function<void ()> &before_actor_join_completion = {});
     task_t<void>
     retire_relocation_source (const std::vector<runtime::stateful::object_ref_t> &sources);
     task_t<result_t<std::string>> transfer_actor_out (const actor_ref_t &actor_ref,
@@ -2584,6 +2602,9 @@ class spot_node_runtime_t
     static void filter_local_actor_inventory_on_lane (
       const spot_node_builder_state_t &state,
       std::vector<runtime::stateful::object_inventory_t> &inventory);
+    static relocation_units_t collect_relocation_units_on_lane (
+      const spot_node_builder_state_t &state,
+      const std::vector<runtime::stateful::object_inventory_t> &inventory);
     std::size_t active_user_spot_count_on_lane () const;
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
 

@@ -9,6 +9,8 @@ package native
 */
 import "C"
 
+import "unsafe"
+
 type subscribeSocket struct {
 	*connectionSocket
 }
@@ -33,6 +35,30 @@ func (s *subscribeSocket) UnsetSubscription(filter string) error {
 		rc81, errno81 := C.zlink_unset_subscription(handle, cstr)
 		return configErrorFromCall(rc81, errno81)
 	})
+}
+
+// SubscriptionAt returns the filter at index. The second result reports
+// whether the index has an entry.
+func (s *subscribeSocket) SubscriptionAt(index int) (Subscription, bool, error) {
+	if index < 0 {
+		return Subscription{}, false, newConfigError(ConfigInvalidArgument, int(C.EINVAL))
+	}
+	handle := s.raw()
+	buffer := make([]byte, defaultOptionBufferSize)
+	size := C.size_t(len(buffer))
+	var isPattern C.int
+	rc, errno := C.zlink_subscription_at(handle, C.size_t(index), (*C.char)(unsafe.Pointer(unsafe.SliceData(buffer))), &size, &isPattern)
+	if rc == C.ZLINK_CONFIG_BUFFER_TOO_SMALL {
+		buffer = make([]byte, int(size))
+		rc, errno = C.zlink_subscription_at(handle, C.size_t(index), (*C.char)(unsafe.Pointer(unsafe.SliceData(buffer))), &size, &isPattern)
+	}
+	if rc == C.ZLINK_CONFIG_NOT_FOUND {
+		return Subscription{}, false, nil
+	}
+	if err := configErrorFromCall(rc, errno); err != nil {
+		return Subscription{}, false, err
+	}
+	return Subscription{Filter: string(buffer[:int(size)]), Pattern: isPattern != 0}, true, nil
 }
 
 func (s *subscribeSocket) Subscribe(out *TopicMessage, flags RecvFlags) (bool, error) {

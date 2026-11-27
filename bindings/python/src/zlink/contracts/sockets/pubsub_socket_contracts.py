@@ -2,6 +2,7 @@
 
 from typing import Protocol, runtime_checkable
 
+from ..messaging.subscription_event import SubscriptionEvent
 from . import socket as _socket_contract
 from .operations import PublishOp
 
@@ -60,7 +61,7 @@ class SubSocket(_socket_contract._ConnectSocketContract, Protocol):
 
     def subscription_at(self, index):
         """Return ``(filter, is_pattern)`` for a subscription index, or
-        ``None`` when the index is absent."""
+        ``None`` when the index is absent. Raise ``ConfigError`` for Core failures."""
         ...
 
     def subscribe_into(self, topic_message, *, flags=0):
@@ -93,7 +94,7 @@ class XPubSocket(_socket_contract._ConnectSocketContract, Protocol):
         submit."""
         ...
 
-    def receive_subscription_event_into(self, event, *, flags=0):
+    def receive_subscription_event_into(self, event: SubscriptionEvent, *, flags=0) -> bool:
         """Receive the next subscriber (un)subscription event into ``event``
         storage; ``False`` when ``DONT_WAIT`` is set and none is available."""
         ...
@@ -127,7 +128,7 @@ class XSubSocket(_socket_contract._ConnectSocketContract, Protocol):
 
     def subscription_at(self, index):
         """Return ``(filter, is_pattern)`` for a subscription index, or
-        ``None`` when the index is absent."""
+        ``None`` when the index is absent. Raise ``ConfigError`` for Core failures."""
         ...
 
     def subscribe_into(self, topic_message, *, flags=0):

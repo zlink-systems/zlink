@@ -3177,6 +3177,7 @@ internal sealed class SpotCloseProbeState
     internal string? StoredMarker { get; set; }
     internal ConcurrentQueue<ulong> PendingHandlerGenerations { get; } = new();
     internal ConcurrentQueue<string> InstanceHandlerMarkers { get; } = new();
+    internal Action<IZLinkInstanceSpotContext>? OnInstanceConstructed { get; set; }
 
     internal TaskCompletionSource OnClosingEntered { get; } = Signal();
     internal TaskCompletionSource ReleaseOnClosing { get; } = Signal();
@@ -3202,13 +3203,17 @@ internal sealed record SpotCloseProbeReply(string Marker);
 
 internal sealed record SpotCloseInstanceReply(string Marker, ulong Generation);
 
-internal sealed class SpotCloseInstance(
-    IZLinkInstanceSpotContext context,
-    SpotCloseProbeState state
-) : IZLinkInstanceSpot
+internal sealed class SpotCloseInstance : IZLinkInstanceSpot
 {
-    public IZLinkInstanceSpotContext Context { get; } = context;
-    internal SpotCloseProbeState State { get; } = state;
+    public SpotCloseInstance(IZLinkInstanceSpotContext context, SpotCloseProbeState state)
+    {
+        Context = context;
+        State = state;
+        state.OnInstanceConstructed?.Invoke(context);
+    }
+
+    public IZLinkInstanceSpotContext Context { get; }
+    internal SpotCloseProbeState State { get; }
 
     internal string? RestoredMarker { get; private set; }
 
@@ -3548,6 +3553,7 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
 {
     internal string? HoldNextPutFor { get; set; }
     internal bool HoldAfterPut { get; set; }
+    internal RoutingId? HoldAfterAggregateCommitForOwner { get; set; }
     internal TaskCompletionSource PutHeld { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource ReleasePut { get; } =
@@ -3699,10 +3705,19 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
             HoldAfterPut
             && HoldNextPutFor is { } appliedSpot
             && written is ZLinkStoreWriteResult.Applied
-            && request.Mutations.Any(mutation =>
-                mutation is ZLinkStoreMutation.Put put
-                && put.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
-                && put.Key.Value.EndsWith("\0" + appliedSpot, StringComparison.Ordinal)
+            && (
+                HoldAfterAggregateCommitForOwner is { } owner
+                    ? await CommitsAggregateForOwnerAsync(
+                        request,
+                        appliedSpot,
+                        owner,
+                        cancellationToken
+                    )
+                    : request.Mutations.Any(mutation =>
+                        mutation is ZLinkStoreMutation.Put put
+                        && put.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                        && put.Key.Value.EndsWith("\0" + appliedSpot, StringComparison.Ordinal)
+                    )
             )
         )
         {
@@ -3731,6 +3746,30 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
 
     // The provider authority record is JSON whose payload field is base64;
     // any string field that decodes as an Instance authority payload is it.
+    private async ValueTask<bool> CommitsAggregateForOwnerAsync(
+        ZLinkStoreWriteRequest request,
+        string spotId,
+        RoutingId owner,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            !request.Mutations.Any(mutation =>
+                mutation is ZLinkStoreMutation.Put put
+                && put.Key.Value.StartsWith("zlink:v11:aggregate:", StringComparison.Ordinal)
+            )
+        )
+            return false;
+
+        var read = await new ZLinkProviderLocationRepository(inner).ReadAuthorityAsync(
+            ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId),
+            cancellationToken
+        );
+        return read is ZLinkAuthorityReadResult.Found found
+            && found.Snapshot.Allocation.Descriptor.Rid == owner
+            && found.Snapshot.Relocation is not null;
+    }
+
     private static bool WritesCompletedReplayCursor(ReadOnlySpan<byte> record)
     {
         JsonDocument document;

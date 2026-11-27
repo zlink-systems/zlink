@@ -74,7 +74,7 @@ TEST (ActorMaintenanceJoin, RejectsWhilePreviousSourceLeaveIsPending)
             return fw::detail::spot_node_runtime_t (target_state)
               .materialize_relocation_state (frozen, object, spot, cancellation);
         },
-        [target_state, &evidence] (const auto &objects) {
+        [target_state, &evidence] (const auto &objects, const auto &before_join_completion) {
             // Admit local work after identity publication, before lifecycle opens.
             std::unique_lock lock (evidence.mutex);
             evidence.materialization_entered = true;
@@ -83,7 +83,7 @@ TEST (ActorMaintenanceJoin, RejectsWhilePreviousSourceLeaveIsPending)
               lock, [&] { return evidence.release_completion.task ().await_ready (); });
             lock.unlock ();
             return fw::detail::spot_node_runtime_t (target_state)
-              .commit_relocation_materialization (objects);
+              .commit_relocation_materialization (objects, before_join_completion);
         },
         [target_state] (const auto &objects) {
             return fw::detail::spot_node_runtime_t (target_state)
@@ -197,7 +197,8 @@ TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
           return fw::detail::spot_node_runtime_t (state).materialize_relocation_state (
             frozen, object, spot, cancellation);
       },
-      [&, state, weak_target, throw_failure] (const auto &objects) {
+      [&, state, weak_target, throw_failure] (const auto &objects,
+                                              const auto &before_join_completion) {
           const auto node = weak_target.lock ();
           if (!node)
               return false;
@@ -215,7 +216,7 @@ TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
           // the publication assertion fails without stranding its terminal.
           if (!current)
               return fw::detail::spot_node_runtime_t (state).commit_relocation_materialization (
-                objects);
+                objects, before_join_completion);
           if (throw_failure)
               throw std::runtime_error ("injected restore commit failure");
           return false;
