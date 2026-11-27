@@ -100,7 +100,7 @@ for (const { name, given, steps } of fixture.queueScenarios) {
         connection,
         ticket: { ticket: codec.issue(connection, epoch, expiresAt), expiresInMs: 30_000 },
         expiresAt,
-        ticketSent: true
+        ticketDelivery: 'sent'
       };
     }
 
@@ -392,12 +392,12 @@ function unexpectedLeaseCheck() {
   assert.fail('No lease lookup is expected');
 }
 
-async function createLeaseCheckScenario() {
+async function createLeaseCheckScenario(readLease = async (owner) => owner.ownerId !== 'ended') {
   const checks = [];
   const codec = new AdmissionTickets(Buffer.alloc(32, 1).toString('base64url'));
   const { spot, handle } = configureQueueSpot(codec, 2, async (owner) => {
     checks.push(owner);
-    return owner.ownerId !== 'ended';
+    return readLease(owner);
   });
   const permitRequest = (session, ownerId) => ({
     ...identity(session),
@@ -483,4 +483,80 @@ test('reports skip lease reads when no locally eligible waiter is blocked', asyn
     deliveries.filter(({ kind }) => kind === 'ticket').map(({ sessionRid }) => sessionRid),
     [first.sessionRid]
   );
+});
+
+test('a used ticket leaves the queue and budget but can still admit until expiry', async () => {
+  const codec = new AdmissionTickets(Buffer.alloc(32, 1).toString('base64url'));
+  let now = 10_000;
+  const spot = new AdmissionQueueSpot(
+    codec,
+    1,
+    42n,
+    () => now,
+    () => now
+  );
+  const first = identity('first');
+  const second = identity('second');
+  const third = identity('third');
+  const permit = (connection, requestSeq) => ({
+    ...connection,
+    ...ownerFor(),
+    epoch: '42',
+    requestSeq
+  });
+  const report = (usedTickets) =>
+    spot.report(
+      {
+        ...local({}),
+        limit: 3,
+        inFlight: 0,
+        usedTickets,
+        endedSessions: [],
+        heldPermits: [],
+        resolvedRequestSeq: '0'
+      },
+      unexpectedLeaseCheck
+    );
+  await report([]);
+  assert.equal(spot.enqueue(first).delivery.kind, 'ticket');
+  assert.equal(spot.enqueue(second).delivery.position, 1);
+  assert.equal(spot.enqueue(third).delivery.position, 2);
+  const original = spot.admit(permit(first, '1'));
+  assert.equal(original.granted, true);
+  spot.release({ ...local({}), permitId: original.permitId });
+
+  const { deliveries } = await report([sessionIdentity(first)]);
+  assert.deepEqual(
+    spot.waiters().map(({ connection }) => connection),
+    [second, third]
+  );
+  assert.equal(deliveries[0].kind, 'ticket');
+  assert.equal(deliveries[0].sessionRid, second.sessionRid);
+  assert.equal(spot.enqueue(third).delivery.position, 1);
+  assert.equal(spot.admit(permit({ ...first, nodeLifecycleGeneration: '2' }, '2')).granted, false);
+  const retry = spot.admit(permit(first, '2'));
+  assert.equal(retry.granted, true);
+  spot.release({ ...local({}), permitId: retry.permitId });
+  now += 30_001;
+  assert.equal(spot.admit(permit(first, '3')).granted, false);
+});
+
+test('lease read failures reject the capped permit and report requests', async () => {
+  const failure = new Error('lease read failed');
+  let fail = true;
+  const { spot, live, admit, report } = await createLeaseCheckScenario(async (owner) => {
+    if (fail) throw failure;
+    return owner.ownerId !== 'ended';
+  });
+  assert.equal((await admit(live)).granted, true);
+  const retry = { ...live, requestSeq: '2' };
+  await assert.rejects(admit(retry), (error) => error === failure);
+  assert.equal(spot.queue.runningPermits, 2);
+  const other = { node: 'other' };
+  const waiting = identity('waiting', other);
+  assert.equal(spot.queue.enqueue(waiting).delivery.kind, 'position');
+  await assert.rejects(report(other), (error) => error === failure);
+  assert.equal(spot.queue.runningPermits, 2);
+  fail = false;
+  assert.equal((await admit(retry)).granted, true);
 });

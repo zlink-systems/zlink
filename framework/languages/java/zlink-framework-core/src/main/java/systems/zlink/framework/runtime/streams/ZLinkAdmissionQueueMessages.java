@@ -37,6 +37,19 @@ public final class ZLinkAdmissionQueueMessages {
     /** Instance Spot type of the queue (§3.5.8). */
     public static final String SPOT_TYPE = "$zlink.AdmissionQueue";
 
+    private static final String ENQUEUE = "$zlink.admission-queue.enqueue";
+    private static final String REPORT = "$zlink.admission-queue.report";
+    private static final String ADMIT_PERMIT = "$zlink.admission-queue.admit-permit";
+    private static final String REPLY_SUFFIX = ".reply";
+
+    /** Returns the response packet name for a queue request (§3.5.8). */
+    public static String replyName(String requestName) {
+        return switch (requestName) {
+            case ENQUEUE, REPORT, ADMIT_PERMIT -> requestName + REPLY_SUFFIX;
+            default -> null;
+        };
+    }
+
     private static final Pattern DEC = Pattern.compile("0|[1-9][0-9]{0,19}");
     private static final Pattern B64 = Pattern.compile("[A-Za-z0-9_-]*");
 
@@ -166,7 +179,7 @@ public final class ZLinkAdmissionQueueMessages {
         }
     }
 
-    @ZLinkPacket("$zlink.admission-queue.report")
+    @ZLinkPacket(REPORT)
     public record NodeReport(
             @JsonDeserialize(using = Rid.Reader.class) String nodeRid,
             @JsonSerialize(using = Dec.Writer.class) @JsonDeserialize(using = Dec.Reader.class)
@@ -192,7 +205,7 @@ public final class ZLinkAdmissionQueueMessages {
         }
     }
 
-    @ZLinkPacket("$zlink.admission-queue.report.reply")
+    @ZLinkPacket(REPORT + REPLY_SUFFIX)
     public record NodeReportReply(
             @JsonSerialize(using = Dec.Writer.class) @JsonDeserialize(using = Dec.Reader.class)
                     Long epoch,
@@ -203,14 +216,14 @@ public final class ZLinkAdmissionQueueMessages {
         }
     }
 
-    @ZLinkPacket("$zlink.admission-queue.enqueue")
+    @ZLinkPacket(ENQUEUE)
     public record Enqueue(Connection connection) {
         public Enqueue {
             required(connection, "connection");
         }
     }
 
-    @ZLinkPacket("$zlink.admission-queue.enqueue.reply")
+    @ZLinkPacket(ENQUEUE + REPLY_SUFFIX)
     public record EnqueueReply(
             @JsonSerialize(using = Dec.Writer.class) @JsonDeserialize(using = Dec.Reader.class)
                     Long epoch,
@@ -221,7 +234,7 @@ public final class ZLinkAdmissionQueueMessages {
         }
     }
 
-    @ZLinkPacket("$zlink.admission-queue.admit-permit")
+    @ZLinkPacket(ADMIT_PERMIT)
     public record AdmitPermit(
             @JsonDeserialize(using = Rid.Reader.class) String nodeRid,
             @JsonSerialize(using = Dec.Writer.class) @JsonDeserialize(using = Dec.Reader.class)
@@ -248,7 +261,7 @@ public final class ZLinkAdmissionQueueMessages {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    @ZLinkPacket("$zlink.admission-queue.admit-permit.reply")
+    @ZLinkPacket(ADMIT_PERMIT + REPLY_SUFFIX)
     public record AdmitPermitReply(
             Boolean granted,
             @ZLinkJsonOptional

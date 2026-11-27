@@ -37,7 +37,7 @@ interface Waiter {
   readonly connection: AdmissionConnection;
   ticket?: AdmissionTicket;
   expiresAt?: number;
-  ticketSent?: boolean;
+  ticketDelivery?: 'sent' | 'used';
   lastPosition?: AdmissionPosition;
   lastPositionAt?: number;
 }
@@ -84,7 +84,7 @@ export class AdmissionQueueSpot {
   }
 
   waiters(): readonly Readonly<Waiter>[] {
-    return [...this.waiting.values()];
+    return [...this.waiting.values()].filter((waiter) => waiter.ticketDelivery !== 'used');
   }
 
   enqueue(connection: AdmissionConnection): AdmissionEnqueueReply {
@@ -100,7 +100,7 @@ export class AdmissionQueueSpot {
     }
     const session = admissionSessionIdentity(connection);
     if (waiter.ticket !== undefined) {
-      waiter.ticketSent = true;
+      waiter.ticketDelivery ??= 'sent';
       return { epoch: this.epoch, delivery: { ...session, kind: 'ticket', ...waiter.ticket } };
     }
     const position = this.positionOf(waiter);
@@ -124,7 +124,16 @@ export class AdmissionQueueSpot {
       issued: 0
     });
     const { nodeRid, nodeLifecycleGeneration } = report;
-    for (const session of [...report.usedTickets, ...report.endedSessions]) {
+    for (const session of report.usedTickets) {
+      const key = admissionConnectionKey({ nodeRid, nodeLifecycleGeneration, ...session });
+      const waiter = this.waiting.get(key);
+      if (waiter?.ticket === undefined) {
+        this.waiting.delete(key);
+      } else {
+        waiter.ticketDelivery = 'used';
+      }
+    }
+    for (const session of report.endedSessions) {
       this.waiting.delete(admissionConnectionKey({ nodeRid, nodeLifecycleGeneration, ...session }));
     }
     if (this.issue(now, utcNow, this.permits.size > 0)) {
@@ -200,7 +209,12 @@ export class AdmissionQueueSpot {
     let remaining = Math.max(0, this.globalLimit - this.permits.size);
     if (remaining === 0) return 0;
     for (const waiter of this.waiting.values()) {
-      if (waiter.ticket === undefined || ticketExpired(waiter, utcNow)) continue;
+      if (
+        waiter.ticket === undefined ||
+        waiter.ticketDelivery === 'used' ||
+        ticketExpired(waiter, utcNow)
+      )
+        continue;
       remaining--;
       if (remaining === 0) break;
     }
@@ -296,8 +310,8 @@ export class AdmissionQueueSpot {
       if (waiter.ticket === undefined) position++;
       if (admissionNodeKey(waiter.connection) !== node) continue;
       if (waiter.ticket !== undefined) {
-        if (waiter.ticketSent !== true) {
-          waiter.ticketSent = true;
+        if (waiter.ticketDelivery === undefined) {
+          waiter.ticketDelivery = 'sent';
           deliveries.push({
             ...admissionSessionIdentity(waiter.connection),
             kind: 'ticket',

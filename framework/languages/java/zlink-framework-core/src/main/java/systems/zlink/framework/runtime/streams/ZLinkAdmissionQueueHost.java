@@ -72,10 +72,6 @@ public final class ZLinkAdmissionQueueHost {
         return new ZLinkAdmissionQueueState(tickets, globalLimit, wallClockMs, epoch);
     }
 
-    boolean atLimit(int runningPermits) {
-        return globalLimit != null && runningPermits >= globalLimit;
-    }
-
     CompletionStage<Boolean> ownerLeaseLive(String ownerId, long leaseGeneration) {
         return liveness == null
                 ? CompletableFuture.completedFuture(true)

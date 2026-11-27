@@ -12,8 +12,9 @@ import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 
-import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -47,25 +48,28 @@ public final class ZLinkAdmissionQueueSpot implements ZLinkInstanceSpot {
     }
 
     /** Reclaims permits whose node owner lease ended before a permit is refused (§3.5.3). */
-    private CompletionStage<Void> reclaimEndedLeases(
-            java.util.Collection<java.util.Map.Entry<String, Long>> owners) {
+    private CompletionStage<Void> reclaimEndedLeases(Collection<Map.Entry<String, Long>> owners) {
         if (owners.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
-        List<CompletableFuture<Void>> checks = new ArrayList<>();
-        for (var owner : owners) {
-            checks.add(
-                    host.ownerLeaseLive(owner.getKey(), owner.getValue())
-                            .handle(
-                                    (live, failure) -> {
-                                        if (failure == null && Boolean.FALSE.equals(live)) {
-                                            state.ownerLeaseEnded(owner.getKey(), owner.getValue());
-                                        }
-                                        return (Void) null;
-                                    })
-                            .toCompletableFuture());
-        }
-        return CompletableFuture.allOf(checks.toArray(CompletableFuture[]::new));
+        var checkedOwners = List.copyOf(owners);
+        var checks =
+                checkedOwners.stream()
+                        .map(
+                                owner ->
+                                        host.ownerLeaseLive(owner.getKey(), owner.getValue())
+                                                .toCompletableFuture())
+                        .toList();
+        return CompletableFuture.allOf(checks.toArray(CompletableFuture[]::new))
+                .thenRun(
+                        () -> {
+                            for (int i = 0; i < checkedOwners.size(); i++) {
+                                if (Boolean.FALSE.equals(checks.get(i).join())) {
+                                    var owner = checkedOwners.get(i);
+                                    state.ownerLeaseEnded(owner.getKey(), owner.getValue());
+                                }
+                            }
+                        });
     }
 
     public static final class ReportHandler
@@ -74,9 +78,7 @@ public final class ZLinkAdmissionQueueSpot implements ZLinkInstanceSpot {
         @Override
         public CompletionStage<NodeReportReply> handle(
                 ZLinkAdmissionQueueSpot spot, NodeReport request) {
-            // The same liveness check as the admit path, only when the cap blocks a ticket.
-            return spot.reclaimEndedLeases(spot.state.ownersToCheckForReport(request))
-                    .thenApply(ignored -> spot.state.report(request));
+            return spot.state.report(request, spot::reclaimEndedLeases);
         }
     }
 
@@ -94,18 +96,13 @@ public final class ZLinkAdmissionQueueSpot implements ZLinkInstanceSpot {
         @Override
         public CompletionStage<AdmitPermitReply> handle(
                 ZLinkAdmissionQueueSpot spot, AdmitPermit request) {
-            var owners =
-                    spot.host.atLimit(spot.state.runningPermits())
-                            ? spot.state.permitOwners()
-                            : java.util.Set.<java.util.Map.Entry<String, Long>>of();
-            return spot.reclaimEndedLeases(owners)
-                    .thenCompose(
+            return spot.reclaimEndedLeases(spot.state.ownersToCheckForAdmit())
+                    .thenApply(
                             ignored -> {
                                 var result = spot.state.admitPermit(request);
-                                return CompletableFuture.completedFuture(
-                                        result.granted()
-                                                ? new AdmitPermitReply(true, result.permitId())
-                                                : new AdmitPermitReply(false, null));
+                                return result.granted()
+                                        ? new AdmitPermitReply(true, result.permitId())
+                                        : new AdmitPermitReply(false, null);
                             });
         }
     }

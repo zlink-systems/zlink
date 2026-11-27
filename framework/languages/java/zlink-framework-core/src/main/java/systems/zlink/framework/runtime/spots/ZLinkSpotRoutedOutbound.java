@@ -192,7 +192,7 @@ final class ZLinkSpotRoutedOutbound {
                                         routerChannelId,
                                         spotId);
                                 try {
-                                    return messages.decodeReply(replyParts, replyType);
+                                    return messages.decodeReply(replyParts, replyType, packetName);
                                 } finally {
                                     replyParts.forEach(Message::close);
                                 }

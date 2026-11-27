@@ -19,12 +19,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 
 /**
  * Memory of one queue Instance Spot incarnation (Authentication Admission §3.5.1-§3.5.3): epoch,
- * waiters, node budgets and global-limit permits. The Spot's serial execution owns it; every method
- * is also synchronized so the conformance tests can drive it directly.
+ * waiters, node budgets and global-limit permits. The Instance Spot execution gate owns state
+ * access, including the continuations of asynchronous lease checks.
  */
 final class ZLinkAdmissionQueueState {
     static final long TICKET_LIFETIME_MS = 30_000;
@@ -47,11 +50,17 @@ final class ZLinkAdmissionQueueState {
         int issuedSinceReport;
     }
 
+    private enum TicketDelivery {
+        PENDING,
+        PUSHED,
+        USED
+    }
+
     private static final class Entry {
         final Connection waiter;
         String ticket;
         long ticketExpiresAtMs;
-        boolean ticketPushed;
+        TicketDelivery ticketDelivery = TicketDelivery.PENDING;
         long lastPushedPosition = -1;
         long lastPushedEstimate = -1;
         long lastPushedAtMs = Long.MIN_VALUE;
@@ -109,7 +118,9 @@ final class ZLinkAdmissionQueueState {
         return Math.min(estimate, MAX_ESTIMATE_MS);
     }
 
-    synchronized NodeReportReply report(NodeReport report) {
+    CompletionStage<NodeReportReply> report(
+            NodeReport report,
+            Function<Set<Map.Entry<String, Long>>, CompletionStage<Void>> reclaimEndedLeases) {
         long now = wallClockMs.getAsLong();
         sweepExpired(now);
         NodeKey key = new NodeKey(report.nodeRid(), report.nodeLifecycleGeneration());
@@ -119,12 +130,32 @@ final class ZLinkAdmissionQueueState {
         node.reportedAtMs = now;
         node.issuedSinceReport = 0;
         for (ConnectionRef used : report.usedTickets()) {
-            waiters.remove(waiter(key, used));
+            Connection connection = waiter(key, used);
+            Entry entry = waiters.get(connection);
+            if (entry == null || entry.ticket == null) {
+                waiters.remove(connection);
+            } else {
+                entry.ticketDelivery = TicketDelivery.USED;
+            }
         }
         for (ConnectionRef ended : report.endedSessions()) {
             waiters.remove(waiter(key, ended));
         }
         reclaimMissingPermits(key, report);
+
+        if (!permits.isEmpty() && reportBlockedByGlobalCap(key, node, now)) {
+            return reclaimEndedLeases.apply(permitOwners()).thenApply(ignored -> finishReport(key));
+        }
+        return CompletableFuture.completedFuture(finishReport(key, node, now));
+    }
+
+    private NodeReportReply finishReport(NodeKey key) {
+        long now = wallClockMs.getAsLong();
+        sweepExpired(now);
+        return finishReport(key, nodes.get(key), now);
+    }
+
+    private NodeReportReply finishReport(NodeKey key, Node node, long now) {
         issue(key, node, now);
         List<Delivery> pushes = new ArrayList<>();
         int position = 0;
@@ -145,7 +176,7 @@ final class ZLinkAdmissionQueueState {
     }
 
     /** Enqueue is idempotent per connection identity (§3.5.3). */
-    synchronized EnqueueReply enqueue(Connection waiter) {
+    EnqueueReply enqueue(Connection waiter) {
         long now = wallClockMs.getAsLong();
         sweepExpired(now);
         Entry entry = waiters.computeIfAbsent(waiter, Entry::new);
@@ -155,7 +186,9 @@ final class ZLinkAdmissionQueueState {
             issue(key, node, now);
         }
         if (entry.ticket != null) {
-            entry.ticketPushed = true;
+            if (entry.ticketDelivery == TicketDelivery.PENDING) {
+                entry.ticketDelivery = TicketDelivery.PUSHED;
+            }
             return new EnqueueReply(
                     epoch,
                     new Delivery(
@@ -184,7 +217,7 @@ final class ZLinkAdmissionQueueState {
                         null));
     }
 
-    synchronized PermitResult admitPermit(AdmitPermit request) {
+    PermitResult admitPermit(AdmitPermit request) {
         long now = wallClockMs.getAsLong();
         Connection key =
                 new Connection(
@@ -198,8 +231,8 @@ final class ZLinkAdmissionQueueState {
         if (holder == null || holder.ticket == null || now > holder.ticketExpiresAtMs) {
             return new PermitResult(false, 0);
         }
-        if (request.epoch() != epoch || (globalLimit != null && permits.size() >= globalLimit)) {
-            returnWaiterToNodeFront(key);
+        if (request.epoch() != epoch || permitLimitReached()) {
+            returnWaiterToNodeFront(holder);
             return new PermitResult(false, 0);
         }
         long id;
@@ -217,13 +250,9 @@ final class ZLinkAdmissionQueueState {
     }
 
     /** A denied connection loses its ticket and goes back to the front of its node FIFO. */
-    private void returnWaiterToNodeFront(Connection key) {
-        Entry denied = waiters.get(key);
-        if (denied == null) {
-            return;
-        }
+    private void returnWaiterToNodeFront(Entry denied) {
         denied.ticket = null;
-        denied.ticketPushed = false;
+        denied.ticketDelivery = TicketDelivery.PENDING;
         denied.lastPushedAtMs = Long.MIN_VALUE;
         List<Entry> ordered = new ArrayList<>(waiters.values());
         ordered.remove(denied);
@@ -236,12 +265,12 @@ final class ZLinkAdmissionQueueState {
         ordered.forEach(entry -> waiters.put(entry.waiter, entry));
     }
 
-    synchronized void releasePermit(long permitId) {
+    void releasePermit(long permitId) {
         permits.remove(permitId);
     }
 
     /** The node owner lease ended: every permit it held is reclaimed (§3.5.3). */
-    synchronized void ownerLeaseEnded(String ownerId, long leaseGeneration) {
+    void ownerLeaseEnded(String ownerId, long leaseGeneration) {
         permits.values()
                 .removeIf(
                         permit ->
@@ -249,32 +278,24 @@ final class ZLinkAdmissionQueueState {
                                         && permit.leaseGeneration() == leaseGeneration);
     }
 
-    /**
-     * Owner leases to check in the Store while handling this report: only when the global cap keeps
-     * a ticket from a waiting connection of the reporting node (§3.5.3), never otherwise.
-     */
-    synchronized Set<Map.Entry<String, Long>> ownersToCheckForReport(NodeReport report) {
-        if (globalLimit == null || permits.isEmpty()) {
-            return Set.of();
-        }
-        NodeKey key = new NodeKey(report.nodeRid(), report.nodeLifecycleGeneration());
-        Set<Connection> gone = new HashSet<>();
-        report.usedTickets().forEach(ref -> gone.add(waiter(key, ref)));
-        report.endedSessions().forEach(ref -> gone.add(waiter(key, ref)));
+    private boolean reportBlockedByGlobalCap(NodeKey key, Node node, long now) {
         long ticketless =
                 waiters.values().stream()
-                        .filter(
-                                entry ->
-                                        entry.node().equals(key)
-                                                && entry.ticket == null
-                                                && !gone.contains(entry.waiter))
+                        .filter(entry -> entry.ticket == null && entry.node().equals(key))
                         .count();
-        long nodeBudget = Math.max(0, report.limit() - report.inFlight());
-        return globalCap() < Math.min(nodeBudget, ticketless) ? permitOwners() : Set.of();
+        return globalCap() < Math.min(budget(node, now), ticketless);
+    }
+
+    Set<Map.Entry<String, Long>> ownersToCheckForAdmit() {
+        return permitLimitReached() ? permitOwners() : Set.of();
+    }
+
+    private boolean permitLimitReached() {
+        return globalLimit != null && permits.size() >= globalLimit;
     }
 
     /** Owner leases that currently hold at least one permit, for the liveness sweep. */
-    synchronized Set<Map.Entry<String, Long>> permitOwners() {
+    private Set<Map.Entry<String, Long>> permitOwners() {
         Set<Map.Entry<String, Long>> owners = new HashSet<>();
         permits.values()
                 .forEach(
@@ -283,15 +304,18 @@ final class ZLinkAdmissionQueueState {
         return owners;
     }
 
-    synchronized int runningPermits() {
+    int runningPermits() {
         return permits.size();
     }
 
-    synchronized List<Connection> waitersInOrder() {
-        return List.copyOf(waiters.keySet());
+    List<Connection> waitersInOrder() {
+        return waiters.values().stream()
+                .filter(entry -> entry.ticketDelivery != TicketDelivery.USED)
+                .map(entry -> entry.waiter)
+                .toList();
     }
 
-    synchronized long positionOf(Connection waiter) {
+    long positionOf(Connection waiter) {
         long position = 0;
         for (Entry candidate : waiters.values()) {
             if (candidate.ticket == null) {
@@ -304,19 +328,18 @@ final class ZLinkAdmissionQueueState {
         return -1;
     }
 
-    synchronized int budget(String nodeRid, long generation) {
+    int budget(String nodeRid, long generation) {
         Node node = nodes.get(new NodeKey(nodeRid, generation));
         return node == null ? 0 : Math.min(budget(node, wallClockMs.getAsLong()), globalCap());
     }
 
-    synchronized String ticketOf(Connection waiter) {
+    String ticketOf(Connection waiter) {
         Entry entry = waiters.get(waiter);
         return entry == null ? null : entry.ticket;
     }
 
     /** Sets a node's last report as if it arrived now; conformance setup only. */
-    synchronized void seedNode(
-            String nodeRid, long generation, int limit, int inFlight, int issuedSinceReport) {
+    void seedNode(String nodeRid, long generation, int limit, int inFlight, int issuedSinceReport) {
         Node node = nodes.computeIfAbsent(new NodeKey(nodeRid, generation), ignored -> new Node());
         node.limit = limit;
         node.inFlight = inFlight;
@@ -325,7 +348,7 @@ final class ZLinkAdmissionQueueState {
     }
 
     /** Seeds a permit that a node already holds; conformance setup only. */
-    synchronized void seedPermit(
+    void seedPermit(
             long id,
             String nodeRid,
             long generation,
@@ -338,7 +361,7 @@ final class ZLinkAdmissionQueueState {
     }
 
     /** Issues tickets to a node's waiters now, in enqueue order within the node's budget. */
-    synchronized List<Connection> issueNow(String nodeRid, long generation) {
+    List<Connection> issueNow(String nodeRid, long generation) {
         long now = wallClockMs.getAsLong();
         NodeKey key = new NodeKey(nodeRid, generation);
         Node node = nodes.get(key);
@@ -346,14 +369,14 @@ final class ZLinkAdmissionQueueState {
     }
 
     /** Gives a waiting connection a ticket as if issued earlier; conformance setup only. */
-    synchronized String seedTicket(Connection waiter) {
+    String seedTicket(Connection waiter) {
         Entry entry = waiters.computeIfAbsent(waiter, Entry::new);
         entry.ticketExpiresAtMs = wallClockMs.getAsLong() + TICKET_LIFETIME_MS;
         entry.ticket = tickets.issue(connection(waiter), entry.ticketExpiresAtMs, epoch);
         return entry.ticket;
     }
 
-    synchronized void sweep() {
+    void sweep() {
         sweepExpired(wallClockMs.getAsLong());
     }
 
@@ -363,7 +386,12 @@ final class ZLinkAdmissionQueueState {
             return Integer.MAX_VALUE;
         }
         long unusedTickets =
-                waiters.values().stream().filter(entry -> entry.ticket != null).count();
+                waiters.values().stream()
+                        .filter(
+                                entry ->
+                                        entry.ticket != null
+                                                && entry.ticketDelivery != TicketDelivery.USED)
+                        .count();
         return (int) Math.max(0, globalLimit - permits.size() - unusedTickets);
     }
 
@@ -386,7 +414,7 @@ final class ZLinkAdmissionQueueState {
             }
             entry.ticketExpiresAtMs = now + TICKET_LIFETIME_MS;
             entry.ticket = tickets.issue(connection(entry.waiter), entry.ticketExpiresAtMs, epoch);
-            entry.ticketPushed = false;
+            entry.ticketDelivery = TicketDelivery.PENDING;
             node.issuedSinceReport++;
             issuedAtMs.addLast(now);
             budget--;
@@ -398,10 +426,10 @@ final class ZLinkAdmissionQueueState {
     private Delivery pushFor(Entry entry, long position, long now) {
         Connection waiter = entry.waiter;
         if (entry.ticket != null) {
-            if (entry.ticketPushed) {
+            if (entry.ticketDelivery != TicketDelivery.PENDING) {
                 return null;
             }
-            entry.ticketPushed = true;
+            entry.ticketDelivery = TicketDelivery.PUSHED;
             return new Delivery(
                     waiter.streamName(),
                     waiter.sessionRid(),

@@ -23,6 +23,7 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
@@ -279,16 +280,22 @@ final class ZLinkAdmissionQueueConformanceTest {
                             ended,
                             held,
                             AdmissionQueueFixture.number(step, "resolvedRequestSeq", 0));
-            for (var owner : state.ownersToCheckForReport(report)) {
-                ownerLeaseChecks++;
-                if (given.path("ownerLeases")
-                        .path(owner.getKey() + ":" + owner.getValue())
-                        .asText("live")
-                        .equals("ended")) {
-                    state.ownerLeaseEnded(owner.getKey(), owner.getValue());
-                }
-            }
-            state.report(report);
+            state.report(
+                            report,
+                            owners -> {
+                                for (var owner : owners) {
+                                    ownerLeaseChecks++;
+                                    if (given.path("ownerLeases")
+                                            .path(owner.getKey() + ":" + owner.getValue())
+                                            .asText("live")
+                                            .equals("ended")) {
+                                        state.ownerLeaseEnded(owner.getKey(), owner.getValue());
+                                    }
+                                }
+                                return CompletableFuture.completedFuture(null);
+                            })
+                    .toCompletableFuture()
+                    .join();
             if (expect.has("ownerLeaseChecks")) {
                 assertEquals(expect.get("ownerLeaseChecks").asInt(), ownerLeaseChecks);
             }
