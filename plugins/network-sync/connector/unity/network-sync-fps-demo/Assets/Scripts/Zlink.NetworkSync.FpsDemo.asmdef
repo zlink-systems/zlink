@@ -1,0 +1,5 @@
+{
+  "name": "Zlink.NetworkSync.FpsDemo",
+  "rootNamespace": "Zlink.NetworkSync.FpsDemo",
+  "references": ["Zlink.NetworkSync"]
+}
