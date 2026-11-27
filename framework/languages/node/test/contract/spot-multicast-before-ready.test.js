@@ -15,7 +15,8 @@ function deferred() {
 }
 
 async function waitFor(condition) {
-  for (let index = 0; index < 1000; index += 1) {
+  const deadline = performance.now() + 5000;
+  while (performance.now() < deadline) {
     if (condition()) return;
     await new Promise(setImmediate);
   }

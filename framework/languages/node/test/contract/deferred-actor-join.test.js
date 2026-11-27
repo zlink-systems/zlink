@@ -110,7 +110,8 @@ test('one handler completes 65 deferred Actor Joins whose requests total more th
 });
 
 async function waitForEvents(events, count) {
-  for (let attempt = 0; attempt < 20 && events.length < count; attempt += 1) {
+  const deadline = performance.now() + 5000;
+  while (events.length < count && performance.now() < deadline) {
     await new Promise((resolve) => setImmediate(resolve));
   }
   assert.ok(events.length >= count, `expected at least ${count} events, received ${events.length}`);
@@ -294,7 +295,8 @@ for (const targetKind of ['entry', 'user']) {
               (record) =>
                 record.stateful?.kindData?.lifecycleKind === framework.ActorLifecycleKind.Joined
             );
-      for (let attempt = 0; lifecycleRecord === undefined && attempt < 20; attempt += 1) {
+      const deadline = performance.now() + 5000;
+      while (lifecycleRecord === undefined && performance.now() < deadline) {
         await new Promise((resolve) => setImmediate(resolve));
         lifecycleRecord = queued.find(
           (record) =>

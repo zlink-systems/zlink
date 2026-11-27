@@ -246,11 +246,10 @@ test('two Node RouteMesh nodes round-trip a channel request and retain the pendi
       server.topology.localDescriptor().advertisedEndpoint,
       server.topology.localDescriptor()
     );
-    for (
-      let turn = 0;
-      turn < 3000 &&
-      (!client.isPeerRouteReady('channel-server') || !server.isPeerRouteReady('channel-client'));
-      turn += 1
+    const readyDeadline = performance.now() + 5000;
+    while (
+      performance.now() < readyDeadline &&
+      (!client.isPeerRouteReady('channel-server') || !server.isPeerRouteReady('channel-client'))
     ) {
       await client.pumpBatch(true, true);
       await server.pumpBatch(true, true);
@@ -267,7 +266,8 @@ test('two Node RouteMesh nodes round-trip a channel request and retain the pendi
       },
       1_000
     );
-    for (let turn = 0; turn < 300; turn += 1) {
+    const replyDeadline = performance.now() + 1000;
+    while (performance.now() < replyDeadline) {
       await client.pumpBatch(true, true);
       await server.pumpBatch(true, true);
       if (

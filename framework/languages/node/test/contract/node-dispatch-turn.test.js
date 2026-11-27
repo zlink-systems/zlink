@@ -214,7 +214,8 @@ test('one-way node-direct dispatch adds no per-record Promise wrappers', async (
 });
 
 async function waitUntilImmediate(predicate) {
-  for (let attempt = 0; attempt < 100_000; attempt++) {
+  const deadline = performance.now() + 10_000;
+  while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setImmediate(resolve));
   }

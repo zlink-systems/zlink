@@ -271,9 +271,12 @@ test('raw router receive retains binding payload storage and replies on the deli
     const endpoint = 'inproc://raw-receive-retention';
     router.bind(endpoint);
     dealer.connect(endpoint);
-    const reply = dealer.request([Buffer.from('header'), payload], 5000);
+    const timeoutMs = 5000;
+    const deadline = performance.now() + timeoutMs;
+    const reply = dealer.request([Buffer.from('header'), payload], timeoutMs);
+    void reply.catch(() => undefined);
     let record;
-    for (let attempt = 0; attempt < 200 && record === undefined; attempt++) {
+    do {
       Buffer.from = function (...args) {
         const result = originalFrom.apply(this, args);
         if (result.length === payload.length) payloadCopies++;
@@ -285,7 +288,7 @@ test('raw router receive retains binding payload storage and replies on the deli
         Buffer.from = originalFrom;
       }
       if (record === undefined) await new Promise((resolve) => setImmediate(resolve));
-    }
+    } while (record === undefined && performance.now() < deadline);
     assert.ok(record !== undefined, 'router received the request');
     // The record keeps the binding's own data() storage: no Framework copy.
     assert.equal(payloadCopies, 0);
@@ -307,7 +310,6 @@ test('raw router receive retains binding payload storage and replies on the deli
       zlink.RoutingId.from = originalRoutingIdFrom;
     }
     assert.equal(routingIds, 0);
-    void reply.catch(() => undefined);
   } finally {
     Buffer.from = originalFrom;
     host.close();

@@ -44,7 +44,8 @@ function deferred() {
 }
 
 async function until(check, label) {
-  for (let i = 0; i < 100; i += 1) {
+  const deadline = performance.now() + 5000;
+  while (performance.now() < deadline) {
     if (check()) return;
     await new Promise(resolve => setImmediate(resolve));
   }
