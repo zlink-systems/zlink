@@ -28,7 +28,7 @@ def test_failed_wait_reports_the_core_configuration_result():
         with pytest.raises(zlink.ConfigError) as raised:
             poller.wait(zlink.create_poll_events(1), 0)
         assert raised.value.result == zlink.ConfigResult.INTERNAL_ERROR
-        assert raised.value.native_errno == ETERM
+        assert raised.value.internal_errno == ETERM
     finally:
         poller.close()
         socket.close()
@@ -156,7 +156,7 @@ def test_monitor_open_failure_is_a_configuration_error():
         with pytest.raises(zlink.ConfigError) as raised:
             socket.monitor_open()
         assert raised.value.result == zlink.ConfigResult.INVALID_STATE
-        assert raised.value.native_errno == errno.EBUSY
+        assert raised.value.internal_errno == errno.EBUSY
     finally:
         monitor.close()
         socket.close()

@@ -126,7 +126,9 @@ except zlink.SubmitError as exc:
 
 `SubmitError`, `RequestError`, `RecvError`, `BindError`, `ConnectError`,
 `ConfigError`, and `CloseError` are all `ZlinkError` subtypes and expose
-`result`, `code`, and `native_errno`.
+`result`, `code`, and `internal_errno`.
+
+`native_errno` is a deprecated alias that returns the same value as `internal_errno`. It will be removed in the next breaking release.
 
 ## Threading Notes
 

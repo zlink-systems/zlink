@@ -262,10 +262,14 @@ receive/subscription 표면만 노출하며 managed send completion은 없다.
 | | `PubOptions() *PubSocketOptions` | 타입별 option facade |
 | `SubSocket` / `XSubSocket` | `Subscribe(out *TopicMessage, flags RecvFlags) (bool, error)` | `out`을 다음 매칭 publish로 채움 |
 | | `SetSubscription(filter string) error` / `UnsetSubscription(filter string) error` | topic filter를 추가/제거; subscription은 누적된다 |
-| | `SubscriptionAt(index int) (string, bool, error)` | `(filter, isPattern, error)` triple — 해당 index의 filter |
+| | `SubscriptionAt(index int) (Subscription, bool, error)` | 해당 index의 filter와 pattern 여부를 `Subscription{Filter string; Pattern bool}`로 반환한다. Core가 `ENOENT`를 반환하면 결과는 `(Subscription{}, false, nil)`이다 |
 | | `TopicsCount() (int, error)` | 활성 구독 개수 |
 | `XPubSocket` | `ReceiveSubscriptionEvent(out *SubscriptionEvent, flags RecvFlags) (bool, error)` | `out`을 다음 subscribe/unsubscribe로 채움, `publishSocket`을 통해 embed하는 `PubSocket` 표면 위에 추가됨 |
 | | `Publish(topic string) SendOp` | 자신만의 복사본, `PubSocket`에서 재사용된 게 아니지만 형태는 동일 |
+
+바인딩은 자체 버퍼를 넘겨 `zlink_subscription_at`를 호출한다. 빈 filter를 포함해 성공하면
+조회를 끝낸다. Core가 `ENOBUFS`를 반환하면 Core가 알려 준 길이로 한 번 더 호출한다.
+그 밖의 Core 실패는 `*ConfigError`로 반환한다.
 
 **Completion result.** `Subscribe`/`ReceiveSubscriptionEvent`는 같은
 `DontWait`에서 `(false, nil)` 관례를 따른다.

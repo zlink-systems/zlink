@@ -45,8 +45,8 @@ impl SubSocket {
         self.inner.unset_subscription(filter)
     }
 
-    /// Returns the subscription filter and pattern flag at `index`, or `None`
-    /// when no subscription exists at that index.
+    /// Returns the subscription filter and pattern flag at `index`, or `Ok(None)`
+    /// when no subscription exists at that index. Core failures return `ConfigError`.
     pub fn subscription_at(&self, index: usize) -> Result<Option<(String, bool)>, ConfigError> {
         self.inner.subscription_at(index)
     }
@@ -114,8 +114,8 @@ impl XSubSocket {
         self.inner.unset_subscription(filter)
     }
 
-    /// Returns the subscription filter and pattern flag at `index`, or `None`
-    /// when no subscription exists at that index.
+    /// Returns the subscription filter and pattern flag at `index`, or `Ok(None)`
+    /// when no subscription exists at that index. Core failures return `ConfigError`.
     pub fn subscription_at(&self, index: usize) -> Result<Option<(String, bool)>, ConfigError> {
         self.inner.subscription_at(index)
     }
