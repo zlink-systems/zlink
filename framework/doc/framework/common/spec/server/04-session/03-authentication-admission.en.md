@@ -174,7 +174,7 @@ The connector handles it as follows.
 - The wait ends as in §5.8: at the earlier of the original request deadline and `first rejection time +
   MaxAdmissionWait`. After that it ends with `RequestTimeout` and sends nothing more.
 - If the `$zlink.admission.queueRequired` value isn't `"1"`, or a Response or Send payload doesn't match the shapes
-  above, only that request ends with `FrameDecodeFailed`; the connection stays open.
+  above, only that request ends with `FrameDecodeFailed`; the connection stays open. A malformed Send follows §3.5.5.
 
 ### 3.5 Queue Details
 
@@ -224,6 +224,18 @@ These were fixed by the PM decision (11-25, #4546 stage 2). Changing one changes
   `budget(N) = max(0, limit − in-flight − tickets issued to N's waiting clients since that report)`. When a report arrives
   and when a client enters the queue, the Spot issues tickets to each node's waiting clients in enqueue order, up to that
   node's budget. Order is therefore FIFO within a node and approximately FIFO across the mesh.
+- **Global limit.** When the setting `AdmissionGlobalLimit` (a positive integer, optional) is present, the Spot issues
+  each ticket only while `Σ(in-flight count of valid reports) + unexpired tickets not yet reported as used <
+  AdmissionGlobalLimit`. Past that, it issues no ticket even if a node budget remains, and waits for the next report or
+  a ticket expiry. Without the setting, only the per-node budgets apply.
+  - A node with stage 2 on rejects every authentication without a valid ticket by the first row of §3.4 before the handler
+    runs, so every authentication that reaches a handler carries a ticket this Spot issued. The count inside the Spot
+    therefore bounds concurrent authentication across the whole mesh. There's no separate Store counter.
+  - A ticket counts as unused until a node report lists it as used. A ticket in use can be counted twice, once with the
+    in-flight count, but that only errs below the limit.
+  - When the queue Spot gets a new incarnation, the epoch changes and every earlier ticket is invalid (§3.5.1). The Spot
+    issues no ticket before it receives a valid report, so it doesn't exceed the limit right after re-preparation.
+  - Every node is set to the same value. The Spot uses the value of the node its incarnation runs on.
 - The estimated wait `estimatedWaitMs` is `ceil(position × 1000 / r)`, where r is the number of tickets issued in the last
   30 seconds divided by 30 (per second). When r is 0, it's `position × 1000`. The result is clamped to 2^31 − 1.
   `position` is the 1-based position across the mesh.
@@ -250,6 +262,9 @@ These were fixed by the PM decision (11-25, #4546 stage 2). Changing one changes
 - A ticket Send that arrives before the enqueue Response is accepted. Positions that arrive after the ticket (in a
   Response or a Send) are ignored and don't call `OnAdmissionPosition`. Position and ticket Sends that arrive while no
   request is waiting are discarded.
+- When a request is waiting and a position or ticket Send arrives whose payload doesn't match the §3.4 shapes, the Send
+  carries no operation identifier and can't be attributed to one request. Every authentication request waiting on that
+  connection ends with `FrameDecodeFailed`, and the connection closes.
 
 #### 3.5.6 Reserved Names and Metadata Conflicts
 

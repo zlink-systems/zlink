@@ -154,8 +154,8 @@ Connector는 다음과 같이 처리한다.
   기다렸다가 같은 ticket으로 다시 보낸다.
 - 마감은 §5.8과 같다: 원래 request deadline과 `처음 거절을 받은 시각 + MaxAdmissionWait` 중 이른 쪽. 마감이 지나면
   `RequestTimeout`으로 끝내고 더 보내지 않는다.
-- `$zlink.admission.queueRequired` 값이 `"1"`이 아니거나 Response·Send payload가 위 형식이 아니면 `FrameDecodeFailed`로
-  그 request만 끝내고 연결은 유지한다.
+- `$zlink.admission.queueRequired` 값이 `"1"`이 아니거나 Response payload가 위 형식이 아니면 `FrameDecodeFailed`로
+  그 request만 끝내고 연결은 유지한다. 형식이 틀린 Send는 §3.5.5를 따른다.
 
 ### 3.5 대기열 세부 계약
 
@@ -197,6 +197,17 @@ Connector는 다음과 같이 처리한다.
   예산도 node마다 센다: `예산(N) = max(0, 한도 − 처리 중 수 − 그 보고 뒤 N의 대기자에게 낸 ticket 수)`. Spot은 보고를
   받을 때와 대기자가 들어올 때 각 node의 예산만큼 그 node 대기자에게 enqueue 순서대로 ticket을 낸다. 그래서 순서는
   node 안에서 FIFO이고 mesh 전체로는 근사 FIFO다.
+- **전역 상한.** 설정 값 `AdmissionGlobalLimit`(양의 정수, 선택)이 있으면 Spot은 ticket을 하나 낼 때마다
+  `Σ(유효 보고의 처리 중 수) + 아직 사용으로 보고되지 않은 미만료 ticket 수 < AdmissionGlobalLimit`일 때만 낸다.
+  조건을 넘으면 node 예산이 남아 있어도 내지 않고 다음 보고나 ticket 만료를 기다린다. 이 값이 없으면 node별 예산만 쓴다.
+  - 2단계가 켜진 node는 유효한 ticket이 없는 인증을 모두 §3.4 첫 행으로 handler 실행 전에 거절하므로, handler에
+    들어오는 인증은 모두 이 Spot이 낸 ticket을 갖는다. 그래서 Spot 안의 이 계산이 mesh 전체의 동시 인증 수를 막는다.
+    별도 Store counter를 두지 않는다.
+  - Ticket은 node 보고의 사용 목록에 오르기 전까지 미사용으로 센다. 사용 중인 ticket이 처리 중 수와 함께 두 번 세어질
+    수 있지만 상한을 넘는 쪽으로는 틀리지 않는다.
+  - 대기열 Spot이 새 incarnation이 되면 epoch가 바뀌어 이전 ticket은 모두 무효이고(§3.5.1), 유효 보고를 받기 전에는
+    ticket을 내지 않으므로 재준비 직후에도 상한을 넘겨 내지 않는다.
+  - 모든 node에 같은 값을 설정한다. Spot은 자기 incarnation이 도는 node의 설정 값을 쓴다.
 - 예상 대기 `estimatedWaitMs`는 `ceil(position × 1000 / r)`이고, r은 최근 30초 동안 낸 ticket 수 ÷ 30(초당)이다.
   r이 0이면 `position × 1000`이다. 결과는 2^31 − 1에서 자른다. `position`은 1부터 시작하는 mesh 전체 순번이다.
 - 같은 SessionRid의 `$zlink.admission.enqueue`는 멱등이다. 이미 대기 중이면 현재 순번을, ticket을 받고 아직 쓰지
@@ -220,6 +231,8 @@ Connector는 다음과 같이 처리한다.
   operation 식별자 없이 연결 단위로 처리한다.
 - Ticket Send가 enqueue Response보다 먼저 와도 받는다. Ticket을 받은 뒤 오는 순번(Response나 Send)은 무시하고
   `OnAdmissionPosition`도 부르지 않는다. 대기 중인 request가 없을 때 온 position·ticket Send는 버린다.
+- 대기 중인 request가 있을 때 온 position·ticket Send의 payload가 §3.4 형식이 아니면, Send에는 operation 식별자가 없어
+  특정 request에 귀속할 수 없으므로 그 연결에서 대기 중인 인증 request를 모두 `FrameDecodeFailed`로 끝내고 연결을 닫는다.
 
 #### 3.5.6 예약 이름과 metadata 충돌
 
