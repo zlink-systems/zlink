@@ -172,6 +172,13 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
       serial_execution_queue_options_t options = {},
       error_handler_t error_handler = {},
       serial_lane_policy_t policy = serial_lane_policy_t::actor_delivery ());
+    /* Shares ownership of the executor so a retained queue never submits to an
+     * executor the node already released. */
+    serial_execution_queue_t (
+      std::shared_ptr<offload_executor_t> executor,
+      serial_execution_queue_options_t options = {},
+      error_handler_t error_handler = {},
+      serial_lane_policy_t policy = serial_lane_policy_t::actor_delivery ());
     ~serial_execution_queue_t ();
 
     serial_execution_queue_t (const serial_execution_queue_t &) = delete;
@@ -503,6 +510,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                                 const std::exception_ptr &error) const noexcept;
 
     offload_executor_t &_executor;
+    std::shared_ptr<offload_executor_t> _executor_owner;
     const serial_execution_queue_options_t _options;
     const serial_lane_policy_t _lane_policy;
     error_handler_t _error_handler;

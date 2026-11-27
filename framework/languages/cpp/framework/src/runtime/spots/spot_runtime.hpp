@@ -604,7 +604,7 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
     {
         _spot_queue = std::move (spot_queue);
         if (!_spot_queue && _worker_executor) {
-            _spot_queue = std::make_shared<queue_t> (*_worker_executor,
+            _spot_queue = std::make_shared<queue_t> (_worker_executor,
                                                      runtime::serial_execution_queue_options_t{},
                                                      queue_t::error_handler_t{}, _spot_policy);
         }

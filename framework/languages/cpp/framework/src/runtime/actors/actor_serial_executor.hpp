@@ -29,7 +29,7 @@ class actor_serial_executor_t
     {
         if (!_queue) {
             _queue = std::make_shared<queue_t> (
-              *_worker_executor, serial_execution_queue_options_t{}, queue_t::error_handler_t{},
+              _worker_executor, serial_execution_queue_options_t{}, queue_t::error_handler_t{},
               serial_lane_policy_t::actor_delivery ());
         }
         if (spot_gate)
