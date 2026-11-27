@@ -658,6 +658,10 @@ class in_memory_location_repository_t : public location_repository_t
                 object_generation = _object_generation;
                 owner_generation = _authority_owner_generation;
                 payload = std::move (reincarnate->payload);
+            } else if (const auto *completion =
+                         std::get_if<authority_completion_put_t> (&mutation)) {
+                aggregate = completion->aggregate;
+                payload = found->second.payload;
             } else {
                 auto &put = std::get<authority_put_t> (mutation);
                 payload = std::move (put.payload);

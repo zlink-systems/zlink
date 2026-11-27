@@ -254,6 +254,10 @@ struct authority_restore_t
     std::vector<std::byte> payload;
     location_owner_token_t expected_owner;
 };
+struct authority_completion_put_t
+{
+    std::shared_ptr<const authority_aggregate_t> aggregate;
+};
 struct authority_delete_t
 {
 };
@@ -261,7 +265,8 @@ using authority_mutation_t = std::variant<authority_put_t,
                                           authority_retarget_t,
                                           authority_restore_t,
                                           authority_delete_t,
-                                          authority_reincarnate_t>;
+                                          authority_reincarnate_t,
+                                          authority_completion_put_t>;
 
 struct authority_stored_t
 {
@@ -1000,6 +1005,8 @@ class location_repository_t
 class relocation_repository_t
 {
   public:
+    static constexpr auto default_retention = std::chrono::hours (24);
+
     virtual ~relocation_repository_t () = default;
     virtual task_t<relocation_stored_t>
     put_relocation (std::vector<std::byte> payload,

@@ -41,7 +41,6 @@ canonical_participants (const std::vector<frozen_object_state_t> &participants)
 }
 
 constexpr std::array<std::uint8_t, 4> session_journal_magic{'Z', 'L', 'S', 'J'};
-constexpr std::chrono::hours relocation_retention{24};
 constexpr std::size_t max_envelope_bytes = 256u * 1024u * 1024u;
 constexpr std::size_t max_application_state_bytes = 64u * 1024u * 1024u;
 constexpr std::uint32_t max_pending_records = 4096;
@@ -380,7 +379,8 @@ durable_session_journal_store_t::prepare (const durable_session_journal_record_t
 {
     const auto payload = encode_session_journal (record);
     const auto checksum = maintenance_runtime_t::crc32c (payload);
-    const auto stored = _store->put (payload, relocation_retention, operation_deadline);
+    const auto stored =
+      _store->put (payload, relocation_repository_t::default_retention, operation_deadline);
     if (stored.reference.empty () || stored.checksum_crc32c != checksum)
         throw std::runtime_error ("durable Session journal store write failed");
     return {stored.reference, checksum};

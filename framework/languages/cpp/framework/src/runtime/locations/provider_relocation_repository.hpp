@@ -65,11 +65,7 @@ class provider_relocation_repository_t final : public relocation_repository_t
         for (;;) {
             if (auto terminal = check_operation ())
                 return std::move (*terminal);
-            auto pending_put = observe_spi<blob_put_result_t> ("relocation_put", [&] {
-                return _store->put (blob_reference_t{reference},
-                                    std::span<const std::byte> (payload.data (), payload.size ()),
-                                    retention_ms);
-            });
+            auto pending_put = put_blob (reference, payload, retention_ms);
             auto response = detail::observe_task_result_for (
               pending_put,
               std::chrono::ceil<std::chrono::milliseconds> (operation_deadline
@@ -120,6 +116,26 @@ class provider_relocation_repository_t final : public relocation_repository_t
                   relocation_stored_t{reference, checksum, found->expires_at, found->store_now});
             }
         }
+    }
+
+    task_t<std::string> put_verified_blob (std::vector<std::byte> payload,
+                                           std::chrono::hours retention,
+                                           std::stop_token cancellation)
+    {
+        if (cancellation.stop_requested ())
+            throw std::system_error (std::make_error_code (std::errc::operation_canceled));
+        const auto reference = make_reference ();
+        const auto written = co_await put_blob (
+          reference, payload, std::chrono::duration_cast<std::chrono::milliseconds> (retention));
+        if (std::holds_alternative<blob_conflict_t> (written))
+            throw framework_exception_t (framework_error_kind_t::rejected,
+                                         "Completion blob reference is already in use");
+        auto read = co_await get_relocation (reference, cancellation);
+        const auto *found = std::get_if<relocation_found_t> (&read);
+        if (!found || found->payload != payload)
+            throw framework_exception_t (framework_error_kind_t::data_lost,
+                                         "Completion blob differs after Put");
+        co_return reference;
     }
 
     task_t<relocation_read_result_t> get_relocation (std::string reference,
@@ -211,6 +227,16 @@ class provider_relocation_repository_t final : public relocation_repository_t
         for (const auto word : words)
             stream << std::setw (16) << word;
         return stream.str ();
+    }
+
+    task_t<blob_put_result_t> put_blob (const std::string &reference,
+                                        std::span<const std::byte> payload,
+                                        std::chrono::milliseconds retention)
+    {
+        return observe_spi<blob_put_result_t> (
+          "relocation_put", [this, reference, payload, retention] {
+              return _store->put (blob_reference_t{reference}, payload, retention);
+          });
     }
 
     template <typename T, typename Start> task_t<T> observe_spi (const char *operation, Start start)

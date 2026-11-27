@@ -597,6 +597,9 @@ class provider_location_repository_t final : public location_repository_t
                                   to_bytes (std::to_string (object_generation + 1)), std::nullopt},
                       store_put_t{authority_owner_counter_key,
                                   to_bytes (std::to_string (owner_generation + 1)), std::nullopt}};
+                } else if (const auto *completion =
+                             std::get_if<authority_completion_put_t> (&mutation)) {
+                    snapshot.aggregate = completion->aggregate;
                 } else {
                     const auto &replacement = std::get<authority_put_t> (mutation);
                     snapshot.payload = replacement.payload;

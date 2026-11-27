@@ -20,19 +20,33 @@ namespace authority_key_codec_detail
 {
 
 inline constexpr std::string_view prefix = "zla1:";
+inline constexpr char actor_kind = 'a';
+inline constexpr char spot_kind = 's';
+inline constexpr char user_spot_kind = 'u';
+inline constexpr std::size_t kind_prefix_size = prefix.size () + 2;
 inline constexpr std::size_t identity_byte_limit = protocol::shortTextBytes;
 inline constexpr std::size_t percent_encoded_byte_width = 3;
 inline constexpr std::size_t identity_length_digits =
   std::numeric_limits<unsigned char>::digits10 + 1;
 inline constexpr std::size_t encoded_key_byte_limit =
-  prefix.size () + 2 + identity_length_digits + 1
-  + identity_byte_limit * percent_encoded_byte_width;
+  kind_prefix_size + identity_length_digits + 1 + identity_byte_limit * percent_encoded_byte_width;
 
 struct decoded_authority_key_t
 {
     char kind = 0;
     std::string object_id;
 };
+
+inline std::optional<char> authority_key_kind (std::string_view value)
+{
+    if (value.size () <= kind_prefix_size || !value.starts_with (prefix)
+        || value[prefix.size () + 1] != ':')
+        return std::nullopt;
+    const auto kind = value[prefix.size ()];
+    if (kind != actor_kind && kind != spot_kind && kind != user_spot_kind)
+        return std::nullopt;
+    return kind;
+}
 
 inline bool is_unreserved (unsigned char byte) noexcept
 {
@@ -68,17 +82,15 @@ inline authority_key_t encode_authority_key (char kind, std::string_view object_
 
 inline std::optional<decoded_authority_key_t> decode_authority_key (std::string_view value)
 {
-    if (!value.starts_with (prefix) || value.size () < prefix.size () + 4
-        || value.size () > encoded_key_byte_limit)
+    const auto kind = authority_key_kind (value);
+    // Authority rows use the spot kind for both spot types.
+    if (!kind || *kind == user_spot_kind || value.size () > encoded_key_byte_limit)
         return std::nullopt;
-    const auto kind = value[prefix.size ()];
-    if ((kind != 'a' && kind != 's') || value[prefix.size () + 1] != ':')
-        return std::nullopt;
-    const auto length_end = value.find (':', prefix.size () + 2);
+    const auto length_end = value.find (':', kind_prefix_size);
     if (length_end == std::string_view::npos)
         return std::nullopt;
     std::size_t expected_size = 0;
-    const auto length = value.substr (prefix.size () + 2, length_end - prefix.size () - 2);
+    const auto length = value.substr (kind_prefix_size, length_end - kind_prefix_size);
     if (length.empty () || (length.size () > 1 && length.front () == '0'))
         return std::nullopt;
     for (const auto digit : length) {
@@ -122,19 +134,21 @@ inline std::optional<decoded_authority_key_t> decode_authority_key (std::string_
     if (decoded.size () != expected_size
         || !zlink::framework::detail::is_valid_non_nul_utf8 (decoded))
         return std::nullopt;
-    return decoded_authority_key_t{kind, std::move (decoded)};
+    return decoded_authority_key_t{*kind, std::move (decoded)};
 }
 
 } // namespace authority_key_codec_detail
 
 inline authority_key_t actor_authority_key (std::string_view actor_id)
 {
-    return authority_key_codec_detail::encode_authority_key ('a', actor_id);
+    return authority_key_codec_detail::encode_authority_key (authority_key_codec_detail::actor_kind,
+                                                             actor_id);
 }
 
 inline authority_key_t spot_authority_key (std::string_view spot_id)
 {
-    return authority_key_codec_detail::encode_authority_key ('s', spot_id);
+    return authority_key_codec_detail::encode_authority_key (authority_key_codec_detail::spot_kind,
+                                                             spot_id);
 }
 
 } // namespace zlink::framework::runtime
