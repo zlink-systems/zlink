@@ -4675,7 +4675,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       stage.staging.envelope.aggregateId,
       entry,
       source,
-      coordinator,
+      relay.coordinator,
       published,
       (acknowledge) => {
         const scheduled = stage.lane.then(acknowledge);
