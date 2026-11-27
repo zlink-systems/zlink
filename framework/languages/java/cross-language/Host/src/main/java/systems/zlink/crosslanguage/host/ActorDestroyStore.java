@@ -24,7 +24,6 @@ final class ActorDestroyStore implements ZLinkLocationStore, AutoCloseable {
     private static final ZLinkStoreCancellation ACTIVE = () -> false;
     private final ZLinkRedisLocationStore redis;
     private final ZLinkStoreKey actorKey;
-    private final ZLinkStoreKey descriptorKey;
     private final boolean owner;
     private final String scenario;
     private final ActorDestroyEvents events;
@@ -32,7 +31,6 @@ final class ActorDestroyStore implements ZLinkLocationStore, AutoCloseable {
     private final SubmissionGate closing = new SubmissionGate();
     private final AtomicBoolean createObservedClosing = new AtomicBoolean();
     private final AtomicBoolean validClosingObserved = new AtomicBoolean();
-    private final AtomicBoolean endedLeaseObserved = new AtomicBoolean();
     private final Set<CompletionStage<?>> leaseWrites = new HashSet<>();
     private volatile Authority original;
     private volatile Instant originalLeaseExpiry;
@@ -44,11 +42,6 @@ final class ActorDestroyStore implements ZLinkLocationStore, AutoCloseable {
     ActorDestroyStore(ZLinkRedisLocationStore redis, HostArgs args, EventSink sink) {
         this.redis = redis;
         actorKey = key("authority", "actor", args.require("actor-id"));
-        descriptorKey =
-                key(
-                        "mesh-node",
-                        args.require("mesh-name"),
-                        RoutingId.from(args.require("node-rid")).toHex());
         owner = args.mode().equals("actor-destroy-owner");
         scenario = args.require("actor-destroy-scenario");
         events = new ActorDestroyEvents(sink, args.require("actor-destroy-run-id"));
@@ -108,7 +101,8 @@ final class ActorDestroyStore implements ZLinkLocationStore, AutoCloseable {
         }
     }
 
-    boolean placementPublished(int weight) {
+    boolean placementPublished(String mesh, RoutingId rid, int weight) {
+        var descriptorKey = key("mesh-node", mesh, rid.toHex());
         return await(redis.read(descriptorKey, ACTIVE)) instanceof ZLinkStoreReadFound found
                 && json(found.value().bytes()).path("descriptor").path("placementWeight").asInt(-1)
                         == weight;
@@ -354,11 +348,8 @@ final class ActorDestroyStore implements ZLinkLocationStore, AutoCloseable {
                                     reads.authority() instanceof ZLinkStoreReadFound found
                                             && found.value().version().value().equals(version)
                                             && entryClosing(found.value(), authority);
-                            if (scenario.equals("f") && invalidLease) {
-                                if (endedLeaseObserved.compareAndSet(false, true))
-                                    events.emit("ownerLeaseEnded");
+                            if (scenario.equals("f") && invalidLease)
                                 events.emit("callerObservedClosingForRelease");
-                            }
                             return writeBackend(request, cancellation)
                                     .thenApply(
                                             result -> {

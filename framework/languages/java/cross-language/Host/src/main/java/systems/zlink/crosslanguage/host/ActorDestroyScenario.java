@@ -39,7 +39,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BooleanSupplier;
 
@@ -177,6 +176,7 @@ public final class ActorDestroyScenario {
         switch (verb) {
             case "create" -> create();
             case "placement" -> placement(Integer.parseInt(arg));
+            case "peer-placement" -> waitForPlacement("peer-rid", Integer.parseInt(arg));
             case "peer" -> peer();
             case "find" -> find(arg);
             case "authority" -> authority(arg);
@@ -245,9 +245,14 @@ public final class ActorDestroyScenario {
 
     private void placement(int weight) {
         runtimeOptions.mesh(mesh).setPlacementWeight(weight);
+        waitForPlacement("node-rid", weight);
+    }
+
+    private void waitForPlacement(String ridOption, int weight) {
+        var rid = RoutingId.from(args.require(ridOption));
         until(
-                () -> store.placementPublished(weight),
-                "placement publication",
+                () -> store.placementPublished(mesh, rid, weight),
+                "placement publication for " + rid,
                 Duration.ofSeconds(30));
     }
 
@@ -337,15 +342,9 @@ public final class ActorDestroyScenario {
                     case "fail" -> "failedDestroyReturned";
                     default -> "destroyReturned";
                 };
-        var deadline = Instant.ofEpochMilli(System.currentTimeMillis()).plus(REQUEST_TIMEOUT);
+        var deadline = Instant.now().plus(REQUEST_TIMEOUT);
         var call = actors.destroy(original).toCompletableFuture();
-        if (label.equals("admission")) {
-            operations.add(
-                    CompletableFuture.runAsync(
-                            () -> events.emitAt(deadline, "destroyDeadline"),
-                            CompletableFuture.delayedExecutor(
-                                    REQUEST_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)));
-        }
+        if (label.equals("admission")) events.emitAt(deadline, "destroyDeadline");
         destroys.put(label, call);
         operations.add(
                 call.handle(
