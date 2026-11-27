@@ -11,7 +11,7 @@ from .operations import SendOp
 
 
 @runtime_checkable
-class StreamSocket(_socket_contract._SocketContract, Protocol):
+class StreamSocket(_socket_contract._DisconnectRidContract, _socket_contract._RoutingIdContract, Protocol):
     """STREAM socket: exchanges framed packets with raw TCP peers."""
 
     @property
@@ -34,10 +34,6 @@ class StreamSocket(_socket_contract._SocketContract, Protocol):
         self, out: StreamPacket, *, flags: RecvFlags = RecvFlags.NONE
     ) -> bool:
         """Receive one framed packet into reusable caller-owned storage."""
-        ...
-
-    def disconnect_rid(self, peer_rid):
-        """Disconnect the peer identified by ``peer_rid``."""
         ...
 
 

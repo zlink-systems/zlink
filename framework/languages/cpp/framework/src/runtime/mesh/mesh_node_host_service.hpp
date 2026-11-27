@@ -132,7 +132,9 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     task_t<std::optional<spot_ref_t>> find_actor_spot (actor_id_t actor_id);
     task_t<std::shared_ptr<detail::mesh_node_runtime_t>>
     find_local_actor_node_async (node_rid_t actor_node);
-    task_t<result_t<void>> finalize_local_actor_destroy (actor_ref_t actor);
+    task_t<void> update_actor_destroy_authority (actor_ref_t actor,
+                                                 bool closing,
+                                                 std::string expected_store_version);
     task_t<bool> destroy_actor (actor_ref_t actor);
 
     static void

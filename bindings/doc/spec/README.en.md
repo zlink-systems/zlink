@@ -1036,9 +1036,7 @@ The rules below are `Required`.
   protocol-specific result type. A surface that splits request meaning by
   socket kind into separate public types — `DealerReceived`,
   `RouterReceived` — is not canonical.
-- Request meaning is independent of socket kind. If `request_seq` is
-  present, the receive result has request-reply context; if not, it's an
-  ordinary receive result.
+- A valid `ReplyToken` in `Received` authorizes a reply to a REQUEST the ROUTER received.
 - The reply target, send-back target, and source routing metadata are
   encapsulated inside `Received`'s own context. A user must not need to
   know a socket-kind-specific frame format or internal dispatch rule to
@@ -1126,8 +1124,8 @@ Public Actor/SpotNode operation start points are owned by [Framework API](../../
   operation builder such as `SendOp`, `RequestOp`, or `ReplyOp`. Regardless of which start point is
   used, multipart payload is always expressed through repeated
   `.message(...)` calls.
-- A builder convenience such as `.messages(...)`, `.flags(...)`,
-  `.timeout(...)`, or the final execution method of an
+- A builder convenience such as `.messages(...)`, publish `.flags(...)`,
+  request `.timeout(...)`, or the final execution method of an
   async completion is part of the builder contract if it is public. It
   must not be defined only as a runtime-internal shortcut. The
   per-language name and meaning of the async-completion final execution
@@ -1226,12 +1224,15 @@ is the baseline.
   internally, and exposes only aggregate routed recv and the
   [common request completion surface](async-coroutine-policy.en.md#6-per-language-terminal-interfaces). It does not provide a
   direct receive callback.
+
+#### Socket Readiness Snapshots
+
 - A binding projects the `ROUTER` selected-route snapshot (`zlink_router_routes_snapshot()`) and
-  `ZLINK_POLLROUTE` with the meaning defined in
+  `ZLINK_POLLROUTE` (64) with the meaning defined in
   [Core ROUTER §10.1](../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route).
   A route generation is a nonzero opaque equality token; its sign or size does not imply order.
 - The connection state snapshot of a raw socket that supports connect
-  (`zlink_socket_connection_attempts_snapshot()`) and `ZLINK_POLLCONNECT` are projected without loss, with
+  (`zlink_socket_connection_attempts_snapshot()`) and `ZLINK_POLLCONNECT` (128) are projected without loss, with
   the meaning defined by [Core socket](../../../core/doc/spec/core/socket/README.en.md#zlink_socket_connection_attempts_snapshot).
   State, failure cause, and stage are published as closed language enums, and `intent_id` and `revision` as nonzero
   opaque equality tokens. `last_failure_id` is 0 with no failure history and a nonzero opaque equality token after a
@@ -1240,14 +1241,6 @@ is the baseline.
   connection result from monitor event history or timer polling, and doesn't turn a successful snapshot that
   carries a failure state into a request failure. Only errors of the query itself are delivered as the
   existing config errors. Loaded with a Core that lacks this surface, it refuses with no fallback behavior.
-- Core's raw `STREAM` is an exceptional type that picks one of three
-  modes: `recv`, the raw callback (`zlink_recv_handler()`), or the packet
-  callback (`zlink_stream_packet_handler()`). A high-level binding's
-  canonical public contract exposes only the `recv` and packet-callback
-  surfaces. The raw direct callback is used only as an internal binding
-  primitive — adding it as public API requires changing this policy
-  document and the matching language spec together first, splitting it
-  out as a separate raw/low-level surface.
 
 #### SPOT Channel And Dispatch Surface
 
@@ -1428,20 +1421,9 @@ SpotNode HWM options are owned by [Framework API](../../../framework/doc/framewo
   outbound selection. The matching submit failure code is
   `ZLINK_SUBMIT_NOT_ADMITTED` (value 13), and it must be included in
   every binding's `SubmitError` mapping.
-- Core's raw `STREAM` can select only one of three receive modes at a
-  time: (a) blocking/non-blocking recv based on `zlink_recv()`,
-  (b) the raw direct callback `zlink_recv_handler()`, or (c) the packet
-  callback `zlink_stream_packet_handler()`, which uses big-endian
-  `u16 header_size + u32 body_size + header + body` framing. A second
-  attach returns `EBUSY`. A high-level binding must keep the same
-  mutual-exclusion rule among the `STREAM` receive surfaces it exposes
-  publicly. A separate public release API such as `detachStream`,
-  `streamDetach`, or a callback detach is not in core's public contract,
-  so it is not added to the canonical binding surface. Releasing the
-  receive mode and cleaning up the callback is handled by socket close.
-- `zlink_recv_handler()` is exclusive to raw `STREAM`. Attaching it to
-  `PAIR`/`DEALER`/`SUB`/`XSUB`/`ROUTER` fails with
-  `ZLINK_HANDLER_NOT_SUPPORTED`.
+- [Core STREAM](../../../core/doc/spec/core/socket/08-stream.en.md) defines RAW and PACKET modes and their
+  receive-mode exclusivity. Public receive surfaces follow the
+  [Socket Capability Matrix](#socket-capability-matrix).
 - Socket defaults: `ZLINK_ROUTER_OPT_MANDATORY` = `1`,
   `ZLINK_OPT_RID_DUPLICATE_POLICY` = `ZLINK_RID_DUPLICATE_REJECT`, and
   `ZLINK_PUB_OPT_NODROP` = `0`.
@@ -1673,11 +1655,7 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
      `trySend`, `tryRecv`, or `tryRequest`.
    - The C ABI expresses blocking vs. non-blocking through a function
      argument `flags`.
-   - A wrapper binding's send/publish/request family, and any reply family
-     whose Core ABI accepts send flags, expresses a non-blocking submit through
-     the builder's `.flags(...)` step. It does not add a separate `flags`
-     argument to the operation start-point signature. A raw terminal reply has
-     no send flag in the Core ABI and therefore exposes no flag step.
+   - High-level send, request, and reply submission and publish flags follow the [Flags Policy](#flags-policy).
    - A wrapper binding's data-plane `recv`, routed recv, and `subscribe`
      fill caller-provided result storage, and the return value expresses
      only "was data received."
@@ -1807,14 +1785,11 @@ function family's concrete error type.
 
 ### Flags Policy
 
-Every raw data-path function has a `flags` option expressed as a per-language signature parameter or a builder `flags(...)` step.
-
-| Function family | `flags` usage |
+| Function family | High-level binding flags usage |
 |---|---|
-| `send`, `publish`, `reply` | `DONTWAIT` — non-blocking submit |
-| `recv`, `subscribe`, `receiveSubscriptionEvent` | `DONTWAIT` — non-blocking receive |
-| `request` (callback) | `DONTWAIT` — non-blocking submit |
-| `request` (async completion) | No flags — uses the per-language completion-object-return path |
+| `send`, `request`, `reply` | The [async completion surface policy](async-coroutine-policy.en.md#1-operations-and-completion-boundaries) defines completion and submission. These builders expose no public flags step. |
+| `publish` | The builder's `.flags(...)` step selects Core publish flags. |
+| `recv`, `subscribe`, `receiveSubscriptionEvent` | `DONTWAIT` selects non-blocking receive. The call takes flags alongside caller-provided storage. |
 
 - The default `flags` value is `0` (blocking).
 - A non-blocking call's temporary state is delivered per each language's
@@ -1831,15 +1806,8 @@ Every raw data-path function has a `flags` option expressed as a per-language si
     - only a binding-local failure returns `-1` and sets `errno`
   - Return-based languages (C/Go/Rust): return the error (C = result
     enum, Go = `error`, Rust = `Err(E)`).
-- Per-language `flags` representation:
-  - C: `int flags = 0` (the C ABI does not apply the builder policy)
-  - C++ / Java / .NET / Node / Python / Go / Rust send/request/reply/
-    publish surfaces: expressed through the builder's
-    `.flags(...)` step. No separate `flags` argument or `_with_flags`
-    variant is added to the operation start-point signature.
-  - C++ / Java / .NET / Node / Python / Go / Rust data-plane
-    recv/subscribe surfaces: take a `flags` argument together with
-    caller-provided output storage.
+- C uses the Core ABI function's `flags` argument. High-level operation start points have no flags argument
+  or `_with_flags` variant.
 
 ### Naming Policy
 
@@ -1976,7 +1944,6 @@ build a multipart payload.
 | `mutable_data` / `as_mut_bytes()` | mutable view | A mutable view for filling an allocated payload |
 | `copy_to(destination)` | `int` / `bool` | Copies the payload into a caller-provided buffer |
 | `to_string()` / `as_str()` | `string` / result | A UTF-8 decode convenience |
-| `get_property(name)` | `string?` / result | Looks up a native message string property |
 | `ref_count()` | `int` | A native-storage reference-count diagnostic value |
 | `close()` / `Dispose()` / `Drop` | — | Cleans up native storage, per each language's lifecycle idiom |
 
@@ -1995,7 +1962,6 @@ The name follows per-language idiom. The meaning fits the slots below.
 | Read view | `AsReadOnlySpan()` | `dataBuffer()` | `data()` | `data` | `as_bytes()` | `bytes()` | `Data()` |
 | Mutable view | `AsSpan()` | `mutableDataBuffer()` | `data()` | `data` | `data_mut()` | `bytes()` / `data()` | `Data()` |
 | UTF-8 decode | `GetString()` | `toUtf8String()` | `toString()` / `getString()` | `to_string()` / `decode` helper | `as_str()` | `to_string()` | `String()` / `Text()` |
-| Property | `GetProperty(name)` | `getProperty(name)` | `getProperty(name)` | `get_property(name)` | `get_property(name)` | `property(name)` | `GetProperty(name)` |
 | Refcount | `RefCount` | `refCount()` | `refCount()` | `ref_count()` | `ref_count()` | `ref_count()` | `RefCount()` |
 
 Rules:
@@ -2021,9 +1987,6 @@ Rules:
 - A read/mutable view is valid only until the message is closed,
   disposed, or dropped. A binding does not guarantee view usage after
   close.
-- `get_property(name)` is a diagnostic/interop API for reading native
-  message metadata. A property-write API is not part of the shared
-  required contract.
 - `ref_count()` is a diagnostic value. Do not build a public contract
   that judges ownership policy or send eligibility from the reference
   count.
@@ -2038,7 +2001,7 @@ Rules:
   application must not retain a returned wrapper as a `Map`, `WeakMap`, or
   metadata key, and must not assume custom properties survive into later
   ownership. Pool capacity and reuse order are not public contract.
-- The behavior of `size`, `data`, and `get_property` on a closed or
+- The behavior of `size` and `data` on a closed or
   moved-from message follows per-language convention, but must document
   whether it returns an empty value or throws an exception/error.
 
@@ -2083,9 +2046,8 @@ response, and a request-reply result also provides a `reply()` builder.
 Both entrypoints accumulate payload and options through builder steps,
 per the `Operation Builder Policy`.
 
-`Received` is not a per-socket-kind message wrapper. Request meaning is
-the same across DEALER and ROUTER, and is expressed only through
-`request_seq` and reply context. A binding must not add a
+`Received` is not a per-socket-kind message wrapper. A `ReplyToken` and reply context represent a request.
+A binding must not add a
 protocol-specific public result type such as `DealerReceived`/
 `RouterReceived` as a new canonical surface. If an
 existing binding has such a type, remove it, and new code, samples,
@@ -2094,57 +2056,37 @@ perf, and framework integrations must use `Received`.
 | Member | Type | Meaning |
 |------|------|------|
 | `routing_id` | `RoutingId?` | The sender's routing id (router = `peer_rid`) |
-| `request_seq` | `uint64?` | Set in request-reply mode; otherwise null |
+| `reply_token` | `ReplyToken?` | Set only when a ROUTER receives a REQUEST |
 | `parts` | `List<Message>` | The multipart payload |
 | `is_single_part()` | `bool` | Same as above |
 | `first_part()` | `Message` | Same as above |
 | `single_part_or_throw()` | `Message` | Same as above |
 | `send()` | `SendOp` | An operation builder that sends an ordinary routed message back to this `Received`'s sender; `SubmitError` at submit time if there's no routed source context |
-| `reply()` | `ReplyOp` | A reply operation builder valid only when this was a request; `SubmitError` at submit time if `request_seq` is absent or the reply context is invalid |
+| `reply()` | `ReplyOp` | A reply operation builder valid only when this was a request; `SubmitError` at submit time if the `ReplyToken` is absent or the reply context is invalid |
 | `close()` / equivalent | — | Same as above |
 
 In .NET, `Received.Create()` is the canonical construction path for
 caller-provided recv storage. `Received` stays a public concrete
 contract type.
 
-`request_seq` rules:
-- `null`/`None`/an empty `Optional`/`hasRequestSeq == false` means an
-  ordinary receive result.
-- `0` is not exposed as "has a request" on the public high-level
-  `Received`. A high-level binding converts a core out-param's
-  `request_seq == 0` into absent.
-- A non-zero `request_seq` means a receive result that has request-reply
-  context. This meaning is the same across DEALER / ROUTER.
-- A substrate-level distinction such as a request/reply message type must
-  not split the public `Received` meaning. If such a value is genuinely
-  needed as a public contract, expose it only as `Received`'s shared
-  metadata, not as a protocol-specific result type.
+The [ReplyToken policy](async-coroutine-policy.en.md#5-replytoken-and-reply) defines how tokens are created
+and where they are valid.
 
 `send()` rules:
-- Independent of whether it was a request. It can be called as long as
-  routed source context exists, even without `request_seq`.
+- Call this when the result has routed source context.
 - `send()` has no request-reply meaning. It simply sends an ordinary
   routed message back toward whoever sent this `Received`.
 - A `ROUTER` and `STREAM` receive result sends by peer routing id. Public Spot receive results follow [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
-- Payload accumulation and options such as `flags(...)` are expressed
-  through `SendOp` builder steps, and a non-blocking submit flag such as
-  `DONTWAIT` is also delivered through the builder's `.flags(...)` step.
+- Append the payload through `SendOp` builder steps.
 
 `reply()` rules:
-- **Calling it is forbidden when `request_seq` is `null`.** Calling it
-  anyway is handled as a `SubmitError`-family failure at the builder's
-  submit step. An invalid reply context — `request_seq == 0`, an invalid
-  `(routing_id, request_seq)` combination, and so on — is treated as the
-  same submit domain.
+- Submit returns `SubmitError` if the `ReplyToken` is absent or the reply context is invalid.
 - `Received` internally holds a reference to the source socket (injected
   by the binding when it builds `Received` inside recv/handler).
 - Calling `reply().submit()` after the socket has closed returns
   `SubmitError(TERMINATED)`.
-- The server-side user does not need to separately store
-  `(peerRid, requestSeq)` — `Received` alone is self-contained.
-- A separate `router.reply(peerRid, seq).message(...).submit()` path is
-  also kept for pull-mode compatibility, but **the recommended path is
-  `received.reply().message(...).submit()`**.
+- `received.reply().message(...).submit()` uses the source context from `Received`. Submit an explicit
+  ROUTER reply with `router.reply(peerRid, token).message(...).submit()`.
 
 #### `SubscriptionEvent`
 
@@ -2301,13 +2243,14 @@ Public Spot/Actor snapshot shapes are owned by [Framework API](../../../framewor
 - This table defines the capability each socket type must have, based on
   the `core/include/zlink.h` C API.
 - This table is a public capability contract shared across every
-  language binding. Functionality must not differ between bindings.
+  language binding. STREAM packet delivery follows the receive matrix and the per-language contract.
 - A per-language difference is allowed only in how the same capability is
   expressed for that language's convention — casing, overloads,
   nullable, exception/error representation.
 - Every binding treats this table as the answer key when writing surface
   tests.
 - `Y` means every binding must expose that capability as public API.
+  `Optional` means the capability is exposed when defined by the per-language spec.
 - `—` means no binding may expose that capability as public API.
 
 #### Connection Capabilities
@@ -2339,6 +2282,7 @@ must provide `disconnectRid` to close an accepted connection. Public Spot/Actor 
 | `recv` | Y | Y | Y | — | — | — | — | Y |
 | `subscribe` | — | — | — | — | Y | — | Y | — |
 | `receiveSubscriptionEvent` | — | — | — | — | — | Y | — | — |
+| STREAM packet receive | — | — | — | — | — | — | — | Y |
 
 #### Subscription Management
 
@@ -2351,15 +2295,16 @@ must provide `disconnectRid` to close an accepted connection. Public Spot/Actor 
 
 | Capability | Pair | Dealer | Router | Pub | Sub | XPub | XSub | Stream |
 |---|---|---|---|---|---|---|---|---|
-| `setPacketHandler` | — | — | — | — | — | — | — | Y |
+| `setPacketHandler` | — | — | — | — | — | — | — | Optional |
 | `onReceive` | — | — | — | — | — | — | — | — |
 | `onSubscribe` | — | — | — | — | — | — | — | — |
 
-The `STREAM` public surface must provide `recv` and `setPacketHandler`.
-The raw direct callback `onReceive` is not canonical public binding API.
-Attempting to attach a different receive mode while one is already
-active returns `HandlerResult::BUSY` (or the equivalent `EBUSY`). A
-public `detachStream`/`streamDetach`-family release API is not provided.
+`STREAM` provides raw `recv` and framed packet receive. The per-language
+contract specifies whether packets are pulled through a `recv_packet`-style
+method or delivered through a `setPacketHandler`-style callback. If the
+binding offers a callback, registering it while another receive mode is active
+returns `HandlerResult::BUSY` or the equivalent `EBUSY`. Closing the socket
+releases the receive mode and callback.
 
 #### Typed Option Capabilities
 
@@ -2397,8 +2342,7 @@ spec file.
   - No `onSubscribe` callback on `XPubSocket` — only
     `receiveSubscriptionEvent` is allowed on XPub.
   - No `STREAM` raw direct callback `onReceive`, and no
-    `detachStream`-family release API — the canonical surface is the
-    `recv`/`setPacketHandler`/`close` combination.
+    `detachStream`-family release API — packet receive follows the matrix and per-language spec.
   - Do not omit the shared socket TLS helper (`setTlsServer`,
     `setTlsClient`, or an equivalent name) — TLS configuration is
     shared transport functionality, so it must sit at the same location
@@ -3496,12 +3440,12 @@ This table and the Required surface test apply to the Core raw socket ABI. [Fram
 | Blocking API named directly | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Non-blocking receive uses flags + empty result | C raw `DONTWAIT` | Required | Required | Required | Required | Required | Required | Required |
 | Non-blocking send explicit outcome | Core enum/result | Required | Required | Required | Required | Required | Required | Required |
-| Public flags surface | Raw C flags | `int flags` | `SendFlags` / `RecvFlags` | `SendFlags` overload | `flags SendFlags` | `SendFlags` via `.flags(...)` builder step | `flags?: SendFlags` | keyword `flags` |
+| Public flags surface | Core ABI flags | Receive / publish | Receive / publish | Receive / publish | Receive / publish | Receive / publish | Receive / publish | Receive / publish |
 | Typed option surface | N/A raw C options | Required | Required | Required | Required | Required | Required | Required |
 | Socket TLS helpers | `zlink_set_tls_*` | Required | Required | Required | Required | Required | Required | Required |
 | Socket Capability Matrix compliance | Based on Core | Required | Required | Required | Required | Required | Required | Required |
 | `onReceive` callback | STREAM raw fn ptr | Internal-only | Internal-only | Internal-only | Internal-only | Internal-only | Internal-only | Internal-only |
-| `setPacketHandler` callback registration | STREAM packet fn ptr | Required | Required | Required | Required | Required | Required | Required |
+| STREAM packet receive | `zlink_stream_recv_packet` | Pull | Pull | Pull | Pull | Pull | Pull | Pull |
 | HWM-managed send completion | Core-owned completion | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `connect` blocked | N/A | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `disconnectRid` provided | N/A | Required | Required | Required | Required | Required | Required | Required |
@@ -4133,7 +4077,7 @@ The perf policy is managed across every language in a shared way, in
 2. **Name Normalization Complete**
    - Every public API uses the Naming Policy's canonical name.
    - No deprecated alias remains.
-   - The raw callback surface exposes `setPacketHandler` for its role.
+   - The STREAM packet receive name matches the per-language contract.
 
 3. **Shallow Wrappers Removed**
    - No public type merely wraps a native function 1:1.
@@ -4322,7 +4266,7 @@ The perf policy is managed across every language in a shared way, in
 | C++ | C++20 | — | CMake 3.10+ |
 | .NET | C# 12 | .NET 8.0 | MSBuild |
 | Java | Java 25 | JDK 25 | Gradle 9.3.0 |
-| Go | Go 1.22+ | — | Go modules |
+| Go | [`go.mod`](../../go/go.mod) | — | Go modules |
 | Rust | Rust 2024 edition | MSRV 1.85+ | Cargo |
 | Node | TypeScript 5.8 | Node 22+ | npm |
 | Python | Python 3.9 | CPython 3.9+ | setuptools 68+ |

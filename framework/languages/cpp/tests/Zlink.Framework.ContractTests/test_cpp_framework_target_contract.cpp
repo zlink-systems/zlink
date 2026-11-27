@@ -145,7 +145,14 @@ int main ()
       read_text_file (root / "framework/src/runtime/utils/relocation_id_generator.hpp");
     const auto live_location_reader =
       read_text_file (root / "framework/src/runtime/locations/live_location_reader.hpp");
-    const auto app_runtime = read_text_file (root / "framework/src/runtime/host/app.cpp");
+    const auto app_host = root / "framework/src/runtime/host";
+    const auto app_runtime = read_text_file (app_host / "app.cpp")
+                             + read_text_file (app_host / "app_actor_gateway.cpp")
+                             + read_text_file (app_host / "app_framework_assembly.cpp")
+                             + read_text_file (app_host / "app_instance_spot.cpp")
+                             + read_text_file (app_host / "app_maintenance.cpp")
+                             + read_text_file (app_host / "app_store_repositories.cpp")
+                             + read_text_file (app_host / "app_internal.hpp");
     const auto dispatch_events =
       read_text_file (root / "framework/src/runtime/diagnostics/dispatch_events.hpp");
     const auto mesh_node_runtime =
@@ -502,7 +509,7 @@ int main ()
     gate.require (framework_json_header.find ("<zlink/json_profile.hpp>") != std::string::npos,
                   "CPP-WIRE-003", "server JSON codec does not use the shared profile");
     for (const std::string required :
-         {"zlink::detail::json_profile::encode", "zlink::detail::json_profile::decode"}) {
+         {"zlink::detail::json_profile::try_encode", "zlink::detail::json_profile::try_decode"}) {
         gate.require (serializer_header.find (required) != std::string::npos, "CPP-WIRE-003",
                       "default typed serializer bypasses the JSON profile: " + required);
     }
@@ -1276,7 +1283,7 @@ int main ()
     /* CPP-OWN-004 — the default JSON serializer writes and reads the encoded
      * payload directly instead of round-tripping through a binding message. */
     gate.require (
-      serializer_header.find ("zlink::detail::json_profile::encode (") != std::string::npos
+      serializer_header.find ("zlink::detail::json_profile::try_encode (") != std::string::npos
         && serializer_header.find ("nlohmann::json (value)") == std::string::npos
         && serializer_header.find ("payload.to_raw ().template parse_json") == std::string::npos
         && serializer_header.find ("zlink::message_t::from_json (value)") == std::string::npos,

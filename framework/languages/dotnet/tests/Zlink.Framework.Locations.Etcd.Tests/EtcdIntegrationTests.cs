@@ -1,6 +1,14 @@
+extern alias etcdprovider;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+
+using Google.Protobuf;
+using ClientIdentity = etcdprovider::Zlink.Framework.Locations.Etcd.ZLinkEtcdClientIdentity;
+using ClientOperation = etcdprovider::Zlink.Framework.Locations.Etcd.EtcdOperation;
+using ClientOptions = etcdprovider::Zlink.Framework.Locations.Etcd.ZLinkEtcdLocationOptions;
+using Rpc = etcdprovider::Etcdserverpb;
+using TlsOptions = etcdprovider::Zlink.Framework.Locations.Etcd.ZLinkEtcdTlsOptions;
 
 namespace Zlink.Framework.Locations.Etcd.Tests;
 
@@ -207,6 +215,146 @@ public sealed class EtcdIntegrationTests
             var parent = Path.GetDirectoryName(directory)!;
             if (!Directory.EnumerateFileSystemEntries(parent).Any())
                 Directory.Delete(parent);
+        }
+    }
+
+    [Fact]
+    public async Task Client_sends_keys_only_and_revision_in_range_request()
+    {
+        await using var server = await FakeEtcdServer.StartAsync();
+        var observed = false;
+        server.BeforeCall = (method, request, _) =>
+        {
+            if (method == "Range")
+            {
+                var range = Assert.IsType<Etcdserverpb.RangeRequest>(request);
+                Assert.True(range.KeysOnly);
+                Assert.Equal(1, range.Revision);
+                observed = true;
+            }
+            return Task.CompletedTask;
+        };
+        var options = new ClientOptions { Namespace = "client-capability" };
+        options.Endpoints.Add(server.Endpoint);
+        using var client = new EtcdClient(options);
+        await client.Range(
+            new Rpc.RangeRequest
+            {
+                Key = ByteString.CopyFromUtf8("key"),
+                Revision = 1,
+                KeysOnly = true,
+            },
+            new ClientOperation(DateTime.UtcNow.AddSeconds(5), CancellationToken.None)
+        );
+        Assert.True(observed);
+    }
+
+    [SkippableFact]
+    public async Task Authenticated_mutual_tls_preserves_revision_and_keys_only_omits_values()
+    {
+        string? Required(string name)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            Skip.If(string.IsNullOrWhiteSpace(value), "Set " + name + " for secure etcd tests.");
+            return value;
+        }
+
+        var endpoint = Required("ZLINK_ETCD_CLIENT_ENDPOINT")!;
+        var user = Required("ZLINK_ETCD_CLIENT_USER")!;
+        var password = Required("ZLINK_ETCD_CLIENT_PASSWORD")!;
+        var ca = Required("ZLINK_ETCD_CLIENT_CA")!;
+        var cert = Required("ZLINK_ETCD_CLIENT_CERT")!;
+        var privateKey = Required("ZLINK_ETCD_CLIENT_KEY")!;
+        var options = new ClientOptions
+        {
+            Namespace = "client-capability",
+            Credentials = new() { User = user, Password = password },
+            Tls = new TlsOptions
+            {
+                TrustedCaPem = await File.ReadAllTextAsync(ca),
+                ClientIdentity = new ClientIdentity
+                {
+                    CertificatePem = await File.ReadAllTextAsync(cert),
+                    KeyPem = await File.ReadAllTextAsync(privateKey),
+                },
+            },
+        };
+        options.Endpoints.Add(endpoint);
+        using var client = new EtcdClient(options);
+        var operation = new ClientOperation(DateTime.UtcNow.AddSeconds(10), CancellationToken.None);
+        var key = ByteString.CopyFromUtf8("client-capability/" + Guid.NewGuid().ToString("N"));
+        var payload = ByteString.CopyFrom(new byte[] { 1, 0, 255 });
+        try
+        {
+            var written = await client.Txn(
+                new Rpc.TxnRequest
+                {
+                    Success =
+                    {
+                        new Rpc.RequestOp
+                        {
+                            RequestPut = new Rpc.PutRequest { Key = key, Value = payload },
+                        },
+                    },
+                },
+                operation
+            );
+            var revision = written.Header.Revision;
+            await client.Txn(
+                new Rpc.TxnRequest
+                {
+                    Success =
+                    {
+                        new Rpc.RequestOp
+                        {
+                            RequestPut = new Rpc.PutRequest
+                            {
+                                Key = key,
+                                Value = ByteString.CopyFromUtf8("replacement"),
+                            },
+                        },
+                    },
+                },
+                operation
+            );
+            var full = await client.Range(
+                new Rpc.RangeRequest { Key = key, Revision = revision },
+                operation
+            );
+            var keys = await client.Range(
+                new Rpc.RangeRequest
+                {
+                    Key = key,
+                    Revision = revision,
+                    KeysOnly = true,
+                },
+                operation
+            );
+            var fullValue = Assert.Single(full.Kvs);
+            var keyOnly = Assert.Single(keys.Kvs);
+            Assert.Equal(payload, fullValue.Value);
+            Assert.Equal(revision, fullValue.ModRevision);
+            Assert.True(keyOnly.Value.IsEmpty);
+            var expected = fullValue.Clone();
+            expected.Value = ByteString.Empty;
+            Assert.Equal(expected, keyOnly);
+            Assert.Equal(full.Header.ClusterId, keys.Header.ClusterId);
+        }
+        finally
+        {
+            await client.Txn(
+                new Rpc.TxnRequest
+                {
+                    Success =
+                    {
+                        new Rpc.RequestOp
+                        {
+                            RequestDeleteRange = new Rpc.DeleteRangeRequest { Key = key },
+                        },
+                    },
+                },
+                operation
+            );
         }
     }
 

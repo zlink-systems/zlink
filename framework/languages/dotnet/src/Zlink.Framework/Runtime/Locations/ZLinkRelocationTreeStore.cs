@@ -404,10 +404,12 @@ internal static partial class ZLinkRelocationTreeStore
         CancellationToken cancellationToken
     )
     {
-        // Chunks are content-addressed and can be shared by another immutable
-        // root. Without a Store-level reference count, eagerly deleting them
-        // can corrupt a published successor. Removing the manifest makes this
-        // tree unreachable; component TTL performs bounded orphan cleanup.
+        // Completion chunks use references scoped to this immutable manifest.
+        if (rootReference.EndsWith(CompletionReferenceSuffix, StringComparison.Ordinal))
+            await DeleteCompletionChunksAsync(store, rootReference, cancellationToken)
+                .ConfigureAwait(false);
+
+        // Other trees may share chunks. Their retention removes orphaned data.
         _ = await store
             .DeleteRelocationAsync(rootReference, cancellationToken)
             .ConfigureAwait(false);

@@ -1,0 +1,11 @@
+/Library/
+/Logs/
+/Temp/
+/UserSettings/
+/Builds/
+/Assets/Plugins/
+/Assets/Plugins.meta
+/Packages/packages-lock.json
+/*.csproj
+/*.sln
+!/Managed~/

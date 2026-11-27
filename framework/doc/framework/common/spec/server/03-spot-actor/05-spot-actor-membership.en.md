@@ -417,7 +417,9 @@ declines isn't an error, so it's `Rejected`, not `Failed`.
 mean the completion callback execution has finished too. The framework
 runs the completion callback after processing the lifecycle callback and
 source membership cleanup. If completion keeps failing, the Actor is kept
-sealed, and regular messages behind the barrier aren't run.
+sealed, and regular messages behind the barrier aren't run. A regular request that arrives after that isn't left waiting: it ends at
+once as `Unavailable` without running. A sender on another node gets the same `Unavailable` (handoff, Message Follow,
+and the relocation terminal relay carry the error kind unchanged).
 `OnJoinedActor` and the completion callback run after the location change is committed, so an
 exception from them or a failed application send inside them does not undo the committed `Accepted`
 or target publication, nor turn them into a failure.

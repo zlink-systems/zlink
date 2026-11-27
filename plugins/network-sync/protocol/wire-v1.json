@@ -1,0 +1,22 @@
+{
+  "spdx": "LicenseRef-Zlink",
+  "version": 1,
+  "packets": {
+    "NetworkSyncInputV1": "Input",
+    "NetworkSyncPingV1": "Ping",
+    "NetworkSyncSnapshotV1": "Snapshot",
+    "NetworkSyncPongV1": "Pong"
+  },
+  "enums": {
+    "InputDisposition": ["Accepted", "Late", "Duplicate", "Rejected"]
+  },
+  "objects": {
+    "Input": {"match_id": "string", "epoch": "u64", "target_tick": "u64", "t1_us": "u64", "last_snapshot_tick": "u64?", "input": "json", "actions": "Action[]"},
+    "Action": {"action_id": "u64", "payload": "json"},
+    "Ping": {"match_id": "string", "probe_id": "u64", "t1_us": "u64"},
+    "Anchor": {"match_id": "string", "epoch": "u64", "tick": "u64", "tick_us": "positive_u64", "since_tick_us": "u64"},
+    "Feedback": {"target_tick": "u64", "t1_us": "u64", "hold_us": "u64", "arrival_margin_us": "i64", "disposition": "InputDisposition"},
+    "Snapshot": {"anchor": "Anchor", "state": "json", "last_applied_input_tick": "u64?", "used_fallback_input": "bool", "input_feedback": "Feedback?"},
+    "Pong": {"anchor": "Anchor", "probe_id": "u64", "t1_us": "u64", "hold_us": "u64"}
+  }
+}

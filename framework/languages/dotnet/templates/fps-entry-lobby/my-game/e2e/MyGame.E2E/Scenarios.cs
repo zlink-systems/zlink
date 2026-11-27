@@ -19,15 +19,16 @@ internal static class Scenarios
     public static string[] Select(string? requested)
     {
         var selected = requested?.Split(',', StringSplitOptions.TrimEntries) ?? Order;
+        string[] available = [.. Order, "network-sync"];
         if (
             selected.Length == 0
             || selected.Distinct().Count() != selected.Length
-            || selected.Any(s => !Order.Contains(s))
+            || selected.Any(s => !available.Contains(s))
         )
             throw new ArgumentException(
-                "Select distinct scenarios from " + string.Join(',', Order)
+                "Select distinct scenarios from " + string.Join(',', available)
             );
-        return Order.Where(selected.Contains).ToArray();
+        return available.Where(selected.Contains).ToArray();
     }
 
     private static void Require(bool condition, string message)
@@ -55,6 +56,11 @@ internal static class Scenarios
         CancellationToken ct
     )
     {
+        if (scenario == "network-sync")
+        {
+            await NetworkSyncScenario.PlayAsync(endpoint, run.Outcome, ct);
+            return;
+        }
         if (scenario == "matchmaking")
         {
             await MatchmakingAsync(endpoint, run, ct);

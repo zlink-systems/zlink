@@ -44,6 +44,8 @@ async function main(argv: string[]): Promise<void> {
   };
   await scenario?.prepare();
   write({ type: 'prepared', ok: !measurement.hasErrors, snapshot: measurement.snapshot(null) });
+  // The runner saves per-connector evidence from prepared in the setup artifact.
+  measurement.setupEvidence = [];
   const lines = readline.createInterface({ input: process.stdin });
   for await (const line of lines) {
     try {

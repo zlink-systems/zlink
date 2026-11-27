@@ -179,6 +179,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
 
     task_t<bool>
     accept_application_ready (std::function<std::optional<serial_prefix_work_t> ()> take);
+    task_t<void> dispatch_application_ready (std::function<task_t<void> ()> ready);
     void notify_control (std::string name, std::function<void ()> control);
     task_t<bool>
     adopt_application_prefix (std::function<std::vector<serial_prefix_work_t> ()> take);
@@ -384,7 +385,13 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
               [retained = weak_from_this ().lock (), completion,
                control = std::move (control)] () mutable {
                   try {
-                      if constexpr (std::is_void_v<T>) {
+                      if constexpr (std::is_same_v<std::invoke_result_t<TControl &>, task_t<T>>) {
+                          auto work = control ();
+                          detail::observe_task_terminal (work,
+                                                         [completion] (const result_t<T> &result) {
+                                                             completion->complete (result);
+                                                         });
+                      } else if constexpr (std::is_void_v<T>) {
                           control ();
                           completion->complete (result_t<void>::success ());
                       } else {

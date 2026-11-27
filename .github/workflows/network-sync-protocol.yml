@@ -1,0 +1,20 @@
+name: Network sync protocol
+
+# network-sync plugin의 wire v1 정의와 공용 fixture가 서로 맞는지 본다(#3774).
+on:
+  # 사용자 결정(11-27): Actions는 C++ 빌드 검증과 릴리스·데일리만. PR 검증은 로컬 실행.
+  schedule:
+    - cron: "37 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate wire definition and fixtures
+        run: python3 plugins/network-sync/protocol/validate.py

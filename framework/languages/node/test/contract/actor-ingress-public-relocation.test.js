@@ -125,7 +125,8 @@ test(
     }
     class MoveHandler {
       async handle(_spot, actor, _context, request) {
-        actor.context.joinSpot(request.target).defer();
+        if (request.target === undefined) actor.context.joinEntrySpot().defer();
+        else actor.context.joinSpot(request.target).defer();
         if (request.pause) {
           entered.resolve();
           await release.promise;
@@ -475,6 +476,12 @@ test(
         (error) => ({ error })
       );
       await sendEntered.promise;
+      const joinsBeforeDestroy = completions.length;
+      await targetClient.requestToActor(actorId, new Move()).submit();
+      await until(
+        () => completions.length > joinsBeforeDestroy && completions.at(-1).status === 'accepted',
+        'Actor did not rejoin the Entry Spot before destroy'
+      );
       assert.equal(await target.get(n.ZLINK_ACTOR_MANAGER).destroy(ref), true);
       releaseSend.resolve();
       await telemetry.observed();

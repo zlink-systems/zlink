@@ -68,7 +68,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                 .toCompletableFuture()
                 .join();
 
-        var normalized = authority.rows.get("spot:room-a");
+        var normalized = authority.rows.get("zla1:s:6:room-a");
         assertEquals(
                 null, ZLinkCanonicalRelocationAuthorityStateCodec.decode(normalized.payload()));
         var payload =
@@ -108,14 +108,14 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                 11,
                 java.util.List.of(
                         new ZLinkAggregateRelocationCoordinator.Participant(
-                                "spot:room-a",
+                                "zla1:s:6:room-a",
                                 ZLinkPlacementObjectKind.USER_SPOT,
                                 3,
                                 5,
                                 "version-1",
                                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                 payload,
-                                new byte[0])),
+                                new byte[] {'[', ']'})),
                 goldenRoot(),
                 new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-b")),
                 4,
