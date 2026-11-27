@@ -50,11 +50,12 @@ class startup_store_t final : public location_store_t
 
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
-        if (on_capacity_write && std::any_of (request.mutations.begin (), request.mutations.end (),
-            [] (const auto &mutation) {
-                const auto *row = std::get_if<store_delete_t> (&mutation);
-                return row && row->key.value.starts_with ("zlink:v11:capacity:");
-            })) {
+        if (on_capacity_write
+            && std::any_of (request.mutations.begin (), request.mutations.end (),
+                            [] (const auto &mutation) {
+                                const auto *row = std::get_if<store_delete_t> (&mutation);
+                                return row && row->key.value.starts_with ("zlink:v11:capacity:");
+                            })) {
             auto hook = std::move (on_capacity_write);
             co_return co_await hook (request);
         }
@@ -226,15 +227,25 @@ TEST (LocationStoreFormat, CapacityConflictAndLostResponse)
         return std::string (R"({"active":{"actors":)") + std::to_string (active)
                + R"(,"spots":0,"spotTypes":{}},"pending":{"actors":0,"spots":0,"spotTypes":{}}})";
     };
-    for (const auto scenario : {"existing", "existing_zero", "zero_lost", "removed", "changed", "lost_before"}) {
+    for (const auto scenario :
+         {"existing", "existing_zero", "zero_lost", "removed", "changed", "lost_before"}) {
         SCOPED_TRACE (scenario);
         startup_store_t store;
-        const auto original = record (std::string_view (scenario) == "zero_lost" || std::string_view (scenario) == "existing_zero" ? 0 : 1);
+        const auto original = record (std::string_view (scenario) == "zero_lost"
+                                          || std::string_view (scenario) == "existing_zero"
+                                        ? 0
+                                        : 1);
         store.seed (old_key, original);
-        if (std::string_view (scenario) == "existing" || std::string_view (scenario) == "existing_zero")
+        if (std::string_view (scenario) == "existing"
+            || std::string_view (scenario) == "existing_zero")
             store.seed (counter, "7");
-        store.on_capacity_write = [&] (const store_write_request_t &request) -> task_t<store_write_result_t> {
+        store.on_capacity_write =
+          [&] (const store_write_request_t &request) -> task_t<store_write_result_t> {
             const std::string_view mode = scenario;
+            if (mode == "existing_zero") {
+                EXPECT_EQ (request.mutations.size (), 1u);
+                EXPECT_EQ (request.conditions.size (), 1u);
+            }
             if (mode == "zero_lost") {
                 (void) co_await store.store.write (request);
                 throw framework_exception_t (framework_error_kind_t::unavailable, "lost response");
@@ -247,7 +258,8 @@ TEST (LocationStoreFormat, CapacityConflictAndLostResponse)
             }
             if (mode == "changed") {
                 store_write_request_t update;
-                update.mutations.push_back (store_put_t{{old_key}, bytes (record (2)), std::nullopt});
+                update.mutations.push_back (
+                  store_put_t{{old_key}, bytes (record (2)), std::nullopt});
                 (void) co_await store.store.write (std::move (update));
                 co_return store_write_conflict_t{};
             }
@@ -261,7 +273,8 @@ TEST (LocationStoreFormat, CapacityConflictAndLostResponse)
             try {
                 runtime.start (zlink::routing_id_t::from ("startup"));
                 ADD_FAILURE () << "Expected configuration error";
-            } catch (const framework_exception_t &error) {
+            }
+            catch (const framework_exception_t &error) {
                 EXPECT_EQ (error.kind (), framework_error_kind_t::protocol_error);
             }
             EXPECT_EQ (store.value ({old_key}), original);
@@ -277,7 +290,8 @@ TEST (LocationStoreFormat, CapacityConflictAndLostResponse)
                 EXPECT_EQ (store.value ({counter}), "2");
             if (std::string_view (scenario) == "lost_before")
                 EXPECT_EQ (store.value ({counter}), "1");
-            if (std::string_view (scenario) == "zero_lost" || std::string_view (scenario) == "removed")
+            if (std::string_view (scenario) == "zero_lost"
+                || std::string_view (scenario) == "removed")
                 EXPECT_EQ (store.value ({counter}), std::nullopt);
         }
     }
