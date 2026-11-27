@@ -5,5 +5,8 @@
     <Nullable>enable</Nullable>
     <LangVersion>12</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NetworkSyncServerProject>$(MSBuildThisFileDirectory)../../../../../../plugins/network-sync/server/Server/Zlink.NetworkSync.Server.csproj</NetworkSyncServerProject>
+    <EnableNetworkSync Condition="'$(EnableNetworkSync)' == '' and Exists('$(NetworkSyncServerProject)')">true</EnableNetworkSync>
+    <DefineConstants Condition="'$(EnableNetworkSync)' == 'true'">$(DefineConstants);NETWORK_SYNC</DefineConstants>
   </PropertyGroup>
 </Project>

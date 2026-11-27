@@ -915,6 +915,7 @@ export class ZLinkFrameworkRuntimeHost
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),
       completions: (meshName) => this.spotNodeRuntime?.meshCompletionTable(meshName),
       spotManager: () => this.spotManager,
+      acquireSpotReplayPermit: (signal) => this.applicationJobQueue.acquire(signal, 'remote'),
       actorManager: () => this.actorManager,
       actorTransfer: this.actorTransferRuntime,
       boundSessionRelocation: {
@@ -3195,7 +3196,7 @@ export class ZLinkFrameworkRuntimeHost
       ...options,
       admission: this.admission,
       errorSink: this.runtimeOrPreStartErrorSink,
-      peerAdmissionSealed: (meshName: string) => !this.admission.accepts(meshName),
+      peerAdmissionSealed: (meshName: string) => this.admission.isSealed(meshName),
       routeActorJoinIngress: (
         meshName: string,
         ...args: Parameters<

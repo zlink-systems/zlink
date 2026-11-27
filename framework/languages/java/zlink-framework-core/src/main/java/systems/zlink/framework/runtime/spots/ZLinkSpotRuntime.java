@@ -77,6 +77,7 @@ import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceRouteFence;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
@@ -95,6 +96,7 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.spots.SpotRef;
 import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
+import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 import systems.zlink.framework.spots.ZLinkSpotCloseReason;
@@ -913,7 +915,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                     .service
                                                                                     .ZLinkServiceM6BWireCodec
                                                                                     .InstanceRouteFence)
-                                                                            message.route());
+                                                                            message.route(),
+                                                                    message.followed());
                                                     if (rejection != null) {
                                                         received.close();
                                                         return CompletableFuture.failedFuture(
@@ -1087,7 +1090,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .InstanceRouteFence
                     requested) {
-        if (current.objectGeneration() < requested.objectGeneration()) {
+        return instanceApplicationAdmissionFailure(current, requested, false);
+    }
+
+    private static RuntimeException instanceApplicationAdmissionFailure(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    current,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    requested,
+            boolean followed) {
+        if (followed
+                ? !current.spotFence().equals(requested.spotFence())
+                : current.objectGeneration() < requested.objectGeneration()) {
             return ZLinkFrameworkErrorOrigin.framework(
                     ZLinkFrameworkErrorKind.INVALID_OPERATION,
                     "Instance Spot is behind the requested generation",
@@ -3602,6 +3618,69 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                         activation))));
     }
 
+    CompletionStage<ZLinkInstanceSpotActivation> prepareInstanceSpotRelocation(
+            String meshName,
+            Class<? extends ZLinkInstanceSpot> spotType,
+            String spotId,
+            long objectGeneration,
+            byte[] timerEnvelope) {
+        var mesh = routeMeshNodesByName.get(meshName);
+        var nodeRid = mesh.status().routingId();
+        if (instanceSpotActivations.containsKey(spotId)) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("Instance Spot relocation target already exists"));
+        }
+        return CompletableFuture.supplyAsync(
+                        () -> nodeByRid(nodeRid).createSpot(spotId, objectGeneration),
+                        infrastructureExecutor)
+                .thenCompose(
+                        backend ->
+                                activationFactory.activateInstanceRelocation(
+                                        meshName, nodeRid, spotType, backend, timerEnvelope));
+    }
+
+    void setRelocatedInstanceAuthority(
+            ZLinkInstanceSpotActivation activation, ZLinkAuthoritySnapshot snapshot) {
+        var allocation = snapshot.allocation();
+        var route =
+                new InstanceRouteFence(
+                        allocation.descriptor().rid(),
+                        allocation.descriptorLifecycleGeneration(),
+                        activation.context.spotId(),
+                        snapshot.objectGeneration(),
+                        snapshot.ownerId(),
+                        snapshot.authorityOwnerGeneration(),
+                        snapshot.ownerLeaseGeneration(),
+                        snapshot.storeVersion());
+        activation.setAuthorityFence(route);
+        routeMeshNodesByName
+                .get(activation.context.meshName())
+                .registerInstanceIntent(allocation.stableType(), route);
+    }
+
+    CompletionStage<Void> publishRelocatedInstanceSpot(ZLinkInstanceSpotActivation activation) {
+        return activation
+                .context
+                .ownerQueue()
+                .underSharedSpotGateAsync(
+                        () -> {
+                            registerInstanceActivation(activation);
+                            return null;
+                        })
+                .thenCompose(ignored -> activation.context.confirmReady())
+                .thenCompose(ignored -> activation.context.finishActivationPreparation());
+    }
+
+    private void registerInstanceActivation(ZLinkInstanceSpotActivation activation) {
+        if (instanceSpotActivations.put(activation.context.spotId(), activation) == null) {
+            recordInstanceCount(activation, 1);
+            signalCountChanged();
+        }
+        activation.startIdleEviction(
+                instanceSpotIdleTimeouts.getOrDefault(
+                        activation.context.meshName(), Duration.ZERO));
+    }
+
     private CompletionStage<Void> publishInstanceActivation(
             ZLinkInstanceSpotActivation activation,
             java.util.function.BiFunction<
@@ -3619,14 +3698,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             Objects.requireNonNull(
                                     restoreFirst.apply(activation.backendSpot, admission),
                                     "first record terminal");
-                            if (instanceSpotActivations.put(activation.context.spotId(), activation)
-                                    == null) {
-                                recordInstanceCount(activation, 1);
-                                signalCountChanged();
-                            }
-                            activation.startIdleEviction(
-                                    instanceSpotIdleTimeouts.getOrDefault(
-                                            activation.context.meshName(), Duration.ZERO));
+                            registerInstanceActivation(activation);
                             return null;
                         })
                 .thenCompose(
@@ -6651,7 +6723,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         (ignored, failure) -> {
                             ZLinkInternalMeshNode routeNode =
                                     routeMeshNodesByName.get(activation.context.meshName());
-                            if (routeNode != null) {
+                            if (routeNode != null && activation.hasExpectedNodeGeneration()) {
                                 routeNode.forgetInstanceIntent(activation.authorityRouteFence());
                             }
                         });

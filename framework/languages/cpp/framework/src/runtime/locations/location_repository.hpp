@@ -857,6 +857,16 @@ class location_repository_t
         return task_t<std::optional<std::vector<aggregate_participant_t>>> (
           result_t<std::optional<std::vector<aggregate_participant_t>>>::success (std::nullopt));
     }
+    virtual task_t<bool>
+    seal_relocation_inventory (aggregate_fence_t, std::string, std::vector<aggregate_participant_t>)
+    {
+        co_return false;
+    }
+    virtual task_t<std::optional<std::vector<aggregate_participant_t>>>
+    read_relocation_inventory (aggregate_fence_t, std::string)
+    {
+        co_return std::nullopt;
+    }
     virtual task_t<std::int64_t> remove_all_by_owner (location_owner_token_t owner) = 0;
     virtual task_t<std::int64_t>
     remove_all_by_owner (location_owner_token_t owner,

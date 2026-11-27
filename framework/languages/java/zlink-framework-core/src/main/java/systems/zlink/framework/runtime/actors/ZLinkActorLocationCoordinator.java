@@ -347,8 +347,10 @@ final class ZLinkActorLocationCoordinator {
                                 return CompletableFuture.completedFuture(true);
                             }
                             var released =
-                                    ZLinkAuthoritySnapshot.actorClosing(
-                                                    snapshot.payload(), snapshot.allocation())
+                                    snapshot.objectGeneration() == requested.objectGeneration()
+                                                    && ZLinkAuthoritySnapshot.actorClosing(
+                                                            snapshot.payload(),
+                                                            snapshot.allocation())
                                             ? lifecycle.releaseEndedActorClosing(
                                                     requested.actorId(), snapshot, cancellation)
                                             : CompletableFuture.completedFuture(false);

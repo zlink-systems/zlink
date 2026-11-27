@@ -102,7 +102,7 @@ public class ZLinkBackendReceived implements AutoCloseable {
                 acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord;
     }
 
-    private ZLinkBackendReceived(
+    protected ZLinkBackendReceived(
             ZLinkBackendRequestResult result,
             int failureCode,
             Optional<RoutingId> routingId,

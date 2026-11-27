@@ -888,8 +888,24 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                             throw failure.getCause();
                                         }
                                     });
+            byte[] targetAuthority =
+                    new ZLinkActorAuthorityPayloadCodec()
+                            .encode(
+                                    ZLinkActorAuthorityPayloadCodec.State.READY,
+                                    "actor-type",
+                                    actorId,
+                                    "target-entry",
+                                    12,
+                                    1,
+                                    targetOwner.ownerId(),
+                                    targetOwner.leaseGeneration(),
+                                    "mesh",
+                                    targetRid,
+                                    12);
             var coordinator = new ZLinkAggregateRelocationCoordinator(observed);
             UUID relocationId = UUID.randomUUID();
+            ZLinkSealedActorInventoryFixture.seal(
+                    coordinator, relocationId, authorityKey, snapshot, targetAuthority, OPEN);
             byte[] root =
                     ZLinkCanonicalActorRelocationEnvelope.encode(
                             relocationId,

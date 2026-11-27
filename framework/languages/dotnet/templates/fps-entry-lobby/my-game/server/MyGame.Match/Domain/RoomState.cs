@@ -14,6 +14,13 @@ public sealed class RoomState
     public RoomState(Func<double>? clock = null) =>
         nowMs = clock ?? (() => Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency);
 
+    public bool Admit(string playerId, string roomId, RoomAdmission admission)
+    {
+        if (admission.PlayerId != playerId || admission.RoomId != roomId)
+            throw new InvalidDataException("Room admission identity mismatch.");
+        return Admit(playerId);
+    }
+
     public bool Admit(string playerId)
     {
         if (Players.Any(p => p.PlayerId == playerId))
@@ -26,7 +33,7 @@ public sealed class RoomState
         return true;
     }
 
-    private Combatant Player(string id) => Players.Single(p => p.PlayerId == id);
+    internal Combatant Player(string id) => Players.Single(p => p.PlayerId == id);
 
     private string? ValidateAction(Combatant player, long sequence) =>
         sequence > GameNames.MaxSequence ? Rejection.IntegerOutOfRange
@@ -134,6 +141,9 @@ public sealed class RoomState
 
     public PlayerView[] View() =>
         Players.Select(p => new PlayerView(p.PlayerId, p.Position, p.Hp, p.Sequence)).ToArray();
+
+    public RoomView View(string roomId, string nodeId) =>
+        new(roomId, nodeId, View(), Phase, Winner);
 
     public RoomSnapshot Capture()
     {

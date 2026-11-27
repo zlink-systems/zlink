@@ -2337,6 +2337,14 @@ public sealed partial class RelocationBehaviorConformanceTests
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
         trace.TargetNodeRid = target.LocalNodeRid;
 
+        var observedJoinPublication = new TaskCompletionSource<ZLinkAuthorityReadResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var authorityStore = new ZLinkProviderLocationRepository(locationStore);
+        var actorKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        trace.OnPublicJoinCompleted = async _ =>
+            observedJoinPublication.SetResult(await authorityStore.ReadAuthorityAsync(actorKey));
+
         var client = source.Services.GetRequiredService<IZLinkActorClient>();
         var join = client
             .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
@@ -2375,20 +2383,20 @@ public sealed partial class RelocationBehaviorConformanceTests
 
             trace.ReleaseTargetLifecycle.TrySetResult();
             await trace.WaitAsync("sourceMembershipLeaveSubmitted");
-            var completionLeftCanonicalAuthority = false;
             try
             {
                 await trace.WaitAsync("publicJoinCompleted");
-                var completedAuthority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-                    await new ZLinkProviderLocationRepository(locationStore).ReadAuthorityAsync(
-                        ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId)
-                    )
+                var committed = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                    await observedJoinPublication.Task.WaitAsync(TimeSpan.FromSeconds(5))
                 );
-                completionLeftCanonicalAuthority =
-                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                        completedAuthority.Snapshot,
-                        out _
-                    );
+                Assert.NotNull(committed.Snapshot.Relocation);
+                var relocation = ZLinkAuthorityAggregateCodec
+                    .Replace(null, committed.Snapshot.Relocation)!
+                    .Value.GetProperty("relocation");
+                var completion = relocation.GetProperty("completion");
+                Assert.Equal("1", completion.GetProperty("acceptedRequests").GetString());
+                Assert.Equal("0", completion.GetProperty("completedResults").GetString());
+                Assert.Equal("0", completion.GetProperty("pendingDeliveries").GetString());
                 Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
                 _ = await saved.WaitAsync(TimeSpan.FromSeconds(15));
                 _ = await temporary.WaitAsync(TimeSpan.FromSeconds(15));
@@ -2427,10 +2435,18 @@ public sealed partial class RelocationBehaviorConformanceTests
             );
             Assert.Equal(trace.SourceObjectGeneration, trace.TargetObjectGeneration);
             Assert.True(trace.TargetOwnerGeneration > trace.SourceOwnerGeneration);
-            Assert.False(
-                completionLeftCanonicalAuthority,
-                "An unbound ActorJoin must normalize the completed relocation "
-                    + "before the public join completion can outlive its target process."
+            await target
+                .Runtime.WaitForAcceptedActorHandoffsAsync(CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            var settled = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                await authorityStore.ReadAuthorityAsync(actorKey)
+            );
+            Assert.Null(settled.Snapshot.Relocation);
+            var completed = await trace.CompletedRelocation.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1UL, completed.CompletedResults);
+            Assert.Equal(0UL, completed.PendingDeliveries);
+            Assert.IsType<ZLinkRelocationReadResult.Missing>(
+                await relocationStore.GetRelocationAsync(completed.Reference!)
             );
             AssertObservedBehavior(fixture.RootElement, trace.Events);
             var retiredSource = source.Runtime.GetOrCreateActorState(actorId);
@@ -2771,6 +2787,11 @@ internal sealed class RelocationBehaviorTrace
     internal TaskCompletionSource ReleaseTargetLifecycle { get; } = Signal();
     internal TaskCompletionSource ReleaseSourceLeave { get; } = Signal();
     internal TaskCompletionSource ReleaseSealStageWork { get; } = Signal();
+    internal TaskCompletionSource<(
+        ulong CompletedResults,
+        ulong PendingDeliveries,
+        string Reference
+    )> CompletedRelocation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource TargetAuthorityObserved { get; } = Signal();
     private TaskCompletionSource TargetAuthorityMutationObserved { get; } = Signal();
 
@@ -2868,6 +2889,23 @@ internal sealed class RelocationBehaviorTrace
             return;
         lock (_gate)
         {
+            if (
+                snapshot.Relocation
+                    is { Phase: ServiceWireCodec.RelocationPhase.Completed } relocation
+                && ZLinkAuthorityAggregateCodec.Replace(null, relocation) is { } aggregate
+                && aggregate
+                    .GetProperty("relocation")
+                    .TryGetProperty("completion", out var completion)
+                && completion.TryGetProperty("reference", out var reference)
+                && reference.GetString() is { } value
+            )
+                CompletedRelocation.TrySetResult(
+                    (
+                        ulong.Parse(completion.GetProperty("completedResults").GetString()!),
+                        ulong.Parse(completion.GetProperty("pendingDeliveries").GetString()!),
+                        value
+                    )
+                );
             if (!_targetAuthorityVersions.Add(snapshot.StoreVersion))
                 return;
             Interlocked.Increment(ref TargetAuthorityMutationCount);

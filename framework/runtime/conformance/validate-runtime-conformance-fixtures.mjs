@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { access, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -4221,6 +4222,85 @@ for (const [name, corrupt] of [
   corrupt(invalid);
   assert.throws(() => validateLoginAdmission(invalid), { name: 'AssertionError' }, name);
   console.log(`Login admission contract: invalid ${name} rejected`);
+}
+
+async function validateActorDestroy(fixture) {
+  assert.equal(fixture.fixture, 'zlink.framework.actor-destroy');
+  assert.equal(fixture.version, 1);
+  assert.deepEqual(fixture.scenarios.map(({ name }) => name), [
+    'remote-destroy-hides-closing-and-get-or-create-reincarnates',
+    'owner-duplicate-destroy-joins-terminal',
+    'stale-actor-ref-destroy-is-invalid-operation',
+    'expired-owner-closing-is-released-before-recreation',
+    'request-during-closing-cas-is-unavailable-and-served-after-cas-failure',
+    'remote-destroy-releases-closing-after-owner-lease-ends'
+  ]);
+  const root = fileURLToPath(new URL('../../../', import.meta.url));
+  const languages = ['cpp', 'dotnet', 'java', 'node'];
+  const testPaths = {
+    cpp: ':(glob)framework/languages/cpp/tests/**',
+    dotnet: ':(glob)framework/languages/dotnet/tests/**',
+    java: ':(glob)framework/languages/java/**/src/test/**',
+    node: ':(glob)framework/languages/node/test/**'
+  };
+  for (const scenario of [...fixture.scenarios, fixture.admissionCheck]) {
+    assert.ok(scenario && typeof scenario.name === 'string');
+    assert.ok(Array.isArray(scenario.specClauses));
+    for (const clause of scenario.specClauses)
+      assert.ok(Object.hasOwn(fixture.contractSources, clause), `${scenario.name}: ${clause}`);
+    if (scenario.requiredOrder !== undefined) {
+      assert.ok(Array.isArray(scenario.requiredOrder), scenario.name);
+      for (const pair of scenario.requiredOrder)
+        assert.ok(Array.isArray(pair) && pair.length === 2
+          && pair.every((event) => typeof event === 'string' && event.length > 0), scenario.name);
+    }
+    if (scenario.testNames !== undefined) {
+      assert.deepEqual(Object.keys(scenario.testNames).sort(), languages);
+      for (const language of languages) {
+        const name = scenario.testNames[language];
+        assert.ok(typeof name === 'string' && name.length > 0, `${scenario.name}: ${language}`);
+        let found = false;
+        try {
+          execFileSync('git', ['grep', '-n', '-F', '-e', name, '--', testPaths[language]],
+            { cwd: root, stdio: 'pipe' });
+          found = true;
+        } catch (error) {
+          if (error.status !== 1) throw error;
+        }
+        assert.ok(found, `${scenario.name}: ${language} test not found: ${name}`);
+      }
+    }
+  }
+  for (const [key, source] of Object.entries(fixture.contractSources)) {
+    assert.equal(typeof source.section, 'string', key);
+    assert.ok(typeof source.startsWith === 'string' && source.startsWith.length > 0, key);
+    const parts = source.section.split('#');
+    assert.equal(parts.length, 2, key);
+    const document = await readFile(resolve(root, parts[0]), 'utf8');
+    const headings = [...document.matchAll(/^(#{1,6}) +(.+?) *#*\s*$/gm)];
+    const slug = (heading) => heading.toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu, '').replace(/ /g, '-');
+    const index = headings.findIndex((heading) => slug(heading[2]) === parts[1]);
+    assert.notEqual(index, -1, `${key}: heading ${parts[1]}`);
+    const heading = headings[index];
+    const next = headings.slice(index + 1).find((candidate) => candidate[1].length <= heading[1].length);
+    const section = document.slice(heading.index + heading[0].length, next?.index ?? document.length);
+    // Quotes are plain text; Markdown strong emphasis in the section is not part of the wording.
+    assert.ok(section.replaceAll('**', '').includes(source.startsWith), `${key}: text not found in section`);
+  }
+}
+
+const actorDestroy = await readFixture('./actor-destroy-v1.json');
+await validateActorDestroy(actorDestroy);
+console.log('Actor destroy contract: valid scenarios accepted');
+for (const [name, corrupt] of [
+  ['scenario name', (f) => { f.scenarios[0].name = 'invalid'; }],
+  ['missing testNames key', (f) => { delete f.scenarios[4].testNames.cpp; }],
+  ['contract source text', (f) => { f.contractSources.getOrCreate.startsWith = 'missing contract text'; }]
+]) {
+  const invalid = structuredClone(actorDestroy);
+  corrupt(invalid);
+  await assert.rejects(() => validateActorDestroy(invalid), { name: 'AssertionError' }, name);
+  console.log(`Actor destroy contract: invalid ${name} rejected`);
 }
 
 await (await import('../../../scripts/etcd/validate-fixtures.mjs')).validateEtcdFixtures();

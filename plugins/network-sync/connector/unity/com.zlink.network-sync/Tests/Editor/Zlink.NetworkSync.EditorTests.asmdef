@@ -1,0 +1,8 @@
+{
+  "name": "Zlink.NetworkSync.EditorTests",
+  "rootNamespace": "Zlink.NetworkSync.Tests",
+  "references": ["Zlink.NetworkSync"],
+  "includePlatforms": ["Editor"],
+  "optionalUnityReferences": ["TestAssemblies"],
+  "autoReferenced": false
+}

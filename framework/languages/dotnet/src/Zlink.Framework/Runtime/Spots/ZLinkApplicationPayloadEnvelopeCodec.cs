@@ -138,6 +138,15 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         return true;
     }
 
+    internal static byte[] EncodeMultipartPayload(IReadOnlyList<ReadOnlyMemory<byte>> parts)
+    {
+        var length = GetMultipartPayloadLength(parts);
+        EnsureRepresentableEncodedLength(length);
+        var result = new byte[checked((int)length)];
+        WriteMultipartPayload(result, 0, parts);
+        return result;
+    }
+
     internal static byte[] EncodeFrameworkMultipart(IReadOnlyList<Message> parts)
     {
         ArgumentNullException.ThrowIfNull(parts);
@@ -455,7 +464,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         }
     }
 
-    private static bool TryDecodeMultipart(ReadOnlySpan<byte> span, out Message[] parts)
+    internal static bool TryDecodeMultipart(ReadOnlySpan<byte> span, out Message[] parts)
     {
         parts = [];
         if (span.Length < sizeof(uint))
