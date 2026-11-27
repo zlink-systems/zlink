@@ -48,6 +48,88 @@ const context = {
 
 after(() => fs.rmSync(outputDirectory, { recursive: true, force: true }));
 
+test('generated service-wire integers preserve big-endian boundaries and reject overflow', () => {
+  const scalars = [
+    [
+      'U8',
+      [
+        [0, '00'],
+        [1, '01'],
+        [128, '80'],
+        [255, 'ff']
+      ],
+      256
+    ],
+    [
+      'U16',
+      [
+        [0, '0000'],
+        [1, '0001'],
+        [32768, '8000'],
+        [65535, 'ffff']
+      ],
+      65536
+    ],
+    [
+      'U32',
+      [
+        [0, '00000000'],
+        [1, '00000001'],
+        [0x80000000, '80000000'],
+        [0xffffffff, 'ffffffff']
+      ],
+      0x100000000
+    ],
+    [
+      'U64',
+      [
+        [0n, '0000000000000000'],
+        [1n, '0000000000000001'],
+        [0x8000000000000000n, '8000000000000000'],
+        [0x89abcdef01234567n, '89abcdef01234567'],
+        [0xffffffffffffffffn, 'ffffffffffffffff']
+      ],
+      0x10000000000000000n
+    ],
+    [
+      'ApplicationVersion',
+      [
+        [0n, '0000000000000000'],
+        [1n, '0000000000000001'],
+        [0x7fffffffffffffffn, '7fffffffffffffff']
+      ],
+      0x8000000000000000n
+    ]
+  ];
+  for (const [name, valid, overflow] of scalars) {
+    const encode = codec[`encode${name}`];
+    const decode = codec[`decode${name}`];
+    for (const [value, hex] of valid) {
+      assert.equal(Buffer.from(encode(value, context)).toString('hex'), hex, name);
+      const padded = Buffer.from(`aa${hex}bb`, 'hex');
+      const view = padded.subarray(1, -1);
+      assert.equal(decode(view, context), value, name);
+      assert.throws(() => decode(view.subarray(0, -1), context), /truncated service-wire value/);
+    }
+    assert.throws(() => encode(overflow, context), { name: 'ServiceWireProtocolError' });
+  }
+
+  const highBit = Buffer.from('8000000000000000', 'hex');
+  assert.throws(
+    () => codec.decodeApplicationVersion(highBit, context),
+    /application-version range/
+  );
+  assert.throws(() => codec.encodeApplicationVersion(-1n, context), /application-version range/);
+  assert.throws(() => codec.decodeNonzeroU32(Buffer.alloc(4), context), /nonzero-u32 range/);
+  assert.throws(() => codec.encodeU32(-1, context), /u32 range/);
+  for (const invalid of [0.5, NaN, Infinity]) {
+    assert.throws(() => codec.encodeU32(invalid, context), RangeError);
+  }
+  assert.deepEqual(codec.encodeU32('4294967295', context), codec.encodeU32(0xffffffff, context));
+  assert.throws(() => codec.encodeBool8('invalid', context), TypeError);
+  assert.throws(() => codec.decodeBool8(Uint8Array.of(2), context), /bool8 enum/);
+});
+
 test('streamBind rejection requires a nonempty message on encode and decode', () => {
   const bindContext = { ...context, originalOperationKind: 'streamBind' };
   const reply = {
