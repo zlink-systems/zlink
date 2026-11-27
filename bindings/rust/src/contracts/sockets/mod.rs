@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+pub(crate) mod connection_attempt;
 pub(crate) mod dealer_socket;
 pub(crate) mod pair_socket;
 pub(crate) mod pubsub_sockets;

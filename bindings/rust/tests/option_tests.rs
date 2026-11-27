@@ -272,3 +272,71 @@ fn stream_exposes_routing_id_surface() {
 
 // No raw option bag access – verified at compile time by absence of
 // pub fn set_option / get_option on any socket type.
+
+#[test]
+fn peer_weight_range_is_validated_before_core() {
+    use zlink::ConfigResult;
+    let ctx = Context::new().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
+
+    router.router_options().set_weight(10_000).unwrap();
+    assert_eq!(router.router_options().weight().unwrap(), 10_000);
+    dealer.dealer_options().set_weight(0).unwrap();
+    assert_eq!(dealer.dealer_options().weight().unwrap(), 0);
+
+    let err = router.router_options().set_weight(10_001).unwrap_err();
+    assert_eq!(err.code(), ConfigResult::InvalidArgument);
+    let err = dealer.dealer_options().set_weight(10_001).unwrap_err();
+    assert_eq!(err.code(), ConfigResult::InvalidArgument);
+    assert_eq!(router.router_options().weight().unwrap(), 10_000);
+}
+
+#[test]
+fn oversized_request_timeout_is_rejected_not_clamped() {
+    use std::time::Duration;
+    use zlink::ConfigResult;
+    let ctx = Context::new().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
+    let too_long = Duration::from_millis(i32::MAX as u64 + 1);
+
+    let err = router
+        .router_options()
+        .set_request_timeout(too_long)
+        .unwrap_err();
+    assert_eq!(err.code(), ConfigResult::InvalidArgument);
+    let err = dealer
+        .dealer_options()
+        .set_request_timeout(too_long)
+        .unwrap_err();
+    assert_eq!(err.code(), ConfigResult::InvalidArgument);
+
+    let max = Duration::from_millis(i32::MAX as u64);
+    router.router_options().set_request_timeout(max).unwrap();
+    assert_eq!(router.router_options().request_timeout().unwrap(), max);
+}
+
+#[test]
+fn endpoint_over_255_bytes_fails_immediately() {
+    use zlink::{BindResult, ConnectResult};
+    let ctx = Context::new().unwrap();
+    let socket = ctx.create_dealer_socket().unwrap();
+    let long = format!("inproc://{}", "a".repeat(256));
+    assert_eq!(
+        socket.bind(&long).unwrap_err().code(),
+        BindResult::InvalidArgument
+    );
+    assert_eq!(
+        socket.connect(&long).unwrap_err().code(),
+        ConnectResult::InvalidArgument
+    );
+    assert_eq!(
+        socket.unbind(&long).unwrap_err().code(),
+        ConnectResult::InvalidArgument
+    );
+    assert_eq!(
+        socket.disconnect(&long).unwrap_err().code(),
+        ConnectResult::InvalidArgument
+    );
+}
