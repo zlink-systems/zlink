@@ -1,0 +1,110 @@
+[
+  {
+    "name": "input",
+    "packet": "NetworkSyncInputV1",
+    "payload": "{\"match_id\":\"match-1\",\"epoch\":\"1\",\"target_tick\":\"43\",\"t1_us\":\"123456\",\"last_snapshot_tick\":null,\"input\":{\"x\":1},\"actions\":[{\"action_id\":\"18446744073709551615\",\"payload\":{\"fire\":true}}]}",
+    "valid": true
+  },
+  {
+    "name": "ping",
+    "packet": "NetworkSyncPingV1",
+    "payload": "{\"match_id\":\"match-1\",\"probe_id\":\"0\",\"t1_us\":\"0\",\"future_field\":1}",
+    "valid": true
+  },
+  {
+    "name": "snapshot",
+    "packet": "NetworkSyncSnapshotV1",
+    "payload": "{\"anchor\":{\"match_id\":\"match-1\",\"epoch\":\"1\",\"tick\":\"42\",\"tick_us\":\"16667\",\"since_tick_us\":\"2000\"},\"state\":{\"players\":[]},\"last_applied_input_tick\":\"42\",\"used_fallback_input\":false,\"input_feedback\":{\"target_tick\":\"43\",\"t1_us\":\"123456\",\"hold_us\":\"20\",\"arrival_margin_us\":\"-1\",\"disposition\":\"Late\"}}",
+    "valid": true
+  },
+  {
+    "name": "snapshot-null",
+    "packet": "NetworkSyncSnapshotV1",
+    "payload": "{\"anchor\":{\"match_id\":\"match-1\",\"epoch\":\"1\",\"tick\":\"42\",\"tick_us\":\"16667\",\"since_tick_us\":\"2000\"},\"state\":{\"players\":[]},\"last_applied_input_tick\":null,\"used_fallback_input\":false,\"input_feedback\":null}",
+    "valid": true
+  },
+  {
+    "name": "pong",
+    "packet": "NetworkSyncPongV1",
+    "payload": "{\"anchor\":{\"match_id\":\"match-1\",\"epoch\":\"1\",\"tick\":\"42\",\"tick_us\":\"16667\",\"since_tick_us\":\"2000\"},\"probe_id\":\"4\",\"t1_us\":\"123\",\"hold_us\":\"5\"}",
+    "valid": true
+  },
+  {
+    "name": "numeric-64",
+    "packet": "NetworkSyncInputV1",
+    "payload": "{\"match_id\":\"match-1\",\"epoch\":1,\"target_tick\":\"43\",\"t1_us\":\"123456\",\"last_snapshot_tick\":null,\"input\":{\"x\":1},\"actions\":[{\"action_id\":\"18446744073709551615\",\"payload\":{\"fire\":true}}]}",
+    "valid": false
+  },
+  {
+    "name": "missing-nullable-required",
+    "packet": "NetworkSyncInputV1",
+    "payload": "{\"match_id\":\"match-1\",\"epoch\":\"1\",\"target_tick\":\"43\",\"t1_us\":\"123456\",\"input\":{\"x\":1},\"actions\":[{\"action_id\":\"18446744073709551615\",\"payload\":{\"fire\":true}}]}",
+    "valid": false
+  },
+  {
+    "name": "duplicate-field",
+    "packet": "NetworkSyncPingV1",
+    "payload": "{\"match_id\":\"m\",\"probe_id\":\"1\",\"probe_id\":\"2\",\"t1_us\":\"1\"}",
+    "valid": false
+  },
+  {
+    "name": "name-mismatch",
+    "packet": "NetworkSyncPingV2",
+    "payload": "{\"match_id\":\"m\",\"probe_id\":\"1\",\"t1_us\":\"1\"}",
+    "valid": false
+  },
+  {
+    "name": "overflow",
+    "packet": "NetworkSyncInputV1",
+    "payload": "{\"match_id\":\"match-1\",\"epoch\":\"18446744073709551616\",\"target_tick\":\"43\",\"t1_us\":\"123456\",\"last_snapshot_tick\":null,\"input\":{\"x\":1},\"actions\":[{\"action_id\":\"18446744073709551615\",\"payload\":{\"fire\":true}}]}",
+    "valid": false
+  },
+  {
+    "name": "leading-zero",
+    "packet": "NetworkSyncInputV1",
+    "payload": "{\"match_id\":\"match-1\",\"epoch\":\"1\",\"target_tick\":\"01\",\"t1_us\":\"123456\",\"last_snapshot_tick\":null,\"input\":{\"x\":1},\"actions\":[{\"action_id\":\"18446744073709551615\",\"payload\":{\"fire\":true}}]}",
+    "valid": false
+  },
+  {
+    "name": "zero-tick-interval",
+    "packet": "NetworkSyncPongV1",
+    "payload": "{\"anchor\":{\"match_id\":\"match-1\",\"epoch\":\"1\",\"tick\":\"42\",\"tick_us\":\"0\",\"since_tick_us\":\"2000\"},\"probe_id\":\"4\",\"t1_us\":\"123\",\"hold_us\":\"5\"}",
+    "valid": false
+  },
+  {
+    "name": "missing-nested-field",
+    "packet": "NetworkSyncSnapshotV1",
+    "payload": "{\"anchor\":{\"match_id\":\"match-1\",\"epoch\":\"1\",\"tick\":\"42\",\"tick_us\":\"16667\",\"since_tick_us\":\"2000\"},\"state\":{\"players\":[]},\"last_applied_input_tick\":\"42\",\"used_fallback_input\":false,\"input_feedback\":{\"target_tick\":\"43\",\"t1_us\":\"123456\",\"hold_us\":\"20\",\"arrival_margin_us\":\"-1\"}}",
+    "valid": false
+  },
+  {
+    "name": "negative-unsigned",
+    "packet": "NetworkSyncInputV1",
+    "payload": "{\"match_id\":\"match-1\",\"epoch\":\"1\",\"target_tick\":\"43\",\"t1_us\":\"-1\",\"last_snapshot_tick\":null,\"input\":{\"x\":1},\"actions\":[{\"action_id\":\"18446744073709551615\",\"payload\":{\"fire\":true}}]}",
+    "valid": false
+  },
+  {
+    "name": "disposition-lowercase",
+    "packet": "NetworkSyncSnapshotV1",
+    "payload": "{\"anchor\":{\"match_id\":\"match-1\",\"epoch\":\"1\",\"tick\":\"42\",\"tick_us\":\"16667\",\"since_tick_us\":\"2000\"},\"state\":{\"players\":[]},\"last_applied_input_tick\":\"42\",\"used_fallback_input\":false,\"input_feedback\":{\"target_tick\":\"43\",\"t1_us\":\"123456\",\"hold_us\":\"20\",\"arrival_margin_us\":\"-1\",\"disposition\":\"late\"}}",
+    "valid": false
+  },
+  {
+    "name": "disposition-unknown",
+    "packet": "NetworkSyncSnapshotV1",
+    "payload": "{\"anchor\":{\"match_id\":\"match-1\",\"epoch\":\"1\",\"tick\":\"42\",\"tick_us\":\"16667\",\"since_tick_us\":\"2000\"},\"state\":{\"players\":[]},\"last_applied_input_tick\":\"42\",\"used_fallback_input\":false,\"input_feedback\":{\"target_tick\":\"43\",\"t1_us\":\"123456\",\"hold_us\":\"20\",\"arrival_margin_us\":\"-1\",\"disposition\":\"Unknown\"}}",
+    "valid": false
+  },
+  {
+    "name": "disposition-number",
+    "packet": "NetworkSyncSnapshotV1",
+    "payload": "{\"anchor\":{\"match_id\":\"match-1\",\"epoch\":\"1\",\"tick\":\"42\",\"tick_us\":\"16667\",\"since_tick_us\":\"2000\"},\"state\":{\"players\":[]},\"last_applied_input_tick\":\"42\",\"used_fallback_input\":false,\"input_feedback\":{\"target_tick\":\"43\",\"t1_us\":\"123456\",\"hold_us\":\"20\",\"arrival_margin_us\":\"-1\",\"disposition\":1}}",
+    "valid": false
+  },
+  {
+    "name": "disposition-ordinal-string",
+    "packet": "NetworkSyncSnapshotV1",
+    "payload": "{\"anchor\":{\"match_id\":\"match-1\",\"epoch\":\"1\",\"tick\":\"42\",\"tick_us\":\"16667\",\"since_tick_us\":\"2000\"},\"state\":{\"players\":[]},\"last_applied_input_tick\":\"42\",\"used_fallback_input\":false,\"input_feedback\":{\"target_tick\":\"43\",\"t1_us\":\"123456\",\"hold_us\":\"20\",\"arrival_margin_us\":\"-1\",\"disposition\":\"1\"}}",
+    "valid": false
+  }
+]
