@@ -152,13 +152,17 @@ async function probe(endpoint, wire) {
         socket.send(wire.encodeStreamWireFrame(header, Buffer.from(JSON.stringify(value))));
       },
       async receive() {
-        const next = await messages.next();
-        assert.ok(!next.done, 'STREAM connection closed before reply');
-        const [event] = next.value;
-        const frame = wire.decodeStreamWireFrame(new Uint8Array(event.data));
-        const header = wire.decodeStreamWireHeader(frame.header);
-        assert.equal(header.codec, json);
-        return { header, body: JSON.parse(Buffer.from(frame.payload).toString('utf8')) };
+        for (;;) {
+          const next = await messages.next();
+          assert.ok(!next.done, 'STREAM connection closed before reply');
+          const [event] = next.value;
+          const frame = wire.decodeStreamWireFrame(new Uint8Array(event.data));
+          const header = wire.decodeStreamWireHeader(frame.header);
+          // Server liveness pings may arrive while the probe waits in the queue.
+          if (header.kind === kinds.Control) continue;
+          assert.equal(header.codec, json, `kind=${header.kind} name=${header.name}`);
+          return { header, body: JSON.parse(Buffer.from(frame.payload).toString('utf8')) };
+        }
       }
     };
   }
