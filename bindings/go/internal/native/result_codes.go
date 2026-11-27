@@ -2,29 +2,19 @@
 
 package native
 
-type SendFlags int
+import contracts "zlink.systems/zlink/contracts"
 
-const (
-	SendFlagsNone     SendFlags = 0
-	SendFlagsDontWait SendFlags = 1
+type (
+	SendFlags = contracts.SendFlags
+	RecvFlags = contracts.RecvFlags
 )
 
-type RecvFlags int
+type CompletionKind = contracts.CompletionKind
 
 const (
-	RecvFlagsNone     RecvFlags = 0
-	RecvFlagsDontWait RecvFlags = 1
-)
-
-// CompletionKind identifies a record in a socket's native completion queue.
-// CompletionSend is retained for ABI compatibility but is never emitted;
-// managed sends use CompletionWritable as a retry notification.
-type CompletionKind int
-
-const (
-	CompletionSend     CompletionKind = 1
-	CompletionRequest  CompletionKind = 2
-	CompletionWritable CompletionKind = 3
+	CompletionSend     = contracts.CompletionSend
+	CompletionRequest  = contracts.CompletionRequest
+	CompletionWritable = contracts.CompletionWritable
 )
 
 type SendCompleteResult int
@@ -36,116 +26,91 @@ const (
 	SendTimedOut     SendCompleteResult = 803
 )
 
-type SubmitResult int
-
-const (
-	SubmitOK              SubmitResult = 0
-	SubmitBackpressured   SubmitResult = 1
-	SubmitNotConnected    SubmitResult = 2
-	SubmitNotFound        SubmitResult = 3
-	SubmitTerminated      SubmitResult = 4
-	SubmitInvalidHandle   SubmitResult = 5
-	SubmitInvalidArgument SubmitResult = 6
-	SubmitNotSupported    SubmitResult = 7
-	SubmitInvalidState    SubmitResult = 8
-	SubmitThreadViolation SubmitResult = 9
-	SubmitOutOfMemory     SubmitResult = 10
-	SubmitSeqExhausted    SubmitResult = 11
-	SubmitInternalError   SubmitResult = 12
-	SubmitNotAdmitted     SubmitResult = 13
+// Result codes are owned by contracts and shared with the native binding.
+type (
+	SubmitResult  = contracts.SubmitResult
+	RequestResult = contracts.RequestResult
+	RecvResult    = contracts.RecvResult
+	HandlerResult = contracts.HandlerResult
+	CloseResult   = contracts.CloseResult
+	BindResult    = contracts.BindResult
+	ConnectResult = contracts.ConnectResult
+	ConfigResult  = contracts.ConfigResult
 )
 
-type RequestResult int
-
 const (
-	RequestOK              RequestResult = 0
-	RequestTimedOut        RequestResult = 101
-	RequestNotFound        RequestResult = 102
-	RequestTerminated      RequestResult = 103
-	RequestProtocolError   RequestResult = 104
-	RequestInternalError   RequestResult = 105
-	RequestRejected        RequestResult = 106
-	RequestConflict        RequestResult = 107
-	RequestBusy            RequestResult = 108
-	RequestNotConnected    RequestResult = 109
-	RequestInvalidArgument RequestResult = 110
-	RequestInvalidState    RequestResult = 111
-	RequestNotSupported    RequestResult = 112
-	RequestBackpressured   RequestResult = 113
-)
-
-type RecvResult int
-
-const (
-	RecvOK             RecvResult = 0
-	RecvNoData         RecvResult = 201
-	RecvBusy           RecvResult = 202
-	RecvTerminated     RecvResult = 203
-	RecvInvalidHandle  RecvResult = 204
-	RecvNotSupported   RecvResult = 205
-	RecvInternalError  RecvResult = 206
-	RecvBufferTooSmall RecvResult = 207
-	RecvInvalidState   RecvResult = 208
-)
-
-type HandlerResult int
-
-const (
-	HandlerOK              HandlerResult = 0
-	HandlerInvalidArgument HandlerResult = 301
-	HandlerBusy            HandlerResult = 302
-	HandlerNotSupported    HandlerResult = 303
-	HandlerDeadlock        HandlerResult = 304
-	HandlerInvalidHandle   HandlerResult = 305
-	HandlerInternalError   HandlerResult = 306
-)
-
-type CloseResult int
-
-const (
-	CloseOK            CloseResult = 0
-	CloseBusy          CloseResult = 401
-	CloseShutdown      CloseResult = 402
-	CloseInvalidHandle CloseResult = 403
-	CloseInternalError CloseResult = 404
-)
-
-type BindResult int
-
-const (
-	BindOK              BindResult = 0
-	BindInvalidArgument BindResult = 501
-	BindAddrInUse       BindResult = 502
-	BindNotSupported    BindResult = 503
-	BindInvalidHandle   BindResult = 504
-	BindInternalError   BindResult = 505
-)
-
-type ConnectResult int
-
-const (
-	ConnectOK              ConnectResult = 0
-	ConnectInvalidArgument ConnectResult = 601
-	ConnectNotSupported    ConnectResult = 602
-	ConnectInvalidHandle   ConnectResult = 603
-	ConnectInternalError   ConnectResult = 604
-	ConnectNotFound        ConnectResult = 605
-	ConnectConflict        ConnectResult = 606
-	ConnectBusy            ConnectResult = 607
-	ConnectAuthFailed      ConnectResult = 608
-)
-
-type ConfigResult int
-
-const (
-	ConfigOK              ConfigResult = 0
-	ConfigInvalidHandle   ConfigResult = 701
-	ConfigInvalidArgument ConfigResult = 702
-	ConfigNotSupported    ConfigResult = 703
-	ConfigInternalError   ConfigResult = 704
-	ConfigInvalidState    ConfigResult = 705
-	ConfigNotFound        ConfigResult = 706
-	ConfigConflict        ConfigResult = 707
-	ConfigBufferTooSmall  ConfigResult = 708
-	ConfigBusy            ConfigResult = 709
+	SubmitOK               = contracts.SubmitOK
+	SubmitBackpressured    = contracts.SubmitBackpressured
+	SubmitNotConnected     = contracts.SubmitNotConnected
+	SubmitNotFound         = contracts.SubmitNotFound
+	SubmitTerminated       = contracts.SubmitTerminated
+	SubmitInvalidHandle    = contracts.SubmitInvalidHandle
+	SubmitInvalidArgument  = contracts.SubmitInvalidArgument
+	SubmitNotSupported     = contracts.SubmitNotSupported
+	SubmitInvalidState     = contracts.SubmitInvalidState
+	SubmitThreadViolation  = contracts.SubmitThreadViolation
+	SubmitOutOfMemory      = contracts.SubmitOutOfMemory
+	SubmitSeqExhausted     = contracts.SubmitSeqExhausted
+	SubmitInternalError    = contracts.SubmitInternalError
+	SubmitNotAdmitted      = contracts.SubmitNotAdmitted
+	RequestOK              = contracts.RequestOK
+	RequestTimedOut        = contracts.RequestTimedOut
+	RequestNotFound        = contracts.RequestNotFound
+	RequestTerminated      = contracts.RequestTerminated
+	RequestProtocolError   = contracts.RequestProtocolError
+	RequestInternalError   = contracts.RequestInternalError
+	RequestRejected        = contracts.RequestRejected
+	RequestConflict        = contracts.RequestConflict
+	RequestBusy            = contracts.RequestBusy
+	RequestNotConnected    = contracts.RequestNotConnected
+	RequestInvalidArgument = contracts.RequestInvalidArgument
+	RequestInvalidState    = contracts.RequestInvalidState
+	RequestNotSupported    = contracts.RequestNotSupported
+	RequestBackpressured   = contracts.RequestBackpressured
+	RecvOK                 = contracts.RecvOK
+	RecvNoData             = contracts.RecvNoData
+	RecvBusy               = contracts.RecvBusy
+	RecvTerminated         = contracts.RecvTerminated
+	RecvInvalidHandle      = contracts.RecvInvalidHandle
+	RecvNotSupported       = contracts.RecvNotSupported
+	RecvInternalError      = contracts.RecvInternalError
+	RecvBufferTooSmall     = contracts.RecvBufferTooSmall
+	RecvInvalidState       = contracts.RecvInvalidState
+	HandlerOK              = contracts.HandlerOK
+	HandlerInvalidArgument = contracts.HandlerInvalidArgument
+	HandlerBusy            = contracts.HandlerBusy
+	HandlerNotSupported    = contracts.HandlerNotSupported
+	HandlerDeadlock        = contracts.HandlerDeadlock
+	HandlerInvalidHandle   = contracts.HandlerInvalidHandle
+	HandlerInternalError   = contracts.HandlerInternalError
+	CloseOK                = contracts.CloseOK
+	CloseBusy              = contracts.CloseBusy
+	CloseShutdown          = contracts.CloseShutdown
+	CloseInvalidHandle     = contracts.CloseInvalidHandle
+	CloseInternalError     = contracts.CloseInternalError
+	BindOK                 = contracts.BindOK
+	BindInvalidArgument    = contracts.BindInvalidArgument
+	BindAddrInUse          = contracts.BindAddrInUse
+	BindNotSupported       = contracts.BindNotSupported
+	BindInvalidHandle      = contracts.BindInvalidHandle
+	BindInternalError      = contracts.BindInternalError
+	ConnectOK              = contracts.ConnectOK
+	ConnectInvalidArgument = contracts.ConnectInvalidArgument
+	ConnectNotSupported    = contracts.ConnectNotSupported
+	ConnectInvalidHandle   = contracts.ConnectInvalidHandle
+	ConnectInternalError   = contracts.ConnectInternalError
+	ConnectNotFound        = contracts.ConnectNotFound
+	ConnectConflict        = contracts.ConnectConflict
+	ConnectBusy            = contracts.ConnectBusy
+	ConnectAuthFailed      = contracts.ConnectAuthFailed
+	ConfigOK               = contracts.ConfigOK
+	ConfigInvalidHandle    = contracts.ConfigInvalidHandle
+	ConfigInvalidArgument  = contracts.ConfigInvalidArgument
+	ConfigNotSupported     = contracts.ConfigNotSupported
+	ConfigInternalError    = contracts.ConfigInternalError
+	ConfigInvalidState     = contracts.ConfigInvalidState
+	ConfigNotFound         = contracts.ConfigNotFound
+	ConfigConflict         = contracts.ConfigConflict
+	ConfigBufferTooSmall   = contracts.ConfigBufferTooSmall
+	ConfigBusy             = contracts.ConfigBusy
 )

@@ -626,11 +626,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                     .locations()
                                                     .options()
                                                     .sessionRelocationSealTimeout(),
-                                            meshName ->
-                                                    this.meshDrains.isSealed(meshName)
-                                                            || runtimeState.get()
-                                                                    != ZLinkFrameworkRuntimeState
-                                                                            .SERVING,
+                                            this.meshDrains::isSealed,
+                                            () ->
+                                                    runtimeState.get()
+                                                            == ZLinkFrameworkRuntimeState.SERVING,
                                             construction.relocationStateMachines(),
                                             construction
                                                     .aggregateRelocationAuthorityStoreDecorator(),
@@ -1404,6 +1403,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         effectiveTargetVersion,
                         completion,
                         new CompletableFuture<>(),
+                        new AtomicBoolean(),
                         System.nanoTime());
         if (!activeRelocation.compareAndSet(null, candidate)) {
             return relocate(options);
@@ -1433,13 +1433,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                     ZLinkFrameworkRuntimeState.SERVING);
             return independentRelocationWaiter(completion);
         }
-        AtomicBoolean relocationPublished = new AtomicBoolean(false);
         CompletionStage<Void> relocation =
                 relocateWithTargetWait(
                         relocationDeadline,
                         options.mode(),
                         effectiveTargetVersion,
-                        relocationPublished,
+                        candidate.published(),
                         candidate.cancellation());
         relocation.whenComplete(
                 (ignored, relocationFailure) -> {
@@ -1783,11 +1782,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             long effectiveTargetVersion,
             CompletableFuture<ZLinkFrameworkRelocationResult> completion,
             CompletableFuture<Void> cancellation,
+            AtomicBoolean published,
             long startedNanos) {
         private RelocationOperation {
             Objects.requireNonNull(mode, "mode");
             Objects.requireNonNull(completion, "completion");
             Objects.requireNonNull(cancellation, "cancellation");
+            Objects.requireNonNull(published, "published");
         }
 
         boolean matches(ZLinkFrameworkRelocationMode requestedMode, long requestedTargetVersion) {
@@ -2519,6 +2520,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (drainStarted.compareAndSet(false, true)) {
             try {
                 terminationDeadline.compareAndSet(null, Instant.now().plus(deadline));
+                if (spotRetire != null) spotRetire.onStopDeadline(terminationDeadline.get());
                 meshDrains.sealAll();
                 meshNodes
                         .nodesByName()
@@ -2577,6 +2579,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private void runDrain(CompletionStage<Void> acceptedTargetRelocations) {
+        RelocationOperation sourceRelocation = activeRelocation.get();
+        // Only a published Relocation can have accepted source units. Publication rollback
+        // can itself await Shutdown.
+        CompletionStage<?> sourceSettlement =
+                sourceRelocation == null || !sourceRelocation.published().get()
+                        ? CompletableFuture.completedFuture(null)
+                        : sourceRelocation.completion();
         CompletionStage<Void> markerPublished =
                 locationAutoConnectHost == null
                         ? CompletableFuture.completedFuture(null)
@@ -2600,6 +2609,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                     traceDrainStage(
                                                             "target_relocation",
                                                             acceptedTargetRelocations))
+                                    .thenCompose(
+                                            barrierStep ->
+                                                    traceDrainStage(
+                                                            "source_relocation", sourceSettlement))
                                     .thenCompose(
                                             barrierStep ->
                                                     traceDrainStage(

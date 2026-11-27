@@ -180,6 +180,17 @@ dispatch_reason_from_error (const framework_exception_t *error) noexcept
                                                         : framework_error_kind_t::internal_failure);
 }
 
+inline dispatch_error_reason_t
+spot_handler_failure_reason (const framework_exception_t *error) noexcept
+{
+    if (error
+        && (error_origin (*error) == error_origin_t::framework
+            || failure_origin (*error) == failure_origin_t::payload_decode
+            || boundary_state (*error) != boundary_error_t::none))
+        return dispatch_reason_from_error (error);
+    return dispatch_error_reason_t::handler_exception;
+}
+
 inline message_flow_reason_t
 message_flow_reason_from_error (const framework_exception_t *error) noexcept
 {

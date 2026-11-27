@@ -12,9 +12,12 @@ import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
 
 final class ZLinkRuntimeConstructorVisibilityTest {
     @RepeatedTest(100)
@@ -23,7 +26,10 @@ final class ZLinkRuntimeConstructorVisibilityTest {
                 constructorWith(
                         ZLinkUserSpotRetireRuntime.class,
                         parameters ->
-                                parameters.length == 16 && parameters[13] == java.util.List.class));
+                                parameters.length == 17
+                                        && parameters[12] == Predicate.class
+                                        && parameters[13] == BooleanSupplier.class
+                                        && parameters[14] == List.class));
         assertPackagePrivate(
                 constructorWith(
                         ZLinkSpotRuntime.class,
@@ -37,8 +43,7 @@ final class ZLinkRuntimeConstructorVisibilityTest {
                         parameters -> Arrays.asList(parameters).contains(ExecutorService.class)));
     }
 
-    private static Constructor<?> constructorWith(
-            Class<?> type, java.util.function.Predicate<Class<?>[]> signature) {
+    private static Constructor<?> constructorWith(Class<?> type, Predicate<Class<?>[]> signature) {
         Constructor<?> constructor =
                 Arrays.stream(type.getDeclaredConstructors())
                         .filter(candidate -> signature.test(candidate.getParameterTypes()))

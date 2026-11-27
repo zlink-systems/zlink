@@ -38,7 +38,10 @@ import type { PendingOperation } from '../../packages/framework/src/runtime/foun
 import { frameworkErrorMappingFixture } from './framework-error-mapping-fixture';
 import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
-import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
+import type {
+  ZLinkAuthorityMutation,
+  ZLinkAuthoritySnapshot
+} from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import { ZLinkInMemoryLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-location-store';
 import { ZLinkAggregateInventoryStore } from '../../packages/framework/src/runtime/locations/aggregate-inventory-store';
 import { ZLinkInMemoryProviderLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
@@ -894,7 +897,12 @@ test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its 
     [35, ZLinkFrameworkErrorKind.DataLost],
     [17, ZLinkFrameworkErrorKind.InternalFailure]
   ] as const) {
-    const harness = createActorJoinHostHarness({ explicitFailureCode: failureCode });
+    const harness = createActorJoinHostHarness({
+      restoreFailure:
+        failureCode === 35
+          ? new ServiceRelocationDataLostError('Restore inventory is damaged.')
+          : new Error('Restore factory failed.')
+    });
     try {
       const started = performance.now();
       await assert.rejects(harness.relocate(), (error: unknown) => {
@@ -905,6 +913,10 @@ test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its 
       assert(performance.now() - started < 1_000);
       assert(harness.events.includes('source:rolled-back'));
       assert.equal(harness.prepareFingerprints.length, 1);
+      assert.equal(
+        harness.location.progress.some((record) => record?.phase === 'prepared'),
+        false
+      );
       assert.equal(harness.location.preserves, 0);
       assert.equal(harness.location.commits, 0);
     } finally {
@@ -2967,7 +2979,7 @@ interface ActorJoinHarnessOptions {
   readonly targetDescriptorState?: ZLinkFrameworkRuntimeState;
   readonly realSourceCapture?: boolean;
   readonly sourceQuiescenceChanged?: (safe: boolean) => void;
-  readonly explicitFailureCode?: number;
+  readonly restoreFailure?: Error;
   readonly submitFailure?: unknown;
   readonly rollbackFailure?: unknown;
   readonly sessionOwnerRouteReady?: () => boolean;
@@ -3356,6 +3368,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         undefined,
         'Entry relocation preserves logical membership at the native boundary'
       );
+      if (options.restoreFailure !== undefined) throw options.restoreFailure;
       events.push('restore:hidden');
       const native = targetCanonicalRuntime.restoreActorAuthority(
         restoredActorId,
@@ -3566,19 +3579,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
               if (result === SubmitResult.Ok) {
                 const replyParts = Array.isArray(reply) ? reply : [reply];
                 readyReplies.push(Buffer.from(replyParts[0]!));
-                finish(() =>
-                  resolve(
-                    options.explicitFailureCode === undefined
-                      ? replyParts.map((part) => Buffer.from(part))
-                      : [
-                          encodeServiceRelocationControlResponse({
-                            ...decodeServiceRelocationControlResponse(Buffer.from(replyParts[0]!)),
-                            kind: 'failed',
-                            failureCode: options.explicitFailureCode
-                          } as ServiceMaintenanceRelocationFailed)
-                        ]
-                  )
-                );
+                finish(() => resolve(replyParts.map((part) => Buffer.from(part))));
               }
               if (result !== SubmitResult.Ok) {
                 sourceRouteReady = false;
@@ -3936,7 +3937,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         ? {
             ...location,
             async compareExchangeAuthority(key: unknown, expected: any, mutation: any) {
-              if (mutation.relocation !== undefined)
+              if (!location.isSourcePreserve(mutation))
                 return location.compareExchangeAuthority(key, expected, mutation);
               assert.fail('Missing must not attempt source Preserve');
             },
@@ -4402,7 +4403,12 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
   let preserves = 0;
   let phaseWrites = 0;
   const progress: (Record<string, unknown> | undefined)[] = [];
+  const isSourcePreserve = (mutation: ZLinkAuthorityMutation): boolean =>
+    mutation.kind === 'put' &&
+    mutation.generationTransition === 'preserve' &&
+    mutation.relocation === undefined;
   return {
+    isSourcePreserve,
     get progress() {
       return [...progress];
     },
@@ -4494,14 +4500,19 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
         removed = true;
         return { kind: 'deleted', storeNow: new Date() };
       }
-      if (mutation.relocation !== undefined) {
+      const sourcePreserved = isSourcePreserve(mutation);
+      const relocation =
+        sourcePreserved && current.relocation?.phase === 'prepared'
+          ? { ...current.relocation, phase: 'aborted' as const }
+          : mutation.relocation;
+      if (relocation !== undefined) {
         progress.push(
-          encodeAuthorityAggregate(undefined, mutation.relocation ?? undefined)?.relocation as
+          encodeAuthorityAggregate(undefined, relocation ?? undefined)?.relocation as
             Record<string, unknown> | undefined
         );
       }
       const settlesOwner =
-        mutation.relocation === undefined ||
+        sourcePreserved ||
         (mutation.relocation === null &&
           (current.ownerId !== initial.ownerId ||
             current.ownerLeaseGeneration !== initial.ownerLeaseGeneration));
@@ -4511,10 +4522,7 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
         ...current,
         storeVersion: { value: `normalized-v${commits + preserves + phaseWrites + 1}` } as never,
         payload: Buffer.from(mutation.payload),
-        relocation:
-          mutation.relocation === undefined
-            ? current.relocation
-            : (mutation.relocation ?? undefined)
+        relocation: relocation === undefined ? current.relocation : (relocation ?? undefined)
       };
       return { ...current, kind: 'stored' };
     },
@@ -4871,7 +4879,7 @@ test('processed PREPARE holds real source FIFO until Store Preserve response con
   });
   const compare = harness.location.compareExchangeAuthority.bind(harness.location);
   harness.location.compareExchangeAuthority = async (key, expected, mutation) => {
-    if (mutation.relocation !== undefined) return compare(key, expected, mutation);
+    if (!harness.location.isSourcePreserve(mutation)) return compare(key, expected, mutation);
     assert.equal(mutation.generationTransition, 'preserve');
     entered();
     await held;
@@ -4929,7 +4937,7 @@ test('uncertain Preserve response retains real source FIFO until Store readback 
     return read();
   };
   harness.location.compareExchangeAuthority = async (key, expected, mutation) => {
-    if (mutation.relocation !== undefined) return compare(key, expected, mutation);
+    if (!harness.location.isSourcePreserve(mutation)) return compare(key, expected, mutation);
     const result = await compare(key, expected, mutation);
     if (uncertain) {
       uncertain = false;
@@ -5028,7 +5036,9 @@ for (const mode of ['explicit-failed', 'never-started', 'preserve', 'target'] as
       });
       const harness = createActorJoinHostHarness({
         metrics: new ZLinkRuntimeMetrics(collector.provider as never),
-        ...(mode === 'explicit-failed' ? { explicitFailureCode: 35 } : {}),
+        ...(mode === 'explicit-failed'
+          ? { restoreFailure: new ServiceRelocationDataLostError('Restore inventory is damaged.') }
+          : {}),
         ...(mode === 'never-started' ? { submitFailure: original } : {}),
         ...(mode === 'preserve'
           ? {
@@ -5246,15 +5256,24 @@ for (const terminal of ['Store validation error', 'source disposal'] as const) {
     });
     harness.location.liveLeases.set('source-owner', 3n);
     const failure = new TypeError('invalid Store authority read');
+    let preserveAttempts = 0;
     const relocation = harness.relocate();
     void relocation.catch(() => undefined);
     try {
       await harness.waitForReadyAttempt(1);
-      if (terminal === 'Store validation error')
+      if (terminal === 'Store validation error') {
         harness.location.readAuthority = async () => {
           throw failure;
         };
-      else await harness.stopSource();
+      } else {
+        const compare = harness.location.compareExchangeAuthority.bind(harness.location);
+        harness.location.compareExchangeAuthority = async (key, version, mutation) => {
+          if (!harness.location.isSourcePreserve(mutation)) return compare(key, version, mutation);
+          preserveAttempts++;
+          throw new Error('Runtime disposal submitted a Store Preserve.');
+        };
+        await harness.stopSource();
+      }
       await assert.rejects(relocation, (error) =>
         terminal === 'Store validation error'
           ? error === failure
@@ -5266,6 +5285,7 @@ for (const terminal of ['Store validation error', 'source disposal'] as const) {
       assert.equal(harness.resumeObservations.length, 0);
       assert(!harness.events.includes('source:fifo-admit'));
       assert.equal(harness.location.preserves, 0);
+      assert.equal(preserveAttempts, 0, 'bare disposal before Cutover cannot submit Preserve');
       assert.equal(harness.prepareFingerprints.length, 1);
     } finally {
       await harness.dispose();

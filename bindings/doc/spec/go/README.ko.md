@@ -11,10 +11,8 @@ title: "Go 바인딩 공개 계약"
 > **이 장이 정의하는 것** — Go binding이 Core raw C API 위에
 > 제공하는 공개 type·ownership·오류 계약.
 
-이 문서는 Go binding의 공개 계약을 정의한다. 다른 언어에만 있는 기능은 이 문서의
-계약이 아니다. 정확한 Go 식별자와 method
-signature는 `bindings/go/contracts/`와 module root의 동일한 projection을 기준으로
-확인한다.
+이 문서는 공통 스펙의 소켓별 능력을 Go의 공개 타입과 메서드로 정의한다. 공개 API의 정확한 이름과
+signature는 module root의 선언을 따른다.
 
 | 절 | 다루는 내용 |
 |---|---|
@@ -33,12 +31,13 @@ signature는 `bindings/go/contracts/`와 module root의 동일한 projection을 
 ## Module과 공개 package
 
 Go module의 import path는 `zlink.systems/zlink`이다. 일반적인 consumer는 module
-root의 `zlink` package를 import한다. `zlink.systems/zlink/contracts`는 같은
-계약을 분류해 선언하는 public projection이며 root package가 이를 다시 export한다.
+root의 `zlink` package를 import한다. `zlink.systems/zlink/contracts`는 열거형·상수·결과·오류와
+런타임 자원을 참조하지 않는 값 구조체를 정의하며, root package가 이를 다시 export한다. 구체 핸들과
+native 상태를 포함하는 공개 타입은 `internal/native`가 구현하고 root package가 노출한다.
+Context·소켓·Poller·Timer·SocketMonitor 구체 핸들의 별도 계약 인터페이스 선언 여부는 후속 결정으로 남긴다.
 
-Runtime handle, cgo declaration, native struct, completion drain state와 buffer
-marshalling은 `internal/native`의 구현 세부사항이다. 이 타입과 package는 consumer
-계약이 아니다.
+root가 노출하는 구체 핸들 타입의 내부 필드, cgo 선언, native 구조체, completion drain 상태와 buffer
+marshalling은 `internal/native`의 구현 세부사항이다. 이 내부 상태와 package는 consumer 계약이 아니다.
 
 - Package 계약은 Core raw C API를 투영한다.
 - Context, Message, raw socket, monitor, poller, timer와 utility는 포함하지만 Spot, Actor, MeshNode와 service operation은 포함하지 않는다.
@@ -71,6 +70,11 @@ Core budget은 public `uint64` method로 받고 Core의 `uint64` byte 값으로 
 전달한다. Profile은 `AutoHwmProfile`로 전달한다. Context는
 `CoreHwmBudgetSnapshot() (CoreHwmBudgetSnapshot, error)`와
 `ResetCoreHwmBudgetMetrics() error`를 제공한다.
+
+`Context.Shutdown() error`는 context의 작업 종료를 요청하며 `Context.RecalculateAutoHwm() error`는 Core에
+Auto-HWM 재계산을 요청한다. Package 함수 `RuntimeVersion() Version`,
+`Has(capability string) (bool, error)`, `Proxy(frontend, backend, capture SocketTarget) error`는 각각 Core
+버전·기능 확인·proxy를 제공한다.
 
 Poller가 등록한 socket과 timer는 해당 resource의 handle을 빌려 사용한다. 따라서
 source를 `Close`하기 전에 poller에서 제거해야 하며, 하나의 poller에 대한 add,
@@ -107,6 +111,14 @@ property는 제공하지 않는다.
 만든다. `NewMessage`의 입력 byte는 native storage로 복사된다. `Message.Data`는
 message가 열려 있는 동안에만 유효한 native payload view를 반환한다. 수명을
 message 밖으로 연장해야 할 때는 `Message.Bytes`가 snapshot을 만든다.
+
+`NewMessageString`은 Go 문자열의 byte를 복사한다. `Message.Clone()`과 `Copy()`는 각각 정리할 수 있는 새
+message를 반환한다. `CopyTo(destination)`와 `TryCopyTo(destination)`는 caller buffer로 복사한다.
+`Size()`·`IsEmpty()`는 payload 크기를, `String()`·`Text()`는 Go 문자열을, `RefCount()`는 storage 참조 수를
+제공한다.
+
+Routing ID 생성자는 `NewRoutingID`, `NewRoutingIDString`, `NewRoutingIDUint32`, `NewRoutingIDUUIDBytes`,
+`NewRoutingIDFromHex`다. 크기·입력 오류를 생성 시점에 받으려면 `TryNewRoutingID`·`TryNewRoutingIDFromHex`가 `*ConfigError`(`ConfigInvalidArgument`)를 반환한다(`New*`는 오류를 버리고 빈 값을 반환한다). `RoutingID.Uint32()`와 `UUIDBytes()`는 4바이트·16바이트 ID를 typed 값으로 꺼내며 형식이 다르면 `ok=false`다.
 
 | Builder 경로 | ownership 규칙 |
 |---|---|
@@ -145,21 +157,66 @@ Send와 request의 `Submit(context.Context)`는 Core `DONTWAIT`로 한 번 제�
 
 ### Socket별 operation
 
-| Socket | 제공 operation |
-|---|---|
-| PAIR | `Send()` |
-| PUB, XPUB | 별도 `PublishOp`를 반환하는 `Publish(topic)` |
-| DEALER | `Send()`, `Request()` |
-| ROUTER | `SendTo(RoutingID)`, `Request(RoutingID)`, `Reply(RoutingID, ReplyToken)` |
-| STREAM | `SendTo(RoutingID)`, RAW `Recv`, PACKET `RecvPacket` |
+소켓별 공통 계약은 [Socket Capability Matrix](../README.ko.md#socket-capability-matrix)를 따른다.
 
-| Socket | 수신 API |
-|---|---|
-| PAIR, DEALER, ROUTER, STREAM | `Received` 저장소를 채우는 `Recv` |
-| SUB, XSUB | `TopicMessage` 저장소를 채우는 `Subscribe` |
+| 소켓 | 제출 | 수신 |
+|---|---|---|
+| PAIR | `Send` | `Recv` |
+| DEALER | `Send`, `Request` | `Recv` |
+| ROUTER | `SendTo`, `Request`, `Reply` | `Recv` |
+| PUB | `Publish` | — |
+| SUB | — | `Subscribe` |
+| XPUB | `Publish` | `ReceiveSubscriptionEvent` |
+| XSUB | — | `Subscribe` |
+| STREAM | `SendTo` | `Recv`, `RecvPacket` |
 
-Binding은 Core whole-message 수신 함수를 한 번 호출해 받은 배열로 이 multipart 수신 API를
-구현한다. Native 배열과 capacity 관리는 Go public method로 노출하지 않는다.
+모든 raw 소켓은 `Bind`와 `Unbind`로 endpoint를 열고 닫으며, `DisconnectRID`로 routing ID에 해당하는 peer
+연결을 끊는다. STREAM을 제외한 소켓은 `Connect`로 outbound 연결을 등록하고 `Disconnect`로 해제한다.
+
+`Bind`, `Unbind`, `Connect`, `Disconnect`, `DisconnectRID`는 `error`를 반환한다. Core의 bind 실패는
+`*BindError`로, 나머지 연결 연산 실패는 `*ConnectError`로 전달한다.
+
+`SetTLSServer(certPath, keyPath string, requireClientCert bool) error`는 bind 전에 인증서·키와 client 인증
+요구를 설정한다. `SetTLSClient(caCertPath, hostname string, trustSystem bool) error`는 connect 전에 CA·서버
+이름과 시스템 CA 사용 여부를 설정한다. 두 메서드는 모든 raw 소켓에 공통이며 Core 설정 실패는
+`*ConfigError`로 전달한다.
+
+`SubSocket`과 `XSubSocket`은 `SetSubscription(filter string) error`,
+`UnsetSubscription(filter string) error`, `SubscriptionAt(index int) (string, bool, error)`를 제공한다.
+조회는 filter와 pattern 여부를 반환한다.
+`XPubSocket.ReceiveSubscriptionEvent(out *SubscriptionEvent, flags RecvFlags) (bool, error)`는 caller가
+제공한 결과를 채운다.
+
+`CommonOptions()`는 PAIR·DEALER·ROUTER·PUB·SUB·XPUB·XSUB의 `CommonSocketOptions`를, `PubOptions()`는
+PUB·XPUB의 `PubSocketOptions`를 반환한다. ROUTER의
+`SetMandatory`·`SetHandover`·`SetProbe`·`SetConnectRoutingID`, DEALER의 `SetProbe`, STREAM의
+`SetNotify`·`SetReceiveMode`, SUB·XSUB의 `TopicsCount`는 소켓 메서드다.
+
+수신 API는 Core whole-message 결과로 caller 저장소를 채우며 native 배열과 capacity를 노출하지 않는다.
+
+### 소켓 readiness snapshot
+
+`(*RouterSocket).RoutesSnapshot() ([]RouterRoute, error)`는 Core가 선택한 route를 routing ID마다 한 행으로
+반환한다. `RouterRoute`는 `RoutingID`, `RouteGeneration`을 제공한다. Route generation은 0이 아닌 opaque
+token이며 동등성만 비교한다. `PollRoute`는 선택 route 변경을 알린다.
+
+연결 시도 snapshot은 outbound 연결 등록마다 한 행을 반환한다. 표면은 STREAM을 제외한 raw 소켓의
+`ConnectionAttemptsSnapshot() ([]ConnectionAttempt, error)`과 Poller의 `PollConnect`다.
+`ConnectionAttempt`는 `Endpoint`, `IntentID`, `Revision`, `LastFailureID`, `State`, `LastFailure`를 담는다.
+`ConnectionFailure`의 필드는 `Kind`, `Stage`, `NormalizedErrno`, `DisconnectReason`다. 상태, 실패 원인,
+단계는 각각 닫힌 `ConnectionAttemptState`, `ConnectionFailureKind`, `ConnectionFailureStage` enum으로 Core
+값을 보존한다.
+
+`Endpoint`는 UTF-8 endpoint를 담은 `string`이며, `LastFailure`는 복구 뒤에도 최근
+실패를 보존하는 `ConnectionFailure`다. `NormalizedErrno` (`int32`)와 `DisconnectReason` (`uint32`)은
+진단값이다.
+
+`IntentID`와 `Revision`은 0이 아닌 `uint64` opaque token이다. `LastFailureID`는 같은 타입이며
+실패 이력이 없을 때 0이다. 토큰은 동등성만 비교한다. 연결 실패는 snapshot 행에 담고 조회 자체의
+실패만 `*ConfigError`로 전달한다. 바인딩은 monitor 이력이나 timer polling으로 연결 결과를 추정하지 않는다.
+
+성공한 snapshot은 반영한 변경의 readiness를 해제한다. Snapshot 종류마다 소켓당 observer를 하나 둔다.
+[공통 snapshot 계약](../README.ko.md#socket-readiness-snapshots)이 두 readiness의 의미를 정한다.
 
 ## Receive와 eventing
 
@@ -181,7 +238,7 @@ event를 선택하고 여러 mask는 OR로 합친다. `MonitorHwmBytes(0)`은 Co
 지정하면 호출 순서상 마지막 값이 적용된다.
 
 `MonitorStatus`는 pending message count와 별도로 `SndPendingBytes`와 `RcvPendingBytes`를
-노출한다. `CoreHwmBudgetSnapshot`은 ABI version/size, configured/resolved memory
+노출한다. `StateFlags`·`DetailFlags`(`uint32`)는 `State()`·`Detail()`이 typed 값(`MonitorStateFlags`, `MonitorStatusDetailFlags`)으로 돌려주고 `Has(flag)`로 비트를 확인한다. 소켓의 raw int `SetRidDuplicatePolicy`·`RidDuplicatePolicy`는 Deprecated이며 typed `CommonOptions()` 메서드를 쓴다. `CoreHwmBudgetSnapshot`은 ABI version/size, configured/resolved memory
 limit, configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/
 current/peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
 monitor/instance aggregate, application/completion queue count,
@@ -195,6 +252,11 @@ Poller는 socket, file descriptor와 timer source의 readiness를 `PollEvent`로
 Timer는 interval event를 poller 또는 직접 receive하는 데 사용한다. Monitor와 timer의
 public pull method가 event와 fire count를 반환한다.
 
+[공통 MonitorStatus 계약](../README.ko.md#monitorstatus)에 따라 `MonitorStatus`는 Core ABI v4를 반영한다.
+`ABIVersion`와 `StructSize`는 반환된 layout을 확인하는 진단값이다. `MonitorEvent`의 `Event`, `Value`,
+`RoutingID`, `LocalAddr`, `RemoteAddr`, `ConnectionID`, `TransportLane`, `Flags`는
+[공통 MonitorEvent 계약](../README.ko.md#monitorevent)의 필드 의미와 native layout을 따른다.
+
 ## Receive flow state
 
 `ReceiveFlowState` 타입은 `ReceiveFlowRunning`, `ReceiveFlowPaused`를 제공한다.
@@ -204,6 +266,8 @@ errno를 담은 `*ConfigError`를 반환한다. Nil 또는 닫힌 handle은 nati
 상태·결과·monitor 투영은 [공통 receive-flow 계약](../README.ko.md#receive-flow-projection)을 따른다.
 
 ## Error contract
+
+함수군별 오류는 [공통 오류 코드 표](../README.ko.md#error-code-표)의 66개 non-OK 코드를 보존한다.
 
 모든 함수군별 error는 `error`를 구현하고 다음 public interface를 만족한다.
 

@@ -17,9 +17,6 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.function.BiFunction;
-import java.util.function.Function;
-import java.util.function.Supplier;
 
 /** Owns one live direct-Join relocation and its target Accepted callback. */
 final class ZLinkDirectJoinRelocation {
@@ -85,41 +82,23 @@ final class ZLinkDirectJoinRelocation {
 
     CompletionStage<Void> deliver(
             Manifest manifest, ZLinkBackendActorRef currentActor, ZLinkActorRuntime runtime) {
-        return deliver(
-                manifest,
-                currentActor,
-                runtime.meshName(),
-                runtime::actorById,
-                runtime::submitActorDispatch);
-    }
-
-    CompletionStage<Void> deliver(
-            Manifest manifest,
-            ZLinkBackendActorRef currentActor,
-            String meshName,
-            Function<String, ZLinkActor> actorResolver,
-            BiFunction<String, Supplier<CompletionStage<Void>>, CompletionStage<Void>> mailbox) {
         ZLinkActorJoinOperationId operationId =
                 new ZLinkActorJoinOperationId(
                         manifest.operationIdHigh(), manifest.operationIdLow());
-        ZLinkActor actor = actorResolver.apply(currentActor.actorId());
+        ZLinkActor actor = runtime.actorById(currentActor.actorId());
         if (actor == null) {
             return CompletableFuture.failedFuture(
                     new IllegalStateException(
                             "target Actor is not materialized for Join completion"));
         }
-        ActorRef publicRef = ZLinkActorRuntime.toPublicActorRef(currentActor, meshName);
+        ActorRef publicRef = ZLinkActorRuntime.toPublicActorRef(currentActor, runtime.meshName());
         ZLinkMessage reply =
                 manifest.rawReply().length == 0
                         ? ZLinkMessage.empty()
                         : ZLinkMessage.fromEncoded(
                                 ZLinkEncodedPayload.from(manifest.rawReply()), serializer);
-        return mailbox.apply(
-                currentActor.actorId(),
-                () ->
-                        actor.onJoinCompleted(
-                                new ZLinkActorJoinCompletion.Accepted(
-                                        operationId, publicRef, reply)));
+        return runtime.enqueueActorJoinCompletion(
+                actor, new ZLinkActorJoinCompletion.Accepted(operationId, publicRef, reply));
     }
 
     record Manifest(

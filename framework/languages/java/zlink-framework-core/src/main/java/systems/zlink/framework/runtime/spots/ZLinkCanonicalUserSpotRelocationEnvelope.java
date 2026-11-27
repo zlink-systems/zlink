@@ -4,7 +4,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
-import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.spots.ZLinkSpot;
 
@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /** Projects one User Spot aggregate onto canonical relocation-envelope-v1. */
@@ -94,7 +95,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
         for (int index = 0; index < inventory.size(); index++) {
             var participant = inventory.get(index);
             byte[] state;
-            if (participant.objectKind() == ZLinkPlacementObjectKind.USER_SPOT.value()) {
+            if (participant.objectKind() != ZLinkPlacementObjectKind.ACTOR.value()) {
                 state = request.spotState();
             } else {
                 var actor = actors.get(participant.objectId());
@@ -151,14 +152,19 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
                                 })
                         .toList();
         try {
-            return ServiceWirePilotCodec.encodeRelocationEnvelopeV1(
+            return ZLinkServiceRelocationEnvelopeCodec.encode(
                     new ServiceWirePilotCodec.RelocationEnvelopeV1(
                             relocationId.getMostSignificantBits(),
                             relocationId.getLeastSignificantBits(),
-                            new ServiceWirePilotCodec.RelocationUserSpotIdentity(
-                                    request.spotId(),
-                                    request.objectGeneration(),
-                                    expectedAuthorityOwnerGeneration),
+                            request.spotKind() == ZLinkPlacementObjectKind.INSTANCE_SPOT
+                                    ? new ServiceWirePilotCodec.RelocationInstanceSpotIdentity(
+                                            request.spotStableType(),
+                                            request.spotId(),
+                                            request.objectGeneration())
+                                    : new ServiceWirePilotCodec.RelocationUserSpotIdentity(
+                                            request.spotId(),
+                                            request.objectGeneration(),
+                                            expectedAuthorityOwnerGeneration),
                             APPLICATION_VERSION,
                             states,
                             work,
@@ -175,14 +181,32 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             RoutingId targetNodeRid,
             Function<String, Class<? extends ZLinkSpot<?>>> spotTypes,
             ZLinkSpotRetireControl.StageRequest stage) {
+        return decode(
+                encoded, targetNodeRid, (kind, stableType) -> spotTypes.apply(stableType), stage);
+    }
+
+    static ZLinkUserSpotAggregateStagingOwner.Request decode(
+            byte[] encoded,
+            RoutingId targetNodeRid,
+            BiFunction<ZLinkPlacementObjectKind, String, Class<?>> spotTypes,
+            ZLinkSpotRetireControl.StageRequest stage) {
         var root = ZLinkServiceRelocationEnvelopeCodec.decode(encoded);
         if (root.relocationHigh() != stage.fence().aggregateId().getMostSignificantBits()
                 || root.relocationLow() != stage.fence().aggregateId().getLeastSignificantBits()
-                || root.object().kind() != ZLinkPlacementObjectKind.USER_SPOT.value()
                 || !root.object().objectId().equals(stage.spotId())) {
             throw invalid("canonical relocation identity differs from stage");
         }
         List<ZLinkSpotRetireControl.ParticipantFence> inventory = stage.participants();
+        var kind =
+                root.object().kind() == ZLinkPlacementObjectKind.INSTANCE_SPOT.value()
+                        ? ZLinkPlacementObjectKind.INSTANCE_SPOT
+                        : ZLinkPlacementObjectKind.USER_SPOT;
+        if (root.object().kind() != kind.value()
+                || (kind == ZLinkPlacementObjectKind.INSTANCE_SPOT
+                        && (inventory.size() != 1
+                                || !stage.stableType().equals(root.object().stableType())))) {
+            throw invalid("canonical Spot kind or stable type differs from stage");
+        }
         if (root.applicationStates().size() != inventory.size()) {
             throw invalid("canonical participant inventory is incomplete");
         }
@@ -201,8 +225,9 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             if (state == null || state.hasState() != participant.restoreSnapshot()) {
                 throw invalid("canonical participant state policy differs");
             }
-            if (participant.objectKind() == ZLinkPlacementObjectKind.USER_SPOT.value()) {
-                if (!participant.objectId().equals(stage.spotId())) {
+            if (participant.objectKind() == kind.value()) {
+                if (!participant.objectId().equals(stage.spotId())
+                        || participant.objectGeneration() != root.object().objectGeneration()) {
                     throw invalid("canonical Spot inventory differs");
                 }
                 spotState = state.payload();
@@ -299,14 +324,15 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
         }
         List<ZLinkSpotTimerRelocationEnvelope.CanonicalTimer> timers =
                 timersByParticipant.getOrDefault(spotParticipant, List.of());
-        Class<? extends ZLinkSpot<?>> spotType = spotTypes.apply(stage.stableType());
+        Class<?> spotType = spotTypes.apply(kind, stage.stableType());
         if (spotType == null) {
-            throw invalid("target does not register User Spot stable type");
+            throw invalid("target does not register Spot stable type");
         }
         LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> frozen =
                 new LinkedHashMap<>();
         journal.forEach((lane, records) -> frozen.put(lane, List.copyOf(records)));
         return new ZLinkUserSpotAggregateStagingOwner.Request(
+                kind,
                 spotType,
                 stage.stableType(),
                 stage.spotId(),
@@ -323,7 +349,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
         String actorId = lane.startsWith("actor:") ? lane.substring(6) : null;
         for (int index = 0; index < inventory.size(); index++) {
             var value = inventory.get(index);
-            if (actorId == null && value.objectKind() == 2
+            if (actorId == null && value.objectKind() != ZLinkPlacementObjectKind.ACTOR.value()
                     || actorId != null
                             && value.objectKind() == 1
                             && value.objectId().equals(actorId)) {

@@ -111,6 +111,10 @@ export class ZLinkRuntimeAdmissionGate {
     return this.isOpen(this.requireState(meshName), kind);
   }
 
+  isSealed(meshName: string): boolean {
+    return this.requireState(meshName).sealed;
+  }
+
   pending(meshName: string): number {
     return this.requireState(meshName).active;
   }

@@ -32,6 +32,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -131,7 +132,8 @@ record ZLinkFrameworkRuntimeConstruction(
                         applicationVersion,
                         maintenanceWave,
                         sessionRelocationSealTimeout,
-                        targetAdmissionSealed,
+                        shutdownAdmissionSealed,
+                        targetHostServing,
                         stateMachines,
                         aggregateRelocationAuthorityStoreDecorator,
                         targetNormalizerDecorator) ->
@@ -148,7 +150,8 @@ record ZLinkFrameworkRuntimeConstruction(
                                 applicationVersion,
                                 maintenanceWave,
                                 sessionRelocationSealTimeout,
-                                targetAdmissionSealed),
+                                shutdownAdmissionSealed,
+                                targetHostServing),
                 Runnable::run);
     }
 
@@ -200,7 +203,8 @@ record ZLinkFrameworkRuntimeConstruction(
                 long applicationVersion,
                 Optional<String> maintenanceWave,
                 Duration sessionRelocationSealTimeout,
-                Predicate<String> targetAdmissionSealed,
+                Predicate<String> shutdownAdmissionSealed,
+                BooleanSupplier targetHostServing,
                 List<?> stateMachines,
                 UnaryOperator<ZLinkLocationRepository> aggregateRelocationAuthorityStoreDecorator,
                 UnaryOperator<Function<Object, CompletionStage<Void>>> targetNormalizerDecorator);

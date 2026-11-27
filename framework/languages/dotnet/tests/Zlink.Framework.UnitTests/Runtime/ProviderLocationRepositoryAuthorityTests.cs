@@ -2208,6 +2208,95 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task EndedClosingActorReleasesOnFirstEligibleAttempt(bool inMemory)
+    {
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        IZLinkLocationRepository repository = inMemory
+            ? new ZLinkInMemoryLocationStore(time)
+            : new ZLinkProviderLocationRepository(provider, time);
+        const string actorId = "closing-actor";
+        var owner = await ClaimAsync(repository, "closing-actor-owner", TimeSpan.FromSeconds(10));
+        var descriptor = Descriptor("closing-actor-node", owner);
+        await PublishAsync(repository, descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation(actorId, descriptor, owner);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request)
+        );
+        Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await repository.CommitAsync(
+                reserved.Reservation,
+                ActorPayload(actorId, descriptor, owner, ZLinkActorAuthorityState.Ready)
+            )
+        );
+        var ready = await ReadAuthorityAsync();
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+            await repository.CompareExchangeAuthorityAsync(
+                request.Key,
+                ready.StoreVersion,
+                new ZLinkAuthorityMutation.Put(
+                    ActorPayload(actorId, descriptor, owner, ZLinkActorAuthorityState.Closing),
+                    ZLinkAuthorityGenerationTransition.Preserve,
+                    null,
+                    null
+                )
+            )
+        );
+        var closing = await ReadAuthorityAsync();
+        Assert.Equal(ready.ObjectGeneration, closing.ObjectGeneration);
+        Assert.True(ZLinkActorAuthorityPayloadCodec.IsClosing(closing));
+        Assert.Equal(1, await ReadActiveCapacityAsync());
+
+        Assert.False(
+            await repository.ReleaseEndedReservationAsync(request.Key, closing.StoreVersion)
+        );
+        Assert.Equal(closing.StoreVersion, (await ReadAuthorityAsync()).StoreVersion);
+        Assert.Equal(1, await ReadActiveCapacityAsync());
+
+        time.Advance(TimeSpan.FromSeconds(11));
+        var lease = await repository.ReadOwnerLeaseAsync(owner.OwnerId);
+        Assert.False(
+            lease is ZLinkOwnerLeaseReadResult.Found live && live.LeaseExpiresAt > live.StoreNow
+        );
+        Assert.False(
+            await repository.ReleaseEndedReservationAsync(request.Key, ready.StoreVersion)
+        );
+        Assert.Equal(closing.StoreVersion, (await ReadAuthorityAsync()).StoreVersion);
+        Assert.Equal(1, await ReadActiveCapacityAsync());
+
+        await ZLinkAuthorityCleanup.ReleaseEndedAuthorityForCreationAsync(
+            repository,
+            request.Key,
+            closing,
+            () => throw new InvalidOperationException("Closing selected a placement target"),
+            default
+        );
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
+            await repository.ReadAuthorityAsync(request.Key)
+        );
+        Assert.Equal(0, await ReadActiveCapacityAsync());
+        Assert.False(
+            await repository.ReleaseEndedReservationAsync(request.Key, closing.StoreVersion)
+        );
+        Assert.Equal(0, await ReadActiveCapacityAsync());
+        Assert.Equal(0, ObservationCount(repository));
+
+        async Task<ZLinkAuthoritySnapshot> ReadAuthorityAsync() =>
+            Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(request.Key)
+                )
+                .Snapshot;
+
+        async Task<int> ReadActiveCapacityAsync() =>
+            Assert
+                .Single((await repository.ListMeshNodesAsync(descriptor.MeshName, default)).Items)
+                .Capacity.Actors.Active;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task EndedReadyActorReleaseWaitsForThreeMargins(bool inMemory)
     {
         var time = new ManualTimeProvider();
@@ -8526,7 +8615,8 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
 
     private sealed class DelayedAuthorityReadLocationStore(
         IZLinkLocationStore inner,
-        ZLinkStoreKey delayedKey
+        ZLinkStoreKey delayedKey,
+        Func<bool>? shouldDelay = null
     ) : IZLinkLocationStore
     {
         private readonly TaskCompletionSource _readEntered = new(
@@ -8546,7 +8636,11 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             CancellationToken cancellationToken = default
         )
         {
-            if (key == delayedKey && Interlocked.Exchange(ref _armed, 0) == 1)
+            if (
+                key == delayedKey
+                && (shouldDelay?.Invoke() ?? true)
+                && Interlocked.Exchange(ref _armed, 0) == 1
+            )
             {
                 _readEntered.TrySetResult();
                 await _releaseRead.Task.WaitAsync(cancellationToken);

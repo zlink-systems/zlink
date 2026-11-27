@@ -153,7 +153,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                 current is null
                 || current.Snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
                 || current.Version.Value != expectedStoreVersion
-                || current.Meta.AggregateFence is not null
             )
             {
                 if (
@@ -184,8 +183,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                         .ConfigureAwait(false);
                 }
 
-                //  Four separate reasons collapse into one Conflict, and the caller
-                //  reports all of them as "authority changed".
                 if (Diagnostics.ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
                     Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                         $"cas_conflict_reason missing={current is null} "
@@ -193,7 +190,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                             + $"version_match={current is not null && current.Version.Value == expectedStoreVersion} "
                             + $"fence={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(current?.Meta.AggregateFence)}"
                     );
-                return Conflict(current);
+                return current?.Meta.AggregateFence is not null
+                    ? AggregatePreserveConflict(current)
+                    : Conflict(current);
             }
 
             var conditions = new List<ZLinkStoreCondition>
@@ -201,6 +200,48 @@ internal sealed partial class ZLinkProviderLocationRepository
                 new ZLinkStoreCondition.Version(metaKey, current.Version),
             };
             var mutations = new List<ZLinkStoreMutation>();
+            var aggregateFence = current.Meta.AggregateFence;
+            if (aggregateFence is { } fence)
+            {
+                if (
+                    mutation
+                        is not ZLinkAuthorityMutation.Put
+                        {
+                            GenerationTransition: ZLinkAuthorityGenerationTransition.Preserve,
+                            TargetOwner: null,
+                            ClearRelocation: false,
+                        } preserve
+                    || current.Snapshot.Relocation
+                        is not {
+                            Phase: ServiceWireCodec.RelocationPhase.Prepared
+                                or ServiceWireCodec.RelocationPhase.Captured,
+                        } relocation
+                    || relocation.RelocationId != fence.AggregateId
+                    || relocation.Source.OwnerId != current.Snapshot.OwnerId
+                    || relocation.Source.OwnerLeaseGeneration
+                        != (ulong)current.Snapshot.OwnerLeaseGeneration
+                    || preserve.Relocation
+                        != (relocation with { Phase = ServiceWireCodec.RelocationPhase.Aborted })
+                    || !current.Snapshot.Payload.Span.SequenceEqual(preserve.Payload.Span)
+                )
+                    return AggregatePreserveConflict(current);
+                var aggregateKey = AggregateKey(fence);
+                var aggregate = await ReadRecordAsync<AggregateRecord>(
+                        aggregateKey,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                if (
+                    aggregate?.Record.Status
+                    is not (AggregateStatus.Staging or AggregateStatus.Prepared)
+                )
+                    return AggregatePreserveConflict(
+                        await ReadAuthorityRecordAsync(key, cancellationToken).ConfigureAwait(false)
+                    );
+                await EnsureStoreFormatAsync(cancellationToken).ConfigureAwait(false);
+                AppendAggregateAbortWrite(aggregateKey, aggregate, conditions, mutations);
+            }
+
             AuthorityMeta? meta = null;
             if (mutation is ZLinkAuthorityMutation.Restore restore)
             {
@@ -420,12 +461,23 @@ internal sealed partial class ZLinkProviderLocationRepository
                 };
             }
             if (meta is not null)
+            {
+                // Source Preserve ends the fenced projection, so the new row version becomes visible.
+                if (aggregateFence is not null)
+                    meta = meta.WithoutParticipantFence() with { VisibleStoreVersion = null };
                 mutations.Add(new ZLinkStoreMutation.Put(metaKey, Encode(meta), null));
+            }
             var result = await _provider
                 .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
                 .ConfigureAwait(false);
             if (result is not ZLinkStoreWriteResult.Applied applied)
+            {
+                if (aggregateFence is not null)
+                    return AggregatePreserveConflict(
+                        await ReadAuthorityRecordAsync(key, cancellationToken).ConfigureAwait(false)
+                    );
                 continue;
+            }
             if (AuthorityObservedAsync is { } observed)
                 await observed(key, meta is null ? null : applied.PutVersions[metaKey].Value)
                     .ConfigureAwait(false);
@@ -820,7 +872,8 @@ internal sealed partial class ZLinkProviderLocationRepository
         var endedUserSpotId = active
             ? ZLinkAuthorityCleanup.RequireReclaimableAuthority(current.Snapshot)
             : null;
-        if (active && !ownerLive)
+        var requiresReleaseWait = active && !ownerLive && !actorClosing;
+        if (requiresReleaseWait)
             _ownerLeaseReleaseWait.Observe(currentOwner);
         if (endedUserSpotId is not null && !discarded)
             members = await ReadEndedUserSpotMembersAsync(
@@ -889,7 +942,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     ? new ZLinkStoreCondition.Version(OwnerKey(ownerId), found.Value.Version)
                     : new ZLinkStoreCondition.Missing(OwnerKey(ownerId))
             );
-        if (active && !ownerLive)
+        if (requiresReleaseWait)
         {
             releaseWaitElapsed = _ownerLeaseReleaseWait.HasElapsed(
                 currentOwner,
@@ -1526,7 +1579,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                             participant.ExpectedStoreVersion,
                             participant.OwnerTransition,
                             0,
-                            requestFingerprint
+                            requestFingerprint,
+                            participant.AcceptedRequests
                         )
                 )
                 .ToArray();
@@ -1769,13 +1823,16 @@ internal sealed partial class ZLinkProviderLocationRepository
     public ValueTask<ZLinkAggregateCommitResult> CommitAggregateAttemptAsync(
         ZLinkAggregateFence fence,
         ulong attempt,
-        CancellationToken cancellationToken
-    ) => CommitAggregateCoreAsync(fence, cancellationToken, attempt);
+        CancellationToken cancellationToken,
+        ulong? representativeAcceptedRequests = null
+    ) =>
+        CommitAggregateCoreAsync(fence, cancellationToken, attempt, representativeAcceptedRequests);
 
     private async ValueTask<ZLinkAggregateCommitResult> CommitAggregateCoreAsync(
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken,
-        ulong? attempt = null
+        ulong? attempt = null,
+        ulong? representativeAcceptedRequests = null
     )
     {
         for (; ; )
@@ -1838,6 +1895,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             {
                 new ZLinkStoreCondition.Version(key, aggregate.Version),
             };
+            var mutations = new List<ZLinkStoreMutation>();
             var committed = aggregate.Record with { Status = AggregateStatus.Committed };
             if (request.RepresentativeKey is { } representative)
             {
@@ -1855,6 +1913,24 @@ internal sealed partial class ZLinkProviderLocationRepository
                         authority.Version
                     )
                 );
+                if (representativeAcceptedRequests is { } acceptedRequests)
+                {
+                    var participant = participants.Single(item =>
+                        item.Metadata.Key == representative.Value
+                    );
+                    var record = participant.Metadata;
+                    var keyForParticipant = AggregateParticipantMetaKey(fence, record.Index);
+                    conditions.Add(
+                        new ZLinkStoreCondition.Version(keyForParticipant, participant.Version)
+                    );
+                    mutations.Add(
+                        new ZLinkStoreMutation.Put(
+                            keyForParticipant,
+                            Encode(record with { AcceptedRequests = acceptedRequests }),
+                            null
+                        )
+                    );
+                }
                 committed = committed with
                 {
                     Header = committed.Header with
@@ -1884,7 +1960,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                     is not null
                 )
                     return ZLinkAggregateCommitResult.Stale;
-            var mutations = new List<ZLinkStoreMutation>();
             // authorities[index].Meta already carries both generation values
             // for this exact read (checklist C-2b: no separate GenerationKey
             // to reconcile), so the per-participant next-generation check below
@@ -1944,8 +2019,14 @@ internal sealed partial class ZLinkProviderLocationRepository
                     throw;
                 if (!MatchesCommittedAttempt(reconciled.Record, attempt))
                     return ZLinkAggregateCommitResult.Stale;
-                await NormalizeCommittedAggregateForAmbiguousAsync(fence, reconciled.Record)
-                    .ConfigureAwait(false);
+                if (
+                    !await TryNormalizeCommittedAggregateForAmbiguousAsync(fence, reconciled.Record)
+                        .ConfigureAwait(false)
+                )
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw;
+                }
                 return ZLinkAggregateCommitResult.AlreadyCommitted;
             }
             if (result is not ZLinkStoreWriteResult.Applied)
@@ -2102,7 +2183,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                             new ZLinkStoreMutation.Put(
                                 AuthorityMetaKey(participant.Key),
                                 Encode(
-                                    authority.Meta with
+                                    authority.Meta.WithoutParticipantFence() with
                                     {
                                         Payload = aggregate
                                             .Header.ProjectPayload(
@@ -2111,7 +2192,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                                             )
                                             .ToArray(),
                                         Aggregate = aggregate.Header.ApplyRelocation(
-                                            authority.Meta.Aggregate
+                                            authority.Meta.Aggregate,
+                                            participant.AcceptedRequests
                                         ),
                                         AuthorityOwnerGeneration = nextGeneration,
                                         OwnerId = changesOwner
@@ -2121,9 +2203,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                                             ? request.TargetOwner.LeaseGeneration
                                             : authority.Meta.OwnerLeaseGeneration,
                                         Allocation = allocation,
-                                        AggregateFence = null,
-                                        AggregateParticipantIndex = null,
-                                        AggregateExpectedStoreVersion = null,
                                     }
                                 ),
                                 null
@@ -2279,14 +2358,20 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (
             !CryptographicOperations.FixedTimeEquals(
                 authority.Snapshot.Payload.Span,
-                participant.AuthorityPayload.Span
+                aggregate
+                    .Header.ProjectPayload(
+                        authority.Meta.Allocation.ObjectKind,
+                        participant.AuthorityPayload
+                    )
+                    .Span
             )
         )
             return false;
         if (
             aggregate.Header.ClearRelocation && authority.Snapshot.Relocation is not null
             || aggregate.Header.Relocation is { } relocation
-                && authority.Snapshot.Relocation != relocation
+                && authority.Snapshot.Relocation
+                    != relocation.WithAcceptedRequests(participant.AcceptedRequests)
         )
             return false;
         if (!changesOwner)
@@ -2372,6 +2457,9 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (staging.Record.Status != AggregateStatus.Staging)
             return false;
         var key = AggregateKey(fence);
+        var conditions = new List<ZLinkStoreCondition>();
+        var mutations = new List<ZLinkStoreMutation>();
+        AppendAggregateAbortWrite(key, staging, conditions, mutations);
         var rootKey = ZLinkAggregateInventory.RootKey(Prefix, fence);
         if (
             await _provider.ReadAsync(rootKey, cancellationToken).ConfigureAwait(false)
@@ -2380,33 +2468,16 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             if (staging.Record.Header.RepresentativeKey is not null)
                 throw ZLinkAggregateInventory.DataLost(rootKey);
-            var abandoned = await _provider
-                .WriteAsync(
-                    new ZLinkStoreWriteRequest(
-                        [
-                            new ZLinkStoreCondition.Version(key, staging.Version),
-                            new ZLinkStoreCondition.Missing(rootKey),
-                        ],
-                        [
-                            new ZLinkStoreMutation.Put(
-                                key,
-                                Encode(staging.Record with { Status = AggregateStatus.Aborted }),
-                                null
-                            ),
-                            new ZLinkStoreMutation.Put(
-                                AggregateHousekeepingKey(key),
-                                EncodeAggregateHousekeeping(
-                                    staging.Record with
-                                    {
-                                        ParticipantsCleaned = true,
-                                    }
-                                ),
-                                null
-                            ),
-                        ]
-                    ),
-                    cancellationToken
+            conditions.Add(new ZLinkStoreCondition.Missing(rootKey));
+            mutations.Add(
+                new ZLinkStoreMutation.Put(
+                    AggregateHousekeepingKey(key),
+                    EncodeAggregateHousekeeping(staging.Record with { ParticipantsCleaned = true }),
+                    null
                 )
+            );
+            var abandoned = await _provider
+                .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
                 .ConfigureAwait(false);
             if (abandoned is ZLinkStoreWriteResult.Applied)
                 await CleanupUnfencedAggregateChildrenAsync(fence, cancellationToken)
@@ -2418,19 +2489,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             : await ReadAndValidateAggregateInventoryAsync(fence, staging.Record, cancellationToken)
                 .ConfigureAwait(false);
         var result = await _provider
-            .WriteAsync(
-                new ZLinkStoreWriteRequest(
-                    [new ZLinkStoreCondition.Version(key, staging.Version)],
-                    [
-                        new ZLinkStoreMutation.Put(
-                            key,
-                            Encode(staging.Record with { Status = AggregateStatus.Aborted }),
-                            null
-                        ),
-                    ]
-                ),
-                cancellationToken
-            )
+            .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
             .ConfigureAwait(false);
         var aborted =
             result is ZLinkStoreWriteResult.Applied
@@ -2704,7 +2763,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                                         new ZLinkStoreMutation.Put(
                                             AuthorityMetaKey(key),
                                             Encode(
-                                                authority.Meta with
+                                                authority.Meta.WithoutParticipantFence() with
                                                 {
                                                     Aggregate =
                                                         key == aggregate.Header.RepresentativeKey
@@ -2713,9 +2772,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                                                                 null
                                                             )
                                                             : authority.Meta.Aggregate,
-                                                    AggregateFence = null,
-                                                    AggregateParticipantIndex = null,
-                                                    AggregateExpectedStoreVersion = null,
                                                 }
                                             ),
                                             null
@@ -3057,6 +3113,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                         existing is not null
                         && existing.Record.Index == record.Index
                         && existing.Record.Key == record.Key
+                        && existing.Record.AcceptedRequests == record.AcceptedRequests
                         && existing
                             .Record.RequestFingerprint.AsSpan()
                             .SequenceEqual(record.RequestFingerprint);
@@ -3330,7 +3387,8 @@ internal sealed partial class ZLinkProviderLocationRepository
         return new StoredAggregateParticipant(
             meta.Record,
             participant.Payload,
-            participant.Mutation
+            participant.Mutation,
+            meta.Version
         );
     }
 
@@ -3396,7 +3454,15 @@ internal sealed partial class ZLinkProviderLocationRepository
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            if (!AggregateParticipantsEqual(participants, request.Participants))
+            if (
+                !AggregateParticipantsEqual(
+                    participants,
+                    request.Participants,
+                    aggregate.Status == AggregateStatus.Committed
+                        ? aggregate.Header.RepresentativeKey
+                        : null
+                )
+            )
                 return new ZLinkAggregatePrepareResult.Conflict();
             generations = participants.ToDictionary(
                 static participant => new ZLinkAuthorityKey(participant.Metadata.Key),
@@ -3503,21 +3569,30 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ConfigureAwait(false);
     }
 
-    private async ValueTask NormalizeCommittedAggregateForAmbiguousAsync(
+    private async ValueTask<bool> TryNormalizeCommittedAggregateForAmbiguousAsync(
         ZLinkAggregateFence fence,
         AggregateRecord aggregate
     )
     {
         using var deadline = new CancellationTokenSource(AmbiguousReconciliationTimeout);
-        await NormalizeCommittedAggregateAsync(fence, aggregate, deadline.Token)
-            .AsTask()
-            .WaitAsync(deadline.Token)
-            .ConfigureAwait(false);
+        try
+        {
+            await NormalizeCommittedAggregateAsync(fence, aggregate, deadline.Token)
+                .AsTask()
+                .WaitAsync(deadline.Token)
+                .ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 
     private static bool AggregateParticipantsEqual(
         IReadOnlyList<StoredAggregateParticipant> stored,
-        IReadOnlyList<ZLinkAggregateParticipant> requested
+        IReadOnlyList<ZLinkAggregateParticipant> requested,
+        ZLinkAuthorityKey? committedRepresentative
     )
     {
         if (stored.Count != requested.Count)
@@ -3534,6 +3609,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                     StringComparison.Ordinal
                 )
                 || actual.Metadata.OwnerTransition != expected.OwnerTransition
+                || expected.Key != committedRepresentative
+                    && actual.Metadata.AcceptedRequests != expected.AcceptedRequests
                 || !CryptographicOperations.FixedTimeEquals(
                     actual.Payload.Span,
                     expected.AuthorityPayload.Span
@@ -3558,7 +3635,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                     participant.Metadata.ExpectedStoreVersion,
                     participant.Metadata.OwnerTransition,
                     participant.Payload,
-                    participant.MembershipMutation
+                    participant.MembershipMutation,
+                    participant.Metadata.AcceptedRequests
                 ))
                 .ToArray(),
             aggregate.Header.InventoryDigest,
@@ -3702,10 +3780,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                 )
                 .ConfigureAwait(false);
             var header = aggregate.Record.Header;
-            var conditions = new List<ZLinkStoreCondition>
-            {
-                new ZLinkStoreCondition.Version(key, aggregate.Version),
-            };
+            var conditions = new List<ZLinkStoreCondition>();
+            var mutations = new List<ZLinkStoreMutation>();
+            AppendAggregateAbortWrite(key, aggregate, conditions, mutations, beforeConversion);
             if (attempt is not null && header.RepresentativeKey is { } representative)
             {
                 var authority = await ReadAuthorityRecordAsync(
@@ -3727,20 +3804,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                     )
                 );
             }
-            var mutations = new List<ZLinkStoreMutation>
-            {
-                new ZLinkStoreMutation.Put(
-                    key,
-                    Encode(aggregate.Record with { Status = AggregateStatus.Aborted }),
-                    null
-                ),
-            };
             if (beforeConversion)
             {
                 try
                 {
                     await AppendLegacyCapacityReleaseAsync(
-                            header,
+                            aggregate.Record.Header,
                             conditions,
                             mutations,
                             cancellationToken
@@ -3755,15 +3824,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 }
             }
             else
-            {
                 await EnsureStoreFormatAsync(cancellationToken).ConfigureAwait(false);
-                AddCapacityMutations(
-                    mutations,
-                    header.TargetDescriptor,
-                    header.Capacity,
-                    pending: -1
-                );
-            }
             var result = await _provider
                 .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
                 .ConfigureAwait(false);
@@ -3789,6 +3850,29 @@ internal sealed partial class ZLinkProviderLocationRepository
                 .ConfigureAwait(false);
             await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
             return ZLinkAggregateAbortResult.Aborted;
+        }
+    }
+
+    private static void AppendAggregateAbortWrite(
+        ZLinkStoreKey key,
+        StoredRecord<AggregateRecord> aggregate,
+        List<ZLinkStoreCondition> conditions,
+        List<ZLinkStoreMutation> mutations,
+        bool beforeConversion = false
+    )
+    {
+        conditions.Add(new ZLinkStoreCondition.Version(key, aggregate.Version));
+        mutations.Add(
+            new ZLinkStoreMutation.Put(
+                key,
+                Encode(aggregate.Record with { Status = AggregateStatus.Aborted }),
+                null
+            )
+        );
+        if (!beforeConversion && aggregate.Record.Status == AggregateStatus.Prepared)
+        {
+            var header = aggregate.Record.Header;
+            AddCapacityMutations(mutations, header.TargetDescriptor, header.Capacity, pending: -1);
         }
     }
 
@@ -4036,7 +4120,10 @@ internal sealed partial class ZLinkProviderLocationRepository
                     meta = meta with
                     {
                         Payload = payloadBytes.ToArray(),
-                        Aggregate = aggregate.Record.Header.ApplyRelocation(meta.Aggregate),
+                        Aggregate = aggregate.Record.Header.ApplyRelocation(
+                            meta.Aggregate,
+                            participant.Metadata.AcceptedRequests
+                        ),
                         AuthorityOwnerGeneration = changesOwner
                             ? targetAuthorityOwnerGeneration
                             : meta.AuthorityOwnerGeneration,
@@ -4469,6 +4556,10 @@ internal sealed partial class ZLinkProviderLocationRepository
             )
             : current.Meta.Aggregate;
 
+    private static ZLinkAuthorityCompareExchangeResult.Conflict AggregatePreserveConflict(
+        StoredAuthority? current
+    ) => Conflict(current) with { MembershipFailure = ZLinkFrameworkErrorKind.Unavailable };
+
     private static ZLinkAuthoritySnapshot Snapshot(
         AuthorityMeta meta,
         ZLinkStoreVersion version,
@@ -4808,6 +4899,14 @@ internal sealed partial class ZLinkProviderLocationRepository
 
         [JsonPropertyName("aggregateExpectedStoreVersion")]
         public string? AggregateExpectedStoreVersion { get; init; }
+
+        internal AuthorityMeta WithoutParticipantFence() =>
+            this with
+            {
+                AggregateFence = null,
+                AggregateParticipantIndex = null,
+                AggregateExpectedStoreVersion = null,
+            };
     }
 
     private sealed record StoredAuthority(
@@ -4855,9 +4954,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                     AggregateId
                 );
 
-        internal JsonElement? ApplyRelocation(JsonElement? aggregate) =>
+        internal JsonElement? ApplyRelocation(JsonElement? aggregate, ulong? acceptedRequests) =>
             ClearRelocation || Relocation is not null
-                ? ZLinkAuthorityAggregateCodec.Replace(aggregate, Relocation)
+                ? ZLinkAuthorityAggregateCodec.Replace(
+                    aggregate,
+                    Relocation?.WithAcceptedRequests(acceptedRequests)
+                )
                 : aggregate;
     }
 
@@ -4877,13 +4979,16 @@ internal sealed partial class ZLinkProviderLocationRepository
         string ExpectedStoreVersion,
         ZLinkAuthorityGenerationTransition OwnerTransition,
         ulong TargetAuthorityOwnerGeneration,
-        byte[] RequestFingerprint
+        byte[] RequestFingerprint,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+            ulong? AcceptedRequests = null
     );
 
     private sealed record StoredAggregateParticipant(
         AggregateParticipantRecord Metadata,
         ReadOnlyMemory<byte> Payload,
-        ReadOnlyMemory<byte> MembershipMutation
+        ReadOnlyMemory<byte> MembershipMutation,
+        ZLinkStoreVersion Version
     );
 
     private sealed record StoredRecord<T>(

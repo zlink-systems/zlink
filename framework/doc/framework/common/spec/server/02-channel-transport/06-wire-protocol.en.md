@@ -187,7 +187,8 @@ correlation is never used.
 ### Decode Validation and Size Limits
 
 - The decoder checks the complete record length, item count, UTF-8 validity, and every bound before allocating.
-- A metadata frame cannot exceed 1,024 bytes.
+- Application metadata size is measured one way, whichever command carries it: as in [ClientServer Channel §5.3](03-client-server-channel.en.md#53-application-record-contract), encode each entry as `ChannelHeader` field 13 (including the field tag and length prefix) and sum over all entries; the sum cannot exceed 1,024 bytes. Commands that carry a metadata frame (16, 17, 23, 24, 25, 39) apply the same calculation to the entries decoded from the frame. Metadata accepted on one command therefore stays within the limit when it moves to another command, for example through Message Follow (39 → 21, 22).
+- The 1,024-byte limit on the metadata frame's own length is a pre-decode allocation guard. Whether the metadata is valid is decided only by the calculation above.
 - The application payload's absolute schema limit is `applicationPayloadAbsoluteBytes`, 4,294,966,774 bytes.
 - On a [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) — the connection group where
   several runtime nodes find each other by name and exchange messages — ServerServer applies
@@ -270,7 +271,7 @@ an Actor use the same header, so an Actor receives one header format whatever th
 
 ## 3. Command Space
 
-Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `55..255` are
+Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `56..255` are
 reserved and never reused for another meaning. A previous command name in parentheses
 is diagnostic compatibility text, not a command that is decoded or sent.
 
@@ -321,6 +322,7 @@ is diagnostic compatibility text, not a command that is decoded or sent.
 | 52 | `relocationState` | infrastructure | none | — | Direct source-memory-to-target payload chunk transfer (base/final stage) |
 | 53 | `relocationFailed` | infrastructure | none | — | Explicit reply to a matching `relocationPrepare` reporting assembly or preparation failure |
 | 54 | `boundSessionClose` | infrastructure | none | — | Requests the Session owner to close the current binding's physical connection |
+| 55 | `instanceSpotFollow` | application | required | `metadata` | A Ready Instance Spot one-way forwarded by Message Follow (operation ID 0, no reply route). [Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner) |
 
 The table's Layer, Application payload, and Permitted flags columns reproduce
 the schema declarations. **Only application-layer commands enter an
@@ -866,6 +868,9 @@ governs validation by the transport, target, and Session owner and defines their
 
 - The target writes terminal completion and delivery state to a new immutable relocation root, then updates `TerminalCompletionCount` and `PendingRelayCount` together via an authority CAS.
 - `replyRelay` uses the original reply route and the source lease fence that identifies that request.
+- The node generation in a request source fence is the sending node's generation carried by the received request record
+  (the ingress source node generation). Only a record without that value (a local request created on this node) uses this
+  node's lifecycle generation.
 - The source sends an authenticated `replyRelayAck` after accepting the terminal result, or after confirming it is already terminal.
 - A closed physical connection is not evidence of terminal delivery.
 

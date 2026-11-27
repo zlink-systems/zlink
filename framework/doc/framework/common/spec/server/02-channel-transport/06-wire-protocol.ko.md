@@ -168,7 +168,8 @@ dispatch 없이 command 20의 `ProtocolError`/`requestProtocolError` terminal을
 ### Decode 검증과 크기 상한
 
 - Decoder는 allocation 전에 complete record 길이, item count, UTF-8 validity와 모든 bound를 검사한다.
-- Metadata frame은 1,024 byte를 넘을 수 없다.
+- Application metadata의 크기는 어느 command가 싣든 한 가지 계산으로 잰다. [ClientServer Channel §5.3](03-client-server-channel.ko.md#53-application-record-계약)처럼 entry 하나를 `ChannelHeader` field 13으로 encoding한 길이(field tag와 length prefix 포함)를 모든 entry에 대해 더하고, 그 합이 1,024 byte를 넘을 수 없다. Metadata frame을 쓰는 command(16·17·23·24·25·39)도 frame을 decode한 entry에 같은 계산을 적용한다. 그래서 한 command에서 받아들인 metadata는 Message Follow 등으로 다른 command(예: 39 → 21·22)에 옮겨도 상한 안에 있다.
+- Metadata frame 자체의 길이 상한 1,024 byte는 decode 전 allocation 방어용이다. Metadata가 유효한지는 위 계산으로만 판단한다.
 - Application payload의 schema 절대 상한은 `applicationPayloadAbsoluteBytes`인 4,294,966,774 byte다.
 - 여러 runtime node가 이름으로 서로를 찾아 message를 주고받는 연결 그룹인
   [RouteMesh](../00-foundation/02-glossary.ko.md#routemesh)의 ServerServer에서는 schema·wire 표현
@@ -239,7 +240,7 @@ Actor에게 보내는 typed message인 `actorSend`(24)와 `actorRequest`(25)는 
 
 ## 3. Command space
 
-Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `55..255`는 reserved이며
+Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `56..255`는 reserved이며
 다른 의미로 재사용하지 않는다. 괄호 안의 이전 command 이름은 호환 진단용 이름일 뿐 decode하거나
 전송하는 command가 아니다.
 
@@ -290,6 +291,7 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `55..25
 | 52 | `relocationState` | infrastructure | 없음 | — | source memory에서 target으로 직접 전달하는 payload chunk 전송(base·final stage) |
 | 53 | `relocationFailed` | infrastructure | 없음 | — | 대응하는 `relocationPrepare`에 대한 assembly·준비 실패 명시 reply |
 | 54 | `boundSessionClose` | infrastructure | 없음 | — | current binding의 physical connection close를 Session owner에 요청한다 |
+| 55 | `instanceSpotFollow` | application | 필수 | `metadata` | Message Follow로 전달하는 Ready Instance Spot one-way(operation ID 0, reply route 없음). [Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다) |
 
 표의 "계층"·"application payload"·"사용할 수 있는 flag" 열은 schema 선언을 그대로 옮긴 것이다.
 **application 계층 command만 application handler로 들어간다.** infrastructure command는 runtime이
@@ -779,6 +781,7 @@ Transport, target과 Session owner가 수행하는 검증과 그 경계는
 
 - Target은 terminal completion과 delivery state를 새 immutable relocation root에 사용한 뒤 authority CAS로 `TerminalCompletionCount`와 `PendingRelayCount`를 함께 갱신한다.
 - `replyRelay`는 원래 reply route와 그 요청을 가리키는 source lease fence를 사용한다.
+- Request source fence의 node generation은 받은 request 기록이 실어 온 송신 node의 generation(ingress source node generation)이다. 그 값이 없는 기록(이 node에서 만든 local request)만 이 node의 lifecycle generation을 쓴다.
 - Source는 terminal result를 수락하거나 이미 terminal임을 확인한 뒤 authenticated `replyRelayAck`을 보낸다.
 - Physical connection close는 terminal delivery의 증거가 아니다.
 

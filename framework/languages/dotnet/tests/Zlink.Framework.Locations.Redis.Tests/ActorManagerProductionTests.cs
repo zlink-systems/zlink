@@ -398,14 +398,26 @@ public sealed partial class ActorManagerProductionTests
         return services.BuildServiceProvider();
     }
 
-    private static ServiceProvider BuildClient(IZLinkLocationStore store, string endpoint)
+    private static ServiceProvider BuildClient(
+        IZLinkLocationStore store,
+        string endpoint,
+        TimeSpan? requestTimeout = null,
+        string? routingIdPrefix = null,
+        TimeSpan? ownerLeaseFencingMargin = null
+    )
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(store);
+            if (requestTimeout is { } timeout)
+                options.DefaultRequestTimeout = timeout;
+            if (ownerLeaseFencingMargin is { } margin)
+                options.ConfigureLocations().OwnerLeaseFencingMargin = margin;
             options.ConfigureInboundDispatch().CoreHwmMemoryLimitBytes = 1UL * 1024 * 1024 * 1024;
             var node = options.AddRouteMesh("objects").Listen(endpoint);
+            if (routingIdPrefix is not null)
+                node.SetRoutingIdPrefix(routingIdPrefix);
             node.Channel("objects").Client();
             node.Objects().Client();
         });
@@ -543,6 +555,9 @@ public sealed partial class ActorManagerProductionTests
         private static int _createCount;
 
         public IZLinkEntrySpotContext Context { get; } = context;
+
+        public void Configure() =>
+            Context.Handlers.AddActorPacket<ClosingProbeHandler, TestActor>();
 
         public static int CreateCount => Volatile.Read(ref _createCount);
 

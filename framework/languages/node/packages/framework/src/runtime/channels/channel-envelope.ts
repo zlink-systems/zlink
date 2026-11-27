@@ -1,3 +1,4 @@
+import { metadataExceedsLimit } from '../foundation/service-metadata-codec';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-values';
 import { randomBytes } from 'node:crypto';
@@ -644,8 +645,7 @@ function writeChannelParts(
   header.topic = topic;
   header.metadata = sortedMetadata;
   if (sortedMetadata.length !== 0) {
-    const metadataBytes = protobufMetadataSize(sortedMetadata);
-    if (metadataBytes > SERVICE_WIRE_METADATA_BYTES) {
+    if (metadataExceedsLimit(sortedMetadata)) {
       throw new ZLinkConfigurationException(
         `Channel application metadata exceeds the ${SERVICE_WIRE_METADATA_BYTES}-byte limit.`
       );
@@ -679,31 +679,6 @@ const OUTBOUND_CHANNEL_HEADER: Record<string, unknown> = {
   topic: null,
   metadata: EMPTY_PROTOBUF_METADATA
 };
-
-function protobufMetadataSize(entries: readonly { key: string; value: string }[]): number {
-  // Count field 13 and each nested string field with their wire tags and length prefixes.
-  let size = 0;
-  for (const entry of entries) {
-    const keyBytes = Buffer.byteLength(entry.key, 'utf8');
-    const valueBytes = Buffer.byteLength(entry.value, 'utf8');
-    const bodyBytes =
-      1 +
-      protobufVarintSize(keyBytes) +
-      keyBytes +
-      (valueBytes === 0 ? 0 : 1 + protobufVarintSize(valueBytes) + valueBytes);
-    size += 1 + protobufVarintSize(bodyBytes) + bodyBytes;
-  }
-  return size;
-}
-
-function protobufVarintSize(value: number): number {
-  let size = 1;
-  while (value >= 0x80) {
-    value = Math.floor(value / 0x80);
-    size++;
-  }
-  return size;
-}
 
 function encodeFlowOrigin(origin: ZLinkFlowOrigin): number {
   switch (origin) {
@@ -876,10 +851,7 @@ function validateChannelHeader(value: unknown, flowEnabled = true): ZLinkChannel
       metadata[key] = entryValue;
     }
     checkedMetadata = Object.freeze(metadata as Record<string, string>);
-    const encodedMetadataLength = protobufMetadataSize(
-      metadataEntries as { key: string; value: string }[]
-    );
-    if (encodedMetadataLength > SERVICE_WIRE_METADATA_BYTES) {
+    if (metadataExceedsLimit(metadataEntries as { key: string; value: string }[])) {
       throw new ZLinkConfigurationException(
         `Channel application metadata exceeds the ${SERVICE_WIRE_METADATA_BYTES}-byte limit.`
       );

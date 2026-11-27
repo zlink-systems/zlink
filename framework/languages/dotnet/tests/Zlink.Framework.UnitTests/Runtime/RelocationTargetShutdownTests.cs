@@ -445,7 +445,8 @@ public class ShutdownSettlementRepository : DispatchProxy
                     _inner.CommitAggregateAttemptAsync(
                         (ZLinkAggregateFence)args![0]!,
                         (ulong)args[1]!,
-                        (CancellationToken)args[2]!
+                        (CancellationToken)args[2]!,
+                        (ulong?)args[3]
                     ),
                 (CancellationToken)args![2]!
             );

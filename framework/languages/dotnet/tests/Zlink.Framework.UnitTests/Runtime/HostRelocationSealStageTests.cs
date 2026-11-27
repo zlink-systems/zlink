@@ -535,7 +535,9 @@ public sealed partial class HostRelocationSealStageTests
                 {
                     if (commitStore is not null)
                     {
-                        await commitStore.Committed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                        var committed = await commitStore.Committed.Task.WaitAsync(
+                            TimeSpan.FromSeconds(10)
+                        );
                         Assert.True(
                             ZLinkActorAuthorityPayloadCodec.TryDecode(
                                 commitStore.SealedAuthorityPayload,
@@ -544,13 +546,13 @@ public sealed partial class HostRelocationSealStageTests
                         );
                         Assert.True(
                             ZLinkActorAuthorityPayloadCodec.TryDecode(
-                                commitStore.CommittedAuthorityPayload,
+                                committed.Payload.Span,
                                 out var committedActor
                             )
                         );
                         Assert.Equal(commitStore.SourceRid, sealedActor.NodeRid);
-                        Assert.Equal(commitStore.TargetRid, committedActor.NodeRid);
-                        Assert.Equal(commitStore.TargetOwnerId, committedActor.OwnerId);
+                        Assert.Equal(committed.Allocation.Descriptor.Rid, committedActor.NodeRid);
+                        Assert.Equal(committed.OwnerId, committedActor.OwnerId);
                         Assert.Equal(sealedActor.CurrentSpotId, committedActor.CurrentSpotId);
                         Assert.Equal(
                             sealedActor.CurrentSpotGeneration,
@@ -572,7 +574,12 @@ public sealed partial class HostRelocationSealStageTests
             },
             holdTargetCommitResponse
                 ? (inner, actorId, sourceRid) =>
-                    commitStore = new CommitResponseGateStore(inner, actorId, sourceRid)
+                    commitStore = new CommitResponseGateStore(
+                        inner,
+                        actorId,
+                        snapshot => snapshot.Allocation.Descriptor.Rid != sourceRid,
+                        sourceRid
+                    )
                 : null
         );
     }
@@ -617,6 +624,7 @@ public sealed partial class HostRelocationSealStageTests
 
     private sealed record BoundMemberRelocationContext(
         RelocationBehaviorHost Source,
+        RelocationBehaviorHost Target,
         IServiceProvider SessionServices,
         IZlinkStreamConnector Connector,
         SpotWideMemberSealCaptureTests.HandoffBacklogLoggerProvider Backlog,
@@ -754,6 +762,7 @@ public sealed partial class HostRelocationSealStageTests
             await scenario(
                 new BoundMemberRelocationContext(
                     source,
+                    target,
                     session.Services,
                     connector,
                     backlog,
@@ -775,21 +784,19 @@ public sealed partial class HostRelocationSealStageTests
     private sealed class CommitResponseGateStore(
         IZLinkLocationStore inner,
         string actorId,
-        RoutingId sourceRid
+        Func<ZLinkAuthoritySnapshot, bool> shouldHold,
+        RoutingId sourceRid = default
     ) : IZLinkLocationStore
     {
         private readonly ZLinkProviderLocationRepository reader = new(inner);
 
-        internal TaskCompletionSource Committed { get; } =
+        internal TaskCompletionSource<ZLinkAuthoritySnapshot> Committed { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Release { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal RoutingId SourceRid => sourceRid;
-        internal RoutingId TargetRid { get; private set; }
-        internal string TargetOwnerId { get; private set; } = string.Empty;
         internal byte[] SealedAuthorityPayload { get; private set; } = [];
-        internal byte[] CommittedAuthorityPayload { get; private set; } = [];
 
         public async ValueTask<ZLinkStoreReadResult> ReadAsync(
             ZLinkStoreKey key,
@@ -822,15 +829,9 @@ public sealed partial class HostRelocationSealStageTests
                     ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
                     cancellationToken
                 );
-                if (
-                    authority is ZLinkAuthorityReadResult.Found found
-                    && found.Snapshot.Allocation.Descriptor.Rid != sourceRid
-                )
+                if (authority is ZLinkAuthorityReadResult.Found found && shouldHold(found.Snapshot))
                 {
-                    TargetRid = found.Snapshot.Allocation.Descriptor.Rid;
-                    TargetOwnerId = found.Snapshot.OwnerId;
-                    CommittedAuthorityPayload = found.Snapshot.Payload.ToArray();
-                    Committed.TrySetResult();
+                    Committed.TrySetResult(found.Snapshot);
                     await Release.Task.WaitAsync(cancellationToken);
                 }
             }

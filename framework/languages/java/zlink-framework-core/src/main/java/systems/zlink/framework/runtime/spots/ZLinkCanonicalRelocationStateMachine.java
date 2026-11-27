@@ -30,10 +30,10 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
-import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkSpotTypeCapacityDelta;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
@@ -49,12 +49,16 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
@@ -89,8 +93,10 @@ final class ZLinkCanonicalRelocationStateMachine
     private final Map<Fence, TerminalTarget> terminalTargets = new HashMap<>();
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
     private Runnable sourceQuiescenceChanged = () -> {};
-    private final java.util.function.BooleanSupplier targetAdmissionSealed;
-    private final java.util.function.BooleanSupplier targetOwnerAdmissionOpen;
+    private final java.util.function.BooleanSupplier shutdownAdmissionSealed;
+    private final java.util.function.BooleanSupplier targetAdmissionOpen;
+    private final Set<SettleRun> settleRuns = ConcurrentHashMap.newKeySet();
+    private volatile Instant stopDeadline;
 
     record AttemptCounts(int sources, int targets, int terminalTargets) {}
 
@@ -143,7 +149,7 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkLocationRepository locations,
             ZLinkAggregateRelocationCoordinator coordinator,
             ZLinkSpotRetireControl.TargetEndpoint target,
-            java.util.function.BooleanSupplier targetAdmissionSealed) {
+            java.util.function.BooleanSupplier shutdownAdmissionSealed) {
         this(
                 node,
                 meshName,
@@ -153,7 +159,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 target,
                 ZLinkCanonicalRelocationStateMachine::scheduleAt,
                 ZLinkRelocationPayloadTransfer.Options.defaults(),
-                targetAdmissionSealed);
+                shutdownAdmissionSealed);
     }
 
     ZLinkCanonicalRelocationStateMachine(
@@ -249,7 +255,7 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkSpotRetireControl.TargetEndpoint target,
             RetentionScheduler retentionScheduler,
             ZLinkRelocationPayloadTransfer.Options transferOptions,
-            java.util.function.BooleanSupplier targetAdmissionSealed) {
+            java.util.function.BooleanSupplier shutdownAdmissionSealed) {
         this(
                 node,
                 meshName,
@@ -261,7 +267,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 transferOptions,
                 System::nanoTime,
                 ZLinkCanonicalRelocationStateMachine::scheduleAfter,
-                targetAdmissionSealed);
+                shutdownAdmissionSealed);
     }
 
     ZLinkCanonicalRelocationStateMachine(
@@ -273,8 +279,8 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkSpotRetireControl.TargetEndpoint target,
             RetentionScheduler retentionScheduler,
             ZLinkRelocationPayloadTransfer.Options transferOptions,
-            java.util.function.BooleanSupplier targetAdmissionSealed,
-            java.util.function.BooleanSupplier targetOwnerAdmissionOpen,
+            java.util.function.BooleanSupplier shutdownAdmissionSealed,
+            java.util.function.BooleanSupplier targetAdmissionOpen,
             ZLinkDispatchErrorReporter dispatchErrors) {
         this(
                 node,
@@ -287,8 +293,8 @@ final class ZLinkCanonicalRelocationStateMachine
                 transferOptions,
                 System::nanoTime,
                 ZLinkCanonicalRelocationStateMachine::scheduleAfter,
-                targetAdmissionSealed,
-                targetOwnerAdmissionOpen,
+                shutdownAdmissionSealed,
+                targetAdmissionOpen,
                 dispatchErrors);
     }
 
@@ -331,7 +337,7 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkRelocationPayloadTransfer.Options transferOptions,
             LongSupplier monotonicNanos,
             DelayScheduler delayScheduler,
-            java.util.function.BooleanSupplier targetAdmissionSealed) {
+            java.util.function.BooleanSupplier shutdownAdmissionSealed) {
         this(
                 node,
                 meshName,
@@ -343,7 +349,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 transferOptions,
                 monotonicNanos,
                 delayScheduler,
-                targetAdmissionSealed,
+                shutdownAdmissionSealed,
                 () -> true,
                 null);
     }
@@ -359,13 +365,13 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkRelocationPayloadTransfer.Options transferOptions,
             LongSupplier monotonicNanos,
             DelayScheduler delayScheduler,
-            java.util.function.BooleanSupplier targetAdmissionSealed,
-            java.util.function.BooleanSupplier targetOwnerAdmissionOpen,
+            java.util.function.BooleanSupplier shutdownAdmissionSealed,
+            java.util.function.BooleanSupplier targetAdmissionOpen,
             ZLinkDispatchErrorReporter dispatchErrors) {
-        this.targetAdmissionSealed =
-                Objects.requireNonNull(targetAdmissionSealed, "targetAdmissionSealed");
-        this.targetOwnerAdmissionOpen =
-                Objects.requireNonNull(targetOwnerAdmissionOpen, "targetOwnerAdmissionOpen");
+        this.shutdownAdmissionSealed =
+                Objects.requireNonNull(shutdownAdmissionSealed, "shutdownAdmissionSealed");
+        this.targetAdmissionOpen =
+                Objects.requireNonNull(targetAdmissionOpen, "targetAdmissionOpen");
         this.node = Objects.requireNonNull(node, "node");
         this.meshName = requireText(meshName, "meshName");
         this.entrySpotId = entrySpotId;
@@ -509,11 +515,11 @@ final class ZLinkCanonicalRelocationStateMachine
 
     /**
      * Settles the source side of one relocation attempt from the Location Store authority (spec 28
-     * §4.4, spec 01 §10). Before {@code preserveAt} the source only reads the primary authority
-     * record; from {@code preserveAt} it runs the {@code Preserve} fence — an expected-StoreVersion
-     * CAS that keeps the source owner. The source attempt, its payload and the boundary batch stay
-     * retained until one of the outcomes is definitive. A transport reconnect observed while
-     * waiting resends the whole boundary batch and the cutover.
+     * §4.4, spec 01 §10). Until shutdown admission is sealed or {@code preserveAt} is reached, the
+     * source only reads the primary authority record. Then it runs the {@code Preserve} fence, an
+     * expected-StoreVersion CAS that keeps the source owner. The source attempt, its payload and
+     * the boundary batch stay retained until one of the outcomes is definitive. A transport
+     * reconnect observed while waiting resends the whole boundary batch and the cutover.
      */
     @Override
     public CompletionStage<Settlement> settle(
@@ -531,8 +537,12 @@ final class ZLinkCanonicalRelocationStateMachine
         if (openSourceQuiescenceWindows.incrementAndGet() == 1) {
             sourceQuiescenceChanged.run();
         }
-        CompletableFuture<AuthoritySettlement> result = new CompletableFuture<>();
-        settleSource(attempt, preserveAt, result);
+        SettleRun run = new SettleRun();
+        CompletableFuture<AuthoritySettlement> result = run.result;
+        settleRuns.add(run);
+        result.whenComplete((ignored, failure) -> settleRuns.remove(run));
+        settleSource(attempt, preserveAt, run);
+        if (stopDeadline != null && !result.isDone()) armStop(run);
         return result.whenComplete(
                 (settlement, failure) -> {
                     inStateLane(() -> sources.remove(key, attempt));
@@ -570,14 +580,54 @@ final class ZLinkCanonicalRelocationStateMachine
         }
     }
 
-    private void settleSource(
-            SourceAttempt attempt,
-            Instant preserveAt,
-            CompletableFuture<AuthoritySettlement> result) {
+    /**
+     * Records the host stop deadline. A unit still unsettled at that instant ends with {@code
+     * Unavailable} for its Join caller, and the Store is not called or retried again for it (host
+     * relocation flow §14, stop deadline paragraph). An already submitted Store call is not
+     * cancelled.
+     */
+    void stopAt(Instant deadline) {
+        stopDeadline = Objects.requireNonNull(deadline, "deadline");
+        settleRuns.forEach(this::armStop);
+    }
+
+    private void armStop(SettleRun run) {
+        if (!run.stopArmed.compareAndSet(false, true)) return;
+        Duration remaining = Duration.between(Instant.now(), stopDeadline);
+        delayScheduler.schedule(remaining.isNegative() ? Duration.ZERO : remaining, run::stop);
+    }
+
+    private boolean stopReached(SettleRun run) {
+        Instant deadline = stopDeadline;
+        if (deadline != null && !Instant.now().isBefore(deadline)) run.stop();
+        return run.stopped;
+    }
+
+    private static final class SettleRun {
+        final CompletableFuture<AuthoritySettlement> result = new CompletableFuture<>();
+        final AtomicBoolean stopArmed = new AtomicBoolean();
+        volatile boolean stopped;
+
+        void stop() {
+            stopped = true;
+            result.completeExceptionally(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Relocation unit is unsettled at the host stop deadline; retry on"
+                                    + " another node"));
+        }
+    }
+
+    private void settleSource(SourceAttempt attempt, Instant preserveAt, SettleRun run) {
+        CompletableFuture<AuthoritySettlement> result = run.result;
+        if (result.isDone() || stopReached(run)) return;
         var prepare = attempt.prepare();
         String key = primary(attempt.request().participants()).authorityKey();
         String expected = attempt.sourceStoreVersion();
-        boolean fence = !Instant.now().isBefore(preserveAt);
+        // Host relocation §14 starts Preserve when shutdown seals admission.
+        // Settlement Store requests keep their independent cancellation scope.
+        boolean fence =
+                shutdownAdmissionSealed.getAsBoolean() || !Instant.now().isBefore(preserveAt);
         CompletionStage<Optional<AuthoritySettlement>> step =
                 locations
                         .read(key, OPEN)
@@ -587,6 +637,11 @@ final class ZLinkCanonicalRelocationStateMachine
                                             settlementOf(read, attempt.request(), expected);
                                     if (observed.isPresent()) {
                                         return CompletableFuture.completedFuture(observed);
+                                    }
+                                    if (stopReached(run)) {
+                                        return CompletableFuture
+                                                .<Optional<AuthoritySettlement>>failedFuture(
+                                                        new CancellationException());
                                     }
                                     var owner = prepare.coordinator();
                                     return leaseLive(owner.ownerId(), owner.ownerLeaseGeneration())
@@ -600,6 +655,12 @@ final class ZLinkCanonicalRelocationStateMachine
                                                                                             Settlement
                                                                                                     .SOURCE_LEASE_EXPIRED,
                                                                                             null)));
+                                                        }
+                                                        if (stopReached(run)) {
+                                                            return CompletableFuture
+                                                                    .<Optional<AuthoritySettlement>>
+                                                                            failedFuture(
+                                                                                    new CancellationException());
                                                         }
                                                         return fence
                                                                         && read
@@ -629,6 +690,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         result.complete(settled.get());
                         return;
                     }
+                    if (result.isDone() || stopReached(run)) return;
                     // Relocation §4.4: compare against the route used by any retained
                     // boundary record, including a cutover with no relay records.
                     var route = node.observePeerRoute(attempt.targetNodeRid());
@@ -647,7 +709,7 @@ final class ZLinkCanonicalRelocationStateMachine
                                     attempt.batch().resubmitted(route.selectedGeneration());
                                 delayScheduler.schedule(
                                         STORE_RETRY_DELAY,
-                                        () -> settleSource(attempt, preserveAt, result));
+                                        () -> settleSource(attempt, preserveAt, run));
                             });
                 });
     }
@@ -847,7 +909,7 @@ final class ZLinkCanonicalRelocationStateMachine
                                         existing, null);
                             TargetAttempt created = new TargetAttempt(prepare);
                             MeshNodeState state = node.status().state();
-                            if (targetAdmissionSealed.getAsBoolean()
+                            if (shutdownAdmissionSealed.getAsBoolean()
                                     || state == MeshNodeState.DRAINING
                                     || state == MeshNodeState.STOPPED
                                     || state == MeshNodeState.ERROR)
@@ -856,11 +918,11 @@ final class ZLinkCanonicalRelocationStateMachine
                                                 ZLinkFrameworkErrorKind.SHUTTING_DOWN,
                                                 "canonical relocation target admission is sealed"),
                                         created);
-                            if (!targetOwnerAdmissionOpen.getAsBoolean())
+                            if (!targetAdmissionOpen.getAsBoolean())
                                 return new java.util.AbstractMap.SimpleImmutableEntry<>(
                                         new ZLinkFrameworkException(
                                                 ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                "canonical relocation target owner admission is closed"),
+                                                "canonical relocation target admission is closed"),
                                         created);
                             targets.put(fence, created);
                             return new java.util.AbstractMap.SimpleImmutableEntry<>(null, created);
@@ -1086,7 +1148,7 @@ final class ZLinkCanonicalRelocationStateMachine
         var prepare = attempt.prepare();
         var object = prepare.object();
         String relocationIdentity = prepare.id() + "/attempt/" + prepare.targetAttemptGeneration();
-        boolean userSpot = object.kind() == 3;
+        boolean spot = object.kind() != ZLinkPlacementObjectKind.ACTOR.value();
         reporter.report(
                 new ZLinkDispatchFailure(
                         ZLinkDispatchErrorSurface.ACTOR_RELOCATION,
@@ -1096,8 +1158,8 @@ final class ZLinkCanonicalRelocationStateMachine
                         "target_prepare_" + stage,
                         null,
                         null,
-                        userSpot ? object.objectId() : null,
-                        userSpot ? null : object.objectId(),
+                        spot ? object.objectId() : null,
+                        spot ? null : object.objectId(),
                         prepare.sourceNodeRid().toString(),
                         relocationIdentity,
                         null,
@@ -1892,9 +1954,10 @@ final class ZLinkCanonicalRelocationStateMachine
                                             new ZLinkCanonicalRelocationProtocol.ObjectFence(
                                                     primary.objectKind(),
                                                     primary.objectId(),
-                                                    "",
+                                                    envelope.object().stableType(),
                                                     primary.objectGeneration(),
-                                                    primary.sourceAuthorityOwnerGeneration()),
+                                                    envelope.object()
+                                                            .expectedAuthorityOwnerGeneration()),
                                             request.sourceNodeRid(),
                                             request.sourceNodeGeneration(),
                                             ZLinkRelocationPayloadTransfer.manifest(
@@ -2050,7 +2113,20 @@ final class ZLinkCanonicalRelocationStateMachine
                                 1,
                                 Optional.of(
                                         new ZLinkSpotTypeCapacityDelta(
-                                                ZLinkPlacementObjectKind.USER_SPOT,
+                                                entries.stream()
+                                                        .map(
+                                                                entry ->
+                                                                        entry.authority()
+                                                                                .snapshot()
+                                                                                .allocation()
+                                                                                .objectKind())
+                                                        .filter(
+                                                                kind ->
+                                                                        kind
+                                                                                != ZLinkPlacementObjectKind
+                                                                                        .ACTOR)
+                                                        .findFirst()
+                                                        .orElseThrow(),
                                                 request.stableType(),
                                                 1)));
         return new ZLinkAggregateRelocationCoordinator.Request(
@@ -2084,6 +2160,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 || envelope.object().kind() != prepare.object().kind()
                 || !envelope.object().objectId().equals(prepare.object().objectId())
                 || envelope.object().objectGeneration() != prepare.object().objectGeneration()
+                || !envelope.object().stableType().equals(prepare.object().stableType())
                 || envelope.object().expectedAuthorityOwnerGeneration()
                         != prepare.object().expectedAuthorityOwnerGeneration()
                 || envelope.applicationVersion() != prepare.applicationVersion()
@@ -2121,14 +2198,14 @@ final class ZLinkCanonicalRelocationStateMachine
             int kind = snapshot.allocation().objectKind().value();
             String objectId;
             String objectType;
-            if (kind == 2) {
+            if (kind != ZLinkPlacementObjectKind.ACTOR.value()) {
                 var decoded =
                         spotCodec
                                 .decode(snapshot.payload())
                                 .orElseThrow(
                                         () ->
                                                 new IllegalStateException(
-                                                        "User Spot authority payload is invalid"));
+                                                        "Spot authority payload is invalid"));
                 objectId = decoded.spotId();
                 objectType = decoded.stableType();
                 targetSpotId = objectId;
@@ -2202,7 +2279,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         meshName,
                         targetSpotId,
                         stableType,
-                        false,
+                        prepare.object().kind() == ZLinkPlacementObjectKind.INSTANCE_SPOT.value(),
                         restorePrimary,
                         rootBytes,
                         participants,
@@ -2290,7 +2367,7 @@ final class ZLinkCanonicalRelocationStateMachine
             int kind = snapshot.allocation().objectKind().value();
             String objectId = "<invalid>";
             String stableType = "<invalid>";
-            if (kind == 2) {
+            if (kind != ZLinkPlacementObjectKind.ACTOR.value()) {
                 var decoded = spotCodec.decode(snapshot.payload());
                 if (decoded.isPresent()) {
                     objectId = decoded.get().spotId();
@@ -2341,8 +2418,10 @@ final class ZLinkCanonicalRelocationStateMachine
                                         new IllegalStateException(
                                                 "relocation primary authority is missing"));
         if (primary.objectGeneration() != prepare.object().objectGeneration()
-                || primary.sourceAuthorityOwnerGeneration()
-                        != prepare.object().expectedAuthorityOwnerGeneration()) {
+                || (primary.objectKind() == ZLinkPlacementObjectKind.INSTANCE_SPOT.value()
+                        ? !primary.stableType().equals(prepare.object().stableType())
+                        : primary.sourceAuthorityOwnerGeneration()
+                                != prepare.object().expectedAuthorityOwnerGeneration())) {
             throw new IllegalStateException("relocation primary authority generation differs");
         }
     }
@@ -2377,7 +2456,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private static ZLinkSpotRetireControl.ParticipantFence primary(
             List<ZLinkSpotRetireControl.ParticipantFence> participants) {
         return participants.stream()
-                .filter(value -> value.objectKind() == 2)
+                .filter(value -> value.objectKind() != ZLinkPlacementObjectKind.ACTOR.value())
                 .findFirst()
                 .orElse(participants.getFirst());
     }

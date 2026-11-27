@@ -1323,6 +1323,23 @@ source·target `AuthorityOwnerGeneration`과 owner fence를 검증한다. Owner 
 target 제한이 아니라 같은 incarnation의 이동인지 확인한다. 실행 중 변경한
 `MessageFollowDuration`은 새 relocation부터 적용한다.
 
+**Ready Instance Spot one-way(command 39, operation ID 0)는 command 55 `instanceSpotFollow`로 전달한다.**
+Spot 전달 command 21·22는 0이 아닌 operation ID와 source Spot ID를 요구하므로, 이 message를 그
+command로 바꾸면 operation ID가 바뀌거나 원래 발신자 정보가 사라진다. Command 55는 operation ID를 0으로
+두고, 원래 source node RID·실행 세대, 있으면 source Spot ID, metadata와 payload를 그대로 싣는다. Reply
+route는 없다. 이전 owner는 위의 route·hop·fence 검증을 그대로 적용한다. Command 55는 전달된 message에만
+쓰므로 hop은 `1..8`이다. 수신 측은 hop 0인 command 55를 protocol error로 거부한다.
+
+- **Operation ID가 0인 전달은 중복 제거 key를 만들지 않는다.** 같은 발신자의 서로 다른 send가 같은 key로
+  합쳐지지 않게 하기 위해서다. 전달 중에 새 operation ID를 발급하지 않는다.
+- **이전 owner는 command 55를 전달한 뒤 위치 cache 무효화 통지(command 50)를 보내지 않는다.** Command 50은
+  0이 아닌 원래 operation ID로 통지를 구분한다. 발신자의 cache는 `RouteCacheMaxAge` 안에 만료되고, 그 사이의
+  send도 같은 route로 전달된다.
+- **Route가 없거나 만료됐거나 순환하면 이전 owner는 그 message를 버리고 진단을 한 번 남긴다.** One-way는
+  outbound admission에서 완료되므로 발신자에게 돌려줄 결과가 없다. Generation 불일치도 같다.
+- Target은 command 55를 command 39의 Ready one-way와 같은 Instance Spot 경로로 처리하며, 원래 source node
+  RID·실행 세대를 발신자로 본다(전달한 이전 owner가 아니다).
+
 ### 7.4 운영 도구에서 현재 위치를 조회한다
 
 운영 도구는 ActorId 또는 SpotId로 현재 위치를 조회할 수 있다. Object 종류와 stable type별
@@ -1935,6 +1952,12 @@ descriptor key에 routing ID가 들어가기 때문이다. 따라서 automatic R
 Store에 남는다. 이를 대상으로 삼지 않는 규칙은 §4.1이 정한다. Fixed RID의 lifecycle 규칙은
 [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)이 정한다. 두 정리 경로는
 서로 독립적이며 서로 다른 lifetime으로 동작한다.
+
+**Host 종료가 실행 중 discard 정리를 기다린 뒤 새로 확정된 discard는 local 정리만 하고 정상으로 끝난다.**
+종료는 transport를 닫기 전에 그때까지 수락한 discard 정리를 기다린다. 그 뒤 lease 상실·outage 기한 같은
+판정이 discard를 새로 확정하면, 그 정리는 transport나 completion table이 닫힌 것을 오류로 보고하지 않고
+"이미 종료 중"인 terminal로 처리한다. Local object 제거와 registry 정리는 끝까지 수행한다. 종료하는 host의
+peer는 그 host의 연결 종료로 결과를 관찰하므로 보낼 것이 남지 않는다. 이 경우를 위한 별도 상태나 순서는 두지 않는다.
 
 Owner lease는 종료 lifecycle이 보유한 동일 token으로 해제한다. 다른 lifecycle의 lease를
 다시 읽어 해제하지 않는다. Store 정리의 시간 범위와 `ForceStopped` 반환 경계는

@@ -192,7 +192,8 @@ internal interface IZLinkLocationRepository
     ValueTask<ZLinkAggregateCommitResult> CommitAggregateAttemptAsync(
         ZLinkAggregateFence fence,
         ulong attempt,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ulong? representativeAcceptedRequests = null
     ) => CommitAggregateAsync(fence, cancellationToken);
 
     ValueTask<ZLinkAggregateCommitResult> CommitAggregateForRecoveryAsync(

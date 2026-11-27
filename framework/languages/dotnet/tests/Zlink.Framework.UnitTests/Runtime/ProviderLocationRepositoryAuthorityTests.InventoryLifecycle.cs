@@ -112,7 +112,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         );
         Assert.Equal(
             ZLinkAggregateCommitResult.Stale,
-            await repository.CommitAggregateAttemptAsync(fence, 1, default)
+            await repository.CommitAggregateAttemptAsync(fence, 1, default, 9)
         );
         Assert.Equal(
             ZLinkAggregateAbortResult.Stale,
@@ -121,11 +121,11 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         Assert.Single(writes);
         Assert.Equal(
             ZLinkAggregateCommitResult.Committed,
-            await repository.CommitAggregateAttemptAsync(fence, 2, default)
+            await repository.CommitAggregateAttemptAsync(fence, 2, default, 3)
         );
         Assert.Equal(
             ZLinkAggregateCommitResult.Stale,
-            await repository.CommitAggregateAttemptAsync(fence, 1, default)
+            await repository.CommitAggregateAttemptAsync(fence, 1, default, 9)
         );
         var owner = Assert
             .IsType<ZLinkAuthorityReadResult.Found>(
@@ -133,6 +133,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             )
             .Snapshot;
         Assert.Equal(2UL, owner.Relocation!.Target!.AttemptGeneration);
+        Assert.Equal(ZLinkRelocationCompletionProgress.Start(3), owner.Relocation.Completion);
         Assert.True(
             ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(owner.Payload.Span, out var actor)
         );
@@ -143,6 +144,48 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         );
         Assert.Equal(originalPayload, sealedParticipant.Payload.ToArray());
         Assert.Equal("[]"u8.ToArray(), sealedParticipant.Mutation.ToArray());
+    }
+
+    [Fact]
+    public async Task CommitReconciliationDeadlinePreservesProviderFailure()
+    {
+        var fixture = await PrepareInventoryFixtureAsync(2);
+        var fence = fixture.Prepared.Fence;
+        var rootKey = ZLinkAggregateInventory.RootKey("zlink:v11:", fence);
+        ApplyThenThrowLocationStore? provider = null;
+        var delayed = new DelayedAuthorityReadLocationStore(
+            fixture.Provider,
+            rootKey,
+            () => provider?.BlockWrites == true
+        );
+        provider = new ApplyThenThrowLocationStore(delayed)
+        {
+            ThrowAfterNextWrite = true,
+            BlockWritesAfterThrownResponse = true,
+        };
+        var repository = new ZLinkProviderLocationRepository(provider);
+        try
+        {
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                repository.CommitAggregateAsync(fence).AsTask()
+            );
+            Assert.True(delayed.ReadEntered.IsCompletedSuccessfully);
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+            Assert.Equal(
+                "The provider response was lost.",
+                Assert.IsType<IOException>(failure.InnerException).Message
+            );
+        }
+        finally
+        {
+            delayed.ReleaseRead();
+            provider.BlockWrites = false;
+        }
+
+        Assert.Equal(
+            ZLinkAggregateCommitResult.AlreadyCommitted,
+            await repository.CommitAggregateAsync(fence)
+        );
     }
 
     [Theory]

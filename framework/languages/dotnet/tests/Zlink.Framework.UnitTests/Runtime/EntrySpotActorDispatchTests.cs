@@ -14854,24 +14854,24 @@ public sealed partial class EntrySpotActorDispatchTests
             );
         }
 
-        public ValueTask StageAsync(
+        public async ValueTask StageAsync(
             ZLinkSpotRetireReservation reservation,
             ZLinkPreparedSpotRetireStaging relocation,
+            Func<ValueTask<IReadOnlyList<ZLinkRelocationQueuedJob>>> freezeBoundary,
             DateTimeOffset deadline,
             CancellationToken cancellationToken
         )
         {
             _ = reservation;
+            await freezeBoundary();
             _staging = relocation;
             StageCalls++;
             // The command boundary is already published by the scheduler. The
             // missing response must therefore enter reconciliation, even when
             // the transport reports cancellation.
-            return ValueTask.FromException(
-                new OperationCanceledException(
-                    "The Stage acknowledgement was not observed.",
-                    cancellationToken
-                )
+            throw new OperationCanceledException(
+                "The Stage acknowledgement was not observed.",
+                cancellationToken
             );
         }
 

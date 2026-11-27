@@ -37,6 +37,7 @@ import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
@@ -348,6 +349,80 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .toCompletableFuture()
                                 .join();
         assertFalse(json.readTree(raw.value().bytes()).has("aggregate"));
+    }
+
+    @Test
+    void abortedAggregateStopsProjectingThePrePrepareVersion() throws Exception {
+        var fixture = preparedFixture(1, new UUID(0, 13), 1);
+        var request = fixture.request();
+        var participant = request.participants().getFirst();
+        assertInstanceOf(
+                ZLinkAggregatePrepared.class,
+                fixture.repository()
+                        .prepareAggregate(request, () -> false)
+                        .toCompletableFuture()
+                        .join());
+        var marked =
+                assertInstanceOf(
+                                ZLinkStoreReadFound.class,
+                                fixture.store()
+                                        .read(authorityKey(participant.authorityKey()), () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .value();
+        var prepared =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        fixture.repository()
+                                .read(participant.authorityKey(), () -> false)
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(participant.expectedStoreVersion(), prepared.storeVersion());
+        assertEquals(1, prepared.aggregateGeneration());
+
+        var aggregateKey = aggregateKey(request);
+        var aggregate =
+                assertInstanceOf(
+                                ZLinkStoreReadFound.class,
+                                fixture.store()
+                                        .read(aggregateKey, () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .value();
+        var abortedRow =
+                (com.fasterxml.jackson.databind.node.ObjectNode)
+                        new com.fasterxml.jackson.databind.ObjectMapper()
+                                .readTree(aggregate.bytes());
+        abortedRow.put("state", "aborted");
+        // C++ publishes the terminal aggregate state before clearing participant markers.
+        assertInstanceOf(
+                ZLinkStoreWriteApplied.class,
+                fixture.store()
+                        .write(
+                                new ZLinkStoreWriteRequest(
+                                        List.of(),
+                                        List.of(
+                                                new ZLinkStorePut(
+                                                        aggregateKey,
+                                                        ZLinkAggregateInventoryStore.canonical(
+                                                                abortedRow),
+                                                        null))),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join());
+
+        var aborted =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        fixture.repository()
+                                .read(participant.authorityKey(), () -> false)
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(marked.version().value(), aborted.storeVersion());
+        assertEquals(0, aborted.aggregateGeneration());
+        assertEquals(prepared.ownerId(), aborted.ownerId());
+        assertEquals(prepared.authorityOwnerGeneration(), aborted.authorityOwnerGeneration());
+        assertArrayEquals(prepared.payload(), aborted.payload());
     }
 
     @Test

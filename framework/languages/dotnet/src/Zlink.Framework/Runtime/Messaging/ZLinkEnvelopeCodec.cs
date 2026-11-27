@@ -864,6 +864,7 @@ internal static class ZLinkEnvelopeCodec
         ValidateHeaderString(header, flowId, validateUnicode);
         if (header.Metadata is { Count: > 0 } metadata)
         {
+            var remaining = ServiceWireConstants.MetadataBytes;
             foreach (var (key, value) in metadata)
             {
                 if (string.IsNullOrEmpty(key) || value is null)
@@ -873,31 +874,18 @@ internal static class ZLinkEnvelopeCodec
                     );
                 ValidateHeaderString(header, key, validateUnicode);
                 ValidateHeaderString(header, value, validateUnicode);
+                if (
+                    !ZLinkMeshMetadataCodec.TryAddChannelHeaderEntry(
+                        ref remaining,
+                        ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(key),
+                        ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(value)
+                    )
+                )
+                    throw new ZLinkEnvelopeProtocolException(
+                        header,
+                        $"ZLink envelope metadata exceeds the {ServiceWireConstants.MetadataBytes}-byte limit."
+                    );
             }
-            var size = 0;
-            foreach (var (key, value) in metadata)
-            {
-                var keyBytes = ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(key);
-                var valueBytes = ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(value);
-                var entryBodySize =
-                    CodedOutputStream.ComputeTagSize(1)
-                    + CodedOutputStream.ComputeLengthSize(keyBytes)
-                    + keyBytes
-                    + CodedOutputStream.ComputeTagSize(2)
-                    + CodedOutputStream.ComputeLengthSize(valueBytes)
-                    + valueBytes;
-                size = checked(
-                    size
-                    + CodedOutputStream.ComputeTagSize(13)
-                    + CodedOutputStream.ComputeLengthSize(entryBodySize)
-                    + entryBodySize
-                );
-            }
-            if (size > ServiceWireConstants.MetadataBytes)
-                throw new ZLinkEnvelopeProtocolException(
-                    header,
-                    $"ZLink envelope metadata exceeds the {ServiceWireConstants.MetadataBytes}-byte limit."
-                );
         }
         if (!fixedFieldsValidated && !IsValidMessageKind(header.Kind))
             throw new ZLinkEnvelopeProtocolException(

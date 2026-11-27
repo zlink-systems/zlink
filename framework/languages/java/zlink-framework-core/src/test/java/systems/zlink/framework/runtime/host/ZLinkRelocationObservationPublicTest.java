@@ -19,11 +19,15 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateParticipant;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
@@ -48,6 +52,7 @@ import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /** Public inputs for the source observation and current membership contracts (#1740). */
@@ -489,6 +494,7 @@ final class ZLinkRelocationObservationPublicTest {
         sourceOptions.configureLocations().setMessageFollowDuration(Duration.ofSeconds(30));
         try (var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions);
                 var sourceServing = observe(source.observe(), status -> status.isReady())) {
+            completeStartup(source);
             await(sourceServing.result);
             var original =
                     assertInstanceOf(
@@ -511,6 +517,7 @@ final class ZLinkRelocationObservationPublicTest {
                             observe(
                                     target.routeMeshRuntime().observe(MESH, 8),
                                     status -> status.isReady() && status.readyPeerCount() > 0)) {
+                completeStartup(target);
                 await(targetServing.result);
                 await(sourcePeer.result);
                 await(targetPeer.result);
@@ -553,6 +560,92 @@ final class ZLinkRelocationObservationPublicTest {
                                     .requestToActor(recreated.actorId(), new ReadGeneration())
                                     .timeout(WAIT)
                                     .submit(Long.class)));
+        }
+    }
+
+    @Test
+    void shutdownPreservesAnAcceptedSourceBeforeTheRestoreDeadline() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var repository = new ZLinkProviderLocationRepository(locations);
+        var relocations = new InMemoryRelocationStore();
+        var sourceUnits = new RelocationUnits();
+        var targetUnits = new RelocationUnits();
+        var commitEntered = new CompletableFuture<Void>();
+        var releaseCommit = new CompletableFuture<Void>();
+        var lateCommit = new CompletableFuture<ZLinkAggregateCommitResult>();
+        var preserved = new CompletableFuture<ZLinkAuthoritySnapshot>();
+        var key = ZLinkAuthorityKeyCodec.spot("draining-room");
+        targetUnits.beforeCommit =
+                () -> {
+                    commitEntered.complete(null);
+                    return releaseCommit;
+                };
+        targetUnits.afterCommit = lateCommit::complete;
+        sourceUnits.beforeAbort =
+                () ->
+                        repository
+                                .read(key, () -> false)
+                                .thenAccept(
+                                        read ->
+                                                preserved.complete(
+                                                        assertInstanceOf(
+                                                                ZLinkAuthoritySnapshot.class,
+                                                                read)));
+
+        try (var source =
+                startObserved(
+                        options("draining-source", locations, relocations, null), sourceUnits)) {
+            awaitReady(source);
+            await(source.spotManager().getOrCreate("draining-room", "room").submit());
+            var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            try (var target =
+                            startObserved(
+                                    options("draining-target", locations, relocations, endpoint),
+                                    targetUnits);
+                    var ready =
+                            observe(
+                                    source.routeMeshRuntime().observe(MESH, 8),
+                                    status -> status.isReady() && status.readyPeerCount() > 0)) {
+                try {
+                    awaitReady(target);
+                    await(ready.result);
+                    var relocation =
+                            source.relocate(
+                                    new ZLinkFrameworkRelocationOptions(
+                                            ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
+                                            null,
+                                            Duration.ofMinutes(1)));
+                    await(commitEntered);
+                    var before =
+                            assertInstanceOf(
+                                    ZLinkAuthoritySnapshot.class,
+                                    await(repository.read(key, () -> false)));
+                    var shutdown = source.shutdown(Duration.ofSeconds(3));
+                    var stopped = await(shutdown);
+                    assertTrue(preserved.isDone(), "Preserve must settle by the stop deadline");
+                    var after = await(preserved);
+                    assertEquals(before.ownerId(), after.ownerId());
+                    assertEquals(before.ownerLeaseGeneration(), after.ownerLeaseGeneration());
+                    assertEquals(before.objectGeneration(), after.objectGeneration());
+                    assertEquals(
+                            before.authorityOwnerGeneration(), after.authorityOwnerGeneration());
+                    assertNotEquals(before.storeVersion(), after.storeVersion());
+                    assertEquals("aborted", after.relocation().phase());
+                    assertEquals(
+                            ZLinkFrameworkRelocationReason.SHUTDOWN_REQUESTED,
+                            await(relocation).reason());
+                    assertTrue(
+                            ((ZLinkUserSpotRetireRuntime)
+                                            ZLinkFrameworkRuntimeTestAccess.spotRetire(source))
+                                    .relocationSourceQuiescent(),
+                            "no source relocation may remain unsettled");
+                    assertEquals(ZLinkFrameworkTerminationOutcome.STOPPED, stopped.outcome());
+                    releaseCommit.complete(null);
+                    assertEquals(ZLinkAggregateCommitResult.STALE, await(lateCommit));
+                } finally {
+                    releaseCommit.complete(null);
+                }
+            }
         }
     }
 
@@ -710,19 +803,15 @@ final class ZLinkRelocationObservationPublicTest {
     void activeRecreateInstanceSpotDoesNotBlockUserSpotRelocation() throws Exception {
         var locations = new ZLinkInMemoryLocationStore();
         var relocations = new InMemoryRelocationStore();
-        var sourceOptions =
-                options(
-                        "instance-source",
-                        locations,
-                        relocations,
-                        null,
-                        objects -> {
-                            addWideRoom(objects);
-                            objects.addInstanceSpotFactory(
-                                    "instance",
-                                    ActiveInstance.class,
-                                    factory -> factory.recreateOnRelocation());
-                        });
+        Consumer<ZLinkMeshObjectServerBuilder> factories =
+                objects -> {
+                    addWideRoom(objects);
+                    objects.addInstanceSpotFactory(
+                            "instance",
+                            ActiveInstance.class,
+                            factory -> factory.recreateOnRelocation());
+                };
+        var sourceOptions = options("instance-source", locations, relocations, null, factories);
         try (var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions)) {
             awaitReady(source);
             await(source.spotManager().getOrCreate("wide-room", "room").submit());
@@ -739,7 +828,12 @@ final class ZLinkRelocationObservationPublicTest {
             var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             try (var target =
                             ZLinkFrameworkRuntimeTestAccess.start(
-                                    options("instance-target", locations, relocations, endpoint));
+                                    options(
+                                            "instance-target",
+                                            locations,
+                                            relocations,
+                                            endpoint,
+                                            factories));
                     var ready =
                             observe(
                                     source.routeMeshRuntime().observe(MESH, 8),
@@ -753,6 +847,15 @@ final class ZLinkRelocationObservationPublicTest {
                         result.toString());
                 var room = await(target.spotManager().getOrCreate("wide-room", "room").submit());
                 assertEquals(RoutingId.from("instance-target"), room.spot().nodeRid());
+                var instance =
+                        new ZLinkProviderLocationRepository(locations)
+                                .read(ZLinkAuthorityKeyCodec.spot("active-instance"), () -> false);
+                assertEquals(
+                        RoutingId.from("instance-target"),
+                        assertInstanceOf(ZLinkAuthoritySnapshot.class, await(instance))
+                                .allocation()
+                                .descriptor()
+                                .rid());
             }
         }
     }
@@ -893,6 +996,10 @@ final class ZLinkRelocationObservationPublicTest {
     private static final class RelocationUnits {
         final List<UnitEvent> events = new CopyOnWriteArrayList<>();
         private final Map<UUID, Set<String>> inventory = new ConcurrentHashMap<>();
+        Supplier<CompletionStage<Void>> beforeCommit =
+                () -> CompletableFuture.completedFuture(null);
+        Consumer<ZLinkAggregateCommitResult> afterCommit = ignored -> {};
+        Runnable beforeAbort = () -> {};
 
         void capture(String actorId) {
             events.add(new UnitEvent("capture", Set.of(ZLinkAuthorityKeyCodec.actor(actorId))));
@@ -913,13 +1020,30 @@ final class ZLinkRelocationObservationPublicTest {
                                     inventory.put(request.aggregateId(), participants);
                                     events.add(new UnitEvent("prepare", participants));
                                 }
+                                if (method.getName().equals("abortAggregate")) beforeAbort.run();
                                 try {
-                                    var result = method.invoke(delegate, arguments);
                                     if (method.getName().equals("commitAggregate")) {
                                         var fence = (ZLinkAggregateFence) arguments[0];
-                                        return ((CompletionStage<?>) result)
+                                        var cancellation =
+                                                (ZLinkStoreCancellation)
+                                                        arguments[arguments.length - 1];
+                                        return beforeCommit
+                                                .get()
+                                                .thenCompose(
+                                                        ignored ->
+                                                                arguments.length == 3
+                                                                        ? delegate.commitAggregate(
+                                                                                fence,
+                                                                                (ZLinkAggregateCommitIntent)
+                                                                                        arguments[
+                                                                                                1],
+                                                                                cancellation)
+                                                                        : delegate.commitAggregate(
+                                                                                fence,
+                                                                                cancellation))
                                                 .thenApply(
                                                         committed -> {
+                                                            afterCommit.accept(committed);
                                                             if (committed
                                                                     == ZLinkAggregateCommitResult
                                                                             .COMMITTED) {
@@ -933,7 +1057,7 @@ final class ZLinkRelocationObservationPublicTest {
                                                             return committed;
                                                         });
                                     }
-                                    return result;
+                                    return method.invoke(delegate, arguments);
                                 } catch (InvocationTargetException failure) {
                                     throw failure.getCause();
                                 }
@@ -999,13 +1123,17 @@ final class ZLinkRelocationObservationPublicTest {
     }
 
     private static void awaitReady(ZLinkFrameworkRuntime runtime) {
+        completeStartup(runtime);
+        assertTrue(runtime.isReady());
+    }
+
+    private static void completeStartup(ZLinkFrameworkRuntime runtime) {
         ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
         if (!runtime.isReady())
             assertTrue(
                     ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
                             .toCompletableFuture()
                             .join());
-        assertTrue(runtime.isReady());
     }
 
     static <T> Observation<T> observe(

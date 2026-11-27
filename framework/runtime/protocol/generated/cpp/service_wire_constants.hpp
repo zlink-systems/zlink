@@ -54,6 +54,7 @@ enum class command : std::uint8_t {
     relocationState = 52,
     relocationFailed = 53,
     boundSessionClose = 54,
+    instanceSpotFollow = 55,
 };
 enum class flag : std::uint8_t {
     metadata = 1,

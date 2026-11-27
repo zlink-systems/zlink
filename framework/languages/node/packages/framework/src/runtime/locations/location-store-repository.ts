@@ -419,13 +419,19 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         current.value.storeNow,
         signal
       );
-      if (record.aggregate !== undefined) {
-        return { kind: 'conflict', current: snapshot };
-      }
       if (
         record.snapshot.allocation.state !== 'active' ||
-        current.value.version.value !== expectedStoreVersion.value
+        snapshot.kind !== 'snapshot' ||
+        snapshot.storeVersion.value !== expectedStoreVersion.value
       ) {
+        return { kind: 'conflict', current: snapshot };
+      }
+      const aggregateAbort =
+        record.aggregate === undefined
+          ? undefined
+          : await this.preparedSourceAbortWrite(record, record.aggregate, mutation, signal);
+      if (aggregateAbort === 'changed') continue;
+      if (record.aggregate !== undefined && aggregateAbort === undefined) {
         return { kind: 'conflict', current: snapshot };
       }
       if (mutation.kind === 'rebindOwnerLease') {
@@ -527,6 +533,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           ? undefined
           : {
               ...record,
+              aggregate: undefined,
               visibleStoreVersion: undefined,
               snapshot: {
                 ...record.snapshot,
@@ -537,9 +544,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                       authorityOwnerGeneration: counterNextValue(generations[1])
                     }),
                 payload: Buffer.from(mutation.payload),
-                ...(mutation.relocation === undefined
-                  ? {}
-                  : { relocation: mutation.relocation ?? undefined })
+                ...(aggregateAbort !== undefined && record.snapshot.relocation !== undefined
+                  ? // The Preserve aborts the prepared relocation in the same write.
+                    { relocation: { ...record.snapshot.relocation, phase: 'aborted' as const } }
+                  : mutation.relocation === undefined
+                    ? {}
+                    : { relocation: mutation.relocation ?? undefined })
               }
             };
       const actor =
@@ -621,6 +631,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           conditions: [
             { kind: 'version', key: rowKey, expected: current.value.version },
             ...membershipConditions,
+            ...(aggregateAbort?.conditions ?? []),
             ...(mutation.kind === 'restore'
               ? []
               : [
@@ -649,6 +660,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                 ]
               : [
                   { kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(nextRecord!) },
+                  ...(aggregateAbort?.mutations ?? []),
                   ...(generations === undefined
                     ? []
                     : [
@@ -734,7 +746,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           (value) => value.key.value === rowKey.value
         )?.version;
         if (version === undefined) {
-          throw new Error('Aggregate staging did not return a Store version.');
+          throw new Error('Preparing aggregate did not return a Store version.');
         }
         aggregateRead = {
           kind: 'found',
@@ -882,7 +894,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         );
         if (stored.kind === 'conflict') {
           // A peer can be in the middle of publishing this same aggregate.
-          // Do not abort its shared staging row merely because this attempt
+          // Do not abort its shared aggregate row merely because this attempt
           // lost a marker CAS; re-enter and adopt its terminal state.
           const aggregateRaced = await this.provider.read(rowKey, signal);
           if (aggregateRaced.kind === 'found') {
@@ -944,7 +956,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         );
         if (reserved.kind === 'applied') return { kind: 'prepared', fence: preparedFence };
 
-        // The staging row keeps its participant fences while capacity is re-evaluated.
+        // The aggregate row keeps its participant fences while capacity is re-evaluated.
         // Preserve or abort changes that row and prevents the next publication.
         capacity = undefined;
       }
@@ -1366,48 +1378,98 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (aggregate.state === 'committed') return { kind: 'stale' };
       const attempt = await this.readAggregateAttemptCondition(fence, signal);
       if (fence.relocationAttempt !== undefined && attempt === undefined) return { kind: 'stale' };
-      const conditions: ZLinkStoreCondition[] = [
+      const abort = await this.aggregateAbortWrite(fence, current.value.version, aggregate, signal);
+      if (abort === 'changed') continue;
+      if (abort === undefined) return { kind: 'stale' };
+      const result = await this.provider.write(
         {
-          kind: 'version',
-          key: rowKey,
-          expected: current.value.version
+          conditions: [...abort.conditions, ...(attempt === undefined ? [] : [attempt])],
+          mutations: abort.mutations
         },
-        ...(attempt === undefined ? [] : [attempt])
-      ];
-      const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [
-        {
-          kind: 'put',
-          key: rowKey,
-          bytes: encodeAggregateRecord(fence, { ...aggregate, state: 'aborted' })
-        }
-      ];
-      if (aggregate.state === 'prepared') {
-        const targetCapacityKey = capacityKey(
-          aggregate.targetDescriptor.meshName,
-          String(aggregate.targetDescriptor.rid)
-        );
-        const targetCapacityRead = await this.provider.read(targetCapacityKey, signal);
-        if (targetCapacityRead.kind === 'missing') return { kind: 'stale' };
-        const capacity = decodeJson<CapacityRecord>(targetCapacityRead.value.bytes);
-        conditions.push({
-          kind: 'version',
-          key: targetCapacityKey,
-          expected: targetCapacityRead.value.version
-        });
-        mutations.push({
-          kind: 'put',
-          key: targetCapacityKey,
-          bytes: encodeJson({
-            active: capacity.active,
-            pending: subtractCapacity(capacity.pending, aggregate.capacity)
-          } satisfies CapacityRecord)
-        });
-      }
-      const result = await this.provider.write({ conditions, mutations }, signal);
+        signal
+      );
       if (result.kind === 'conflict') continue;
       await this.clearAggregateMarkersByScan(fence, signal);
       return { kind: 'aborted' };
     }
+  }
+
+  private async preparedSourceAbortWrite(
+    record: AuthorityRecord,
+    marker: AggregateParticipantFenceRecord,
+    mutation: ZLinkAuthorityMutation,
+    signal?: AbortSignal
+  ): Promise<ZLinkStoreWriteRequest | 'changed' | undefined> {
+    // Only a source Preserve that keeps the payload and leaves the relocation record to this
+    // repository competes with the target NewOwner; every other write to a held row conflicts.
+    if (
+      mutation.kind !== 'put' ||
+      mutation.generationTransition !== 'preserve' ||
+      mutation.relocation !== undefined ||
+      Buffer.compare(record.snapshot.payload, mutation.payload) !== 0 ||
+      !isPreparedAuthorityRelocation(record.snapshot.relocation, marker.aggregateId)
+    ) {
+      return undefined;
+    }
+    const fence = aggregateFence(aggregateId(marker.aggregateId), marker.aggregateGeneration);
+    const current = await this.provider.read(aggregateKey(fence), signal);
+    if (current.kind === 'missing') return undefined;
+    const aggregate = decodeAggregateRecord(fence, current.value.bytes);
+    if (aggregate.state !== 'prepared') return undefined;
+    // Preserve and NewOwner compete on the participant and aggregate versions.
+    return this.aggregateAbortWrite(fence, current.value.version, aggregate, signal);
+  }
+
+  private async aggregateAbortWrite(
+    fence: ZLinkAggregateFence,
+    version: ZLinkStoreVersion,
+    aggregate: AggregateRecord,
+    signal?: AbortSignal
+  ): Promise<ZLinkStoreWriteRequest | 'changed' | undefined> {
+    const key = aggregateKey(fence);
+    const conditions: ZLinkStoreCondition[] = [{ kind: 'version', key, expected: version }];
+    const mutations: ZLinkStoreMutation[] = [
+      {
+        kind: 'put',
+        key,
+        bytes: encodeAggregateRecord(fence, { ...aggregate, state: 'aborted' })
+      }
+    ];
+    if (aggregate.state === 'prepared') {
+      const targetCapacityKey = capacityKey(
+        aggregate.targetDescriptor.meshName,
+        String(aggregate.targetDescriptor.rid)
+      );
+      const targetCapacity = await this.provider.read(targetCapacityKey, signal);
+      if (targetCapacity.kind === 'missing') return undefined;
+      const capacity = decodeJson<CapacityRecord>(targetCapacity.value.bytes);
+      let pending: CapacityUsage;
+      try {
+        pending = subtractCapacity(capacity.pending, aggregate.capacity);
+      } catch (error) {
+        if (
+          !(error instanceof ZLinkFrameworkException) ||
+          error.kind !== ZLinkFrameworkErrorKind.DataLost
+        )
+          throw error;
+        // A terminal write can release the reservation between the marker and capacity reads.
+        const observed = await this.provider.read(key, signal);
+        if (observed.kind === 'missing' || observed.value.version.value !== version.value) {
+          return 'changed';
+        }
+        throw error;
+      }
+      conditions.push(versionCondition(targetCapacityKey, targetCapacity));
+      mutations.push({
+        kind: 'put',
+        key: targetCapacityKey,
+        bytes: encodeJson({
+          active: capacity.active,
+          pending
+        } satisfies CapacityRecord)
+      });
+    }
+    return { conditions, mutations };
   }
 
   override async cleanupAggregateInventory(
@@ -1418,7 +1480,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const current = await this.provider.read(key, signal);
     if (current.kind === 'found') {
       const aggregate = decodeAggregateRecord(fence, current.value.bytes);
-      if (aggregate.state !== 'committed' && aggregate.state !== 'aborted') {
+      if (aggregate.state === 'aborted') {
+        await this.clearAggregateMarkersByScan(fence, signal);
+      } else if (aggregate.state !== 'committed') {
         await this.aggregateInventory.read(
           fence,
           Buffer.from(aggregate.inventoryDigestSha256, 'hex'),
@@ -1553,9 +1617,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         )
       )
         return 'reclaimed';
+      const actor =
+        snapshot.allocation.objectKind === 'actor'
+          ? decodeActorAuthorityPayload(
+              serviceRelocationAuthorityApplicationPayload(snapshot.payload)
+            )
+          : undefined;
+      const actorClosing = actor?.state === 'closing';
       if (
         snapshot.allocation.state === 'active'
-          ? request === undefined
+          ? request === undefined && !actorClosing
           : snapshot.pendingCreation === undefined
       )
         return 'notReclaimable';
@@ -1568,12 +1639,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         snapshot.allocation.objectKind === 'actor'
           ? undefined
           : decodeServiceReadySpotAuthority(snapshot.payload);
-      const readyActor =
-        snapshot.allocation.objectKind === 'actor'
-          ? decodeActorAuthorityPayload(
-              serviceRelocationAuthorityApplicationPayload(snapshot.payload)
-            )
-          : undefined;
       const releaseCandidate =
         snapshot.allocation.state === 'active' &&
         requiredOwner === undefined &&
@@ -1581,10 +1646,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         snapshot.relocation === undefined &&
         !hasRelocationAuthority(snapshot.payload) &&
         (discarded !== undefined ||
+          (request === undefined && actorClosing) ||
           (creation !== undefined &&
             creation.key.kind === snapshot.allocation.objectKind &&
             creation.intent.stableType === snapshot.allocation.stableType &&
-            (readySpot !== undefined || readyActor?.state === 'ready') &&
+            (readySpot !== undefined || actor?.state === 'ready' || actorClosing) &&
             (readySpot === undefined ||
               (readySpot.kind === creation.key.kind &&
                 readySpot.stableType === creation.intent.stableType &&
@@ -1602,7 +1668,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const leaseRead = this.provider.read(leaseKey, signal).then(async (read) => {
         const ownerLive = sameLiveOwner(read, snapshot);
         let targetCondition: ZLinkStoreCondition | undefined;
-        if (releaseCandidate && !ownerLive && creation !== undefined) {
+        if (releaseCandidate && !ownerLive && creation !== undefined && !actorClosing) {
           const targetKey = meshKey(creation.target.meshName, creation.target.nodeRid);
           const sameDescriptor = targetKey.value === descriptorKey.value;
           const targetRead = await (sameDescriptor
@@ -1621,7 +1687,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           if (!sameDescriptor) targetCondition = conditionFor(targetKey, targetRead);
         }
         const ownerReleaseAllowed =
-          releaseCandidate && !ownerLive && this.ownerLeaseReleaseDelay.allowsAuthority(owner);
+          releaseCandidate &&
+          !ownerLive &&
+          (actorClosing || this.ownerLeaseReleaseDelay.allowsAuthority(owner));
         return { read, ownerLive, ownerReleaseAllowed, targetCondition };
       });
       const memberObservations = leaseRead.then(async (leaseObservation) => {
@@ -1697,7 +1765,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (discarded !== undefined && members.length > 0) return 'notReclaimable';
       if (snapshot.allocation.state === 'active') {
         if (ownerLive) return 'notReclaimable';
-        if (!releaseCandidate && discarded !== undefined) return 'notReclaimable';
+        if (!releaseCandidate && creation === undefined) return 'notReclaimable';
         if (!releaseCandidate)
           throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
@@ -3733,17 +3801,19 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const aggregate = decodeAggregateRecord(fence, aggregateRead.value.bytes);
     // The publish CAS rewrites both rows. A Prepared snapshot can predate
     // the aggregate row read and still represents the source owner.
-    if (
-      aggregate.state !== 'committed' ||
-      isPreparedAuthorityRelocation(record.snapshot.relocation, marker.aggregateId)
-    ) {
+    const representativePrepared = isPreparedAuthorityRelocation(
+      record.snapshot.relocation,
+      marker.aggregateId
+    );
+    if (aggregate.state !== 'committed' || representativePrepared) {
+      if (record.visibleStoreVersion === undefined) {
+        throw new Error('Aggregate participant is missing visibleStoreVersion.');
+      }
       return authoritySnapshot(
         record.snapshot,
-        isPreparedAuthorityRelocation(record.snapshot.relocation, marker.aggregateId)
+        representativePrepared
           ? version
-          : ({
-              value: record.visibleStoreVersion ?? marker.expectedStoreVersion
-            } as ZLinkStoreVersion),
+          : ({ value: record.visibleStoreVersion } as ZLinkStoreVersion),
         storeNow
       );
     }

@@ -9,7 +9,8 @@ internal sealed record ZLinkAggregateRelocationParticipant(
     string ExpectedStoreVersion,
     ZLinkAuthorityGenerationTransition OwnerTransition,
     ReadOnlyMemory<byte> ApplicationAuthorityPayload,
-    ReadOnlyMemory<byte> MembershipMutation
+    ReadOnlyMemory<byte> MembershipMutation,
+    ZLinkRelocationCompletionBudget? CompletionBudget = null
 )
 {
     internal string? CapturedStoreVersion { get; init; }
@@ -71,6 +72,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         ArgumentNullException.ThrowIfNull(request);
         Validate(request);
         cancellationToken.ThrowIfCancellationRequested();
+        foreach (var participant in request.Participants)
+            participant.CompletionBudget?.EnsureFitsBeforeCommit();
 
         var inventoryDigest = request.CanonicalEnvelope is not null
             ? request.CanonicalEnvelope.InventoryDigest.ToArray()
@@ -191,10 +194,12 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
 
     internal async ValueTask<ZLinkAggregateRelocationPublished> CommitPublicationAsync(
         PublicationState publication,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        ZLinkRelocationCompletionBudget? representativeBudget = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
+        representativeBudget?.EnsureFitsBeforeCommit();
         try
         {
             var commit = publication.HasRepresentative
@@ -202,7 +207,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     .CommitAggregateAttemptAsync(
                         publication.Fence,
                         publication.AuthorityRelocation.Target!.AttemptGeneration,
-                        cancellationToken
+                        cancellationToken,
+                        representativeBudget?.AcceptedRequests
                     )
                     .ConfigureAwait(false)
                 : await authorityStore
@@ -528,7 +534,8 @@ internal static class ZLinkAggregateInventoryDigest
                 participant.ExpectedStoreVersion,
                 participant.OwnerTransition,
                 participant.ApplicationAuthorityPayload,
-                ZLinkAggregateInventory.MembershipBody(participant.MembershipMutation)
+                ZLinkAggregateInventory.MembershipBody(participant.MembershipMutation),
+                participant.CompletionBudget?.AcceptedRequests
             )
             {
                 CapturedStoreVersion = participant.CapturedStoreVersion,

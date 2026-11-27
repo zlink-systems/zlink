@@ -349,7 +349,9 @@ Session owner에 target route 적용과 seal 해제를 one-way로 알린다.
 `Accepted`는 위치와 membership 변경이 commit되었다는 뜻이다. Completion callback 실행까지
 끝났다는 뜻은 아니다. Framework는 lifecycle callback과 source membership cleanup을 처리한
 뒤 completion callback을 실행한다. Completion이 계속 실패하면 Actor를 sealed 상태로
-유지하고 barrier 뒤의 일반 message를 실행하지 않는다.
+유지하고 barrier 뒤의 일반 message를 실행하지 않는다. 그 뒤 도착한 일반 request는 기다리게 두지 않고
+실행 없이 즉시 `Unavailable`로 끝낸다. 다른 node의 송신 측도 같은 `Unavailable`을 받는다(handoff·Message Follow·
+relocation terminal relay가 오류 종류를 그대로 전달한다).
 `OnJoinedActor`와 completion callback은 위치 변경을 commit한 뒤 실행되므로, 이 callback의 예외나 그 안의 application
 송신 실패는 이미 commit한 `Accepted`와 target publication을 되돌리거나 실패로 바꾸지 않는다.
 

@@ -1501,6 +1501,26 @@ preserved. An absent or expired route or a loop is `Unavailable`; a generation m
 restricting a regular message's target. A runtime change to `MessageFollowDuration` applies to
 new relocations.
 
+**A Ready Instance Spot one-way (command 39, operation ID 0) is forwarded as command 55
+`instanceSpotFollow`.** The Spot forwarding commands 21 and 22 require a non-zero operation ID and a
+source Spot ID, so converting the message to them would change the operation ID or drop the original
+sender. Command 55 keeps the operation ID at 0 and carries the original source node RID and lifecycle
+generation, the source Spot ID when present, the metadata, and the payload unchanged. It has no reply
+route. The previous owner applies the route, hop, and fence checks above unchanged. Command 55 is used
+only for a forwarded message, so its hop is `1..8`. The receiver rejects a command 55 with hop 0 as a
+protocol error.
+
+- **A forward with operation ID 0 creates no deduplication key.** This keeps different sends from the
+  same sender from merging under one key. No new operation ID is issued during forwarding.
+- **The previous owner doesn't send the location-cache invalidation notice (command 50) after forwarding
+  command 55.** Command 50 identifies a notice by the non-zero original operation ID. The sender's cache
+  expires within `RouteCacheMaxAge`, and sends in the meantime are forwarded on the same route.
+- **When the route is absent, expired, or loops, the previous owner discards the message and records one
+  diagnostic.** A one-way completes at outbound admission, so no result can be returned to the sender. A
+  generation mismatch is handled the same way.
+- The target processes command 55 on the same Instance Spot path as a Ready one-way command 39 and treats
+  the original source node RID and lifecycle generation as the sender (not the forwarding previous owner).
+
 ### 7.4 Querying the Current Location from Operational Tools
 
 Operational tools can query the current location by ActorId or SpotId. A list per object
@@ -2181,6 +2201,14 @@ previous descriptor. The owner lease expires after renewals stop, but that descr
 the Store. Section 4.1 defines the rule that prevents targeting it. Fixed RID lifecycle rules are
 defined by [MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid). The two
 cleanup paths are independent and operate with different lifetimes.
+
+**A discard confirmed after host shutdown has waited for in-flight discard cleanup does local cleanup
+only and ends normally.** Shutdown waits for the discard cleanup it has accepted so far before it closes
+the transport. When a decision such as owner-lease loss or an outage deadline confirms a new discard after
+that, its cleanup doesn't report a closed transport or completion table as an error and treats it as an
+"already shutting down" terminal. It still completes local object removal and registry cleanup. Peers of
+the stopping host observe the result through that host's connection close, so nothing remains to send.
+No separate state or ordering exists for this case.
 
 The owner lease is released with the same token held by the terminating lifecycle.
 Cleanup does not reread and release another lifecycle's lease. The time boundary for Store

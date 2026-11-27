@@ -30,6 +30,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -121,7 +122,8 @@ public final class ZLinkSpotRuntimeTestAccess {
             long applicationVersion,
             Optional<String> maintenanceWave,
             Duration sessionRelocationSealTimeout,
-            Predicate<String> targetAdmissionSealed,
+            Predicate<String> shutdownAdmissionSealed,
+            BooleanSupplier targetHostServing,
             List<?> stateMachines,
             UnaryOperator<ZLinkLocationRepository> authorityStoreDecorator,
             UnaryOperator<Function<Object, CompletionStage<Void>>> targetNormalizerDecorator) {
@@ -138,7 +140,8 @@ public final class ZLinkSpotRuntimeTestAccess {
                 applicationVersion,
                 maintenanceWave,
                 sessionRelocationSealTimeout,
-                targetAdmissionSealed,
+                shutdownAdmissionSealed,
+                targetHostServing,
                 stateMachines,
                 authorityStoreDecorator,
                 targetNormalizerDecorator);

@@ -21,7 +21,7 @@ internal sealed record ZLinkAuthorityRelocation(
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
         ulong ApplicationVersion,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        JsonElement? Completion = null
+        ZLinkRelocationCompletionProgress? Completion = null
 )
 {
     internal record Fence(
@@ -59,6 +59,14 @@ internal sealed record ZLinkAuthorityRelocation(
         ulong OwnerLeaseGeneration,
         [property: JsonPropertyOrder(4)] string ExpectedStoreVersion
     ) : Fence(NodeRid, NodeGeneration, OwnerId, OwnerLeaseGeneration);
+
+    internal ZLinkAuthorityRelocation WithAcceptedRequests(ulong? acceptedRequests) =>
+        acceptedRequests is { } count
+            ? this with
+            {
+                Completion = ZLinkRelocationCompletionProgress.Start(count),
+            }
+            : this;
 
     internal static bool MatchesCommittedTarget(
         ZLinkAuthoritySnapshot authority,
@@ -117,7 +125,7 @@ internal sealed record ZLinkAuthorityRelocation(
         Guid id,
         ZLinkCanonicalRelocationAuthorityState state,
         string inventorySha256,
-        JsonElement? completion = null
+        ZLinkRelocationCompletionProgress? completion = null
     ) =>
         new(
             id,
@@ -261,7 +269,7 @@ internal static class ZLinkAuthorityAggregateCodec
             )
         )
             throw InvalidRecord();
-        JsonElement? completion = null;
+        ZLinkRelocationCompletionProgress? completion = null;
         if (value.TryGetProperty("completion", out var progress))
         {
             var accepted = Number(progress, "acceptedRequests");
@@ -281,7 +289,13 @@ internal static class ZLinkAuthorityAggregateCodec
                 )
             )
                 throw InvalidRecord();
-            completion = progress.Clone();
+            completion = new(
+                accepted,
+                completed,
+                pending,
+                completed == 0 ? null : reference.GetString(),
+                completed == 0 ? null : sha.GetString()
+            );
         }
         return new(
             relocationId,

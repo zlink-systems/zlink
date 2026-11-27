@@ -22,7 +22,7 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/transport/endpoint_notation.hpp"
-#include "runtime/utils/uuid.hpp"
+#include "runtime/utils/weak_runtime_owner.hpp"
 #include "runtime/utils/relocation_id_generator.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
@@ -275,20 +275,6 @@ runtime::relocation_id_generator_t &relocation_ids ()
 {
     static runtime::relocation_id_generator_t value;
     return value;
-}
-
-bool valid_routing_id_prefix (std::string_view value) noexcept
-{
-    if (value.empty () || value.size () > 64)
-        return false;
-    for (const auto character : value) {
-        const auto is_alphanumeric = (character >= 'A' && character <= 'Z')
-                                     || (character >= 'a' && character <= 'z')
-                                     || (character >= '0' && character <= '9');
-        if (!is_alphanumeric && character != '.' && character != '_' && character != '-')
-            return false;
-    }
-    return true;
 }
 
 std::size_t message_follow_payload_bytes (const runtime::messaging::envelope_header_t &header,
@@ -679,9 +665,6 @@ task_t<void> mesh_node_runtime_t::start (
         if (_state->listen_endpoint.empty ()) {
             throw configuration_error ("MeshNode listen endpoint is required");
         }
-        if (!_state->routing_id) {
-            throw configuration_error ("MeshNode routing id is required");
-        }
         if (!_state->core_context) {
             throw configuration_error ("MeshNode shared Core Context is required");
         }
@@ -713,10 +696,15 @@ task_t<void> mesh_node_runtime_t::start (
         std::set<std::string> stable_types (spot_snapshot.actor_types.begin (),
                                             spot_snapshot.actor_types.end ());
         stable_types.insert ("framework.spot");
+        const auto &prefix = _state->automatic_routing_id_prefix
+                               ? *_state->automatic_routing_id_prefix
+                               : _state->mesh_name;
+        const auto routing_id =
+          _state->routing_id ? *_state->routing_id : new_automatic_routing_id (prefix);
         auto native_options = runtime::mesh::raw_mesh_node_options_t{
           runtime::mesh::service_node_descriptor_t{
             .mesh_name = _state->mesh_name,
-            .node_routing_id = _state->routing_id->to_bytes (),
+            .node_routing_id = routing_id.to_bytes (),
             .lifecycle_generation = make_lifecycle_generation (),
             .descriptor_revision = 1,
             .advertised_endpoint = _state->listen_endpoint,
@@ -737,10 +725,12 @@ task_t<void> mesh_node_runtime_t::start (
           std::move (native_options), spot_snapshot.entry_spot_name.value_or ("entry"),
           std::move (stable_types),   _owner_lease_fencing_margin,
           _state->core_context,       _session_relocation_seal_timeout};
-        return std::make_tuple (std::move (options), _state->mesh_name, *_state->routing_id);
+        return std::make_tuple (std::move (options), _state->mesh_name, routing_id);
     });
-    node_options.mesh.shutdown_admission_seal =
-      co_await spot_state->lane.run_task ([&] { return spot_state->drain_flag; });
+    node_options.mesh.shutdown_admission_seal = co_await spot_state->lane.run_task ([&] {
+        spot_state->snapshot.routing_id = routing_id;
+        return spot_state->drain_flag;
+    });
     node_options.mesh.dispatch = spot_state->dispatch;
     co_await _state->lane.run_task ([&] {
         for (const auto &[name, _] : _state->channels)
@@ -805,6 +795,44 @@ task_t<void> mesh_node_runtime_t::start (
     if (_user_spot_store && _user_spot_materializer) {
         node->configure_user_spot_operations (_user_spot_store, _user_spot_materializer,
                                               _user_spot_closer);
+    }
+    if (_user_spot_store) {
+        struct actor_destroy_target_t
+        {
+            static task_t<bool> run (std::shared_ptr<spot_node_builder_state_t> state,
+                                     std::shared_ptr<location_repository_t> store,
+                                     runtime::protocol::actor_route_fence_t fence)
+            {
+                const auto current =
+                  co_await store->read_authority (runtime::actor_authority_key (fence.actor_id));
+                const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
+                if (!snapshot)
+                    co_return false;
+                const auto &target = snapshot->allocation.target;
+                if (snapshot->object_generation != fence.object_generation
+                    || snapshot->authority_owner_generation != fence.authority_owner_generation
+                    || target.node_lifecycle_generation != fence.target_node_generation
+                    || target.owner.lease_generation <= 0
+                    || static_cast<std::uint64_t> (target.owner.lease_generation)
+                         != fence.owner_lease_generation
+                    || zlink::routing_id_t::from (std::string (target.node_rid.value ()))
+                           .to_bytes ()
+                         != fence.target_node_routing_id)
+                    co_return result_t<bool>::failure (framework_error_kind_t::invalid_operation,
+                                                       "Actor destroy owner fence is stale");
+                co_return co_await spot_node_runtime_t (std::move (state))
+                  .destroy_actor (
+                    actor_ref_access_t::make (target.node_rid, snapshot->allocation.stable_type,
+                                              std::move (fence.actor_id), fence.object_generation,
+                                              target.mesh_name),
+                    std::nullopt, snapshot->store_version);
+            }
+        };
+        node->configure_actor_destroy (
+          [state = std::weak_ptr (spot_state), store = _user_spot_store] (auto fence) {
+              return actor_destroy_target_t::run (lock_runtime_owner (state), store,
+                                                  std::move (fence));
+          });
     }
     if (_actor_create_target)
         node->configure_actor_create_operations (_actor_create_target);
@@ -1460,27 +1488,12 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
     co_return result;
 }
 
-task_t<bool> mesh_node_runtime_t::application_actor_transfer_in_progress (actor_ref_t actor) const
+task_t<result_t<bool>>
+mesh_node_runtime_t::destroy_application_actor (actor_ref_t actor,
+                                                std::string expected_store_version)
 {
-    return spot_node_runtime_t (_state->spot_state).actor_transfer_in_progress_async (actor);
-}
-
-task_t<result_t<bool>> mesh_node_runtime_t::destroy_application_actor (actor_ref_t actor)
-{
-    const auto destroyed = co_await spot_node_runtime_t (_state->spot_state).destroy_actor (actor);
-    if (!destroyed)
-        co_return destroyed;
-    const auto stateful = co_await cleanup_application_actor_stateful (actor);
-    if (!stateful)
-        co_return result_t<bool>::failure (stateful.error_kind (),
-                                           stateful.error () ? stateful.error ()->what ()
-                                                             : "stateful Actor cleanup failed");
-    co_return result_t<bool>::success (true);
-}
-
-task_t<result_t<void>> mesh_node_runtime_t::cleanup_application_actor_stateful (actor_ref_t actor)
-{
-    co_return co_await cleanup_local_actor_resources (_node, {}, actor);
+    co_return co_await spot_node_runtime_t (_state->spot_state)
+      .destroy_actor (actor, std::nullopt, std::move (expected_store_version));
 }
 
 task_t<runtime::stateful::aggregate_relocation_result_t>
@@ -2313,11 +2326,12 @@ mesh_node_runtime_t::create_application_actor_async (std::string actor_type,
     try {
         if (!_node)
             throw configuration_error ("MeshNode has not started");
+        const auto &descriptor = _node->transport ().startup_descriptor ();
         auto native = co_await _node->create_reserved_actor_async (
-          actor_type,
-          runtime::stateful::object_ref_t{runtime::stateful::object_kind_t::actor, actor_id,
-                                          object_generation, authority_owner_generation,
-                                          _state->mesh_name, _state->routing_id->to_string ()});
+          actor_type, runtime::stateful::object_ref_t{
+                        runtime::stateful::object_kind_t::actor, actor_id, object_generation,
+                        authority_owner_generation, descriptor.mesh_name,
+                        zlink::routing_id_t::from (descriptor.node_routing_id).to_string ()});
         co_await _state->spot_state->lane.run_task (
           [&] { _state->spot_state->core_actor_membership_epochs.try_emplace (actor_id, 1); });
         co_return native.ref ();
@@ -5354,9 +5368,6 @@ mesh_node_builder_t &mesh_node_builder_t::set_routing_id (zlink::routing_id_t ro
           if (_state->automatic_routing_id_prefix)
               throw detail::configuration_error ("MeshNode cannot configure both a fixed routing "
                                                  "id and an automatic routing id prefix");
-          _state->spot_state->lane
-            .run ([&] { _state->spot_state->snapshot.routing_id = routing_id; })
-            .get ();
           _state->routing_id = std::move (routing_id);
       })
       .get ();
@@ -5365,19 +5376,15 @@ mesh_node_builder_t &mesh_node_builder_t::set_routing_id (zlink::routing_id_t ro
 
 mesh_node_builder_t &mesh_node_builder_t::set_automatic_routing_id_prefix (std::string prefix)
 {
-    if (!detail::valid_routing_id_prefix (prefix))
+    if (!detail::is_valid_automatic_routing_id_prefix (prefix))
         throw detail::configuration_error ("MeshNode automatic routing id prefix must contain "
                                            "1..64 ASCII letters, digits, '.', '_' or '-'");
     _state->lane
       .run ([&] {
-          if (_state->routing_id)
+          if (_state->routing_id || _state->automatic_routing_id_prefix)
               throw detail::configuration_error ("MeshNode cannot configure both a fixed routing "
                                                  "id and an automatic routing id prefix");
-          _state->automatic_routing_id_prefix = prefix;
-          _state->routing_id = zlink::routing_id_t::from (prefix + "-" + detail::new_uuid_v4 ());
-          _state->spot_state->lane
-            .run ([&] { _state->spot_state->snapshot.routing_id = *_state->routing_id; })
-            .get ();
+          _state->automatic_routing_id_prefix = std::move (prefix);
       })
       .get ();
     return *this;

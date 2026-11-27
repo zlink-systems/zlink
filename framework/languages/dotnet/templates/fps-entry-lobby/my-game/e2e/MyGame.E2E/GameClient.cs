@@ -68,7 +68,7 @@ internal sealed class GameClient(
         }
     }
 
-    private void Record<T>()
+    public void Record<T>()
     {
         var inbox = Channel.CreateUnbounded<object>();
         inboxes.Add(typeof(T), inbox);

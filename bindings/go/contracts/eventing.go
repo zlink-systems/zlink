@@ -2,163 +2,302 @@
 
 package contracts
 
-import impl "zlink.systems/zlink/internal/native"
+// PollEventFlag is a bitmask of poll readiness event flags.
+type PollEventFlag int16
 
-type (
-	// MonitorEventMask is a bitmask selecting which socket monitor events to subscribe to.
-	MonitorEventMask = impl.MonitorEventMask
-	// MonitorSourceKind identifies what a monitored source is.
-	MonitorSourceKind = impl.MonitorSourceKind
-	// MonitorEventType is the kind of a delivered socket monitor event.
-	MonitorEventType = impl.MonitorEventType
-	// MonitorEventFlag is a bitmask of event-specific detail flags.
-	MonitorEventFlag = impl.MonitorEventFlag
-	// MonitorTransportLane identifies the transport lane associated with a monitor event.
-	MonitorTransportLane = impl.MonitorTransportLane
-	// MonitorOpenOption configures the event mask or byte HWM of a socket monitor.
-	MonitorOpenOption = impl.MonitorOpenOption
-	// MonitorEvent is a single socket connection-lifecycle event reported by a monitor.
-	MonitorEvent = impl.MonitorEvent
-	// MonitorStatus is a snapshot of a monitored socket's state and auto-high-water-mark telemetry.
-	MonitorStatus = impl.MonitorStatus
-	// SocketMonitor observes a socket's connection lifecycle events and current status.
-	SocketMonitor = impl.SocketMonitor
-	// PollEventFlag is a readiness condition a poll source can be watched for or report.
-	PollEventFlag = impl.PollEventFlag
-	// PollSourceKind is whether a poll event came from a socket, file descriptor, or timer.
-	PollSourceKind = impl.PollSourceKind
-	// PollItem is a raw poll descriptor: a file descriptor and its watched/fired events.
-	PollItem = impl.PollItem
-	// PollEvent is one ready source reported by a poller wait.
-	PollEvent = impl.PollEvent
-	// Poller multiplexes sockets, file descriptors, and timers, reporting which become ready.
-	Poller = impl.Poller
-	// Timer fires on an interval and can be polled or awaited.
-	Timer = impl.Timer
+const (
+	PollIn         PollEventFlag = 1
+	PollOut        PollEventFlag = 2
+	PollErr        PollEventFlag = 4
+	PollPri        PollEventFlag = 8
+	PollCompletion PollEventFlag = 32
+	// PollRoute reports that a ROUTER's selected route changed; read RoutesSnapshot().
+	PollRoute PollEventFlag = 64
+	// PollConnect reports that a raw socket's connection attempts changed; read ConnectionAttemptsSnapshot().
+	PollConnect PollEventFlag = 128
+)
+
+// PollSourceKind identifies the kind of source in a PollEvent.
+type PollSourceKind int32
+
+const (
+	PollSourceSocket PollSourceKind = 1
+	PollSourceFD     PollSourceKind = 2
+	PollSourceTimer  PollSourceKind = 3
+)
+const (
+	MonitorEventConnected               MonitorEventMask = MonitorEventMask(1 << 0)
+	MonitorEventConnectDelayed          MonitorEventMask = MonitorEventMask(1 << 1)
+	MonitorEventConnectRetried          MonitorEventMask = MonitorEventMask(1 << 2)
+	MonitorEventListening               MonitorEventMask = MonitorEventMask(1 << 3)
+	MonitorEventBindFailed              MonitorEventMask = MonitorEventMask(1 << 4)
+	MonitorEventAccepted                MonitorEventMask = MonitorEventMask(1 << 5)
+	MonitorEventAcceptFailed            MonitorEventMask = MonitorEventMask(1 << 6)
+	MonitorEventClosed                  MonitorEventMask = MonitorEventMask(1 << 7)
+	MonitorEventCloseFailed             MonitorEventMask = MonitorEventMask(1 << 8)
+	MonitorEventDisconnected            MonitorEventMask = MonitorEventMask(1 << 9)
+	MonitorEventMonitorStopped          MonitorEventMask = MonitorEventMask(1 << 10)
+	MonitorEventHandshakeFailedNoDetail MonitorEventMask = MonitorEventMask(1 << 11)
+	MonitorEventConnectionReady         MonitorEventMask = MonitorEventMask(1 << 12)
+	MonitorEventHandshakeFailedProtocol MonitorEventMask = MonitorEventMask(1 << 13)
+	MonitorEventHandshakeFailedAuth     MonitorEventMask = MonitorEventMask(1 << 14)
+	MonitorEventPeerWeightChanged       MonitorEventMask = MonitorEventMask(1 << 15)
+	// MonitorEventSendFlowPaused selects the PAUSED-transition event for an
+	// affected Application pipe (core-byte-hwm-flow-control-plan.ko.md §6).
+	MonitorEventSendFlowPaused MonitorEventMask = MonitorEventMask(1 << 16)
+	// MonitorEventSendFlowResumed selects the RUNNING-transition event for an affected Application pipe.
+	MonitorEventSendFlowResumed MonitorEventMask = MonitorEventMask(1 << 17)
+	// MonitorEventFlowStateStale selects a rejected stale or duplicate flow-state frame event.
+	MonitorEventFlowStateStale MonitorEventMask = MonitorEventMask(1 << 18)
+	MonitorEventAll            MonitorEventMask = MonitorEventMask(0x7ffff)
+)
+
+type MonitorEventMask uint32
+type MonitorSourceKind uint32
+type MonitorEventType uint64
+
+// MonitorOpenOption configures a socket monitor when it is opened.
+type MonitorOpenOption interface {
+	applyMonitorOpenOption(*monitorOpenConfig)
+}
+
+type monitorOpenConfig struct {
+	events          MonitorEventMask
+	hasEvents       bool
+	monitorHwmBytes uint64
+}
+
+type monitorHwmBytesOption uint64
+
+func (events MonitorEventMask) applyMonitorOpenOption(config *monitorOpenConfig) {
+	config.events |= events
+	config.hasEvents = true
+}
+
+func (value monitorHwmBytesOption) applyMonitorOpenOption(config *monitorOpenConfig) {
+	config.monitorHwmBytes = uint64(value)
+}
+
+// MonitorHwmBytes selects the monitor queue HWM in bytes.
+func MonitorHwmBytes(value uint64) MonitorOpenOption { return monitorHwmBytesOption(value) }
+
+// ResolveMonitorOpenOptions resolves the monitor mask and HWM. A false result
+// reports a nil option; the caller maps it to the binding's config error.
+func ResolveMonitorOpenOptions(options []MonitorOpenOption) (MonitorEventMask, uint64, bool) {
+	config := monitorOpenConfig{}
+	for _, option := range options {
+		if option == nil {
+			return 0, 0, false
+		}
+		option.applyMonitorOpenOption(&config)
+	}
+	if !config.hasEvents {
+		config.events = MonitorEventAll
+	}
+	return config.events, config.monitorHwmBytes, true
+}
+
+const (
+	MonitorEventTypeConnected               MonitorEventType = MonitorEventType(MonitorEventConnected)
+	MonitorEventTypeConnectDelayed          MonitorEventType = MonitorEventType(MonitorEventConnectDelayed)
+	MonitorEventTypeConnectRetried          MonitorEventType = MonitorEventType(MonitorEventConnectRetried)
+	MonitorEventTypeListening               MonitorEventType = MonitorEventType(MonitorEventListening)
+	MonitorEventTypeBindFailed              MonitorEventType = MonitorEventType(MonitorEventBindFailed)
+	MonitorEventTypeAccepted                MonitorEventType = MonitorEventType(MonitorEventAccepted)
+	MonitorEventTypeAcceptFailed            MonitorEventType = MonitorEventType(MonitorEventAcceptFailed)
+	MonitorEventTypeClosed                  MonitorEventType = MonitorEventType(MonitorEventClosed)
+	MonitorEventTypeCloseFailed             MonitorEventType = MonitorEventType(MonitorEventCloseFailed)
+	MonitorEventTypeDisconnected            MonitorEventType = MonitorEventType(MonitorEventDisconnected)
+	MonitorEventTypeMonitorStopped          MonitorEventType = MonitorEventType(MonitorEventMonitorStopped)
+	MonitorEventTypeHandshakeFailedNoDetail MonitorEventType = MonitorEventType(MonitorEventHandshakeFailedNoDetail)
+	MonitorEventTypeConnectionReady         MonitorEventType = MonitorEventType(MonitorEventConnectionReady)
+	MonitorEventTypeHandshakeFailedProtocol MonitorEventType = MonitorEventType(MonitorEventHandshakeFailedProtocol)
+	MonitorEventTypeHandshakeFailedAuth     MonitorEventType = MonitorEventType(MonitorEventHandshakeFailedAuth)
+	MonitorEventTypePeerWeightChanged       MonitorEventType = MonitorEventType(MonitorEventPeerWeightChanged)
+	MonitorEventTypeSendFlowPaused          MonitorEventType = MonitorEventType(MonitorEventSendFlowPaused)
+	MonitorEventTypeSendFlowResumed         MonitorEventType = MonitorEventType(MonitorEventSendFlowResumed)
+	MonitorEventTypeFlowStateStale          MonitorEventType = MonitorEventType(MonitorEventFlowStateStale)
+	MonitorEventTypeAll                     MonitorEventType = MonitorEventType(MonitorEventAll)
+)
+
+// MonitorEventFlag is a bitmask of event-specific detail flags carried in
+// zlink_monitor_event_t.flags (core-byte-hwm-flow-control-plan.ko.md §6).
+type MonitorEventFlag uint32
+
+const (
+	// MonitorEventFlagConnectionReadyEdge is set on MonitorEventTypeConnectionReady
+	// when the event changes a connection from not-ready to ready.
+	MonitorEventFlagConnectionReadyEdge MonitorEventFlag = MonitorEventFlag(1 << 0)
+	// MonitorEventFlagSendFlowWritable is set on MonitorEventTypeSendFlowResumed when
+	// clearing the remote pause left the pipe actually writable. Value carries the flow epoch.
+	MonitorEventFlagSendFlowWritable MonitorEventFlag = MonitorEventFlag(1 << 1)
+	// MonitorEventFlagFlowStateStaleEpoch is set on MonitorEventTypeFlowStateStale when
+	// the epoch did not advance inside the current generation. Value carries the
+	// received epoch.
+	MonitorEventFlagFlowStateStaleEpoch MonitorEventFlag = MonitorEventFlag(1 << 3)
+)
+
+// MonitorTransportLane identifies the transport lane associated with a monitor event.
+type MonitorTransportLane uint32
+
+const (
+	MonitorTransportLaneApplication MonitorTransportLane = MonitorTransportLane(0)
+	MonitorTransportLaneCompletion  MonitorTransportLane = MonitorTransportLane(1)
 )
 
 const (
-	// MonitorEventConnected selects a connection-established event.
-	MonitorEventConnected = impl.MonitorEventConnected
-	// MonitorEventConnectDelayed selects an asynchronous connect-in-progress event.
-	MonitorEventConnectDelayed = impl.MonitorEventConnectDelayed
-	// MonitorEventConnectRetried selects a connect-retry event.
-	MonitorEventConnectRetried = impl.MonitorEventConnectRetried
-	// MonitorEventListening selects a listening-state event.
-	MonitorEventListening = impl.MonitorEventListening
-	// MonitorEventBindFailed selects a bind-failed event.
-	MonitorEventBindFailed = impl.MonitorEventBindFailed
-	// MonitorEventAccepted selects an accepted-connection event.
-	MonitorEventAccepted = impl.MonitorEventAccepted
-	// MonitorEventAcceptFailed selects an accept-failed event.
-	MonitorEventAcceptFailed = impl.MonitorEventAcceptFailed
-	// MonitorEventClosed selects a closed-connection event.
-	MonitorEventClosed = impl.MonitorEventClosed
-	// MonitorEventCloseFailed selects a close-failed event.
-	MonitorEventCloseFailed = impl.MonitorEventCloseFailed
-	// MonitorEventDisconnected selects a peer-disconnected event.
-	MonitorEventDisconnected = impl.MonitorEventDisconnected
-	// MonitorEventMonitorStopped selects a monitor-stopped event.
-	MonitorEventMonitorStopped = impl.MonitorEventMonitorStopped
-	// MonitorEventHandshakeFailedNoDetail selects a handshake failure without detail.
-	MonitorEventHandshakeFailedNoDetail = impl.MonitorEventHandshakeFailedNoDetail
-	// MonitorEventHandshakeFailedProtocol selects a protocol handshake failure.
-	MonitorEventHandshakeFailedProtocol = impl.MonitorEventHandshakeFailedProtocol
-	// MonitorEventHandshakeFailedAuth selects an authentication handshake failure.
-	MonitorEventHandshakeFailedAuth = impl.MonitorEventHandshakeFailedAuth
-	// MonitorEventAll subscribes the monitor to every connection lifecycle event.
-	MonitorEventAll = impl.MonitorEventAll
-	// MonitorEventConnectionReady fires when a connection completes its handshake and is ready for traffic.
-	MonitorEventConnectionReady = impl.MonitorEventConnectionReady
-	// MonitorEventPeerWeightChanged fires when a peer's load-balancing weight changes.
-	MonitorEventPeerWeightChanged = impl.MonitorEventPeerWeightChanged
-	// MonitorEventSendFlowPaused selects the PAUSED-transition event for an affected Application pipe.
-	MonitorEventSendFlowPaused = impl.MonitorEventSendFlowPaused
-	// MonitorEventSendFlowResumed selects the RUNNING-transition event for an affected Application pipe.
-	MonitorEventSendFlowResumed = impl.MonitorEventSendFlowResumed
-	// MonitorEventFlowStateStale selects a rejected stale or duplicate flow-state frame event.
-	MonitorEventFlowStateStale = impl.MonitorEventFlowStateStale
-	// MonitorEventTypeConnected is the delivered value for a connection-established event.
-	MonitorEventTypeConnected = impl.MonitorEventTypeConnected
-	// MonitorEventTypeConnectDelayed is the delivered value for a connect-in-progress event.
-	MonitorEventTypeConnectDelayed = impl.MonitorEventTypeConnectDelayed
-	// MonitorEventTypeConnectRetried is the delivered value for a connect-retry event.
-	MonitorEventTypeConnectRetried = impl.MonitorEventTypeConnectRetried
-	// MonitorEventTypeListening is the delivered value for a listening-state event.
-	MonitorEventTypeListening = impl.MonitorEventTypeListening
-	// MonitorEventTypeBindFailed is the delivered value for a bind-failed event.
-	MonitorEventTypeBindFailed = impl.MonitorEventTypeBindFailed
-	// MonitorEventTypeAccepted is the delivered value for an accepted-connection event.
-	MonitorEventTypeAccepted = impl.MonitorEventTypeAccepted
-	// MonitorEventTypeAcceptFailed is the delivered value for an accept-failed event.
-	MonitorEventTypeAcceptFailed = impl.MonitorEventTypeAcceptFailed
-	// MonitorEventTypeClosed is the delivered value for a closed-connection event.
-	MonitorEventTypeClosed = impl.MonitorEventTypeClosed
-	// MonitorEventTypeCloseFailed is the delivered value for a close-failed event.
-	MonitorEventTypeCloseFailed = impl.MonitorEventTypeCloseFailed
-	// MonitorEventTypeDisconnected is the delivered value for a peer-disconnected event.
-	MonitorEventTypeDisconnected = impl.MonitorEventTypeDisconnected
-	// MonitorEventTypeMonitorStopped is the delivered value for a monitor-stopped event.
-	MonitorEventTypeMonitorStopped = impl.MonitorEventTypeMonitorStopped
-	// MonitorEventTypeHandshakeFailedNoDetail is the delivered value for an undescribed handshake failure.
-	MonitorEventTypeHandshakeFailedNoDetail = impl.MonitorEventTypeHandshakeFailedNoDetail
-	// MonitorEventTypeConnectionReady is the delivered value for a ready connection.
-	MonitorEventTypeConnectionReady = impl.MonitorEventTypeConnectionReady
-	// MonitorEventTypeHandshakeFailedProtocol is the delivered value for a protocol handshake failure.
-	MonitorEventTypeHandshakeFailedProtocol = impl.MonitorEventTypeHandshakeFailedProtocol
-	// MonitorEventTypeHandshakeFailedAuth is the delivered value for an authentication handshake failure.
-	MonitorEventTypeHandshakeFailedAuth = impl.MonitorEventTypeHandshakeFailedAuth
-	// MonitorEventTypePeerWeightChanged is the delivered value for a peer weight change.
-	MonitorEventTypePeerWeightChanged = impl.MonitorEventTypePeerWeightChanged
-	// MonitorEventTypeSendFlowPaused is the delivered value for a PAUSED transition on an affected Application pipe.
-	MonitorEventTypeSendFlowPaused = impl.MonitorEventTypeSendFlowPaused
-	// MonitorEventTypeSendFlowResumed is the delivered value for a RUNNING transition on an affected Application pipe.
-	MonitorEventTypeSendFlowResumed = impl.MonitorEventTypeSendFlowResumed
-	// MonitorEventTypeFlowStateStale is the delivered value for a rejected stale or duplicate flow-state frame.
-	MonitorEventTypeFlowStateStale = impl.MonitorEventTypeFlowStateStale
-	// MonitorEventTypeAll is the mask value representing every monitor event.
-	MonitorEventTypeAll = impl.MonitorEventTypeAll
-	// MonitorSourceSocket identifies a plain socket as the monitored source.
-	MonitorSourceSocket = impl.MonitorSourceSocket
-	// MonitorEventFlagConnectionReadyEdge is set when a CONNECTION_READY event changes a connection from not-ready to ready.
-	MonitorEventFlagConnectionReadyEdge = impl.MonitorEventFlagConnectionReadyEdge
-	// MonitorEventFlagSendFlowWritable is set on a RESUMED event when the pipe became actually writable.
-	MonitorEventFlagSendFlowWritable = impl.MonitorEventFlagSendFlowWritable
-	// MonitorEventFlagFlowStateStaleEpoch is set on a STALE event whose epoch did not advance in the current generation.
-	MonitorEventFlagFlowStateStaleEpoch = impl.MonitorEventFlagFlowStateStaleEpoch
-	// MonitorTransportLaneApplication identifies the application lane of a paired transport.
-	MonitorTransportLaneApplication = impl.MonitorTransportLaneApplication
-	// MonitorTransportLaneCompletion identifies the Completion connection of a count-2 ROUTER-ROUTER peer.
-	MonitorTransportLaneCompletion = impl.MonitorTransportLaneCompletion
-	// PollIn reports that a receive will not block.
-	PollIn = impl.PollIn
-	// PollOut reports aggregate send readiness and stays set while an unread WRITABLE record exists.
-	PollOut = impl.PollOut
-	// PollErr reports an error condition on the source.
-	PollErr = impl.PollErr
-	// PollPri reports that priority or out-of-band data is available.
-	PollPri = impl.PollPri
-	// PollCompletion reports completion-queue data; WRITABLE advances a retry rather than reporting send success.
-	PollCompletion = impl.PollCompletion
-	// PollRoute reports that a ROUTER's selected route changed; read RouterSocket.RoutesSnapshot.
-	PollRoute = impl.PollRoute
-	// PollSourceSocket identifies a socket as the source of a poll event.
-	PollSourceSocket = impl.PollSourceSocket
-	// PollSourceFD identifies a raw file descriptor as the source of a poll event.
-	PollSourceFD = impl.PollSourceFD
-	// PollSourceTimer identifies a timer as the source of a poll event.
-	PollSourceTimer = impl.PollSourceTimer
+	MonitorSourceSocket MonitorSourceKind = MonitorSourceKind(1)
 )
 
-var (
-	// MonitorHwmBytes sets the monitor queue HWM in bytes. Zero selects the Core default.
-	MonitorHwmBytes = impl.MonitorHwmBytes
-	// OpenSocketMonitor opens a monitor on a socket for the selected events; the caller owns it.
-	OpenSocketMonitor = impl.OpenSocketMonitor
-	// NewTimer creates a standalone timer; the caller owns it.
-	NewTimer = impl.NewTimer
-	// NewPoller creates an empty poller; the caller owns it.
-	NewPoller = impl.NewPoller
-	// Poll waits for events across several sockets or monitors at once.
-	Poll = impl.Poll
+type MonitorEvent struct {
+	Event      MonitorEventType
+	Value      uint64
+	RoutingID  RoutingID
+	LocalAddr  string
+	RemoteAddr string
+	// ConnectionID is the process-local identity of the physical transport attempt.
+	ConnectionID uint64
+	// TransportLane identifies which lane of a paired transport this event describes.
+	TransportLane MonitorTransportLane
+	// Flags carries event-specific detail bits; see MonitorEventFlag.
+	Flags MonitorEventFlag
+}
+
+func (e *MonitorEvent) HasRoutingID() bool {
+	return e != nil && e.RoutingID.Size() > 0
+}
+
+func (e *MonitorEvent) IsConnected() bool {
+	return e != nil && e.Event&MonitorEventTypeConnected != 0
+}
+
+func (e *MonitorEvent) IsDisconnected() bool {
+	return e != nil && e.Event&MonitorEventTypeDisconnected != 0
+}
+
+func (e *MonitorEvent) IsListening() bool {
+	return e != nil && e.Event&MonitorEventTypeListening != 0
+}
+
+func (e *MonitorEvent) IsAccepted() bool {
+	return e != nil && e.Event&MonitorEventTypeAccepted != 0
+}
+
+func (e *MonitorEvent) IsConnectionReady() bool {
+	return e != nil && e.Event&MonitorEventTypeConnectionReady != 0
+}
+
+func (e *MonitorEvent) IsSendFlowPaused() bool {
+	return e != nil && e.Event&MonitorEventTypeSendFlowPaused != 0
+}
+
+func (e *MonitorEvent) IsSendFlowResumed() bool {
+	return e != nil && e.Event&MonitorEventTypeSendFlowResumed != 0
+}
+
+func (e *MonitorEvent) IsFlowStateStale() bool {
+	return e != nil && e.Event&MonitorEventTypeFlowStateStale != 0
+}
+
+func (e *MonitorEvent) HasFlag(flag MonitorEventFlag) bool {
+	return e != nil && e.Flags&flag != 0
+}
+
+type MonitorStatus struct {
+	ABIVersion                       uint32
+	StructSize                       uint32
+	SourceKind                       MonitorSourceKind
+	StateFlags                       uint32
+	DetailFlags                      uint32
+	SndPendingMsgs                   uint64
+	RcvPendingMsgs                   uint64
+	SndPendingBytes                  uint64
+	RcvPendingBytes                  uint64
+	AutoHwmEnabled                   bool
+	AutoHwmProfile                   uint32
+	AutoHwmRole                      uint32
+	AutoHwmPolicyClass               uint32
+	AutoHwmPlannedSndHwmBytes        uint64
+	AutoHwmPlannedRcvHwmBytes        uint64
+	AutoHwmAppliedSndHwmBytes        uint64
+	AutoHwmAppliedRcvHwmBytes        uint64
+	AutoHwmEffectiveSndBuf           int32
+	AutoHwmEffectiveRcvBuf           int32
+	AutoHwmLastRecalcMs              uint64
+	AutoHwmLastRecalcReason          AutoHwmRecalcReason
+	AutoHwmSendBlockedRatioPPM       uint32
+	AutoHwmDeferredSndHwmBytes       uint64
+	AutoHwmDeferredRcvHwmBytes       uint64
+	AutoHwmDeferredSndHwmValid       bool
+	AutoHwmDeferredRcvHwmValid       bool
+	SndBytesInFlight                 uint64
+	RcvBytesInFlight                 uint64
+	MinimumCoreMessageChargeBytes    uint64
+	OversizeMessageAdmissionCount    uint64
+	OversizeMessageAdmissionMaxBytes uint64
+	// DEALER/ROUTER receive-flow observation for affected Application pipes.
+	// Control uses the Application connection for count-1 peers and the
+	// Completion connection for count-2 ROUTER-ROUTER peers. Present since ABI 4;
+	// zero on socket types other than DEALER/ROUTER.
+	FlowPausedConnections  uint64
+	FlowPauseAppliedTotal  uint64
+	FlowResumeAppliedTotal uint64
+	FlowStateStaleTotal    uint64
+	FlowPauseDurationMs    uint64
+}
+
+// MonitorStateFlags is the typed view of MonitorStatus.StateFlags. Bit values
+// mirror zlink_monitor_state_flag_e in core/include/zlink_enum.h.
+type MonitorStateFlags uint32
+
+const (
+	MonitorStateReady      MonitorStateFlags = 1 << 0
+	MonitorStateBoundReady MonitorStateFlags = 1 << 1
+	MonitorStateClosed     MonitorStateFlags = 1 << 3
 )
+
+// Has reports whether every bit of flag is set.
+func (f MonitorStateFlags) Has(flag MonitorStateFlags) bool { return f&flag == flag }
+
+// MonitorStatusDetailFlags is the typed view of MonitorStatus.DetailFlags. Bit
+// values mirror zlink_monitor_status_detail_flag_e in core/include/zlink_enum.h.
+type MonitorStatusDetailFlags uint32
+
+const (
+	MonitorDetailSndPendingMsgs MonitorStatusDetailFlags = 1 << 1
+	MonitorDetailRcvPendingMsgs MonitorStatusDetailFlags = 1 << 2
+	MonitorDetailAutoHwmBudget  MonitorStatusDetailFlags = 1 << 3
+	MonitorDetailAutoHwmBuffers MonitorStatusDetailFlags = 1 << 4
+	MonitorDetailFlowState      MonitorStatusDetailFlags = 1 << 5
+)
+
+// Has reports whether every bit of flag is set.
+func (f MonitorStatusDetailFlags) Has(flag MonitorStatusDetailFlags) bool { return f&flag == flag }
+
+// State returns StateFlags as typed flags.
+func (s *MonitorStatus) State() MonitorStateFlags {
+	if s == nil {
+		return 0
+	}
+	return MonitorStateFlags(s.StateFlags)
+}
+
+// Detail returns DetailFlags as typed flags.
+func (s *MonitorStatus) Detail() MonitorStatusDetailFlags {
+	if s == nil {
+		return 0
+	}
+	return MonitorStatusDetailFlags(s.DetailFlags)
+}
+
+func (s *MonitorStatus) IsReady() bool {
+	return s.State().Has(MonitorStateReady)
+}
+
+// IsFlowStateDetailPopulated reports whether FlowPausedConnections and the
+// other flow_* fields are populated (ABI 4+, paired DEALER/ROUTER sockets
+// only). Mirrors ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE in
+// core/include/zlink_enum.h.
+func (s *MonitorStatus) IsFlowStateDetailPopulated() bool {
+	return s.Detail().Has(MonitorDetailFlowState)
+}

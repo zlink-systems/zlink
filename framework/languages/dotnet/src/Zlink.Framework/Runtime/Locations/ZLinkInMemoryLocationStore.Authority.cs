@@ -889,7 +889,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
         var endedUserSpotId = active
             ? ZLinkAuthorityCleanup.RequireReclaimableAuthority(current)
             : null;
-        if (active && !ownerLive)
+        var requiresReleaseWait = active && !actorClosing;
+        if (requiresReleaseWait && !ownerLive)
             _ownerLeaseReleaseWait.Observe(owner);
         if (endedUserSpotId is not null && !discarded && creationTarget is { } spotTarget)
             members = EndedUserSpotMembers(
@@ -899,16 +900,16 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 spotTarget.TargetDescriptor,
                 now
             );
-        if (active)
+        if (requiresReleaseWait)
         {
             releaseWaitElapsed = _ownerLeaseReleaseWait.HasElapsed(owner, _ownerLeaseFencingMargin);
-            foreach (var (memberKey, member) in members)
+            foreach (var (_, member) in members)
                 releaseWaitElapsed &= _ownerLeaseReleaseWait.HasElapsed(
                     new ZLinkLocationOwnerToken(member.OwnerId, member.OwnerLeaseGeneration),
                     _ownerLeaseFencingMargin
                 );
         }
-        if (active && !releaseWaitElapsed)
+        if (!releaseWaitElapsed)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 "The Location owner lease release wait has not elapsed.",
@@ -1232,13 +1233,16 @@ internal sealed partial class ZLinkInMemoryLocationStore
     public ValueTask<ZLinkAggregateCommitResult> CommitAggregateAttemptAsync(
         ZLinkAggregateFence fence,
         ulong attempt,
-        CancellationToken cancellationToken
-    ) => CommitAggregateCoreAsync(fence, attempt, cancellationToken);
+        CancellationToken cancellationToken,
+        ulong? representativeAcceptedRequests = null
+    ) =>
+        CommitAggregateCoreAsync(fence, attempt, cancellationToken, representativeAcceptedRequests);
 
     private async ValueTask<ZLinkAggregateCommitResult> CommitAggregateCoreAsync(
         ZLinkAggregateFence fence,
         ulong? attempt,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ulong? representativeAcceptedRequests = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -1314,8 +1318,11 @@ internal sealed partial class ZLinkInMemoryLocationStore
                         StoreVersion = Next(ref _authorityRevision).ToString(),
                         Payload = Payload(participant).ToArray(),
                         Relocation =
-                            committedRelocation
-                            ?? aggregate.Request.ApplyRelocation(current.Relocation),
+                            committedRelocation?.WithAcceptedRequests(
+                                participant.Key == aggregate.Request.RepresentativeKey
+                                    ? representativeAcceptedRequests ?? participant.AcceptedRequests
+                                    : participant.AcceptedRequests
+                            ) ?? aggregate.Request.ApplyRelocation(current.Relocation, participant),
                         AuthorityOwnerGeneration = changesOwner
                             ? aggregate.TargetAuthorityOwnerGenerations[participant.Key]
                             : current.AuthorityOwnerGeneration,
@@ -1802,6 +1809,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 || !leftParticipant.AuthorityPayload.Span.SequenceEqual(
                     rightParticipant.AuthorityPayload.Span
                 )
+                || leftParticipant.AcceptedRequests != rightParticipant.AcceptedRequests
                 || !leftParticipant.MembershipMutation.Span.SequenceEqual(
                     rightParticipant.MembershipMutation.Span
                 )

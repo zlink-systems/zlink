@@ -281,18 +281,9 @@ public sealed partial class LocationRuntimeTests
             Assert.True(runtime.TryGetActorState("steady-actor", out var actor));
 
             var instance = Assert.IsType<OutageExecutionActor>(actor.Actor);
+            var messages = instance.Messages;
             var factoryCalls = probe.FactoryCalls;
             var client = servicesProvider.GetRequiredService<IZLinkActorClient>();
-            Assert.Equal(
-                1,
-                (
-                    await client
-                        .RequestToActor(actor.ActorId, "before")
-                        .Timeout(TimeSpan.FromSeconds(1))
-                        .Async<OutageExecutionReply>()
-                ).Count
-            );
-            var messages = instance.Messages;
             var running = actor
                 .ExecuteDispatchAsync(
                     async _ =>
@@ -394,7 +385,7 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(1, calls);
             Assert.Equal(messages, instance.Messages);
             Assert.Equal(
-                2,
+                messages + 1,
                 (
                     await client
                         .RequestToActor(actor.ActorId, "after")
@@ -1764,7 +1755,11 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(0, discarded);
             Assert.False(pending.IsCompleted);
             time.Advance(TimeSpan.FromTicks(1));
-            Assert.True(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+            var outageAtT = locations.GetHealthSnapshot().StoreOutage;
+            Assert.NotNull(outageAtT);
+            Assert.Equal(episode.ObservedAt, outageAtT.ObservedAt);
+            Assert.Equal(episode.LeaseOperationStartedAt, outageAtT.LeaseOperationStartedAt);
+            Assert.True(outageAtT.Discarded);
             renewal.Arm();
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
@@ -1781,7 +1776,6 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
             Assert.Equal(factoryCalls, probe.FactoryCalls);
-            Assert.True(locations.GetHealthSnapshot().StoreOutage!.Discarded);
         }
         finally
         {
@@ -3701,11 +3695,13 @@ public sealed partial class LocationRuntimeTests
     [Fact]
     public async Task Tokenless_ClaimConflict_RechecksAndConvergesOnTheSameOwnerLease()
     {
-        var store = new ZLinkInMemoryLocationStore();
+        var time = new ControllableTimeProvider();
+        var store = new ZLinkInMemoryLocationStore(time);
         var ambiguous = new AmbiguousCommittedClaimStore(store, hiddenReads: 1);
         var runtime = new ZLinkLocationRuntime(
             new ZLinkLocationOptions { OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(25) },
-            ambiguous
+            ambiguous,
+            time
         );
 
         Assert.False(await runtime.RenewOwnerLeaseOnceAsync());

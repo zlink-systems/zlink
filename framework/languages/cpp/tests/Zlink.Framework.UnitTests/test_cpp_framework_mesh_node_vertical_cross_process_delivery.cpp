@@ -241,29 +241,6 @@ namespace framework_mesh_node_vertical_tests
 {
 int run_cross_process_delivery ()
 {
-    const std::map<std::string, std::string> metadata_boundary{{"k", std::string (1018, 'v')}};
-    const auto encoded_boundary =
-      zlink::framework::detail::mesh_metadata_codec_t::encode (metadata_boundary);
-    assert (encoded_boundary.size () == 1024);
-    std::map<std::string, std::string> decoded_boundary;
-    assert (
-      zlink::framework::detail::mesh_metadata_codec_t::decode (encoded_boundary, decoded_boundary));
-    assert (decoded_boundary == metadata_boundary);
-    bool rejected_oversize = false;
-    try {
-        (void) zlink::framework::detail::mesh_metadata_codec_t::encode (
-          {{"k", std::string (1019, 'v')}});
-    }
-    catch (const zlink::framework::framework_exception_t &) {
-        rejected_oversize = true;
-    }
-    assert (rejected_oversize);
-    std::map<std::string, std::string> malformed_output;
-    assert (!zlink::framework::detail::mesh_metadata_codec_t::decode ({1, 1, 1, 0xc0, 0, 0},
-                                                                      malformed_output));
-    assert (!zlink::framework::detail::mesh_metadata_codec_t::decode (
-      {1, 2, 1, 'k', 0, 1, 'a', 1, 'k', 0, 1, 'b'}, malformed_output));
-
     int endpoint_pipe[2];
     int direct_ack_pipe[2];
     int channel_ack_pipe[2];

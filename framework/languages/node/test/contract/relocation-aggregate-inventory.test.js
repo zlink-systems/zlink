@@ -199,6 +199,8 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
     const provider = new ZLinkInMemoryProviderLocationStore();
     const store = new ZLinkAggregateInventoryStore(provider);
     const key = encodeAuthorityKey('user_spot', 'room');
+    const memberKey = encodeAuthorityKey('actor', 'player');
+    const actorState = { actorId: 'player', actorType: 'Player', actor: {}, meshName: 'mesh' };
     const target = {
       rid: 'target',
       lifecycleGeneration: 6n,
@@ -216,12 +218,29 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
       ownerLeaseGeneration: 3n,
       payload: Buffer.from([0, 255])
     };
+    const member = {
+      ...primary,
+      allocation: { objectKind: 'actor', stableType: 'Player' },
+      objectGeneration: 7n,
+      authorityOwnerGeneration: 13n,
+      storeVersion: { value: 'sealed-member' },
+      payload: Buffer.from([42])
+    };
     const phases = [];
-    let current = primary;
+    const rows = new Map([
+      [key.value, primary],
+      [memberKey.value, member]
+    ]);
     const source = new ZLinkHostServiceRelocationRuntime({
       registration: {
         spotNodes: new Map([
-          ['mesh', { spotFactoryRegistrations: { Room: { relocation: { kind: 'recreate' } } } }]
+          [
+            'mesh',
+            {
+              spotFactoryRegistrations: { Room: { relocation: { kind: 'recreate' } } },
+              actorFactoryRegistrations: { Player: { relocation: { kind: 'recreate' } } }
+            }
+          ]
         ])
       },
       spotManager: () => ({
@@ -229,18 +248,24 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
         isSpotClosing: () => false
       }),
       meshNode: () => ({ status: () => ({ routingId: 'source', lifecycleGeneration: 2n }) }),
+      actorTransfer: {
+        async prepareMaintenanceSession() {
+          return { handoffBacklog: [] };
+        }
+      },
       locationStore: () => ({
-        async readAuthority() {
-          return current;
+        async readAuthority(authorityKey) {
+          return rows.get(authorityKey.value);
         },
-        async compareExchangeAuthority(_key, expected, mutation) {
+        async compareExchangeAuthority(authorityKey, expected, mutation) {
+          const current = rows.get(authorityKey.value);
           assert.equal(expected.value, current.storeVersion.value);
-          phases.push(mutation.relocation);
-          current = {
-            ...primary,
+          phases.push({ key: authorityKey.value, relocation: mutation.relocation });
+          rows.set(authorityKey.value, {
+            ...current,
             storeVersion: { value: `v${phases.length + 1}` },
             relocation: mutation.relocation
-          };
+          });
           return { kind: 'stored' };
         },
         storeAggregateInventory: (request, signal) => store.store(request, signal)
@@ -262,17 +287,21 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
         }
       },
       'user_spot',
-      [],
+      [actorState],
       target
     );
     const id = captured.envelope.aggregateId;
     const hexId = id.replaceAll('-', '');
-    const expected = phases[0].sourceInventorySha256;
+    const expected = phases[0].relocation.sourceInventorySha256;
     assert.deepEqual(
-      phases.map(({ phase }) => phase),
-      ['preparing', 'captured']
+      phases.map(({ key, relocation }) => [key, relocation.phase]),
+      [
+        [key.value, 'preparing'],
+        [key.value, 'captured']
+      ]
     );
-    assert.equal(phases[1].sourceInventorySha256, expected);
+    assert.equal(phases[1].relocation.sourceInventorySha256, expected);
+    assert.deepEqual(rows.get(memberKey.value).storeVersion, member.storeVersion);
     const inventoryFence = { aggregateId: { value: id }, aggregateGeneration: 1n };
     const rootKey = storeKey(`zlink:v11:aggregate-inventory:${id}:1:root`);
     const root = await provider.read(rootKey);
@@ -284,7 +313,7 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
         new Map([
           [
             `zlink:v11:aggregate-inventory:${id}:1:participant:0:authorityPayload`,
-            Buffer.from([0, 254])
+            Buffer.from([43])
           ]
         ])
       );
@@ -296,8 +325,8 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
       currentOwner: () => ({ ownerId: 'target-owner', leaseGeneration: 4n }),
       spotManager: () => undefined,
       locationStore: () => ({
-        async readAuthority() {
-          return current;
+        async readAuthority(authorityKey) {
+          return rows.get(authorityKey.value);
         },
         readAggregateInventory: (requestedFence, digest, signal) => {
           assert.deepEqual(requestedFence, inventoryFence);
@@ -349,7 +378,8 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
     const staging = { handler, queue };
     let expireOldReady;
     if (phase === 'prepared') {
-      current = {
+      const current = rows.get(key.value);
+      rows.set(key.value, {
         ...current,
         storeVersion: { value: 'v4' },
         relocation: {
@@ -361,7 +391,7 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
             attemptGeneration: 1n
           }
         }
-      };
+      });
       receiver.targetStages.set(oldId, {
         phase: 'ready',
         offer: { prepareFingerprint: 'previous request' },
@@ -398,7 +428,10 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
     }
     receiver.materializeTargetEnvelope = async (_mesh, envelope) => {
       events.push('materialized');
-      assert.equal(envelope.participants[0].key, key.value);
+      assert.deepEqual(
+        envelope.participants.map(({ key }) => key),
+        [memberKey.value, key.value]
+      );
       return {
         owner: {
           async restoreSavedWork() {
@@ -423,8 +456,12 @@ for (const phase of ['captured', 'damaged', 'prepared']) {
     ) => {
       assert.equal(priorVersion?.value, phase === 'prepared' ? 'v4' : undefined);
       assert.equal(digest, expected);
-      assert.equal(entries[0].expectedStoreVersion, 'v1');
-      assert.deepEqual(Buffer.from(entries[0].authorityPayload), primary.payload);
+      const spotEntry = entries.find((entry) => entry.authorityKey === key.value);
+      const memberEntry = entries.find((entry) => entry.authorityKey === memberKey.value);
+      assert.equal(spotEntry.expectedStoreVersion, primary.storeVersion.value);
+      assert.deepEqual(Buffer.from(spotEntry.authorityPayload), primary.payload);
+      assert.equal(memberEntry.expectedStoreVersion, member.storeVersion.value);
+      assert.deepEqual(Buffer.from(memberEntry.authorityPayload), member.payload);
       events.push('prepared');
       return { prepared: {} };
     };
@@ -808,4 +845,12 @@ async function spotWideMatrix(provider, staleMember, mode) {
       }
     }
   }
+}
+
+for (const staleMember of [false, true]) {
+  test(`SpotWide sealed inventory ${staleMember ? 'rejects a changed member' : 'accepts a representative-only capture'}`, async () => {
+    const provider = new ZLinkInMemoryProviderLocationStore();
+    await spotWideMatrix(provider, staleMember, 'write');
+    await spotWideMatrix(provider, staleMember, 'read');
+  });
 }

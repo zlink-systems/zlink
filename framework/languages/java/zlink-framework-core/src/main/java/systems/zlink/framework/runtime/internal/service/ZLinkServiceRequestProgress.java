@@ -5,12 +5,14 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /** Observes request progress without owning admission, dispatch or completion. */
 public class ZLinkServiceRequestProgress {
@@ -64,13 +66,27 @@ public class ZLinkServiceRequestProgress {
             List<Message> parts,
             InstanceReply reply,
             String contentType) {
-        return new ZLinkBackendReceived(
+        return receiveInstance(
+                source, header, metadata, parts, reply, contentType, () -> new byte[0], 0);
+    }
+
+    public ZLinkBackendReceived receiveInstance(
+            RoutingId source,
+            ZLinkServiceM6BWireCodec.InstanceSpotMessage header,
+            byte[] metadata,
+            List<Message> parts,
+            InstanceReply reply,
+            String contentType,
+            Supplier<byte[]> acceptedRecord,
+            int acceptedRecordSize) {
+        return ZLinkBackendReceived.lazyJournal(
                 ZLinkBackendRequestResult.OK,
                 Optional.of(source),
                 Optional.ofNullable(header.sourceSpotId()),
                 Optional.ofNullable(header.replyRouteId()),
                 metadata,
-                new byte[0],
+                acceptedRecord,
+                acceptedRecordSize,
                 parts,
                 header.request() ? reply : null,
                 null,
@@ -182,15 +198,30 @@ public class ZLinkServiceRequestProgress {
                 byte[] metadata,
                 List<Message> parts,
                 InstanceReply reply,
-                String contentType) {
-            return new ObservedInstance(source, header, metadata, parts, reply, contentType, this);
+                String contentType,
+                Supplier<byte[]> acceptedRecord,
+                int acceptedRecordSize) {
+            return new ObservedInstance(
+                    source,
+                    header,
+                    metadata,
+                    parts,
+                    reply,
+                    contentType,
+                    acceptedRecord,
+                    acceptedRecordSize,
+                    this);
         }
 
         long elapsed() {
             return Math.max(1, System.nanoTime() - started);
         }
 
-        void report(long terminal) {
+        void report(
+                long terminal,
+                long scheduledDeadlineNanos,
+                long ownerVisitNanos,
+                long dispatcherStartNanos) {
             long selected = beforeTerminal(routeSelected, terminal);
             long peer = beforeTerminal(peerAdmitted, terminal);
             long submitted = beforeTerminal(bindingSubmitted, terminal);
@@ -218,7 +249,11 @@ public class ZLinkServiceRequestProgress {
                       bindingSubmittedMs: %s,
                       bindingAdmittedMs: %s,
                       replyReceivedMs: %s,
-                      localDispatchMs: %s
+                      localDispatchMs: %s,
+                      scheduledDeadlineNanos: %s,
+                      ownerVisitNanos: %s,
+                      terminalNanos: %s,
+                      dispatcherStartNanos: %s
                     }\
                     """
                             .formatted(
@@ -233,7 +268,13 @@ public class ZLinkServiceRequestProgress {
                                     millis(submitted),
                                     millis(admitted),
                                     millis(reply),
-                                    millis(dispatched)));
+                                    millis(dispatched),
+                                    scheduledDeadlineNanos == 0
+                                            ? "undefined"
+                                            : scheduledDeadlineNanos,
+                                    ownerVisitNanos == 0 ? "undefined" : ownerVisitNanos,
+                                    started + terminal,
+                                    dispatcherStartNanos));
         }
 
         private static long beforeTerminal(long time, long terminal) {
@@ -265,18 +306,23 @@ public class ZLinkServiceRequestProgress {
                 List<Message> parts,
                 InstanceReply reply,
                 String contentType,
+                Supplier<byte[]> acceptedRecord,
+                int acceptedRecordSize,
                 Recording progress) {
             super(
                     ZLinkBackendRequestResult.OK,
+                    0,
                     Optional.of(source),
                     Optional.ofNullable(header.sourceSpotId()),
                     Optional.ofNullable(header.replyRouteId()),
                     metadata,
-                    new byte[0],
+                    acceptedRecord,
+                    acceptedRecordSize,
                     parts,
                     reply,
                     null,
-                    contentType);
+                    contentType,
+                    Instant.now());
             this.progress = progress;
         }
 

@@ -259,29 +259,32 @@ internal sealed partial class ZLinkActorSessionManager
         var authority = publishClosing ? LocationLifecycle?.ActorOwnership : null;
         if (transaction.OwnsExecution)
         {
-            bool closingPublished;
-            try
+            var closingPublished = false;
+            if (transaction.Closing is not null)
             {
-                closingPublished =
-                    authority is not null
-                    && await authority
+                try
+                {
+                    closingPublished = await authority!
                         .PublishClosingAsync(state, nativeActor)
                         .ConfigureAwait(false);
-            }
-            catch (Exception failure)
-            {
+                }
+                catch (Exception failure)
+                {
+                    await state
+                        .ExecuteLockedAsync(
+                            () => state.FinishClosingOnLane(transaction, failure),
+                            CancellationToken.None
+                        )
+                        .ConfigureAwait(false);
+                    throw;
+                }
+
                 await state
                     .ExecuteLockedAsync(
-                        () =>
-                            state.FailTeardownAttempt(
-                                transaction,
-                                transaction.NativeAlreadyDestroyed,
-                                failure
-                            ),
+                        () => state.FinishClosingOnLane(transaction, null),
                         CancellationToken.None
                     )
                     .ConfigureAwait(false);
-                throw;
             }
 
             var teardown = state.BeginHandlerActivationAsyncCompletion(async () =>
@@ -364,16 +367,14 @@ internal sealed partial class ZLinkActorSessionManager
             await teardown.Completion.ConfigureAwait(false);
         }
 
-        if (state.OwnsCurrentDispatch && !transaction.Completion.IsCompleted)
-        {
-            if (authority is not null)
-                await authority.PublishClosingAsync(state, nativeActor).ConfigureAwait(false);
+        var completion =
+            state.OwnsCurrentDispatch && !transaction.Completion.IsCompleted
+                ? transaction.Closing
+                : transaction.Completion;
+        if (completion is null)
             return;
-        }
 
-        var sharedFailure = await transaction
-            .Completion.WaitAsync(cancellationToken)
-            .ConfigureAwait(false);
+        var sharedFailure = await completion.WaitAsync(cancellationToken).ConfigureAwait(false);
         if (sharedFailure is not null)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(sharedFailure).Throw();
     }
