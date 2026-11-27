@@ -6,7 +6,7 @@
 
 | 항목 | 결과 |
 |---|---|
-| `keys_only=true`, revision 고정, mTLS·인증 | 통합 시험 추가. 보안 etcd 환경 미설정으로 미실행. |
+| `keys_only=true`, revision 고정, mTLS·인증 | 2026-11-27 ws2의 Docker etcd 3.6.16에서 `EtcdIntegrationTests.Authenticated_mutual_tls_preserves_revision_and_keys_only_omits_values`가 Release net8.0·net10.0에서 각각 1건 통과했다. |
 | `keys_only` 요청 필드 | fake gRPC 시험: Debug net8.0·Release net10.0 통과(2026-11-27 로컬). |
 
 ## etcd client

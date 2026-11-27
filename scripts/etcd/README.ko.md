@@ -340,21 +340,23 @@ OS 시계 격리의 실행 근거로 쓰지 않는다.
 
 위 nightly run 전체의 결론은 `failure`다. C++ 시험 job과 Node 시험 job은 성공했으며, 별도 sanitizer job이 실패했다. F는 plaintext etcd harness다. C와 N의 TLS·auth는 fake gRPC server 시험이며 보안 설정을 켠 실제 etcd harness의 결과가 아니다.
 
+L은 아래 실제 mTLS·인증 etcd 실행 결과를 가리킨다.
+
 | Capability | C++ | .NET | Java | Node |
 |---|---|---|---|---|
 | Txn Compare VALUE LESS | F: `etcd.expiry-before-apply` | F: `etcd.expiry-before-apply` | F: `etcd.expiry-before-apply` | F: `etcd.expiry-before-apply` |
 | Txn Compare CREATE | F: `spi.atomic-conflict` | F: `spi.atomic-conflict` | F: `spi.atomic-conflict` | F: `spi.atomic-conflict` |
 | Txn Compare MOD | F: `etcd.condition-change-before-apply` | F: `etcd.condition-change-before-apply` | F: `etcd.condition-change-before-apply` | F: `etcd.condition-change-before-apply` |
-| Revision-pinned Range | F: `etcd.snapshot-stability` | F: `etcd.snapshot-stability` | F: `etcd.snapshot-stability` | F: `etcd.snapshot-stability` |
+| Revision-pinned Range | F: `etcd.snapshot-stability`, L | F: `etcd.snapshot-stability`, L | F: `etcd.snapshot-stability`, L | F: `etcd.snapshot-stability`, L |
 | Linearizable reads | F: `etcd.minority-isolation` | F: `etcd.minority-isolation` | F: `etcd.minority-isolation` | F: `etcd.minority-isolation` |
 | Header cluster_id / revision | F: `etcd.cross-language-record`; `etcd.cross-language-version-condition` | F: `etcd.cross-language-record`; `etcd.cross-language-version-condition` | F: `etcd.cross-language-record`; `etcd.cross-language-version-condition` | F: `etcd.cross-language-record`; `etcd.cross-language-version-condition` |
 | ErrCompacted | F: `etcd.compacted-snapshot` | F: `etcd.compacted-snapshot` | F: `etcd.compacted-snapshot` | F: `etcd.compacted-snapshot` |
 | NOSPACE | F: `etcd.quota-exhaustion` | F: `etcd.quota-exhaustion` | F: `etcd.quota-exhaustion` | F: `etcd.quota-exhaustion` |
 | Transport errors | F: `etcd.leader-loss-before-result` | F: `etcd.leader-loss-before-result` | F: `etcd.leader-loss-before-result` | F: `etcd.leader-loss-before-result` |
 | Lost Txn reply: no hidden retry | F: `etcd.leader-loss-before-result`; `spi.unknown-commit-reconstruction` | F: `etcd.leader-loss-before-result`; `spi.unknown-commit-reconstruction` | F: `etcd.leader-loss-before-result`; `spi.unknown-commit-reconstruction` | F: `etcd.leader-loss-before-result`; `spi.unknown-commit-reconstruction` |
-| `keys_only=true` | 없음 | fake gRPC 요청 필드: Debug net8.0·Release net10.0 통과(2026-11-27 로컬); mTLS·인증 실제 etcd: 환경 미설정으로 skip | 없음 | 없음 |
-| TLS | C: `EtcdTls.MutualTlsCustomCaAndIdentityHostNameAndTrustValidation` | 실행 근거 없음: `EtcdTlsTests.Custom_trusted_CA_and_client_certificate_chain_complete_mutual_TLS`, `Untrusted_server_certificate_fails_before_the_RPC_is_received` | 실행 근거 없음: `ZLinkEtcdTlsTest.customCaAndClientIdentityEstablishMutualTlsAndUntrustedCaFails` | N: `etcd TLS uses normalized HTTPS URLs and supports trusted CA plus client identity` |
-| Auth | C: `EtcdProvider.AuthenticationRefreshesOnlyOnceForRecognizedDescriptions`; `EtcdProvider.AuthenticationAndAllWriteCallsShareAbsoluteDeadline` | 실행 근거 없음: `Authentication_rejection_reauthenticates_once_with_the_same_deadline`, `A_second_authentication_rejection_is_not_retried` | 실행 근거 없음: `authenticationErrorReauthenticatesAndResendsOnlyOnce`, `authenticationAndAllWriteRpcsShareOneAbsoluteDeadline` | N: `only a rejected authentication RPC is replayed once, within the original deadline` |
+| `keys_only=true` | L | L, fake gRPC 요청 필드(Debug net8.0·Release net10.0, 2026-11-27 로컬) | L | L |
+| TLS | L, C: `EtcdTls.MutualTlsCustomCaAndIdentityHostNameAndTrustValidation` | L, fake 실행 근거 없음: `EtcdTlsTests.Custom_trusted_CA_and_client_certificate_chain_complete_mutual_TLS`, `Untrusted_server_certificate_fails_before_the_RPC_is_received` | L, fake 실행 근거 없음: `ZLinkEtcdTlsTest.customCaAndClientIdentityEstablishMutualTlsAndUntrustedCaFails` | L, N: `etcd TLS uses normalized HTTPS URLs and supports trusted CA plus client identity` |
+| Auth | L, C: `EtcdProvider.AuthenticationRefreshesOnlyOnceForRecognizedDescriptions`; `EtcdProvider.AuthenticationAndAllWriteCallsShareAbsoluteDeadline` | L, fake 실행 근거 없음: `Authentication_rejection_reauthenticates_once_with_the_same_deadline`, `A_second_authentication_rejection_is_not_retried` | L, fake 실행 근거 없음: `authenticationErrorReauthenticatesAndResendsOnlyOnce`, `authenticationAndAllWriteRpcsShareOneAbsoluteDeadline` | L, N: `only a rejected authentication RPC is replayed once, within the original deadline` |
 | 16 MiB send boundary | C: `EtcdProvider.MaximumSendLimitUsesStoreFailureBeforeServerDispatch` | D: `EtcdTransportLimitTests.Channels_take_no_service_config_and_use_the_spec_bounds` (channel 설정값) | J: `ZLinkEtcdTransportLimitTest.sendLimitAcceptsExactly16MiBAndFailsOneByteMoreBeforeDispatch` | K: `location-etcd-client.test.js` 'etcd send limit accepts exactly 16 MiB and fails one byte more before dispatch' |
 | 8 MiB receive boundary | C: `EtcdProvider.ReceiveLimitAcceptsFiveMiBAndRejectsNineMiBAuthenticationResponses` | D: `EtcdTransportLimitTests.Channels_take_no_service_config_and_use_the_spec_bounds` (channel 설정값) | J: `ZLinkEtcdTransportLimitTest.receiveLimitAcceptsExactly8MiBAndFailsOneByteMore` | K: `location-etcd-client.test.js` 'etcd receive limit accepts exactly 8 MiB and fails one byte more' |
 | Cancellation | 없음 (physical RPC 취소); C의 `EtcdProvider.ConsumerWaitCancellationDoesNotCancelOrRetirePhysicalOperation`은 wait 취소 뒤 RPC 유지를 검사한다. | F: `spi.unknown-commit-reconstruction` | F: `spi.unknown-commit-reconstruction` | N: `etcd cancellation cancels a pending RPC; dispose drains and rejects new operations`; F: `spi.unknown-commit-reconstruction` |
@@ -363,9 +365,23 @@ OS 시계 격리의 실행 근거로 쓰지 않는다.
 
 F의 cancellation case는 .NET·Java·Node에서 전송 후 abort와 unknown commit을 확인한다. C++에서는 [conformance-cases.cjs:635](conformance-cases.cjs)의 `proxy.disconnect()`를 쓰므로 RPC 취소 capability의 근거가 아니다. 크기 설정과 최대 SPI batch 통과는 client 송수신 제한의 양쪽 경계 시험을 대체하지 않는다. C의 send 시험은 15 MiB 수락·17 MiB 거부, receive 시험은 5 MiB 수락·9 MiB 거부를 검사한다. 정확히 16 MiB·8 MiB의 직전/직후 경계 실측과는 구분한다.
 
+### 실제 mTLS·인증 etcd 실행 결과
+
+L은 2026-11-27 ws2(`ulalax-ws2`)의 Docker etcd 3.6.16에서 실행한 결과다. 저장소가 고정한 이미지에
+`--client-cert-auth`를 지정하고 `etcdctl auth enable`로 비밀번호 인증을 켰다. 비밀번호 또는 client 인증서를
+제거한 읽기 요청은 각각 인증 및 TLS 단계에서 거절됐다. 아래 성공 시험은 이전 revision에 기록된 값을
+읽고, 같은 revision에서 `keys_only=true`가 value만 생략하는지 확인했다.
+
+| 언어 | 실제 etcd 시험 | 통과 |
+|---|---|---|
+| C++ | `EtcdLive.KeysOnlyRevisionAndAuthenticatedMutualTls`. 잘못된 비밀번호·CA·hostname과 누락된 client 인증서의 거부 포함 | 1건 |
+| .NET | `EtcdIntegrationTests.Authenticated_mutual_tls_preserves_revision_and_keys_only_omits_values` | Release net8.0·net10.0 각 1건 |
+| Java | `ZLinkEtcdClientLiveTest`. `authenticatedMutualTlsPreservesRevisionAndKeysOnlyOmitsValues`와 잘못된 비밀번호·CA·hostname, 누락된 client 인증서의 거부 | 5건 |
+| Node | `location-etcd-security.test.js`. `etcd live mTLS and user authentication support provider reads and revision-pinned keys_only`와 잘못된 비밀번호·CA·hostname, 누락된 자격 증명·client 인증서의 거부 | 6건 |
+
 ### 남은 작업
 
-- 항목 3: 네 언어의 `keys_only=true`, .NET·Java·Node의 송수신 크기 양쪽 경계, C++의 직접 RPC 취소 시험을 추가한다. 기존 .NET·Java TLS·auth 단위시험의 실행 결과도 기록한다. 실제 TLS·auth-enabled etcd harness 결과와 fake server 결과를 구분한다.
+- 항목 3: .NET·Java·Node의 송수신 크기 양쪽 경계와 C++의 직접 RPC 취소 시험을 확인한다. 기존 .NET·Java TLS·auth 단위시험의 실행 결과도 기록한다.
 - 항목 5·6: 고정한 resolved 그래프와 capability 실행을 연결하고, .NET·Java lockfile 및 C++·.NET·Java의 전이 의존성 license 목록을 기록한다. .NET의 retry·hedging 비활성화는 관찰된 lost-reply 비재전송 결과와 별도로 선택 transport의 설정·계약 근거가 필요하다.
 - C++ pinning: Conan의 etcd-enabled gRPC lock entry와 vcpkg baseline·실제 gRPC/protobuf 해석 버전이 없다. 버전 고정은 별도 결정이며 이 작업에서 build·lockfile을 바꾸지 않는다.
 - 과거 F 실행은 host clock 세 ID를 검증하지 않았다. 현재 실행은 위 QEMU 설정을 요구하며 guest 시계 관측 근거를 보존한다.
