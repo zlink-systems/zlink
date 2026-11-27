@@ -247,6 +247,10 @@ Instance Spot default mesh), that's a configuration error at startup. Every node
   `budget(N) = max(0, limit − in-flight − tickets issued to N's waiting clients since that report)`. When a report arrives
   and when a client enters the queue, the Spot issues tickets to each node's waiting clients in enqueue order, up to that
   node's budget. Order is therefore FIFO within a node and approximately FIFO across the mesh.
+- With a global limit (below), the issue budget includes it too: `budget(N) = min(node budget(N), max(0, AdmissionGlobalLimit − executing permits − unexpired issued tickets not yet used))`.
+  Tickets are therefore issued only as permits free up. When `AdmitPermit` answers a connection with `granted=false`, that
+  connection's ticket becomes invalid on the spot and the Spot puts that waiting client back at the head of its node's FIFO. If the
+  connection enqueues again, it gets its current position, not the same ticket.
 - **Global limit.** When the setting `AdmissionGlobalLimit` (a positive integer, optional) is present, it caps concurrent
   authentication executions across the whole mesh. A ticket is only an admission right; the queue Spot grants the
   execution permit separately.
