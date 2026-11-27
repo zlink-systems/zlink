@@ -56,6 +56,9 @@ NODE_COMMON = (
 NODE_EXTRA = (
     "Run Node M6B runtime gate",
     "Run Node M6C runtime gate",
+    "Run Node M6A runtime gate",
+    "Run Node M5 foundation gate",
+    "Run the tutorial StreamClient receiving check",
     "Verify packed Node packages in clean consumers",
 )
 NODE_BROWSER = "Run actual Chromium Stream Connector E2E"
