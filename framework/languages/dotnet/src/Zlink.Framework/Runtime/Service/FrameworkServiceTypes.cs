@@ -869,6 +869,9 @@ internal struct MeshReceiveRecord
 {
     // An application reply has either a local callback or a captured native route.
     private readonly object? _replyRoute;
+
+    // Ready Instance Spot ingress has no SpotTargetAdmission payload.
+    private readonly object? _kindData;
     private readonly Func<RequestResult, uint, SubmitResult>? _terminalReply;
     private readonly Func<
         ActorJoinResult,
@@ -905,6 +908,7 @@ internal struct MeshReceiveRecord
         Func<RequestResult, uint, SubmitResult>? terminalReply = null,
         ZLinkMultipartPayloadView? applicationPayloadView = null,
         bool instanceIntent = false,
+        ServiceWireCodec.InstanceRouteV1Case0? readyInstanceRoute = null,
         ZlinkSubmitException? submitFailure = null,
         ZLinkManagedMeshNode.NativeApplicationReply? nativeApplicationReply = null
     )
@@ -924,7 +928,8 @@ internal struct MeshReceiveRecord
         PartCount = partCount;
         TerminalResult = terminalResult;
         FailureErrno = failureErrno;
-        KindData = kindData;
+        _kindData = readyInstanceRoute ?? (object?)kindData;
+        InstanceIntent = instanceIntent;
         _replyRoute = reply ?? (object?)nativeApplicationReply;
         _terminalReply = terminalReply;
         _joinReply = joinReply;
@@ -935,7 +940,6 @@ internal struct MeshReceiveRecord
         ReplyRouteId = replyRouteId;
         DeadlineUnixMs = deadlineUnixMs;
         ApplicationPayloadView = applicationPayloadView;
-        InstanceIntent = instanceIntent;
         SubmitFailure = submitFailure;
     }
 
@@ -962,7 +966,9 @@ internal struct MeshReceiveRecord
     public ulong ReplyRouteId { get; }
     public ulong DeadlineUnixMs { get; }
     internal bool InstanceIntent { get; }
-    public MeshRecordPayload? KindData { get; }
+    internal ServiceWireCodec.InstanceRouteV1Case0? ReadyInstanceRoute =>
+        _kindData as ServiceWireCodec.InstanceRouteV1Case0;
+    public MeshRecordPayload? KindData => _kindData as MeshRecordPayload;
     internal ZLinkMultipartPayloadView? ApplicationPayloadView { get; }
 
     // Ingress records carry the payload size once it is known. This keeps the

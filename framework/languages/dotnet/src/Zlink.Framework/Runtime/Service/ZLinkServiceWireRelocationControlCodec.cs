@@ -209,24 +209,85 @@ internal static partial class ZLinkServiceWireCodec
         );
         if (record.SenderRole != 1)
             throw new ArgumentOutOfRangeException(nameof(record));
-        _ = ToGenerated(record.Object);
-        if (
-            !ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(
-                record.FrozenRecord.Encoded.Span
-            )
-        )
+        var frozen = record.FrozenRecord.Encoded;
+        if (!ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(frozen.Span))
             throw new ArgumentOutOfRangeException(nameof(record));
-        return ServiceWirePilotCodec.EncodeRelocationData31(
+        var context = ZLinkRelocationEnvelopeCodec.FrozenWireContext(int.MaxValue);
+        return ServiceWireCodec.EncodeRelocationData31Header(
             new(
-                ToGenerated(record.RelocationId),
-                record.TargetAttemptGeneration,
-                ToGenerated(record.Coordinator),
-                ServiceWirePilotCodec.RelocationRole.Source,
-                ToGenerated(record.Object),
-                record.FrozenRecord.Encoded.ToArray()
-            )
+                0,
+                new(new(record.RelocationId.High), new(record.RelocationId.Low)),
+                new(record.TargetAttemptGeneration),
+                new(
+                    new(record.Coordinator.OwnerId),
+                    new(record.Coordinator.LeaseGeneration),
+                    new(record.Coordinator.NodeRid),
+                    new(record.Coordinator.NodeGeneration),
+                    new(record.Coordinator.ExpectedAuthorityStoreVersion)
+                ),
+                ServiceWireCodec.RelocationRole.Source,
+                ToCanonicalObject(record.Object),
+                ServiceWireCodec.DecodeFrozenRecord(frozen.ToArray(), context)
+            ),
+            context
         );
     }
+
+    private static ServiceWireCodec.RelocationObjectIdentity ToCanonicalObject(
+        RelocationObjectRecord value
+    ) =>
+        ToGenerated(value) switch
+        {
+            ServiceWirePilotCodec.RelocationActorIdentity actor =>
+                new ServiceWireCodec.RelocationObjectIdentityCase0(
+                    ServiceWireCodec.StatefulObjectKind.Actor,
+                    new(new(actor.ActorId), new(actor.ObjectGeneration)),
+                    new(actor.ExpectedAuthorityOwnerGeneration)
+                ),
+            ServiceWirePilotCodec.RelocationUserSpotIdentity spot =>
+                new ServiceWireCodec.RelocationObjectIdentityCase1(
+                    ServiceWireCodec.StatefulObjectKind.UserSpot,
+                    new(new(spot.SpotId), new(spot.ObjectGeneration)),
+                    new(spot.ExpectedAuthorityOwnerGeneration)
+                ),
+            ServiceWirePilotCodec.RelocationInstanceSpotIdentity spot =>
+                new ServiceWireCodec.RelocationObjectIdentityCase2(
+                    ServiceWireCodec.StatefulObjectKind.InstanceSpot,
+                    new(spot.InstanceType),
+                    new(spot.SpotId),
+                    new(spot.ObjectGeneration)
+                ),
+            _ => throw new InvalidDataException("Unknown relocation object identity."),
+        };
+
+    internal static RelocationObjectRecord FromCanonicalObject(
+        ServiceWireCodec.RelocationObjectIdentity value
+    ) =>
+        value switch
+        {
+            ServiceWireCodec.RelocationObjectIdentityCase0 actor => new(
+                (byte)actor.ObjectKind,
+                string.Empty,
+                actor.Actor.ActorId.Value,
+                actor.Actor.ObjectGeneration.Value,
+                actor.ExpectedAuthorityOwnerGeneration.Value
+            ),
+            ServiceWireCodec.RelocationObjectIdentityCase1 spot => new(
+                (byte)spot.ObjectKind,
+                string.Empty,
+                spot.Spot.SpotId.Value,
+                spot.Spot.ObjectGeneration.Value,
+                spot.ExpectedAuthorityOwnerGeneration.Value
+            ),
+            ServiceWireCodec.RelocationObjectIdentityCase2 spot => new(
+                (byte)spot.ObjectKind,
+                spot.InstanceType.Value,
+                spot.SpotId.Value,
+                spot.ObjectGeneration.Value,
+                0
+            ),
+            _ => throw new InvalidDataException("Unknown relocation object identity."),
+        };
 
     internal static byte[] EncodeRelocationCutover(RelocationCutoverRecord record)
     {
@@ -381,7 +442,11 @@ internal static partial class ZLinkServiceWireCodec
             !TryDecodeGenerated(
                 bytes,
                 ServiceWireConstants.Command.RelocationData,
-                ServiceWirePilotCodec.DecodeRelocationData31,
+                static frame =>
+                    ServiceWireCodec.DecodeRelocationData31Header(
+                        frame,
+                        ZLinkRelocationEnvelopeCodec.FrozenWireContext(frame.Length)
+                    ),
                 out var generated,
                 out error
             )
@@ -391,13 +456,34 @@ internal static partial class ZLinkServiceWireCodec
                 error = DecodeError.InvalidField;
             return false;
         }
+        var relocation = new RelocationWireId(
+            generated.Relocation.High.Value,
+            generated.Relocation.Low.Value
+        );
+        if (relocation.IsEmpty || generated.SenderRole != ServiceWireCodec.RelocationRole.Source)
+        {
+            error = DecodeError.InvalidField;
+            return false;
+        }
+        var coordinator = generated.Coordinator;
         record = new RelocationDataRecord(
-            FromGenerated(generated.Relocation),
-            generated.TargetAttemptGeneration,
-            FromGenerated(generated.Coordinator),
-            FromGeneratedRole(generated.SenderRole),
-            FromGenerated(generated.Object),
-            new FrozenRecord(generated.Record)
+            relocation,
+            generated.TargetAttemptGeneration.Value,
+            new RelocationCoordinatorFence(
+                coordinator.CoordinatorOwnerId.Value,
+                coordinator.CoordinatorLeaseGeneration.Value,
+                coordinator.CoordinatorNodeRid.RoutingId,
+                coordinator.CoordinatorNodeGeneration.Value,
+                coordinator.ExpectedAuthorityStoreVersion.Value
+            ),
+            (byte)generated.SenderRole,
+            FromCanonicalObject(generated.Object),
+            new FrozenRecord(
+                ServiceWireCodec.EncodeFrozenRecord(
+                    generated.Record,
+                    ZLinkRelocationEnvelopeCodec.FrozenWireContext(bytes.Length)
+                )
+            )
         );
         return true;
     }
