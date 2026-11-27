@@ -241,7 +241,7 @@ Connector는 다음과 같이 처리한다.
     인증마다 Spot 왕복 1회와 반납 send 1회다.
   - 모든 node에 같은 값을 설정한다. Spot은 자기 incarnation이 도는 node의 설정 값을 쓴다. 새 incarnation은 permit 수 0에서
     시작하지만, 이전 incarnation의 permit을 쥔 node는 새 epoch를 받은 보고 Response 뒤 그 permit을 반납한 것으로 보고 새로 셀
-    permit에 포함하지 않으므로, incarnation 전환 직후에는 상한을 잠시 넘을 수 있다. 그 폭은 전환 시점에 실행 중이던 인증 수 이하다.
+    permit에 포함하지 않으므로, incarnation 전환 직후에는 상한을 잠시 넘을 수 있다. 그 폭은 전환 시점에 실행 중이었거나 응답이 오가던 permit 수 이하다(이전 incarnation의 grant가 전환 뒤 늦게 도착한 경우 포함).
 - 예상 대기 `estimatedWaitMs`는 `ceil(position × 1000 / r)`이고, r은 최근 30초 동안 낸 ticket 수 ÷ 30(초당)이다.
   r이 0이면 `position × 1000`이다. 결과는 2^31 − 1에서 자른다. `position`은 1부터 시작하는 mesh 전체 순번이다.
 - 같은 SessionRid의 `$zlink.admission.enqueue`는 멱등이다. 이미 대기 중이면 현재 순번을, ticket을 받고 아직 쓰지
