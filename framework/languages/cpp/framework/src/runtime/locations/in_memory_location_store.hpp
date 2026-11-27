@@ -1284,9 +1284,10 @@ class in_memory_location_repository_t : public location_repository_t
           .get ();
     }
 
-    task_t<bool> seal_relocation_inventory (aggregate_fence_t fence,
-                                            std::string digest,
-                                            std::vector<aggregate_participant_t> participants) override
+    task_t<bool>
+    seal_relocation_inventory (aggregate_fence_t fence,
+                               std::string digest,
+                               std::vector<aggregate_participant_t> participants) override
     {
         const auto tree = aggregate_inventory::build_tree (participants);
         if (tree.root.at (location_record_fields::digestSha256) != digest)
@@ -1311,8 +1312,8 @@ class in_memory_location_repository_t : public location_repository_t
                 _sealed_inventories.find (aggregate_inventory::key_suffix (fence));
               if (sealed == _sealed_inventories.end () || sealed->second.digest != digest)
                   return completed (std::optional<std::vector<aggregate_participant_t>>{});
-              return completed (std::optional<std::vector<aggregate_participant_t>>{
-                sealed->second.participants});
+              return completed (
+                std::optional<std::vector<aggregate_participant_t>>{sealed->second.participants});
           })
           .get ();
     }

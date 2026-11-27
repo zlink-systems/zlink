@@ -359,19 +359,19 @@ TEST (ZLinkFrameworkInMemoryLocationStore, SpotWideSourceCaptureSealsInventoryAt
                  .mesh_name = "play",
                  .node_rid = target_a.node_rid,
                  .node_generation = 1}));
-    const auto member = create (
-      placement_object_kind_t::actor, "member-1", "player",
-      encode_actor_authority_payload (
-        {.stable_type = "player",
-         .actor_id = "member-1",
-         .current_spot_id = "room-1",
-         .current_spot_generation = spot.object_generation,
-         .current_spot_kind = actor_authority_spot_kind_t::user,
-         .owner_id = owner_a.owner_id,
-         .owner_lease_generation = static_cast<std::uint64_t> (owner_a.lease_generation),
-         .mesh_name = "play",
-         .node_rid = target_a.node_rid,
-         .node_generation = 1}));
+    const auto member =
+      create (placement_object_kind_t::actor, "member-1", "player",
+              encode_actor_authority_payload (
+                {.stable_type = "player",
+                 .actor_id = "member-1",
+                 .current_spot_id = "room-1",
+                 .current_spot_generation = spot.object_generation,
+                 .current_spot_kind = actor_authority_spot_kind_t::user,
+                 .owner_id = owner_a.owner_id,
+                 .owner_lease_generation = static_cast<std::uint64_t> (owner_a.lease_generation),
+                 .mesh_name = "play",
+                 .node_rid = target_a.node_rid,
+                 .node_generation = 1}));
     const std::vector<object_ref_t> participants{
       {object_kind_t::user_spot, "room-1", spot.object_generation, spot.authority_owner_generation,
        "play", "node-a"},
@@ -384,6 +384,10 @@ TEST (ZLinkFrameworkInMemoryLocationStore, SpotWideSourceCaptureSealsInventoryAt
     fence.source_owner = owner_a;
     fence.target_owner = owner_b;
     fence.relocation = {0x4718, 0x5728};
+    const auto source_rid = target_a.node_rid.value ();
+    for (const auto value : source_rid)
+        fence.source_node_routing_id.push_back (static_cast<std::uint8_t> (value));
+    fence.source_node_generation = target_a.node_lifecycle_generation;
 
     // §8.3 (#5656): a SpotWide capture seals its source inventory at (relocationId, 1).
     public_authority_store_adapter_t relocation (store);
@@ -399,9 +403,8 @@ TEST (ZLinkFrameworkInMemoryLocationStore, SpotWideSourceCaptureSealsInventoryAt
     const auto record = std::get<authority_snapshot_t> (
       store.read_authority (spot_authority_key ("room-1")).result ().value ());
     ASSERT_TRUE (record.aggregate && record.aggregate->relocation);
-    const auto digest = record.aggregate->encoded.at ("relocation")
-                          .at ("sourceInventorySha256")
-                          .get<std::string> ();
+    const auto digest =
+      record.aggregate->encoded.at ("relocation").at ("sourceInventorySha256").get<std::string> ();
     const auto inventory = store.read_relocation_inventory (sealed, digest).result ().value ();
     ASSERT_TRUE (inventory);
     ASSERT_EQ (inventory->size (), 2u);
