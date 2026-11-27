@@ -179,7 +179,7 @@ Connector는 다음과 같이 처리한다.
 
 #### 3.5.1 대기열 Spot과 epoch
 
-- 대기열 Spot은 인증 STREAM 등록이 속한 RouteMesh마다 하나인 Instance Spot이고 Spot ID는 `$zlink.admission-queue`다.
+- 대기열 Spot은 인증 STREAM 등록이 속한 RouteMesh마다 하나인 Instance Spot이고 Spot ID는 `$zlink.admission-queue/<RouteMeshName>`이다. Spot ID는 Location Store에서 mesh를 가리지 않는 전역 이름이므로 RouteMesh 이름을 넣어 같은 Store를 쓰는 RouteMesh끼리 겹치지 않게 한다(Spot ID 길이 상한 안에서).
   Framework가 첫 `$zlink.admission.enqueue`나 첫 node 보고(§3.5.3)를 `InstanceSpot(...)` intent로 보내 준비한다.
   배치는 기존 Instance Spot 배치 규칙을 따르며 별도 배치 권위를 두지 않는다.
 - Epoch는 대기열 Spot incarnation이 초기화할 때 CSPRNG로 만드는 0이 아닌 64-bit 부호 없는 정수다. Incarnation이
@@ -205,7 +205,7 @@ Connector는 다음과 같이 처리한다.
 #### 3.5.3 Node 보고와 ticket 발급
 
 - 2단계가 켜진 node는 1초마다 대기열 Spot에 `NodeReport` Spot request를 보낸다. 내용은 node RID, 1단계 한도, 현재
-  처리 중 수, 직전 보고 뒤 사용된 ticket의 SessionRid 목록, 직전 보고 뒤 끝난 대기 session의 SessionRid 목록, 전역 상한이 있을 때 쥐고 있는 permit ID 목록과 받은 가장 큰 permit ID다.
+  처리 중 수, 직전 보고 뒤 사용된 ticket의 SessionRid 목록, 직전 보고 뒤 끝난 대기 session의 SessionRid 목록, 전역 상한이 있을 때 쥐고 있는 permit ID 목록과 끝난 요청의 연속 최대 순번(아래)이다.
   Spot은 그 Response로 현재 epoch를 돌려준다. 이 보고는 Framework 내부 Spot 메시지이고 client wire가 아니다.
 - Spot은 3초 안에 받은 보고만 유효로 본다. 유효 보고가 없는 node의 session에는 ticket을 내지 않는다.
 - 대기자는 SessionRid와 그 session의 node RID로 기록한다. Ticket은 그 session의 node에서만 쓸 수 있으므로 발급
@@ -215,14 +215,16 @@ Connector는 다음과 같이 처리한다.
 - **전역 상한.** 설정 값 `AdmissionGlobalLimit`(양의 정수, 선택)이 있으면 mesh 전체의 동시 인증 실행 수를 이 값으로 막는다.
   Ticket은 입장 자격일 뿐이고, 실행 permit은 대기열 Spot이 따로 준다.
   - Node는 유효한 ticket을 가진 인증을 handler에 넣기 전에 대기열 Spot에 `AdmitPermit` Spot request를 한 번 보낸다. 내용은 node
-    RID, node owner lease(`ownerId`, `leaseGeneration`), SessionRid와 ticket의 epoch다. Spot은 `실행 중 permit 수 < AdmissionGlobalLimit`
+    RID, node owner lease(`ownerId`, `leaseGeneration`), SessionRid, ticket의 epoch와 `requestSeq`다. `requestSeq`는 node incarnation 안에서
+    단조 증가하는 요청 순번이고 Spot은 permit에 그 순번을 기록한다. Spot은 `실행 중 permit 수 < AdmissionGlobalLimit`
     이고 epoch가 현재 값이면 permit ID(0이 아닌 64-bit)를 Response로 주고, 아니면 §3.4 첫 행과 같은 `unavailable`+queueRequired로
     거절한다. 거절된 연결은 §3.5.5대로 다시 대기한다.
   - Node는 handler가 끝나면(성공·실패·취소 모두) `ReleasePermit` Spot send로 permit을 반납한다. Spot은 같은 permit의 반납을
     멱등으로 처리한다.
-  - Spot은 permit마다 node owner lease를 기록하고, 그 lease가 끝난 node의 permit을 모두 회수한다. Permit ID는 Spot incarnation 안에서 단조 증가한다.
-    Node 보고(§3.5.3)는 쥐고 있는 permit ID 목록과 지금까지 받은 가장 큰 permit ID를 보내고, Spot은 그 값 이하인데 목록에 없는
-    permit만 회수한다. 보고보다 늦게 도착한 grant는 회수하지 않는다.
+  - Spot은 permit마다 node owner lease를 기록하고, 그 lease가 끝난 node의 permit을 모두 회수한다. Node 보고(§3.5.3)는
+    쥐고 있는 permit ID 목록과 '이 순번 이하의 `AdmitPermit`은 모두 끝났다(응답을 받았거나 기본 timeout으로 포기했다)'인 연속 최대
+    `requestSeq`를 보낸다. Spot은 `requestSeq`가 그 값 이하인데 목록에 없는 permit만 회수한다. 그래서 응답이 사라진 permit은 그
+    요청의 timeout 뒤 회수되고, 응답 순서가 뒤바뀌어도 아직 끝나지 않은 요청의 permit은 회수되지 않는다.
   - `AdmitPermit`은 Framework Spot request의 기본 timeout으로 기다린다(새 설정·timer 없음). 실패하거나 그 안에 응답이 없으면 handler를 실행하지 않고 `unavailable`로 끝낸다.
     전역 상한이 있으면 Spot이 없을 때 넘겨 들여보내지 않는다.
   - Ticket 재사용, 사용 보고 지연, 보고 만료와 epoch 전환은 permit 수에 영향을 주지 않는다. 비용은 2단계와 전역 상한을 켰을 때
