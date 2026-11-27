@@ -374,12 +374,13 @@ test('request source acceptance uses ingress G and local runtime G', async () =>
       seen.push(nodeGeneration);
       return { nodeRid, nodeGeneration, ownerId: 'owner', leaseGeneration: 1n };
     });
-    for (const sourceRoutingId of ['target', 'source']) {
+    // A received record carries its sender G; only a local record without one uses this node G.
+    for (const ingress of [
+      { sourceRoutingId: 'target', sourceNodeGeneration: 8n },
+      { sourceRoutingId: 'source' }
+    ]) {
       await f.runtime.prepareDispatch(
-        {
-          ingress: { sourceRoutingId, sourceNodeGeneration: 8n },
-          stateful: {}
-        } as ServiceMailboxRecord,
+        { ingress, stateful: {} } as ServiceMailboxRecord,
         new AbortController().signal
       );
     }
