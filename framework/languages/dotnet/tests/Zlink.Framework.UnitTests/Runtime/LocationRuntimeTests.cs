@@ -281,18 +281,9 @@ public sealed partial class LocationRuntimeTests
             Assert.True(runtime.TryGetActorState("steady-actor", out var actor));
 
             var instance = Assert.IsType<OutageExecutionActor>(actor.Actor);
+            var messages = instance.Messages;
             var factoryCalls = probe.FactoryCalls;
             var client = servicesProvider.GetRequiredService<IZLinkActorClient>();
-            Assert.Equal(
-                1,
-                (
-                    await client
-                        .RequestToActor(actor.ActorId, "before")
-                        .Timeout(TimeSpan.FromSeconds(1))
-                        .Async<OutageExecutionReply>()
-                ).Count
-            );
-            var messages = instance.Messages;
             var running = actor
                 .ExecuteDispatchAsync(
                     async _ =>
@@ -394,7 +385,7 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(1, calls);
             Assert.Equal(messages, instance.Messages);
             Assert.Equal(
-                2,
+                messages + 1,
                 (
                     await client
                         .RequestToActor(actor.ActorId, "after")

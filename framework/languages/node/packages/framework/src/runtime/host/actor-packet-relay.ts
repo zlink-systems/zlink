@@ -4,7 +4,9 @@ import { mapZLinkRequestReply } from '../messaging/request-result';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
-  internalFrameworkErrorKind
+  internalFrameworkErrorKind,
+  internalFrameworkErrorKindFromWireFailureCode,
+  internalFrameworkWireReply
 } from '../framework-errors-internal';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type {
@@ -433,7 +435,10 @@ export class ZLinkActorPacketRelay {
         error: error instanceof Error ? error.message : String(error),
         errorKind:
           error instanceof ZLinkFrameworkException
-            ? internalFrameworkErrorKind(error)
+            ? (internalFrameworkErrorKind(error) ??
+              internalFrameworkErrorKindFromWireFailureCode(
+                internalFrameworkWireReply(error).failureCode
+              ))
             : ZLinkFrameworkInternalErrorKind.RequestFailed
       };
     } finally {
