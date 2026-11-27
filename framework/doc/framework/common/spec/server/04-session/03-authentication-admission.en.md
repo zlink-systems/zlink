@@ -2,7 +2,7 @@
 
 > Scope: the server Framework for STREAM sessions and the Stream Connector
 > Issue: #4546
-> Shared fixture: `framework/runtime/conformance/login-admission-v1.json`
+> Shared fixtures: `framework/runtime/conformance/login-admission-v1.json` (stage 1), `login-admission-queue-v1.json` and `admission-queue-messages-v1.json` (stage 2)
 
 When many logins arrive at once, the authentication handler and the DB lookups and Actor creation behind it
 spike together. This document defines admission control that protects the authentication handler and the
@@ -237,8 +237,8 @@ Instance Spot default mesh), or the name of a STREAM registration with stage 2 o
 #### 3.5.3 Node Reports and Ticket Issue
 
 - Every node with stage 2 on sends the queue Spot a `NodeReport` Spot request once per second. It carries the node RID,
-  the stage 1 limit, the current in-flight count, the SessionRids whose tickets were used since the previous report,
-  the SessionRids of waiting sessions that ended since the previous report, and, with a global limit, the permit IDs it holds and the highest contiguous finished request sequence (below). The Spot returns the current epoch in
+  the stage 1 limit, the current in-flight count, the connection identities (STREAM registration name and SessionRid) whose tickets were used since the previous
+  report, the connection identities of waiting sessions that ended since the previous report, and, with a global limit, the permit IDs it holds and the highest contiguous finished request sequence (below). The Spot returns the current epoch in
   the Response. These reports are Framework-internal Spot messages, not client wire.
 - The Spot treats only reports received within the last 3 seconds as valid. It issues no tickets to sessions on a node
   without a valid report.
@@ -371,6 +371,10 @@ send and has no response.
 ## 4. Tests
 
 - All four languages run the shared fixture `login-admission-v1.json`: 12 server scenarios and 11 connector scenarios.
+- All four languages run the two stage 2 shared fixtures. `login-admission-queue-v1.json`: 12 ticket vectors
+  (§3.5.2), 22 queue Spot scenarios, 10 node scenarios, 7 startup scenarios (§3.5.0), and 11 connector scenarios.
+  `admission-queue-messages-v1.json`: 8 valid and 9 invalid node-to-node messages (§3.5.8). Each language test checks
+  the exact counts.
 - A cross-language contract test of four language servers × four language connectors: no handler run over the limit,
   the rejection code and `$zlink.admission.retryAfterMs`, success after the connector's automatic retry, and no Actor,
   Location Store, or permit use by a rejected request.

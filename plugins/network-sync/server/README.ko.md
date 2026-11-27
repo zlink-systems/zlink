@@ -13,3 +13,11 @@
 ## 검증
 
 `dotnet test Simulation.Tests`와 `dotnet test Server.Tests`(Server.Tests는 `ZLINK_REDIS_TEST_ENDPOINT`의 Redis가 필요합니다. 기본 `127.0.0.1:6379`). CI는 `.github/workflows/network-sync-server.yml`입니다.
+
+`plugins/network-sync/server`에서 현재 checkout으로 만든 package를 사용해 빌드하고 시험합니다. 같은 버전의 package가 이미 캐시에 있으면 `NUGET_PACKAGES`를 새로운 디렉터리로 지정합니다:
+
+```bash
+source_dir=$(bash ../../../scripts/local-package/dotnet/build-framework-wsl.sh)
+export RestoreAdditionalProjectSources="$source_dir"
+dotnet build Server && dotnet test Server.Tests
+```
