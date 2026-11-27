@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.locations;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.locations.ZLinkCanonicalRelocationAuthorityStateCodec.Published;
 import systems.zlink.framework.runtime.internal.locations.ZLinkCanonicalRelocationAuthorityStateCodec.State;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 
