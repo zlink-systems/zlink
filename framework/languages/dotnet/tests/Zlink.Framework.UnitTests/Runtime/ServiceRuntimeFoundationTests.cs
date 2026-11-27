@@ -1924,91 +1924,132 @@ public sealed class ServiceRuntimeFoundationTests
             .Select(static index => checked((byte)(index % 251)))
             .ToArray();
         using var requestPart = Message.From(requestPayload);
-        MeshOperationId operationId;
-        var submit = channelRequest
-            ? source
-                .EntrySpot()
-                .RequestToChannel("worker", [requestPart], out operationId, TimeSpan.FromSeconds(3))
-            : source.RequestToNode(
-                targetRid,
-                [requestPart],
-                out operationId,
-                TimeSpan.FromSeconds(3)
+        var started = Stopwatch.GetTimestamp();
+        long submitStarted = 0;
+        long submitReturned = 0;
+        long requestReady = 0;
+        long requestReceived = 0;
+        long replyStarted = 0;
+        long replyReturned = 0;
+        long completionReady = 0;
+        long completionReceived = 0;
+        try
+        {
+            MeshOperationId operationId;
+            submitStarted = Stopwatch.GetTimestamp();
+            var submit = channelRequest
+                ? source
+                    .EntrySpot()
+                    .RequestToChannel("worker", [requestPart], out operationId, TimeSpan.FromSeconds(3))
+                : source.RequestToNode(
+                    targetRid,
+                    [requestPart],
+                    out operationId,
+                    TimeSpan.FromSeconds(3)
+                );
+            submitReturned = Stopwatch.GetTimestamp();
+            Assert.Equal(SubmitResult.Ok, submit);
+
+            using var targetReady = new MeshReadyBatch();
+            await WaitUntilAsync(() =>
+            {
+                targetReady.Reset();
+                target.DrainReady(MeshReadyDomains.Application, targetReady, RecvFlags.DontWait);
+                return targetReady.Count == 1;
+            });
+            requestReady = Stopwatch.GetTimestamp();
+            using var targetClaim = targetReady.TakeClaim(0);
+            using var targetBatch = new MeshReceiveBatch();
+            Assert.True(targetClaim.Receive(targetBatch, RecvFlags.DontWait));
+            requestReceived = Stopwatch.GetTimestamp();
+            Assert.Equal(1, targetBatch.Count);
+            var request = targetBatch[0];
+            Assert.Equal(
+                channelRequest ? MeshRecordKind.ChannelRequest : MeshRecordKind.NodeRequest,
+                request.Kind
             );
-        Assert.Equal(SubmitResult.Ok, submit);
+            Assert.Equal(
+                channelRequest ? MeshOperationKind.ChannelRequest : MeshOperationKind.NodeRequest,
+                request.OperationKind
+            );
+            Assert.Equal(sourceRid, request.SourceNodeRid);
+            Assert.Equal(operationId.Low, request.OperationId.Low);
+            Assert.Equal(channelRequest ? "worker" : null, request.ChannelName);
+            var receivedRequestParts = targetBatch.RetainMessage(0);
+            try
+            {
+                Assert.Single(receivedRequestParts);
+                Assert.Equal(requestPayload, receivedRequestParts[0].ToArray());
+            }
+            finally
+            {
+                foreach (var part in receivedRequestParts)
+                    part.Dispose();
+            }
 
-        using var targetReady = new MeshReadyBatch();
-        await WaitUntilAsync(() =>
-        {
-            targetReady.Reset();
-            target.DrainReady(MeshReadyDomains.Application, targetReady, RecvFlags.DontWait);
-            return targetReady.Count == 1;
-        });
-        using var targetClaim = targetReady.TakeClaim(0);
-        using var targetBatch = new MeshReceiveBatch();
-        Assert.True(targetClaim.Receive(targetBatch, RecvFlags.DontWait));
-        Assert.Equal(1, targetBatch.Count);
-        var request = targetBatch[0];
-        Assert.Equal(
-            channelRequest ? MeshRecordKind.ChannelRequest : MeshRecordKind.NodeRequest,
-            request.Kind
-        );
-        Assert.Equal(
-            channelRequest ? MeshOperationKind.ChannelRequest : MeshOperationKind.NodeRequest,
-            request.OperationKind
-        );
-        Assert.Equal(sourceRid, request.SourceNodeRid);
-        Assert.Equal(operationId.Low, request.OperationId.Low);
-        Assert.Equal(channelRequest ? "worker" : null, request.ChannelName);
-        var receivedRequestParts = targetBatch.RetainMessage(0);
-        try
-        {
-            Assert.Single(receivedRequestParts);
-            Assert.Equal(requestPayload, receivedRequestParts[0].ToArray());
+            using var replyPart = Message.From(new byte[] { 9, 8, 7 });
+            replyStarted = Stopwatch.GetTimestamp();
+            var replySubmit = request.Reply([replyPart]);
+            replyReturned = Stopwatch.GetTimestamp();
+            Assert.Equal(SubmitResult.Ok, replySubmit);
+            Assert.Equal(SubmitResult.InvalidState, request.Reply([replyPart]));
+
+            using var sourceReady = new MeshReadyBatch();
+            await WaitUntilAsync(() =>
+            {
+                sourceReady.Reset();
+                source.DrainReady(MeshReadyDomains.Infrastructure, sourceReady, RecvFlags.DontWait);
+                return sourceReady.Count == 1;
+            });
+            completionReady = Stopwatch.GetTimestamp();
+            using var sourceClaim = sourceReady.TakeClaim(0);
+            using var sourceBatch = new MeshReceiveBatch();
+            Assert.True(sourceClaim.Receive(sourceBatch, RecvFlags.DontWait));
+            completionReceived = Stopwatch.GetTimestamp();
+            Assert.Equal(1, sourceBatch.Count);
+            var completion = sourceBatch[0];
+            Assert.Equal(MeshRecordKind.Completion, completion.Kind);
+            Assert.Equal(operationId, completion.OperationId);
+            Assert.Equal(
+                channelRequest ? MeshOperationKind.ChannelRequest : MeshOperationKind.NodeRequest,
+                completion.OperationKind
+            );
+            Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
+            Assert.Equal(0, completion.FailureErrno);
+            var receivedReplyParts = sourceBatch.RetainMessage(0);
+            try
+            {
+                Assert.Single(receivedReplyParts);
+                Assert.Equal(new byte[] { 9, 8, 7 }, receivedReplyParts[0].ToArray());
+            }
+            finally
+            {
+                foreach (var part in receivedReplyParts)
+                    part.Dispose();
+            }
+            sourceBatch.Reset();
+            Assert.False(sourceClaim.Receive(sourceBatch, RecvFlags.DontWait));
         }
-        finally
+        catch (Exception error) when (error is TimeoutException or Xunit.Sdk.XunitException)
         {
-            foreach (var part in receivedRequestParts)
-                part.Dispose();
+            var message =
+                $"{error.Message}\nTimeline (ms since observation started) "
+                + $"submitStarted={Elapsed(submitStarted)}, submitReturned={Elapsed(submitReturned)}, "
+                + $"requestReady={Elapsed(requestReady)}, requestReceived={Elapsed(requestReceived)}, "
+                + $"replyStarted={Elapsed(replyStarted)}, replyReturned={Elapsed(replyReturned)}, "
+                + $"completionReady={Elapsed(completionReady)}, completionReceived={Elapsed(completionReceived)}, "
+                + $"failed={Elapsed(Stopwatch.GetTimestamp())}.";
+            if (error is TimeoutException)
+                throw new TimeoutException(message, error);
+            throw new Xunit.Sdk.XunitException(message, error);
         }
 
-        using var replyPart = Message.From(new byte[] { 9, 8, 7 });
-        Assert.Equal(SubmitResult.Ok, request.Reply([replyPart]));
-        Assert.Equal(SubmitResult.InvalidState, request.Reply([replyPart]));
-
-        using var sourceReady = new MeshReadyBatch();
-        await WaitUntilAsync(() =>
-        {
-            sourceReady.Reset();
-            source.DrainReady(MeshReadyDomains.Infrastructure, sourceReady, RecvFlags.DontWait);
-            return sourceReady.Count == 1;
-        });
-        using var sourceClaim = sourceReady.TakeClaim(0);
-        using var sourceBatch = new MeshReceiveBatch();
-        Assert.True(sourceClaim.Receive(sourceBatch, RecvFlags.DontWait));
-        Assert.Equal(1, sourceBatch.Count);
-        var completion = sourceBatch[0];
-        Assert.Equal(MeshRecordKind.Completion, completion.Kind);
-        Assert.Equal(operationId, completion.OperationId);
-        Assert.Equal(
-            channelRequest ? MeshOperationKind.ChannelRequest : MeshOperationKind.NodeRequest,
-            completion.OperationKind
-        );
-        Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
-        Assert.Equal(0, completion.FailureErrno);
-        var receivedReplyParts = sourceBatch.RetainMessage(0);
-        try
-        {
-            Assert.Single(receivedReplyParts);
-            Assert.Equal(new byte[] { 9, 8, 7 }, receivedReplyParts[0].ToArray());
-        }
-        finally
-        {
-            foreach (var part in receivedReplyParts)
-                part.Dispose();
-        }
-        sourceBatch.Reset();
-        Assert.False(sourceClaim.Receive(sourceBatch, RecvFlags.DontWait));
+        string Elapsed(long timestamp) =>
+            timestamp == 0
+                ? "unobserved"
+                : FormattableString.Invariant(
+                    $"{Stopwatch.GetElapsedTime(started, timestamp).TotalMilliseconds:F3}"
+                );
     }
 
     [Fact]
