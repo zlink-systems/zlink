@@ -41,6 +41,7 @@ import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotAggregateStagingOwner.PreparedSpot;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.testutil.PerCallAllocation;
@@ -298,7 +299,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                                         "mesh",
                                                         sourceRid,
                                                         11),
-                                        new byte[0])),
+                                        new byte[] {'[', ']'})),
                         root,
                         new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
                         targetNodeGeneration,
@@ -320,7 +321,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         targetNodeGeneration,
                         coordinator,
                         new ZLinkUserSpotAggregateStagingOwner(new FakeStagingBackend()),
-                        ignored -> TestSpot.class,
+                        (kind, stableType) -> TestSpot.class,
                         (lane, queued) ->
                                 CompletableFuture.failedFuture(
                                         new AssertionError("standalone Actor root has no backlog")),
@@ -754,7 +755,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         "actor-version-1",
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         sourceAuthority(actorId, sourceRid),
-                                        new byte[0]),
+                                        new byte[] {'[', ']'}),
                                 new ZLinkAggregateRelocationCoordinator.Participant(
                                         authorityKey,
                                         ZLinkPlacementObjectKind.USER_SPOT,
@@ -763,7 +764,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         "version-1",
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         sourceAuthority(spotId, sourceRid),
-                                        new byte[0])),
+                                        new byte[] {'[', ']'})),
                         ZLinkCanonicalUserSpotRelocationEnvelope.encode(
                                 envelope, aggregateId, 5, participants),
                         new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
@@ -897,7 +898,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         targetNodeGeneration,
                         coordinator,
                         recoveredStaging,
-                        ignored -> TestSpot.class,
+                        (kind, stableType) -> TestSpot.class,
                         (lane, record) ->
                                 CompletableFuture.failedFuture(
                                         new AssertionError(
@@ -1161,7 +1162,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                 "actor-version-1",
                                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                 sourceAuthority(actorId, sourceRid),
-                                new byte[0]),
+                                new byte[] {'[', ']'}),
                         new ZLinkAggregateRelocationCoordinator.Participant(
                                 authorityKey,
                                 ZLinkPlacementObjectKind.USER_SPOT,
@@ -1170,7 +1171,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                 "version-1",
                                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                 sourceAuthority(spotId, sourceRid),
-                                new byte[0]));
+                                new byte[] {'[', ']'}));
         var storeRequest =
                 new ZLinkAggregateRelocationCoordinator.Request(
                         aggregateId,
@@ -1772,7 +1773,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
 
         @Override
         public CompletionStage<Optional<byte[]>> replayActor(
-                Object spot, Object prepared, ZLinkActorAcceptedJournal.Record record) {
+                PreparedSpot spot, Object prepared, ZLinkActorAcceptedJournal.Record record) {
             assertTrue(lifecycleOpen);
             var actor = ((ZLinkActorRuntime.PreparedTransferredActor) prepared).actor();
             operations.add("actor-push");
@@ -1787,15 +1788,15 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         private int maxActiveSpotTurns;
 
         @Override
-        public CompletionStage<Object> prepareSpot(
+        public CompletionStage<PreparedSpot> prepareSpot(
                 ZLinkUserSpotAggregateStagingOwner.Request request) {
             operations.add("prepare");
-            return CompletableFuture.completedFuture("spot");
+            return CompletableFuture.completedFuture(new TestPreparedSpot("spot"));
         }
 
         @Override
         public CompletionStage<Void> restoreSpot(
-                Object prepared,
+                PreparedSpot prepared,
                 ZLinkUserSpotAggregateStagingOwner.Request request,
                 ZLinkRelocationCancellation cancellation) {
             operations.add("restore");
@@ -1817,7 +1818,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
 
         @Override
         public CompletionStage<Void> enqueueIngress(
-                Object preparedSpot,
+                PreparedSpot preparedSpot,
                 List<QueuedTurn> dispatches,
                 String laneId,
                 byte[] record,
@@ -1882,7 +1883,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public CompletionStage<Void> resumeIngress(Object preparedSpot, Object hold) {
+        public CompletionStage<Void> resumeIngress(
+                PreparedSpot preparedSpot, Supplier<CompletionStage<Void>> hold) {
             moving.complete(null);
             drainIngress();
             return CompletableFuture.completedFuture(null);
@@ -1912,16 +1914,16 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public CompletionStage<Void> publishSpot(Object prepared) {
+        public CompletionStage<Void> publishSpot(PreparedSpot prepared) {
             operations.add("publish");
-            live.add((String) prepared);
+            live.add((String) prepared.surface());
 
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public void publishActor(
-                Object preparedSpot,
+                PreparedSpot preparedSpot,
                 Object prepared,
                 String targetSpotId,
                 Long targetOwnerGeneration) {
@@ -1944,14 +1946,14 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public void publishTimers(Object prepared) {
+        public void publishTimers(PreparedSpot prepared) {
             operations.add("timers");
             lifecycleOpen = true;
         }
 
         @Override
         public CompletionStage<List<byte[]>> replaySpot(
-                Object prepared, ZLinkSpotAcceptedJournal.Record record) {
+                PreparedSpot prepared, ZLinkSpotAcceptedJournal.Record record) {
             assertTrue(lifecycleOpen, "durable backlog handler ran before target lifecycle open");
             assertEquals(
                     List.of("actor-a", "spot"),
@@ -1974,7 +1976,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public CompletionStage<Void> discardSpot(Object prepared) {
+        public CompletionStage<Void> discardSpot(PreparedSpot prepared) {
             return CompletableFuture.completedFuture(null);
         }
     }

@@ -364,6 +364,11 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/handlers/handler_registry.cpp
   framework/src/runtime/dispatch/projection.cpp
   framework/src/runtime/host/app.cpp
+  framework/src/runtime/host/app_actor_gateway.cpp
+  framework/src/runtime/host/app_framework_assembly.cpp
+  framework/src/runtime/host/app_instance_spot.cpp
+  framework/src/runtime/host/app_maintenance.cpp
+  framework/src/runtime/host/app_store_repositories.cpp
   framework/src/runtime/host/relocation_target_eligibility.cpp
   framework/src/runtime/http/http_listener.cpp
   framework/src/runtime/http/http_request_pipeline.cpp
@@ -2310,6 +2315,16 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_listener_identity PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_metadata_boundary
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_metadata_boundary.cpp
+    "framework-unit;framework-contract;framework-client-server" unit)
+  target_include_directories(test_cpp_framework_metadata_boundary PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${CMAKE_CURRENT_BINARY_DIR})
+  target_use_zlink_gtest_main(test_cpp_framework_metadata_boundary)
+  target_link_libraries(test_cpp_framework_metadata_boundary PRIVATE protobuf::libprotobuf)
+  add_dependencies(test_cpp_framework_metadata_boundary zlink_framework_channel_header_proto)
+  add_zlink_framework_test(
     test_cpp_framework_client_server_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
     "framework-unit;framework-regression;framework-client-server;framework-monitoring")
@@ -3045,6 +3060,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance_callback_cause.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance_join_route.cpp
     tests/support/spot_close_scenario_fixture.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_destroy_contract.cpp
     # Keep the original GoogleTest registration order across translation units.
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_user_spot_creation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relay_admission.cpp

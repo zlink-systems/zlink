@@ -1022,7 +1022,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         SessionState state =
                 inStateLane(
                         () ->
-                                sessionStates()
+                                registeredSessions().stream()
                                         .filter(
                                                 candidate ->
                                                         receivingNodeRid.equals(

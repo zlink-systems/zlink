@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.binding;
 
+import static systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec.ACCEPTED_RECORD_OVERHEAD_BYTES;
+
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkConfigException;
@@ -332,6 +334,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private boolean deferServiceReadyPublication;
     volatile java.util.function.BooleanSupplier peerAdmissionSealed = () -> false;
     private volatile ZLinkInternalMeshNode.UserSpotOperationHandler userSpotOperationHandler;
+    private volatile Function<ZLinkServiceM6BWireCodec.ActorRouteFence, CompletionStage<Void>>
+            actorDestroyHandler;
     private volatile ZLinkInternalMeshNode.ActorCreateOperationHandler actorCreateOperationHandler;
     private volatile ZLinkInternalMeshNode.CanonicalActorJoinHandler canonicalActorJoinHandler;
     private volatile ZLinkInternalMeshNode.PeerAuthorityResolver peerAuthorityResolver;
@@ -789,6 +793,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         var local = localAuthorityFence;
         return ZLinkServiceFrozenRecordCodec.encodeSpot(
                 local, local, message, metadata, wire.encodeFrameworkMultipartFrame(parts));
+    }
+
+    byte[] encodeAcceptedInstanceSpot(
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            ZLinkServiceM6BWireCodec.InstanceSpotMessage header,
+            ZLinkServiceM6BWireCodec.InstanceRouteFence target,
+            byte[] metadata,
+            List<Message> parts) {
+        return ZLinkServiceFrozenRecordCodec.encodeInstanceSpot(
+                source, header, target, metadata, wire.encodeFrameworkMultipartFrame(parts));
     }
 
     ZLinkServiceM6BWireCodec.SpotMessage localSpotMessage(
@@ -4100,6 +4114,31 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
+    public void setActorDestroyHandler(
+            Function<ZLinkServiceM6BWireCodec.ActorRouteFence, CompletionStage<Void>> handler) {
+        actorDestroyHandler = Objects.requireNonNull(handler, "handler");
+    }
+
+    @Override
+    public CompletionStage<Void> sendActorDestroy(ZLinkServiceM6BWireCodec.ActorRouteFence actor) {
+        return inSourceTurn(
+                () -> {
+                    var socket = requireStarted();
+                    var target = actor.actor().nodeRid();
+                    if (!observePeerRoute(target, actor.targetNodeGeneration()).ready()) {
+                        return CompletableFuture.failedFuture(
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "Actor destroy owner route is unavailable"));
+                    }
+                    return port.send(
+                            socket,
+                            target,
+                            List.of(statefulWire.encodeActorDestroy(allocateCorrelation(), actor)));
+                });
+    }
+
+    @Override
     public void setActorCreateOperationHandler(
             ZLinkInternalMeshNode.ActorCreateOperationHandler handler) {
         actorCreateOperationHandler = Objects.requireNonNull(handler, "handler");
@@ -6347,6 +6386,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 handedOff = dispatchActor(inbound, flags, actorHeader, sourceLifecycle);
                 return;
             }
+            if (command == ServiceWireConstants.COMMAND_ACTOR_DESTROY) {
+                dispatchActorDestroy(inbound);
+                return;
+            }
             if (command == ServiceWireConstants.COMMAND_ACTOR_JOIN) {
                 dispatchCanonicalActorJoin(inbound);
                 return;
@@ -6788,6 +6831,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
+    private void dispatchActorDestroy(ZLinkJavaRawServicePort.Inbound inbound) {
+        var handler = actorDestroyHandler;
+        if (handler == null || inbound.requestSequence() != null || inbound.frames().size() != 1) {
+            return;
+        }
+        var actor = statefulWire.decodeActorDestroy(inbound.frames().getFirst());
+        if (!actor.actor().nodeRid().equals(routingId)
+                || actor.targetNodeGeneration() != status().lifecycleGeneration()) {
+            return;
+        }
+        handler.apply(actor)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                LOGGER.log(
+                                        Level.WARNING,
+                                        "Actor destroy command failed",
+                                        unwrap(failure));
+                            }
+                        });
+    }
+
     private void dispatchActorLeft(ZLinkJavaRawServicePort.Inbound inbound) {
         if (inbound.requestSequence() != null || inbound.frames().size() != 1) {
             return;
@@ -7115,7 +7180,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                     Integer.MAX_VALUE,
                                                     applicationPayloadBytes(messages)
                                                             + metadata.length
-                                                            + 512L);
+                                                            + ACCEPTED_RECORD_OVERHEAD_BYTES);
                             boolean accepted =
                                     ((ZLinkJavaRawSpotNode) spotNode())
                                             .enqueueRemoteSpotLazy(
@@ -8300,8 +8365,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
-    private CompletionStage<Optional<ZLinkInternalMeshNode.PeerAuthorityFence>>
-            resolveSourceAuthority(RoutingId source, long sourceLifecycle) {
+    CompletionStage<Optional<ZLinkInternalMeshNode.PeerAuthorityFence>> resolveSourceAuthority(
+            RoutingId source, long sourceLifecycle) {
         ZLinkInternalMeshNode.PeerAuthorityResolver resolver = peerAuthorityResolver;
         if (resolver == null) {
             return CompletableFuture.completedFuture(Optional.empty());

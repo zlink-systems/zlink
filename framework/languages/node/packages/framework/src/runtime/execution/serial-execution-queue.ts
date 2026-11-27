@@ -103,7 +103,7 @@ export class ZLinkSerialExecutionQueue {
   private lifecycleStreak = 0;
   private lifecycleDebt = false;
   private claimStartedAt?: number;
-  private closed: boolean | 'pending' = false;
+  private closed: boolean | 'pending' | 'destroyed' = false;
   private executionPolicy?: ZLinkExecutionPolicy;
   private captureExecutionOwner?: () => object | undefined;
 
@@ -296,12 +296,13 @@ export class ZLinkSerialExecutionQueue {
     if (this.admissionClosed) return await accept();
     try {
       this.closed = 'pending';
-      await accept();
+      await accept().then(() => {
+        if (this.closed === 'pending') this.closed = 'destroyed';
+      });
     } catch (error) {
       if (this.closed === 'pending') this.closed = false;
       throw error;
     }
-    this.closeAdmission();
   }
 
   get admissionClosed(): boolean {
@@ -323,7 +324,15 @@ export class ZLinkSerialExecutionQueue {
         'Actor admission is closed while destroy is being accepted.'
       );
     }
-    if (this.closed) throw new Error('The serial execution queue is closed.');
+    if (this.closed !== false) {
+      const message = 'The serial execution queue is closed.';
+      throw this.closed === 'destroyed'
+        ? createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+            message
+          )
+        : new Error(message);
+    }
     const lane = options?.lane ?? 'application';
     const target = lane === 'application' ? this.application : this.lifecycle;
     let released = false;
