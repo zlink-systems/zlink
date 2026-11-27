@@ -294,7 +294,7 @@ export class ZLinkFrameworkRuntimeHost
   private runtimeRelocationResult?: ZLinkFrameworkRelocationResult;
   private runtimeTerminationResult?: ZLinkFrameworkTerminationResult;
   private relocationOperation?: Promise<ZLinkFrameworkRelocationResult>;
-  private relocationStopStarting?: AbortController;
+  private shutdownRequested = new AbortController();
   private relocationOperationKey?: string;
   private relocationOperationStartedAt?: number;
   private shutdownOperation?: Promise<ZLinkFrameworkTerminationResult>;
@@ -880,7 +880,8 @@ export class ZLinkFrameworkRuntimeHost
       flowCreationEnabled: () => this.flowCreationEnabled(),
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       registration: options.registration,
-      targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
+      shutdownRequested: () => this.shutdownRequested.signal,
+      shutdownDeadline: () => this.shutdownDeadline?.signal,
       ensureEntryActivation: (meshName) => {
         const runtime = this.spotNodeRuntime;
         if (runtime === undefined) throw new Error('Relocation target runtime is not started.');
@@ -1097,12 +1098,11 @@ export class ZLinkFrameworkRuntimeHost
     this.relocationTargetApplicationVersion = effectiveTargetApplicationVersion;
     this.relocationOperationKey = operationKey;
     this.relocationOperationStartedAt = performance.now();
-    this.relocationStopStarting = new AbortController();
     this.relocationOperation = this.runRelocation(
       options.mode,
       effectiveTargetApplicationVersion,
       deadlineMs,
-      this.relocationStopStarting.signal
+      this.shutdownRequested.signal
     );
     return waitForRuntimeOperation(this.relocationOperation, options.signal);
   }
@@ -1127,8 +1127,8 @@ export class ZLinkFrameworkRuntimeHost
         }
       }
       this.runtimeDeadline = new Date(Date.now() + deadlineMs);
-      this.relocationStopStarting?.abort(new Error('Shutdown requested.'));
       this.shutdownOperationStartedAt = performance.now();
+      this.shutdownRequested.abort(new Error('Shutdown requested.'));
       const teardown = this.teardown.operation;
       this.shutdownOperation = this.runShutdown(deadlineMs, teardown);
     }
@@ -1262,10 +1262,7 @@ export class ZLinkFrameworkRuntimeHost
             }
             this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
             if (teardown === undefined) {
-              if (
-                this.relocationOperation !== undefined &&
-                this.relocationStopStarting?.signal.aborted === true
-              ) {
+              if (this.relocationOperation !== undefined) {
                 await step('host.await_relocation', () => this.relocationOperation!);
               }
               // Seal application admission before the public status reports that the
@@ -1370,7 +1367,6 @@ export class ZLinkFrameworkRuntimeHost
     }
     this.runtimeDeadline = undefined;
     this.relocationTargetApplicationVersion = undefined;
-    this.relocationStopStarting = undefined;
     this.relocationOperation = undefined;
     this.relocationOperationKey = undefined;
     this.relocationOperationStartedAt = undefined;
@@ -1604,6 +1600,7 @@ export class ZLinkFrameworkRuntimeHost
     this.teardown = new RuntimeDisposal();
     this.shutdownOperation = undefined;
     this.shutdownOperationStartedAt = undefined;
+    this.shutdownRequested = new AbortController();
     const previousLease = this.telemetryLease;
     this.telemetryLease = renewTelemetryLease(previousLease);
     if (this.telemetryLease !== previousLease) {
@@ -1822,6 +1819,7 @@ export class ZLinkFrameworkRuntimeHost
     if (state === undefined) {
       return;
     }
+    this.shutdownRequested.abort(new Error('Shutdown requested.'));
     state.abortController.abort();
 
     const channelRuntime = this.channelRuntime;

@@ -6,6 +6,7 @@ import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.eventing.PollEvents;
 import systems.zlink.contracts.eventing.Poller;
 import systems.zlink.contracts.eventing.SocketMonitor;
+import systems.zlink.contracts.eventing.ZlinkTimer;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent;
@@ -15,21 +16,35 @@ import java.util.Objects;
 
 final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
     private static final long MONITOR_SLOT = 1L;
+    private static final long WAKE_SLOT = 2L;
 
     final SocketMonitor monitor;
     final Poller poller;
-    private final PollEvents events = new PollEvents(1);
+    private final ZlinkTimer wakeTimer;
+    private final PollEvents events = new PollEvents(2);
     private volatile boolean closed;
     boolean waiting;
 
     ZLinkJavaSocketMonitor(SocketMonitor monitor) {
         this(monitor, Zlink.createPoller());
-        poller.add(monitor, MONITOR_SLOT, PollEventFlags.POLLIN);
     }
 
     ZLinkJavaSocketMonitor(SocketMonitor monitor, Poller poller) {
         this.monitor = Objects.requireNonNull(monitor, "monitor");
         this.poller = Objects.requireNonNull(poller, "poller");
+        ZlinkTimer timer = null;
+        try {
+            timer = Zlink.createTimer();
+            poller.add(monitor, MONITOR_SLOT, PollEventFlags.POLLIN);
+            poller.add(timer, WAKE_SLOT);
+        } catch (RuntimeException | Error failure) {
+            try (var cleanup = timer;
+                    monitor;
+                    poller) {
+                throw failure;
+            }
+        }
+        this.wakeTimer = timer;
     }
 
     @Override
@@ -45,14 +60,16 @@ final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
             }
             waiting = true;
         }
+        boolean readable;
         try {
-            return poller.wait(events, timeout) > 0 && !closed;
+            readable = poller.wait(events, timeout) > 0;
         } finally {
             synchronized (this) {
                 waiting = false;
                 notifyAll();
             }
         }
+        return readable && !closed;
     }
 
     @Override
@@ -74,31 +91,24 @@ final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
         boolean interrupted = false;
         try {
             synchronized (this) {
-                Throwable sourceFailure = null;
-                try {
-                    if (!closed) {
-                        closed = true;
-                        monitor.close();
-                    }
-                } catch (RuntimeException | Error failure) {
-                    sourceFailure = failure;
-                    throw failure;
-                } finally {
-                    while (waiting) {
-                        try {
-                            wait();
-                        } catch (InterruptedException interruption) {
-                            interrupted = true;
-                        }
-                    }
+                if (closed) {
+                    return;
+                }
+                if (waiting) {
+                    wakeTimer.start(Duration.ofNanos(1), 1);
+                }
+                closed = true;
+                // The poller retains both native sources until its active wait returns.
+                while (waiting) {
                     try {
-                        poller.close();
-                    } catch (RuntimeException | Error failure) {
-                        if (sourceFailure == null) {
-                            throw failure;
-                        }
-                        sourceFailure.addSuppressed(failure);
+                        wait();
+                    } catch (InterruptedException interruption) {
+                        interrupted = true;
                     }
+                }
+                try (wakeTimer;
+                        poller) {
+                    monitor.close();
                 }
             }
         } finally {

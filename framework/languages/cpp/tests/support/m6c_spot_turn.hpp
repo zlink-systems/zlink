@@ -8,7 +8,7 @@
 
 namespace zlink::framework::detail
 {
-struct spot_context_state_t;
+class spot_context_state_t;
 }
 
 namespace m6c_test

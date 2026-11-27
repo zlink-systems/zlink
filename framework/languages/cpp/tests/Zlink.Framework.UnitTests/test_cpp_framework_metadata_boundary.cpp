@@ -46,8 +46,9 @@ bool check_boundary (std::size_t value_size, bool accepted)
     ok &= header_decoded == accepted;
 
     bool frame_encoded = true;
+    std::vector<std::uint8_t> encoded_frame;
     try {
-        (void) mesh::mesh_metadata_codec_t::encode (metadata);
+        encoded_frame = mesh::mesh_metadata_codec_t::encode (metadata);
     }
     catch (const zlink::framework::framework_exception_t &) {
         frame_encoded = false;
@@ -63,6 +64,10 @@ bool check_boundary (std::size_t value_size, bool accepted)
     std::map<std::string, std::string> decoded;
     const bool frame_decoded = mesh::mesh_metadata_codec_t::decode (frame, decoded);
     ok &= frame_decoded == accepted;
+    if (accepted) {
+        EXPECT_EQ (encoded_frame, frame);
+        EXPECT_EQ (decoded, metadata);
+    }
     std::cout << "field13=" << value_size + 9 << " expected=" << accepted
               << " header-encode=" << header_encoded << " header-decode=" << header_decoded
               << " frame-encode=" << frame_encoded << " frame-decode=" << frame_decoded
@@ -75,6 +80,14 @@ TEST (MetadataBoundary, Field13Boundaries)
     EXPECT_TRUE (check_boundary (1017, false));
     EXPECT_TRUE (check_boundary (1015, true));
     EXPECT_TRUE (check_boundary (1016, false));
+}
+
+TEST (MetadataBoundary, RejectsMalformedMeshFrames)
+{
+    std::map<std::string, std::string> decoded;
+    EXPECT_FALSE (mesh::mesh_metadata_codec_t::decode ({1, 1, 1, 0xc0, 0, 0}, decoded));
+    EXPECT_FALSE (
+      mesh::mesh_metadata_codec_t::decode ({1, 2, 1, 'k', 0, 1, 'a', 1, 'k', 0, 1, 'b'}, decoded));
 }
 
 TEST (MetadataBoundary, EmptyValue)

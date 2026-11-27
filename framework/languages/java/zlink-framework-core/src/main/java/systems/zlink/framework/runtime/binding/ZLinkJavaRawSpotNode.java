@@ -3502,6 +3502,37 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return terminal;
     }
 
+    ZLinkServiceM6BWireCodec.SpotRouteFence committedSpotForward(
+            ZLinkServiceM6BWireCodec.InstanceRouteFence source) {
+        return relocationSpotForwards.isEmpty() ? null : committedSpotForward(source.spotFence());
+    }
+
+    ZLinkServiceM6BWireCodec.SpotRouteFence committedSpotForward(
+            ZLinkServiceM6BWireCodec.SpotRouteFence source) {
+        var forward = spotForward(source);
+        return forward != null && forward.committed() ? forward.target() : null;
+    }
+
+    ZLinkServiceM6BWireCodec.InstanceSpotMessage readyInstanceFollow(
+            ZLinkServiceM6BWireCodec.InstanceSpotFollow follow) {
+        var authority = instanceAuthorities.get(follow.target().spotId());
+        if (authority == null || !authority.route().spotFence().equals(follow.target())) {
+            return null;
+        }
+        return new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
+                follow.flags(),
+                authority.route(),
+                true,
+                follow.sourceNodeGeneration(),
+                follow.sourceNodeRid(),
+                follow.sourceSpotId(),
+                false,
+                0,
+                0,
+                null,
+                true);
+    }
+
     boolean enqueueRemoteInstanceSpot(
             RoutingId sourceNodeRid,
             ZLinkServiceM6BWireCodec.InstanceSpotMessage header,
@@ -3654,7 +3685,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             ZLinkInternalMeshNode.PeerAuthorityFence sourceAuthority) {
         var route = (ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route();
         InstanceAuthority authority = instanceAuthorities.get(route.targetSpotId());
-        if (authority == null) {
+        if (authority == null
+                || header.followed() && !authority.route().spotFence().equals(route.spotFence())) {
             return false;
         }
         try {
