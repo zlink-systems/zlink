@@ -4,6 +4,7 @@
 #include <zlink/stream_connector.hpp>
 #include "runtime/protocol/header_codec.hpp"
 #include "runtime/protocol/framing/frame_codec.hpp"
+#include "locked_stream_capture.hpp"
 #include <boost/asio.hpp>
 #include <algorithm>
 #include <array>
@@ -161,8 +162,7 @@ template <class WithConnector> int connector_cases (WithConnector with_connector
                                                             [&] (const auto &) { ++callbacks; });
         auto pong = connector.template on<sc::packet_t> ("$zlink.heartbeat.pong",
                                                          [&] (const auto &) { ++callbacks; });
-        std::ostringstream logs;
-        auto *previous = std::cerr.rdbuf (logs.rdbuf ());
+        stream_capture_t logs (std::cerr);
         std::vector<std::uint8_t> batch;
         for (int i = 0; i < 1000; ++i) {
             auto bytes = frame ("$zlink.future", {255, 1, 2});
@@ -189,7 +189,7 @@ template <class WithConnector> int connector_cases (WithConnector with_connector
         const bool single_pong =
           !read_exact (peer, asio::buffer (outgoing)) && outgoing == expected;
         connector.dispatch ();
-        std::cerr.rdbuf (previous);
+        logs.close ();
         check (ignored_received && received
                  && connector.state () == sc::connection_state_t::connected,
                "unknown control and nonempty pong preserve connection");
@@ -197,7 +197,7 @@ template <class WithConnector> int connector_cases (WithConnector with_connector
                "unknown heartbeat version receives exactly one empty pong");
         check (ignored_pong, "nonempty pong and unknown controls send no extra reply");
         check (callbacks == 0, "ignored controls never reach packet callbacks");
-        check (logs.str ().empty (), "1000 control frames produce zero default logs");
+        check (logs.text ().empty (), "1000 control frames produce zero default logs");
         connector.close ();
     });
     struct invalid_t
