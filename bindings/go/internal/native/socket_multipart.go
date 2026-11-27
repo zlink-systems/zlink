@@ -54,7 +54,7 @@ func (p *preparedMultipart) restore() error {
 
 func submitPreparedMultipart(prepared *preparedMultipart, submit multipartSubmitFunc) error {
 	if prepared == nil || len(prepared.native) == 0 {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	// Whole-message submission consumes every native slot on both success and
 	// failure, so this prepared array has no ownership after the call returns.
@@ -63,7 +63,7 @@ func submitPreparedMultipart(prepared *preparedMultipart, submit multipartSubmit
 
 func initNativeMessageFromBytes(native *C.zlink_msg_t, data []byte) error {
 	if native == nil {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	rc57, errno57 := C.zlink_msg_init_size(native, C.size_t(len(data)))
 	if err := configErrorFromCall(rc57, errno57); err != nil {
@@ -110,10 +110,10 @@ func submitMultipartFromClones(parts []*Message, consumeOriginal bool, submit mu
 
 func submitSinglePartFromCopy(part *Message, submit multipartSubmitFunc) error {
 	if part == nil {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	if part.closed {
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	var native C.zlink_msg_t
 	rc60, errno60 := C.zlink_msg_init(&native)
@@ -143,10 +143,10 @@ func submitSinglePartFromCopy(part *Message, submit multipartSubmitFunc) error {
 
 func submitSinglePartMoved(part *Message, submit multipartSubmitFunc) error {
 	if part == nil {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	if part.closed {
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 	}
 	var native C.zlink_msg_t
 	rc64, errno64 := C.zlink_msg_init(&native)
@@ -177,7 +177,7 @@ func submitSinglePartFromBytes(data []byte, submit multipartSubmitFunc) error {
 
 func submitMultipartFromBuilderParts(parts []sendBuilderPart, submit multipartSubmitFunc) error {
 	if len(parts) == 0 {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	if len(parts) == 1 {
 		if parts[0].bytes {
@@ -210,10 +210,10 @@ func submitMultipartFromBuilderParts(parts []sendBuilderPart, submit multipartSu
 			continue
 		}
 		if part.message == nil {
-			return restorePreparation(&ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)})
+			return restorePreparation(newConfigError(ConfigInvalidArgument, int(C.EINVAL)))
 		}
 		if part.message.closed {
-			return restorePreparation(&ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)})
+			return restorePreparation(newConfigError(ConfigInvalidHandle, int(C.EFAULT)))
 		}
 		rc67, errno67 := C.zlink_msg_init(&native[i])
 		if err := configErrorFromCall(rc67, errno67); err != nil {

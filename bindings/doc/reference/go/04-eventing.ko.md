@@ -6,11 +6,11 @@
 
 이 category는 socket monitoring, 재사용 가능한 poller, standalone
 timer를 다룬다 — 각각 `OpenSocketMonitor(...)`, `NewPoller()`,
-`NewTimer()`, 그리고 standalone `Poll(...)` 함수. `Timer`, `Poller`,
-`Poll`은 모두 `poller_timer.go`에 선언돼 있다 — 다른 일부 언어와 달리
-별도 timer 파일이 없다. 정확한 signature는
-[`internal/native/monitor.go`](../../../../bindings/go/internal/native/monitor.go)와
-[`poller_timer.go`](../../../../bindings/go/internal/native/poller_timer.go)가
+`NewTimer()`, 그리고 standalone `Poll(...)` 함수. `Poller`와 `Poll`은
+`poller.go`에, `Timer`는 `timer.go`에 선언돼 있다. 정확한 signature는
+[`internal/native/monitor.go`](../../../../bindings/go/internal/native/monitor.go),
+[`poller.go`](../../../../bindings/go/internal/native/poller.go),
+[`timer.go`](../../../../bindings/go/internal/native/timer.go)가
 소유하며,
 [`contracts/eventing.go`](../../../../bindings/go/contracts/eventing.go)를
 통해 alias로 re-export된다.
@@ -264,5 +264,6 @@ wait에서 multiplex하려면 `Poller.AddTimer`로 timer를 등록한다.
 ---
 
 [`internal/native/monitor.go`](../../../../bindings/go/internal/native/monitor.go),
-[`poller_timer.go`](../../../../bindings/go/internal/native/poller_timer.go),
+[`poller.go`](../../../../bindings/go/internal/native/poller.go),
+[`timer.go`](../../../../bindings/go/internal/native/timer.go),
 [Go 바인딩 스펙](../../spec/go/README.ko.md)에서 전체 근거를 확인한다.

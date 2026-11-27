@@ -25,7 +25,7 @@ except ImportError:  # Extension-free installations retain the ctypes path.
     _native_extension = None
 
 
-def _native_errno():
+def _internal_errno():
     return ctypes.get_errno()
 
 
@@ -64,20 +64,20 @@ def _config_result_from_errno(err):
     return ConfigResult.INTERNAL_ERROR
 
 
-def _raise_zlink_error(error_type, result, native_errno=None):
-    if native_errno is None:
-        native_errno = lib().zlink_errno()
-    raise error_type(result, native_errno)
+def _raise_zlink_error(error_type, result, internal_errno=None):
+    if internal_errno is None:
+        internal_errno = lib().zlink_errno()
+    raise error_type(result, internal_errno)
 
 
-def _raise_result_error(error_type, result_type, rc, native_errno=None):
+def _raise_result_error(error_type, result_type, rc, internal_errno=None):
     try:
         result = result_type(int(rc))
     except ValueError:
         # Do not map an unknown native result to enum value zero. The typed
         # error preserves the raw result for forward-compatible diagnostics.
         result = int(rc)
-    _raise_zlink_error(error_type, result, native_errno)
+    _raise_zlink_error(error_type, result, internal_errno)
 
 
 def _raise_last_error():
@@ -85,14 +85,14 @@ def _raise_last_error():
     raise ZlinkError(err, err)
 
 
-def _raise_mapped_error(error_type, mapper, native_errno=None):
-    if native_errno is None:
-        native_errno = lib().zlink_errno()
-    _raise_zlink_error(error_type, mapper(int(native_errno)), int(native_errno))
+def _raise_mapped_error(error_type, mapper, internal_errno=None):
+    if internal_errno is None:
+        internal_errno = lib().zlink_errno()
+    _raise_zlink_error(error_type, mapper(int(internal_errno)), int(internal_errno))
 
 
-def _raise_config_error_from_errno(native_errno=None):
-    _raise_mapped_error(ConfigError, _config_result_from_errno, native_errno)
+def _raise_config_error_from_errno(internal_errno=None):
+    _raise_mapped_error(ConfigError, _config_result_from_errno, internal_errno)
 
 
 def _as_bytes_view(data):
@@ -232,34 +232,27 @@ def _msg_to_bytes(msg):
     return ctypes.string_at(ptr, size)
 
 
-def _init_msg_from_buffer(msg, data, *, borrow):
-    if not borrow and _native_extension is not None:
+def _init_msg_from_buffer(msg, data):
+    if _native_extension is not None:
         source = data if isinstance(data, bytes) else _as_bytes_view(data)
-        rc, native_errno = _native_extension.msg_init_buffer(msg, source)
+        rc, internal_errno = _native_extension.msg_init_buffer(msg, source)
         if rc != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, native_errno)
-        return None
-    ptr, size, keepalive = _send_buffer(data)
-    if borrow:
-        data_ptr = ctypes.c_void_p(ptr if isinstance(ptr, int) else ctypes.cast(ptr, ctypes.c_void_p).value or 0)
-        rc = lib().zlink_msg_init_data(ctypes.byref(msg), data_ptr, size, None, None)
-    else:
-        rc = lib().zlink_msg_init_size(ctypes.byref(msg), size)
-        if rc == 0 and size:
-            ctypes.memmove(_msg_data_ptr(msg), ptr, size)
+            _raise_result_error(ConfigError, ConfigResult, rc, internal_errno)
+        return
+    ptr, size, _keepalive = _send_buffer(data)
+    rc = lib().zlink_msg_init_size(ctypes.byref(msg), size)
+    if rc == 0 and size:
+        ctypes.memmove(_msg_data_ptr(msg), ptr, size)
     if rc != 0:
         _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-    # A copied message no longer depends on the caller buffer. Borrowed
-    # messages retain the source object until the native message is closed.
-    return keepalive if borrow else None
 
 
 def _clone_native_msg(src):
     dst = ZlinkMsg()
     if _native_extension is not None:
-        rc, native_errno = _native_extension.msg_clone(dst, src)
+        rc, internal_errno = _native_extension.msg_clone(dst, src)
         if rc != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, native_errno)
+            _raise_result_error(ConfigError, ConfigResult, rc, internal_errno)
         return dst
     rc = lib().zlink_msg_init(ctypes.byref(dst))
     if rc != 0:

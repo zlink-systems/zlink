@@ -2156,6 +2156,7 @@ class spot_node_runtime_t
      * (graceful-drain-handoff §5.2). */
     std::vector<actor_ref_t> local_actor_refs () const;
     task_t<bool> relocation_ready_async () const;
+    task_t<relocation_units_t> read_relocation_units () const;
     task_t<relocation_units_t> relocation_units () const;
     void begin_relocation_readiness ();
     task_t<void> begin_relocation_readiness_async ();
@@ -2385,7 +2386,9 @@ class spot_node_runtime_t
     // markers instead of allocating a second ID.
     std::optional<std::string> reserved_actor_transfer_id (const actor_ref_t &actor_ref) const;
     result_t<std::shared_ptr<deferred_barrier_t>>
-    reserve_actor_join_barrier (const actor_ref_t &actor_ref);
+    reserve_actor_join_barrier (const actor_ref_t &actor_ref,
+                                bool pending_relocation_request = false);
+    bool reserved_with_pending_relocation_request (const actor_ref_t &actor_ref) const;
     std::pair<std::uint64_t, std::uint64_t>
     actor_join_operation_id (std::string_view transfer_id) const;
     task_t<result_t<void>>
@@ -2453,8 +2456,9 @@ class spot_node_runtime_t
                                   const runtime::stateful::object_ref_t &target,
                                   const std::optional<runtime::stateful::object_ref_t> &target_spot,
                                   std::stop_token cancellation = {});
-    bool
-    commit_relocation_materialization (const std::vector<runtime::stateful::object_ref_t> &targets);
+    bool commit_relocation_materialization (
+      const std::vector<runtime::stateful::object_ref_t> &targets,
+      const std::function<void ()> &before_actor_join_completion = {});
     task_t<void>
     retire_relocation_source (const std::vector<runtime::stateful::object_ref_t> &sources);
     task_t<result_t<std::string>> transfer_actor_out (const actor_ref_t &actor_ref,
@@ -2598,6 +2602,9 @@ class spot_node_runtime_t
     static void filter_local_actor_inventory_on_lane (
       const spot_node_builder_state_t &state,
       std::vector<runtime::stateful::object_inventory_t> &inventory);
+    static relocation_units_t collect_relocation_units_on_lane (
+      const spot_node_builder_state_t &state,
+      const std::vector<runtime::stateful::object_inventory_t> &inventory);
     std::size_t active_user_spot_count_on_lane () const;
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
 

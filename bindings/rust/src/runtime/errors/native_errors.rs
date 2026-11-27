@@ -1,8 +1,8 @@
-use crate::error::{
+use crate::contracts::errors::errors::{
     BindError, BindResult, CloseError, CloseResult, ConfigError, ConfigResult, ConnectError,
     ConnectResult, RecvError, RecvResult, RequestError, RequestResult, SubmitError, SubmitResult,
 };
-use crate::ffi;
+use crate::runtime::native::ffi;
 
 const ETERM: i32 = 156_384_765;
 const EFSM: i32 = 156_384_763;
@@ -192,7 +192,7 @@ mod tests {
             if result != SubmitResult::Ok {
                 let error = submit_error_from_rc(result as i32, libc::EIO);
                 assert_eq!(error.code(), result);
-                assert_eq!(error.native_errno(), libc::EIO);
+                assert_eq!(error.internal_errno(), libc::EIO);
             }
         }
     }
@@ -258,7 +258,7 @@ mod tests {
         for (result, expected_errno) in cases {
             let error = request_error_from_result(result);
             assert_eq!(error.code(), result);
-            assert_eq!(error.native_errno(), expected_errno);
+            assert_eq!(error.internal_errno(), expected_errno);
         }
     }
 

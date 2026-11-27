@@ -137,10 +137,14 @@ TEST (CppFrameworkInstanceSpotActivation, StartupReleasesPreviousLifecycleBefore
         EXPECT_TRUE (std::holds_alternative<fw::authority_missing_t> (
           store->read_authority (key).result ().value ()));
         const auto capacity = std::get<fw::store_found_t> (
-          provider->read ({"zlink:v11:capacity:startup-mesh:startup-target"}).result ().value ());
+          provider
+            ->read ({std::string ("zlink:v12:capacity") + '\0' + "startup-mesh" + '\0'
+                     + descriptor.rid.to_hex () + '\0' + "spots" + '\0' + "pending"})
+            .result ()
+            .value ());
         const auto counts =
           nlohmann::json::parse (capacity.value.bytes.begin (), capacity.value.bytes.end ());
-        EXPECT_EQ (counts.at ("pending").at ("spots"), 0);
+        EXPECT_EQ (counts, 0);
     };
     store->remove_mesh_node ({descriptor.mesh_name, descriptor.rid}, owner).result ().value ();
     descriptor.lifecycle_generation = 2;

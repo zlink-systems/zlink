@@ -271,7 +271,7 @@ fn request_completion_reservation_exhaustion_preserves_tokenless_backpressure() 
         Poll::Pending => panic!("request waited after reservation exhaustion"),
     };
     assert_eq!(error.code(), SubmitResult::Backpressured);
-    assert_eq!(error.native_errno(), libc::EAGAIN);
+    assert_eq!(error.internal_errno(), libc::EAGAIN);
     let mut events = [PollEvent::default()];
     assert_eq!(poller.wait(&mut events, 0).unwrap(), 0);
 
@@ -281,7 +281,7 @@ fn request_completion_reservation_exhaustion_preserves_tokenless_backpressure() 
             test_support::poll_once(&mut future),
             Poll::Ready(Err(ZlinkError::Submit(error)))
                 if error.code() == SubmitResult::Terminated
-                    && error.native_errno() == libc::ESHUTDOWN
+                    && error.internal_errno() == libc::ESHUTDOWN
         ));
     }
 }
@@ -877,7 +877,7 @@ fn request_timeout_is_owned_by_core() {
         error => panic!("request failed with the wrong error type: {error}"),
     };
     assert_eq!(request_error.code(), RequestResult::TimedOut);
-    assert_eq!(request_error.native_errno(), libc::ETIMEDOUT);
+    assert_eq!(request_error.internal_errno(), libc::ETIMEDOUT);
 }
 
 #[test]
@@ -910,7 +910,7 @@ fn request_not_found_uses_core_errno_mapping() {
         Err(error) => panic!("request failed with the wrong error type: {error}"),
     };
     assert_eq!(error.code(), RequestResult::NotFound);
-    assert_eq!(error.native_errno(), libc::ENOENT);
+    assert_eq!(error.internal_errno(), libc::ENOENT);
 }
 
 #[test]
@@ -945,7 +945,7 @@ fn request_not_connected_uses_core_errno_mapping() {
         Err(error) => panic!("request failed with the wrong error type: {error}"),
     };
     assert_eq!(error.code(), RequestResult::NotConnected);
-    assert_eq!(error.native_errno(), libc::ENOTCONN);
+    assert_eq!(error.internal_errno(), libc::ENOTCONN);
 }
 
 #[test]

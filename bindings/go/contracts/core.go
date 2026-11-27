@@ -1,74 +1,57 @@
 // SPDX-License-Identifier: MPL-2.0
 
-// Package contracts is the public Go binding projection.
+// Package contracts owns the Go binding value contract.
 package contracts
 
-import impl "zlink.systems/zlink/internal/native"
+type Version struct {
+	Major int
+	Minor int
+	Patch int
+}
 
-type (
-	// Version is the native zlink library version (major, minor, patch).
-	Version = impl.Version
-	// Context is a messaging context: the factory and owner of sockets.
-	// Closing the context terminates any sockets still open under it.
-	Context = impl.Context
-	// ContextOptions are context-wide options governing the I/O threads and defaults shared by every socket.
-	ContextOptions = impl.ContextOptions
-	// CoreHwmBudgetSnapshot is an immutable context-wide Core budget value.
-	CoreHwmBudgetSnapshot = impl.CoreHwmBudgetSnapshot
-	// AutoHwmProfile selects an automatic high-water-mark sizing profile.
-	AutoHwmProfile = impl.AutoHwmProfile
-	// AutoHwmRecalcReason reports what triggered the last automatic high-water-mark recalculation.
-	AutoHwmRecalcReason = impl.AutoHwmRecalcReason
-	// SocketTarget identifies a socket that can participate in poll and proxy operations.
-	SocketTarget = impl.SocketTarget
-	// Stopwatch is a high-resolution elapsed-time stopwatch.
-	Stopwatch = impl.Stopwatch
-	// AtomicCounter is a thread-safe integer counter.
-	AtomicCounter = impl.AtomicCounter
-	// Thread is a running background thread created by the zlink runtime.
-	Thread = impl.Thread
-)
+// CoreHwmBudgetSnapshot is an immutable value copy of Core's ABI-v1 budget snapshot.
+type CoreHwmBudgetSnapshot struct {
+	ABIVersion, StructSize                                               uint32
+	BudgetGeneration, MeasurementEpoch                                   uint64
+	ConfiguredMemoryLimitBytes, ResolvedMemoryLimitBytes                 uint64
+	ConfiguredCoreBudgetBytes, EffectiveCoreBudgetBytes                  uint64
+	TotalPlannedHwmBytes, TotalAppliedHwmBytes, ManualReservedHwmBytes   uint64
+	CoreQueueAccountedBytes, ApplicationAccountedBytes                   uint64
+	CurrentAccountedBytes, ProvisionalAccountedBytes, PeakAccountedBytes uint64
+	CompletionCurrentAccountedBytes, CompletionPeakAccountedBytes        uint64
+	CompletionPendingMessageCount, TotalMessagingAccountedBytes          uint64
+	MonitorQueueAppliedHwmBytes, MonitorQueueAccountedBytes              uint64
+	TotalInstanceAppliedHwmBytes, TotalInstanceAccountedBytes            uint64
+	OversizeAdmissionCount, LargestOversizeMessageBytes                  uint64
+	ActiveDirectionalQueueCount, ActiveCompletionDirectionalQueueCount   uint64
+	ActiveSendQueueCount, ActiveReceiveQueueCount                        uint64
+	OutstandingApplicationLeaseCount, RetiredQueueCount                  uint64
+	DeferredOriginCreditBytes, UnlimitedManualQueueCount                 uint64
+	BlockedRatioPPM, Flags                                               uint32
+	ReservedUint64                                                       [8]uint64
+}
+
+func (s CoreHwmBudgetSnapshot) BudgetPlanningActive() bool { return s.Flags&(1<<0) != 0 }
+func (s CoreHwmBudgetSnapshot) BudgetInsufficient() bool   { return s.Flags&(1<<1) != 0 }
+func (s CoreHwmBudgetSnapshot) AggregateHwmValid() bool    { return s.Flags&(1<<2) != 0 }
+func (s CoreHwmBudgetSnapshot) AggregateOverflow() bool    { return s.Flags&(1<<3) != 0 }
+
+type AutoHwmProfile int
 
 const (
-	// AutoHwmProfileCompact uses the smallest queues to minimize memory use.
-	AutoHwmProfileCompact = impl.AutoHwmProfileCompact
-	// AutoHwmProfileLowLatency uses small queues that drain quickly to favor latency.
-	AutoHwmProfileLowLatency = impl.AutoHwmProfileLowLatency
-	// AutoHwmProfileBalanced balances latency against throughput.
-	AutoHwmProfileBalanced = impl.AutoHwmProfileBalanced
-	// AutoHwmProfileThroughput uses large queues to maximize throughput.
-	AutoHwmProfileThroughput = impl.AutoHwmProfileThroughput
-	// AutoHwmRecalcReasonNone indicates no recalculation has occurred yet.
-	AutoHwmRecalcReasonNone = impl.AutoHwmRecalcReasonNone
-	// AutoHwmRecalcReasonInitial is set on the first recalculation after context creation.
-	AutoHwmRecalcReasonInitial = impl.AutoHwmRecalcReasonInitial
-	// AutoHwmRecalcReasonRoleChange is set when a socket's topology role changes.
-	AutoHwmRecalcReasonRoleChange = impl.AutoHwmRecalcReasonRoleChange
-	// AutoHwmRecalcReasonPolicyToggle is set when auto-HWM is enabled or disabled.
-	AutoHwmRecalcReasonPolicyToggle = impl.AutoHwmRecalcReasonPolicyToggle
-	// AutoHwmRecalcReasonRefresh is set when an explicit recalculation is requested.
-	AutoHwmRecalcReasonRefresh = impl.AutoHwmRecalcReasonRefresh
-	// AutoHwmRecalcReasonDeferredShrink is set when a scheduled deferred queue shrink fires.
-	AutoHwmRecalcReasonDeferredShrink = impl.AutoHwmRecalcReasonDeferredShrink
+	AutoHwmProfileCompact    AutoHwmProfile = AutoHwmProfile(0)
+	AutoHwmProfileLowLatency AutoHwmProfile = AutoHwmProfile(1)
+	AutoHwmProfileBalanced   AutoHwmProfile = AutoHwmProfile(2)
+	AutoHwmProfileThroughput AutoHwmProfile = AutoHwmProfile(3)
 )
 
-var (
-	// RuntimeVersion returns the native zlink library version.
-	RuntimeVersion = impl.RuntimeVersion
-	// NewContext creates a messaging context; the caller owns it and must close it.
-	NewContext = impl.NewContext
-	// Has reports whether the native library was built with the named capability.
-	Has = impl.Has
-	// Proxy forwards messages between two sockets, blocking until the context is terminated.
-	Proxy = impl.Proxy
-	// Sleep blocks the calling goroutine for the given duration.
-	Sleep = impl.Sleep
-	// MultipartClose closes every message in a multipart payload.
-	MultipartClose = impl.MultipartClose
-	// NewStopwatch creates a high-resolution stopwatch; the caller owns it.
-	NewStopwatch = impl.NewStopwatch
-	// NewAtomicCounter creates a thread-safe integer counter; the caller owns it.
-	NewAtomicCounter = impl.NewAtomicCounter
-	// NewThread starts target on a zlink-owned native thread; the caller owns the handle.
-	NewThread = impl.NewThread
+type AutoHwmRecalcReason uint32
+
+const (
+	AutoHwmRecalcReasonNone           AutoHwmRecalcReason = AutoHwmRecalcReason(0)
+	AutoHwmRecalcReasonInitial        AutoHwmRecalcReason = AutoHwmRecalcReason(1)
+	AutoHwmRecalcReasonRoleChange     AutoHwmRecalcReason = AutoHwmRecalcReason(2)
+	AutoHwmRecalcReasonPolicyToggle   AutoHwmRecalcReason = AutoHwmRecalcReason(3)
+	AutoHwmRecalcReasonRefresh        AutoHwmRecalcReason = AutoHwmRecalcReason(4)
+	AutoHwmRecalcReasonDeferredShrink AutoHwmRecalcReason = AutoHwmRecalcReason(5)
 )

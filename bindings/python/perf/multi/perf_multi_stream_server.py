@@ -108,7 +108,7 @@ async def main(argv=None):
                     if exc.result not in {
                         zlink.SubmitResult.NOT_CONNECTED,
                         zlink.SubmitResult.NOT_FOUND,
-                    } and exc.native_errno not in {errno.EHOSTUNREACH, errno.ENOTCONN}:
+                    } and exc.internal_errno not in {errno.EHOSTUNREACH, errno.ENOTCONN}:
                         raise
 
             def on_send_done(task):
