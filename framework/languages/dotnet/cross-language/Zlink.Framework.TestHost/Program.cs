@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -297,6 +299,8 @@ internal sealed record UserSpotJoinRes(
 );
 
 internal sealed record UserSpotProbeReq(string Marker);
+
+internal sealed record UserSpotLateSend(string Marker);
 
 internal sealed record UserSpotProbeRes(
     string ActorId,
@@ -633,13 +637,14 @@ internal sealed class UserSpotSourceHostedService(
         }
 
         if (startFilePath is not null)
+            await WaitForFileAsync(startFilePath, cancellationToken);
+
+        if (
+            Environment.GetEnvironmentVariable("ZLINK_CROSS_LATE_REQUEST_TIMEOUT_MS") is { } timeout
+        )
         {
-            using var startDeadline = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken
-            );
-            startDeadline.CancelAfter(TimeSpan.FromSeconds(60));
-            while (!File.Exists(startFilePath))
-                await Task.Delay(10, startDeadline.Token);
+            await ProbeSealedActorAsync(timeout, startFilePath + ".request", cancellationToken);
+            return;
         }
 
         var created = await actors
@@ -682,6 +687,54 @@ internal sealed class UserSpotSourceHostedService(
                 throw new InvalidOperationException("Outage relocation Join was rejected.");
             outage.JoinCompleted.TrySetResult();
         }
+    }
+
+    private static async Task WaitForFileAsync(string file, CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(60));
+        while (!File.Exists(file))
+            await Task.Delay(10, deadline.Token);
+    }
+
+    private async Task ProbeSealedActorAsync(
+        string timeoutMs,
+        string requestFile,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await actorClient.SendToActor(actorId, new UserSpotLateSend("late-send")).Async();
+            sink.Append("late-actor-send|submitted=true");
+        }
+        catch (ZLinkFrameworkException failure)
+        {
+            sink.Append(
+                $"late-actor-send|submitted=false|kind={failure.Kind}|message={failure.Message}"
+            );
+        }
+
+        await WaitForFileAsync(requestFile, cancellationToken);
+        var timeout = TimeSpan.FromMilliseconds(int.Parse(timeoutMs, CultureInfo.InvariantCulture));
+        var elapsed = Stopwatch.StartNew();
+        var kind = "success";
+        var message = "";
+        try
+        {
+            await actorClient
+                .RequestToActor(actorId, new UserSpotProbeReq("late-request"))
+                .Timeout(timeout)
+                .Async<UserSpotProbeRes>(cancellationToken);
+        }
+        catch (ZLinkFrameworkException failure)
+        {
+            kind = failure.Kind.ToString().ToLowerInvariant();
+            message = failure.Message;
+        }
+        sink.Append(
+            $"late-actor-request|kind={kind}|elapsedMs={elapsed.ElapsedMilliseconds}|message={message}"
+        );
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

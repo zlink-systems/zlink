@@ -4303,5 +4303,47 @@ for (const [name, corrupt] of [
   console.log(`Actor destroy contract: invalid ${name} rejected`);
 }
 
+function validateActorJoinSealedRemote(fixture) {
+  assert.equal(fixture.fixture, 'zlink.framework.actor-join-sealed-remote');
+  assert.equal(fixture.version, 1);
+  const languages = ['cpp', 'dotnet', 'java', 'node'];
+  assert.deepEqual(fixture.senderLanguages, languages);
+  assert.deepEqual(Object.keys(fixture.ownerLanguages).sort(), languages);
+  for (const [owner, status] of Object.entries(fixture.ownerLanguages)) {
+    assert.ok(['enabled', 'expected-failure-before-owner-fix'].includes(status), `${owner}: ${status}`);
+  }
+  // Node owner rejects sealed late requests on main (#5809); other owners turn on with their fixes.
+  assert.equal(fixture.ownerLanguages.node, 'enabled');
+  const { expect } = fixture;
+  // PM 11-27 (#5788): the late request is rejected at once with Unavailable; the send is dropped.
+  assert.equal(expect.requestErrorKind, 'unavailable');
+  assert.equal(expect.sendOwnerAction, 'drop');
+  assert.ok(Number.isInteger(expect.requestTimeoutMs) && expect.requestTimeoutMs > 0);
+  assert.ok(Number.isInteger(expect.requestMaxElapsedMs) && expect.requestMaxElapsedMs > 0);
+  assert.ok(expect.requestMaxElapsedMs < expect.requestTimeoutMs, 'rejection must settle before the deadline');
+  // Error text differs by language; the drop is identified by event, sender and action.
+  assert.equal(expect.ownerDropEvent, 'zlink.dispatch_error');
+  assert.equal('ownerRejectionMessage' in expect, false, 'owner error text is not a cross-language contract');
+  for (const [owner, reason] of Object.entries(expect.ownerDropReasons)) {
+    assert.ok(owner in fixture.ownerLanguages, `${owner}: unknown owner`);
+    assert.match(reason, /^[a-z_]+$/, `${owner}: reason`);
+  }
+}
+
+const actorJoinSealedRemote = await readFixture('./actor-join-sealed-remote-v1.json');
+validateActorJoinSealedRemote(actorJoinSealedRemote);
+console.log('Actor Join sealed remote contract: valid cells accepted');
+for (const [name, corrupt] of [
+  ['owner status', (f) => { f.ownerLanguages.java = 'skipped'; }],
+  ['missing sender language', (f) => { f.senderLanguages.pop(); }],
+  ['request error kind', (f) => { f.expect.requestErrorKind = 'deadlineExceeded'; }],
+  ['elapsed bound over deadline', (f) => { f.expect.requestMaxElapsedMs = f.expect.requestTimeoutMs; }]
+]) {
+  const invalid = structuredClone(actorJoinSealedRemote);
+  corrupt(invalid);
+  assert.throws(() => validateActorJoinSealedRemote(invalid), { name: 'AssertionError' }, name);
+  console.log(`Actor Join sealed remote contract: invalid ${name} rejected`);
+}
+
 await (await import('../../../scripts/etcd/validate-fixtures.mjs')).validateEtcdFixtures();
 console.log('runtime conformance fixtures: PASS');

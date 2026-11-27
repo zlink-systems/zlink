@@ -3428,7 +3428,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       );
       if (observed?.kind === 'target') return observed;
       if (observed?.kind === 'other') return 'lost';
-      const preserve = this.relocationStopping() || restoreDeadlineReached();
+      // Host shutdown requested (host relocation §14) or the Restore deadline authorizes the
+      // Preserve fence. A bare runtime stop authorizes it only once the cutover reached the
+      // target, which may commit; an uncertain PREPARE with no cutover ends as stopped.
+      const preserve =
+        restoreDeadlineReached() ||
+        this.options.shutdownRequested?.().aborted === true ||
+        (this.disposed && window !== undefined);
       if (preserve && observed?.kind === 'source') {
         // An unreadable lease is an uncertain result, not an expiry.
         this.options.shutdownDeadline?.()?.throwIfAborted();
