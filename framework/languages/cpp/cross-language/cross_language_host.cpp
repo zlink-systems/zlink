@@ -1389,7 +1389,8 @@ class outage_control_t
                            "staged target executed an application handler");
                     _sink.append ("outage-staged|publicOwner="
                                   + std::string (found->node_rid ().value ()) + "|handlerCalls=0");
-                    _sink.append ("outage-blocker|staged-fence|public_host_runtime.cpp:513"
+                    _sink.append ("outage-blocker|staged-fence|"
+                                  "public_host_runtime_messaging.cpp::read_route_owner_fence"
                                   "|existing fence reader is translation-unit private");
                 } else if (command == "commit") {
                     check (g_outage_store->staged.load (), "target commit was not staged");

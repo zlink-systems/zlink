@@ -315,21 +315,14 @@ internal sealed class ZLinkDeferredActorJoin(
             if (relayed is not null)
                 await relayed.SourceCleanup().ConfigureAwait(false);
             if (completion is not null)
-            {
-                try
-                {
-                    await actor
-                        .OnJoinCompletedAsync(completion, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception callbackFailure)
-                    when (completion is ZLinkActorJoinCompletion.Accepted)
-                {
-                    // Publish the seal before restoring the suffix and releasing the turn.
-                    actorState.SealFailedJoinCompletion(callbackFailure);
-                    throw;
-                }
-            }
+                await runtime
+                    .DeliverActorJoinCompletionAsync(
+                        actorState,
+                        actor,
+                        completion,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
         }
         finally
         {
