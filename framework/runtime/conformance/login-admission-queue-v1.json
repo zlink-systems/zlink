@@ -1260,6 +1260,54 @@
           }
         }
       ]
+    },
+    {
+      "name": "position-skips-waiters-holding-a-ticket",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:248",
+      "given": {
+        "waiting": [
+          {
+            "node": "n1",
+            "sessionRid": "a",
+            "ticket": true
+          },
+          {
+            "node": "n2",
+            "sessionRid": "b",
+            "ticket": false
+          },
+          {
+            "node": "n1",
+            "sessionRid": "c",
+            "ticket": true
+          },
+          {
+            "node": "n2",
+            "sessionRid": "d",
+            "ticket": false
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "enqueue",
+          "node": "n2",
+          "sessionRid": "d",
+          "expect": {
+            "position": 2,
+            "newWaiters": 0
+          }
+        },
+        {
+          "action": "enqueue",
+          "node": "n2",
+          "sessionRid": "b",
+          "expect": {
+            "position": 1,
+            "newWaiters": 0
+          }
+        }
+      ]
     }
   ],
   "nodeScenarios": [
