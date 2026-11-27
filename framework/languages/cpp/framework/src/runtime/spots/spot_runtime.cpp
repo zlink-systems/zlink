@@ -1168,9 +1168,9 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
               return !terminal.await_ready ();
           });
         if (pending != 0)
-            node.runtime_failures ()->report (std::make_exception_ptr (std::runtime_error (
-              "Spot drain passed its deadline with " + std::to_string (pending)
-              + " Actor Join deliveries still settling")));
+            node.runtime_failures ()->report (std::make_exception_ptr (
+              std::runtime_error ("Spot drain passed its deadline with " + std::to_string (pending)
+                                  + " Actor Join deliveries still settling")));
     }
     // Join ready can still publish controls until its claim or cancellation settles.
     for (const auto &delivery : plan.join_deliveries)
