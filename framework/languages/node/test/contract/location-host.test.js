@@ -2941,7 +2941,7 @@ async function resolveFrameworkRegistration(module) {
   return container.get(nestjs.ZLINK_FRAMEWORK_REGISTRATION);
 }
 
-test('concurrent relocation with a different deadline joins the running operation', async t => {
+test('concurrent Relocate joins the running operation while a reply row is pending', async t => {
   let monotonicMs = 0;
   t.mock.method(performance, 'now', () => monotonicMs);
   const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
@@ -2974,6 +2974,24 @@ test('concurrent relocation with a different deadline joins the running operatio
       assert.equal(await serving.reached, true);
       serving.controller.abort();
     }
+    const { RelocationReplyStore } = require(
+      '../../packages/framework/dist/runtime/locations/relocation-reply-store'
+    );
+    const repository = new framework.ZLinkLocationStoreRepository(provider);
+    const [descriptor] = (await repository.listMeshNodes('play')).items;
+    const writer = { ownerId: descriptor.ownerId, leaseGeneration: descriptor.leaseGeneration };
+    const identity = {
+      relocationId: '11111111-1111-1111-1111-111111111111',
+      objectKey: 'zla1:a:5:actor',
+      source: { ownerId: 'requester', leaseGeneration: '1', nodeRid: '41', nodeGeneration: '1' },
+      operationId: '00000000000000010000000000000001',
+      replyRouteId: '1'
+    };
+    const accepted = RelocationReplyStore.accepted(identity, writer);
+    await provider.write({ conditions: [], mutations: [accepted] });
+    const pending = await repository.relocationReplies.complete(identity, writer, 'YW5zd2Vy', () => assert.fail());
+    assert.equal(pending.state, 'pending');
+
     // Two concurrent relocations with the same mode and effective target
     // version but different deadlines. The join key is (mode, effective target
     // version) and excludes the deadline, so the second call joins the running

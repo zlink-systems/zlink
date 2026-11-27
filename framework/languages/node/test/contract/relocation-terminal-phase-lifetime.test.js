@@ -10,7 +10,7 @@ const {
 } = require('../../packages/framework/dist/runtime/locations/authority-relocation-record');
 
 for (const outcome of ['success', 'failure']) {
-  test(`terminal progress waits for admission and ${outcome} request delivery`, async () => {
+  test(`terminal progress follows admission before ${outcome} request delivery`, async () => {
     const fence = {
       nodeRid: '746172676574',
       nodeGeneration: 6n,
@@ -36,35 +36,11 @@ for (const outcome of ['success', 'failure']) {
         target: { ...fence, attemptGeneration: 1n },
         coordinator: { ...fence, expectedStoreVersion: 'source-v1' },
         sourceInventorySha256: '0'.repeat(64),
-        applicationVersion: 1n,
-        completion: {
-          acceptedRequests: 1n,
-          completedResults: 0n,
-          pendingDeliveries: 0n,
-          reference: null,
-          sha256: null
-        }
+        applicationVersion: 1n
       },
       allocation: { objectKind: 'actor' }
     };
-    const blobs = new Map();
     const runtimeOptions = {
-      relocationStore: {
-        async put(reference, bytes, retention) {
-          blobs.set(reference.value, Buffer.from(bytes));
-          return { kind: 'stored', storeNow: new Date(0), expiresAt: new Date(retention) };
-        },
-        async read(reference) {
-          return blobs.has(reference.value)
-            ? {
-                kind: 'found',
-                bytes: blobs.get(reference.value),
-                storeNow: new Date(0),
-                expiresAt: new Date(86400000)
-              }
-            : { kind: 'missing', storeNow: new Date(0) };
-        }
-      },
       locationStore: () => ({
         async readAuthority() {
           return current;
@@ -111,28 +87,6 @@ for (const outcome of ['success', 'failure']) {
         },
         async normalize() {
           await delivery;
-          const {
-            RelocationCompletionStore
-          } = require('../../packages/framework/dist/runtime/locations/relocation-completion-store');
-          const completion = new RelocationCompletionStore(
-            runtimeOptions.locationStore(),
-            runtimeOptions.relocationStore
-          );
-          const entry = {
-            objectKey: key.value,
-            source: {
-              ownerId: 'requester',
-              leaseGeneration: '1',
-              nodeRid: '61',
-              nodeGeneration: '1'
-            },
-            operationId: '00000000000000010000000000000001',
-            replyRouteId: '1',
-            reply: '',
-            delivery: 'pending'
-          };
-          await completion.append(key, current, entry);
-          await completion.acknowledge(key, current, entry, 'terminalReceived');
           events.push('delivered');
         },
         async openAdmission() {
@@ -144,18 +98,18 @@ for (const outcome of ['success', 'failure']) {
     };
     const finalized = runtime.finalizeTargetStage('mesh', 'terminal', stage);
     const settled = Promise.allSettled([finalized]);
-    await turn();
-    assert.deepEqual(events, ['committed', 'activating', 'publish', 'activated', 'open']);
-    finish(outcome === 'failure' ? new Error('delivery failed') : undefined);
-    const [result] = await settled;
-    if (outcome === 'success') {
+    try {
+      await turn();
+      assert.deepEqual(events, [
+        'committed', 'activating', 'publish', 'activated', 'open', 'cleaning', 'completed', 'clear'
+      ]);
+      assert.equal(current.relocation, undefined);
+    } finally {
+      finish(outcome === 'failure' ? new Error('delivery failed') : undefined);
+      const [result] = await settled;
       assert.equal(result.status, 'fulfilled');
-      assert.deepEqual(events.slice(-4), ['delivered', 'cleaning', 'completed', 'clear']);
-    } else {
-      assert.equal(result.status, 'rejected');
-      assert.equal(current.relocation.phase, 'activated');
-      assert.equal(events.includes('clear'), false);
     }
+
   });
 }
 
@@ -290,14 +244,7 @@ for (const outcome of ['accepted', 'publication', 'deadline', 'unavailable']) {
           target: { ...fence, attemptGeneration: 1n },
           coordinator: { ...fence, expectedStoreVersion: 'source-v1' },
           sourceInventorySha256: '0'.repeat(64),
-          applicationVersion: 1n,
-          completion: {
-            acceptedRequests: 0n,
-            completedResults: 0n,
-            pendingDeliveries: 0n,
-            reference: null,
-            sha256: null
-          }
+          applicationVersion: 1n
         }
       };
       let releaseOpening;

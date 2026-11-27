@@ -48,7 +48,6 @@ for (const remote of [false, true]) {
         const requestQueued = deferred();
         const handlerEntered = deferred();
         const releaseHandler = deferred();
-        const callbackEntered = deferred();
         const callback = deferred();
         const clearStarted = deferred();
         const releaseClear = deferred();
@@ -107,7 +106,6 @@ for (const remote of [false, true]) {
               return;
             }
             callbackCount++;
-            callbackEntered.resolve();
             const authority = await readAuthority();
             callbackFinished = true;
             callback.resolve({ completion, authority });
@@ -260,46 +258,32 @@ for (const remote of [false, true]) {
           }
           releaseJoin.resolve();
 
-          let enteredBeforeClear;
-          if (remote && !captured) {
-            const { current } = await clearStarted.promise;
-            assertTarget(current);
-            assert.equal(current.relocation.completion?.acceptedRequests ?? 0n, 0n);
-            enteredBeforeClear = await Promise.race([
-              callbackEntered.promise.then(() => true),
-              delay(150, false)
-            ]);
-            releaseClear.resolve();
-          }
           const { completion, authority } = await callback.promise;
           assert.equal(completion.status, 'accepted');
           assertTarget(authority);
-          if (remote && captured) {
-            assert.equal(authority.relocation?.phase, 'activated');
-            assert.equal(authority.relocation.completion.acceptedRequests, 1n);
-          } else if (!remote) {
-            assert.equal(authority.relocation, undefined);
+          assert.equal(authority.relocation?.phase, remote ? 'activated' : undefined);
+
+          if (remote) {
+            const atClear = await clearStarted.promise;
+            assertTarget(atClear.current);
+            assert.equal(atClear.replyReceived, false);
+            assert.equal(atClear.current.relocation.phase, 'completed');
+            const replies = [];
+            for await (const row of repository.relocationReplies.scan(atClear.current.relocation.relocationId)) {
+              replies.push(row);
+            }
+            assert.equal(replies.length, captured);
+            if (captured) assert.equal(replies[0].state, 'accepted');
+            releaseClear.resolve();
           }
 
           if (captured) {
             const entered = await handlerEntered.promise;
             assert.equal(entered.afterCallback, true);
             assertTarget(entered.authority);
-            assert.equal(entered.authority.relocation?.phase, remote ? 'activated' : undefined);
             assert.equal(replyReceived, false);
-            if (remote) {
-              assert.equal(entered.authority.relocation.completion.acceptedRequests, 1n);
-              assert.equal(clearing, false);
-            }
             releaseHandler.resolve();
             assert.deepEqual(await request, { value: 71 });
-            if (remote) {
-              const atClear = await clearStarted.promise;
-              assert.equal(atClear.replyReceived, true);
-              assert.equal(atClear.current.relocation.completion.completedResults, 1n);
-              assert.equal(atClear.current.relocation.completion.pendingDeliveries, 0n);
-              releaseClear.resolve();
-            }
           }
           for (;;) {
             const steady = await readAuthority();
@@ -310,13 +294,6 @@ for (const remote of [false, true]) {
             await delay(10, undefined, { signal: t.signal });
           }
           assert.equal(callbackCount, 1);
-          if (remote && !captured) {
-            assert.deepEqual(
-              { enteredBeforeClear, phaseAtCallback: authority.relocation?.phase },
-              { enteredBeforeClear: false, phaseAtCallback: undefined },
-              'Join completion must observe steady authority after the finishing CAS'
-            );
-          }
         } finally {
           releaseJoin.resolve();
           releaseHandler.resolve();

@@ -15,7 +15,7 @@ import {
   type ZLinkLocationRuntimeStores,
   type ZLinkDomainLocationStore
 } from '../locations';
-import type { ZLinkSpotNodeRuntimeManager } from '../spots';
+import type { ZLinkDetachedTaskRunner, ZLinkSpotNodeRuntimeManager } from '../spots';
 import type { ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
 
 export interface ZLinkLocationRuntimeOwnerOptions {
@@ -24,6 +24,8 @@ export interface ZLinkLocationRuntimeOwnerOptions {
   readonly fallbackNodeRid: RoutingId;
   readonly metrics: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly monotonicNowMs?: () => number;
+  readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
+  readonly shutdownSignal: () => AbortSignal | undefined;
   readonly observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void;
   readonly observeSpotAuthorityVersion?: (spotId: RoutingId, storeVersion: string) => void;
 }
@@ -110,6 +112,22 @@ export class ZLinkLocationRuntimeOwner {
         }))
       ]
     });
+    const relocationReplies = stores.locationStore.relocationReplies;
+    if (relocationReplies !== undefined) {
+      runtime.addOwnerLeaseRenewedHandler((renewal, _wasUsable, previousStoreNow) => {
+        const writer = runtime.currentOwnerToken;
+        if (writer === undefined || previousStoreNow === undefined) return;
+        const maintenance = relocationReplies.acceptedRetentionAtHeartbeat(
+          writer,
+          previousStoreNow,
+          renewal.storeNow,
+          this.options.shutdownSignal()
+        );
+        if (maintenance !== undefined) {
+          this.options.detachedTaskRunner.runDetached('Relocation accepted reply retention', maintenance);
+        }
+      });
+    }
     this.runtime = runtime;
     this.lifecycle = new ZLinkLocationLifecycle(
       runtime,

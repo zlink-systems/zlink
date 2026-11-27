@@ -1,3 +1,4 @@
+const { replyFixture } = require('./helpers/relocation-reply');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate: turn } = require('node:timers/promises');
@@ -8,7 +9,7 @@ const {
   ZLinkStreamCodec,
   ZLinkStreamHeaderFlags
 } = require('../../packages/framework/dist/runtime/streams/protocol');
-const { ZLinkSpotKind, ZLinkFrameworkErrorKind } = require('../../packages/framework/dist');
+const { ZLinkSpotKind } = require('../../packages/framework/dist');
 const {
   ZLinkActorHandoffCoordinator,
   ZLinkHostServiceRelocationRuntime
@@ -44,12 +45,12 @@ for (const [scenario, name] of [
   ['send', 'a replayed send runs with dispatch opening and its Join waits for publication release'],
   [
     'outside request',
-    'a Join waits for captured request delivery while a replayed send is still running'
+    'a Join waits for publication while a captured request is still running'
   ],
-  ['inside request', 'a Join deferred by the captured request fails immediately with Unavailable'],
+  ['inside request', 'a captured request can defer a cross-node Join of its Actor while publication is held'],
   [
     'send before request',
-    'a Join deferred by a replayed send fails immediately while the same Actor has a captured request queued'
+    'a replayed send can defer a cross-node Join with a captured request still queued'
   ],
   [
     'same-node',
@@ -99,25 +100,22 @@ for (const [scenario, name] of [
         target: { ...fence, attemptGeneration: 1n },
         coordinator: { ...fence, expectedStoreVersion: 'source-v1' },
         sourceInventorySha256: '0'.repeat(64),
-        applicationVersion: 1n,
-        completion: {
-          acceptedRequests: hasRequest ? 1n : 0n,
-          completedResults: 0n,
-          pendingDeliveries: 0n,
-          reference: null,
-          sha256: null
-        }
+        applicationVersion: 1n
       }
     };
+    const replies = replyFixture({ ownerId: fence.ownerId, leaseGeneration: fence.ownerLeaseGeneration });
+    await replies.setWriter(replies.writer);
+    const publication = deferred();
     const store = {
+      relocationReplies: replies.store,
       async readAuthority() {
-        if (outsideJoin) joinRead.resolve();
         return current;
       },
       async compareExchangeAuthority(_key, expected, mutation) {
         assert.equal(current.storeVersion.value, expected.value);
         // Replay must not wait for publication release: hold the release until the replayed send runs.
         if (scenario === 'send' && mutation.relocation === null) await sendStarted.promise;
+        if (hasRequest && mutation.relocation === null) await publication.promise;
         // Keep finalization in flight while the replayed send starts its same-node Join.
         if (sameNode && mutation.relocation?.phase === 'cleaning') {
           await sendStarted.promise;
@@ -157,6 +155,7 @@ for (const [scenario, name] of [
           deadlineAtMs
         ) {
           joinOperationId = operationId;
+          joinRead.resolve();
           const result = await runtime.relocateActorJoin({
             meshName: 'play',
             actor,
@@ -266,14 +265,28 @@ for (const [scenario, name] of [
     assert.equal(packets.length, hasRequest ? 2 : 1);
     if (hasRequest) assert.ok(packets[sendBeforeRequest ? 1 : 0].source);
 
+    if (hasRequest) {
+      const packet = packets.find((candidate) => candidate.returnResponse);
+      await replies.seed({
+        relocationId,
+        objectKey: key.value,
+        operationId: packet.messageFollowContext.operationId,
+        replyRouteId: packet.source.replyRouteId,
+        source: {
+          ownerId: packet.source.ownerId,
+          leaseGeneration: packet.source.ownerLeaseGeneration,
+          nodeRid: Buffer.from(packet.source.nodeRid).toString('hex'),
+          nodeGeneration: packet.source.nodeGeneration
+        }
+      });
+    }
+
     const requestStarted = deferred();
     const finishRequest = deferred();
     const replySent = deferred();
     const acknowledgeReply = deferred();
     const sendStarted = deferred();
     const joinRead = deferred();
-    let outsideJoin = false;
-    let elapsed;
     let joinTask;
     const startJoin = () =>
       runActorHandlerWithDeferredJoins(() => {
@@ -300,9 +313,7 @@ for (const [scenario, name] of [
     };
 
     const joinInActorTurn = async () => {
-      const started = performance.now();
       await startJoin();
-      elapsed = performance.now() - started;
       joinFinished();
     };
 
@@ -358,7 +369,6 @@ for (const [scenario, name] of [
       }
     });
 
-    const blobs = new Map();
     runtime = new ZLinkHostServiceRelocationRuntime({
       registration: {
         spotNodes: new Map([
@@ -385,18 +395,6 @@ for (const [scenario, name] of [
       }),
       liveDescriptors: async () => [next],
       locationStore: () => store,
-      relocationStore: {
-        async put(reference, bytes, retention) {
-          blobs.set(reference.value, Buffer.from(bytes));
-          return { kind: 'stored', storeNow: new Date(0), expiresAt: new Date(retention) };
-        },
-        async read(reference) {
-          const bytes = blobs.get(reference.value);
-          return bytes === undefined
-            ? { kind: 'missing', storeNow: new Date(0) }
-            : { kind: 'found', bytes, storeNow: new Date(0), expiresAt: new Date(86400000) };
-        }
-      },
       spotManager: () => undefined,
       actorTransfer: {
         async publishRoutedActorOwnership() {},
@@ -487,48 +485,34 @@ for (const [scenario, name] of [
     try {
       await Promise.race([admissionOpened, finalization]);
       resumeReplay();
-      if (scenario === 'outside request') {
-        await requestStarted.promise;
-        outsideJoin = true;
-        joinTask = startJoin();
+      if (hasRequest) {
+        if (scenario === 'outside request') {
+          await requestStarted.promise;
+          joinTask = startJoin();
+        }
         await joinRead.promise;
         await turn();
-        assert.equal(current.relocation.phase, 'activated');
-        assert.equal(current.relocation.completion.completedResults, 0n);
+        assert.equal(completions.length, 0, errors.filter(Boolean).join('\n'));
+        assert.equal((await replies.rows(relocationId))[0].state, 'accepted');
         assert.ok(!events.includes('capture'));
+        if (sendBeforeRequest) assert.ok(!events.includes('request'));
+        publication.resolve();
 
-        finishRequest.resolve();
-        await Promise.race([replySent.promise, finalization, joinTask]);
-        assert.ok(events.includes('reply'), errors.filter(Boolean).join('\n'));
-        await sendStarted.promise;
-        assert.equal(current.relocation.completion.completedResults, 1n);
-        assert.equal(current.relocation.completion.pendingDeliveries, 1n);
-        assert.ok(!events.includes('capture'));
-
-        acknowledgeReply.resolve();
-        await joinTask;
-        assert.equal(completions[0]?.status, 'accepted', errors.filter(Boolean).join('\n'));
-        assert.ok(events.indexOf('ack') < events.indexOf('release'));
-        assert.ok(events.indexOf('release') < events.indexOf('capture'));
-      } else if (scenario === 'inside request' || sendBeforeRequest) {
-        await Promise.race([joined, finalization]);
+        await (joinTask ?? joined);
         assert.deepEqual(
           completions.map(({ status, kind }) => ({ status, kind })),
-          [{ status: 'failed', kind: ZLinkFrameworkErrorKind.Unavailable }],
+          [{ status: 'accepted', kind: undefined }],
           errors.filter(Boolean).join('\n')
         );
-        assert.ok(elapsed < 500, `Join took ${elapsed}ms with a 1500ms deadline`);
-        assert.equal(current.relocation.phase, 'activated');
-        assert.ok(!events.includes('capture'));
-        if (sendBeforeRequest) {
-          assert.ok(!events.includes('request'));
-          assert.equal(current.relocation.completion.completedResults, 0n);
-          finishReplay();
-          await Promise.race([requestStarted.promise, finalization]);
-        }
+        assert.ok(events.indexOf('open') < events.indexOf('release'));
+        assert.ok(events.indexOf('release') < events.indexOf('capture'));
+        assert.ok(!events.includes('reply'));
+        if (sendBeforeRequest) finishReplay();
         finishRequest.resolve();
+        await replySent.promise;
+        assert.equal((await replies.rows(relocationId))[0].state, 'pending');
         acknowledgeReply.resolve();
-        await Promise.race([sendStarted.promise, finalization]);
+        finishReplay();
       } else if (sameNode) {
         await Promise.race([joined, finalization.then(() => joined)]);
         assert.deepEqual(localJoinErrors, []);
@@ -573,14 +557,14 @@ for (const [scenario, name] of [
           ]
         );
       }
-      if (scenario === 'inside request') finishReplay();
       await stage.terminal;
       assert.equal(runtime.targetStages.has(stagingId), false);
-      if (scenario !== 'inside request' && !sendBeforeRequest) {
+      if (!hasRequest) {
         assert.ok(!events.includes('replay-terminal'));
       }
     } finally {
       resumeReplay();
+      publication.resolve();
       finishRequest.resolve();
       acknowledgeReply.resolve();
       finishReplay();
@@ -592,8 +576,8 @@ for (const [scenario, name] of [
     }
     if (sendBeforeRequest) {
       assert.ok(events.indexOf('replay-terminal') < events.indexOf('request'));
-      assert.ok(events.indexOf('ack') < events.indexOf('release'));
-    } else if (scenario !== 'inside request') {
+      assert.ok(events.indexOf('release') < events.indexOf('ack'));
+    } else {
       assert.equal(events.at(-1), 'replay-terminal');
     }
   });

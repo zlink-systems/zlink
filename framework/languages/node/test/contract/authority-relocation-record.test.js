@@ -170,8 +170,8 @@ test('authority relocation accepts the maximum RID length and full uint64 fence 
   );
 });
 
-const golden = require('../../../../runtime/protocol/golden/authority-aggregate-relocation-v1.json');
-for (const vector of golden.cases) {
+const vectors = require('./helpers/authority-relocation-golden');
+for (const vector of vectors) {
   test(`common aggregate golden: ${vector.name} (${vector.expect})`, () => {
     if (vector.expect === 'reject') {
       assert.throws(() => decodeAuthorityAggregate(vector.aggregate));

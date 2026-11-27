@@ -1,3 +1,4 @@
+const { replyFixture } = require('./helpers/relocation-reply');
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const routingIds = require('../../packages/framework/dist/runtime/routing-id');
 const assert = require('node:assert/strict');
@@ -119,57 +120,12 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
       }
     }
   });
-  const blobBytes = new Map();
-  let authority = {
-    kind: 'snapshot',
-    storeVersion: { value: '1' },
-    payload: Buffer.from('application'),
+  const replies = replyFixture({
     ownerId: coordinator.ownerId,
-    ownerLeaseGeneration: coordinator.leaseGeneration,
-    relocation: {
-      relocationId: '00000000-0000-0000-0000-000000000001',
-      sourceInventorySha256: 'ab'.repeat(32),
-      completion: {
-        acceptedRequests: 1n,
-        completedResults: 0n,
-        pendingDeliveries: 0n,
-        reference: null,
-        sha256: null
-      }
-    }
-  };
-  const targetStore = {
-    ...store,
-    async readAuthority() {
-      return authority;
-    },
-    async compareExchangeAuthority(_key, version, mutation) {
-      assert.equal(version.value, authority.storeVersion.value);
-      authority = {
-        ...authority,
-        ...mutation,
-        kind: 'snapshot',
-        storeVersion: { value: String(Number(version.value) + 1) }
-      };
-      return { ...authority, kind: 'stored' };
-    }
-  };
-  const relocationStore = {
-    async put(reference, bytes, retention) {
-      blobBytes.set(reference.value, Buffer.from(bytes));
-      return { kind: 'stored', storeNow: new Date(0), expiresAt: new Date(retention) };
-    },
-    async read(reference) {
-      return blobBytes.has(reference.value)
-        ? {
-            kind: 'found',
-            bytes: blobBytes.get(reference.value),
-            storeNow: new Date(0),
-            expiresAt: new Date(86400000)
-          }
-        : { kind: 'missing', storeNow: new Date(0) };
-    }
-  };
+    leaseGeneration: coordinator.leaseGeneration
+  });
+  void replies.setWriter(replies.writer);
+  const targetStore = { ...store, relocationReplies: replies.store };
   const targetOptions = {
     registration: { messageSerializers: undefined },
     meshNode: () => targetNode,
@@ -178,7 +134,6 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
       ownerId: coordinator.ownerId,
       leaseGeneration: coordinator.leaseGeneration
     }),
-    relocationStore,
     locationStore: () => targetStore,
     liveDescriptors: async () => descriptors
   };
@@ -193,11 +148,7 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
   };
   const sendRelay = async (rid, parts) => {
     assert.equal(routingIds.routingIdsEqual(rid, sourceRid), true);
-    assert.equal(
-      authority.relocation.completion.completedResults,
-      1n,
-      'reply must follow completion CAS'
-    );
+    assert.equal((await replies.rows())[0]?.state, 'pending', 'reply must follow result CAS');
     const relay = wire.decodeMaintenanceReplyRelay(parts);
     relays.push(relay);
     await deliver(receiver, targetRid, parts);
@@ -241,17 +192,28 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
     staging: {
       envelope: {
         aggregateId: '00000000-0000-0000-0000-000000000001',
-        participants: [{ key: 'zla1:a:actor' }]
+        participants: [{ key: 'zla1:a:5:actor' }]
       }
     },
     offer: { prepare: { targetAttemptGeneration: 1n } }
   };
+  void replies.seed({
+    relocationId: stage.staging.envelope.aggregateId,
+    objectKey: stage.staging.envelope.participants[0].key,
+    operationId: packet.messageFollowContext.operationId,
+    replyRouteId: packet.source.replyRouteId,
+    source: {
+      ownerId: source.ownerId,
+      leaseGeneration: source.leaseGeneration.toString(),
+      nodeRid: routingIds.encodeRoutingIdStorageHex(sourceRid),
+      nodeGeneration: source.nodeGeneration.toString()
+    }
+  });
   return {
     requester,
-    currentAuthority: () => authority,
+    replies,
     targetStore,
     targetOptions,
-    relocationStore,
     targetNode,
     pending,
     operation,
@@ -569,15 +531,10 @@ for (const local of [false, true]) {
   });
 }
 
-test('completion Put rejection forbids both authority CAS and reply', async () => {
+test('result CAS rejection forbids reply and leaves the row accepted', async () => {
   const f = fixture();
-  let cas = 0;
-  f.targetStore.compareExchangeAuthority = async () => {
-    cas++;
-    throw new Error('CAS must not run');
-  };
-  f.relocationStore.put = async () => {
-    throw new TypeError('injected Put failure');
+  f.replies.provider.write = async () => {
+    throw new TypeError('injected result CAS failure');
   };
   try {
     await assert.rejects(
@@ -586,9 +543,9 @@ test('completion Put rejection forbids both authority CAS and reply', async () =
         ok: true,
         response: {}
       }),
-      /injected Put failure/
+      /injected result CAS failure/
     );
-    assert.equal(cas, 0);
+    assert.equal((await f.replies.rows())[0].state, 'accepted');
     assert.equal(f.relays.length, 0);
   } finally {
     void f.pending.promise.catch(() => {});
@@ -596,41 +553,29 @@ test('completion Put rejection forbids both authority CAS and reply', async () =
   }
 });
 
-test('the same target runtime redelivers stored bytes after relay ACK storage failed', async () => {
+test('lost ACK CAS response rereads the terminal row without a second relay', async () => {
   const f = fixture();
-  const original = f.targetStore.compareExchangeAuthority;
-  f.targetStore.compareExchangeAuthority = async (...args) => {
-    if (args[2].relocation.completion.pendingDeliveries === 0n)
-      throw new TypeError('injected ACK storage failure');
-    return original(...args);
+  const write = f.replies.provider.write.bind(f.replies.provider);
+  let lost = 0;
+  f.replies.provider.write = async (batch, signal) => {
+    const result = await write(batch, signal);
+    if (JSON.parse(Buffer.from(batch.mutations[0].bytes)).state === 'terminalReceived') {
+      lost++;
+      throw new Error('injected lost ACK CAS response');
+    }
+    return result;
   };
   try {
-    await assert.rejects(
-      f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
-        index: 0,
-        ok: true,
-        response: { answer: 42 }
-      }),
-      /injected ACK storage failure/
-    );
-    assert.equal(f.currentAuthority().relocation.completion.pendingDeliveries, 1n);
-    const first = f.relays[0];
-    f.targetNode.status = () => ({ routingId: 'C', lifecycleGeneration: 11n });
-    f.targetStore.compareExchangeAuthority = original;
-    const current = await f.target.redeliverPendingCompletions(
-      'mesh',
-      { value: 'zla1:a:actor' },
-      f.currentAuthority()
-    );
-    assert.equal(current.relocation.completion.pendingDeliveries, 0n);
-    assert.equal(f.relays.length, 2);
-    assert.deepEqual(f.relays[1].payload, first.payload);
-    assert.deepEqual(f.relays[1].operation, first.operation);
-    assert.equal(f.acks[1].status, 'alreadyTerminal');
-    await f.target.redeliverPendingCompletions('mesh', { value: 'zla1:a:actor' }, current);
-    assert.equal(f.relays.length, 2);
+    await f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
+      index: 0,
+      ok: true,
+      response: { answer: 42 }
+    });
+    assert.equal(lost, 1);
+    assert.equal(f.relays.length, 1);
+    assert.equal((await f.replies.rows())[0].state, 'terminalReceived');
   } finally {
-    f.target.dispose();
+    await f.target.dispose();
     void f.pending.promise.catch(() => {});
     f.requester.close();
   }
@@ -660,7 +605,7 @@ for (const lease of [
         ok: true,
         response: {}
       });
-      assert.equal(f.currentAuthority().relocation.completion.pendingDeliveries, 0n);
+      assert.equal((await f.replies.rows())[0].state, 'sourceLeaseExpired');
       assert.equal(f.relays.length, 0);
     } finally {
       void f.pending.promise.catch(() => {});
@@ -683,7 +628,7 @@ test('Relocate deadline ends the caller while durable terminal delivery continue
       deadline.signal
     );
     assert.equal((await f.pending.promise).terminalResult, RequestResult.Ok);
-    assert.equal(f.currentAuthority().relocation.completion.pendingDeliveries, 0n);
+    assert.equal((await f.replies.rows())[0].state, 'terminalReceived');
   } finally {
     void f.pending.promise.catch(() => {});
     f.requester.close();

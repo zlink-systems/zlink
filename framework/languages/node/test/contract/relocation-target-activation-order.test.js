@@ -104,27 +104,13 @@ test('request terminal relay uses the activated authority before terminal cleanu
   const key = encodeAuthorityKey('actor', 'actor');
   stage.staging.hidden.set(key.value, hidden);
   stage.staging.envelope.participants.push({ key: key.value });
-  const {
-    RelocationCompletionStore
-  } = require('../../packages/framework/dist/runtime/locations/relocation-completion-store');
   const relocationId = '11111111-1111-1111-1111-111111111111';
   const targetOwner = { ownerId: 'target-owner', ownerLeaseGeneration: 1n };
   let current = {
     kind: 'snapshot',
     ...targetOwner,
     storeVersion: { value: '1:committed' },
-    relocation: {
-      relocationId,
-      phase: 'committed',
-      sourceInventorySha256: '0'.repeat(64),
-      completion: {
-        acceptedRequests: 1n,
-        completedResults: 0n,
-        pendingDeliveries: 0n,
-        reference: null,
-        sha256: null
-      }
-    }
+    relocation: { relocationId, phase: 'committed' }
   };
   const store = {
     async readAuthority() {
@@ -140,26 +126,11 @@ test('request terminal relay uses the activated authority before terminal cleanu
       return { ...current, kind: 'stored' };
     }
   };
-  const blobs = new Map();
-  const blobStore = {
-    async put(reference, bytes, retention) {
-      blobs.set(reference.value, Buffer.from(bytes));
-      return { kind: 'stored', storeNow: new Date(0), expiresAt: new Date(retention) };
-    },
-    async read(reference) {
-      const bytes = blobs.get(reference.value);
-      return bytes === undefined
-        ? { kind: 'missing', storeNow: new Date(0) }
-        : { kind: 'found', bytes, storeNow: new Date(0), expiresAt: new Date(86400000) };
-    }
-  };
   stage.offer.prepare = { target: targetOwner };
   stage.staging.envelope.aggregateId = relocationId;
   stage.staging.primaryAuthorityKey = key;
   runtime.options.locationStore = () => store;
-  runtime.options.relocationStore = blobStore;
   runtime.commitTargetReservation = async () => current;
-  const completion = new RelocationCompletionStore(store, blobStore);
   runtime.clearTargetRelocationPublication = async () => {
     events.push('normalized');
     return { storeVersion: { value: 'normalized-v2' } };
@@ -171,16 +142,6 @@ test('request terminal relay uses the activated authority before terminal cleanu
   runtime.relayTerminalReply = async (_mesh, _stage, coordinator) => {
     events.push('relay');
     observed.push(coordinator.expectedAuthorityStoreVersion);
-    const entry = {
-      objectKey: key.value,
-      source: { ownerId: 'requester', leaseGeneration: '1', nodeRid: '61', nodeGeneration: '1' },
-      operationId: '00000000000000010000000000000001',
-      replyRouteId: '1',
-      reply: '',
-      delivery: 'pending'
-    };
-    await completion.append(key, current, entry);
-    return completion.acknowledge(key, current, entry, 'terminalReceived');
   };
   stage.owner.normalize = async () => {
     await hidden.replayStart;
@@ -189,7 +150,7 @@ test('request terminal relay uses the activated authority before terminal cleanu
   await finalize(runtime, stage);
   assert.deepEqual(observed, ['1:committed:activating:activated']);
   assert.ok(events.indexOf('handler') < events.indexOf('relay'));
-  assert.ok(events.indexOf('relay') < events.indexOf('normalized'));
+  assert.ok(events.indexOf('handler') < events.indexOf('normalized'));
 });
 
 for (const primary of [false, true]) {

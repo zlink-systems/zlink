@@ -1008,8 +1008,7 @@ export class ZLinkInMemoryAuthorityStore {
         relocation:
           commitAuthorityRelocation(
             row.snapshot.relocation,
-            fence.aggregateId.value,
-            fence.acceptedRequests?.get(participant.authorityKey.value)
+            fence.aggregateId.value
           ) ?? row.snapshot.relocation
       });
     }

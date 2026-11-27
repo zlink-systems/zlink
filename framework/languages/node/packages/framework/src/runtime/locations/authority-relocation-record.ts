@@ -1,5 +1,4 @@
 import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
-import { completionDataLost } from './relocation-completion-record';
 
 /** Location runtime §2.3, §9.1: the authority record owns durable relocation progress. */
 export interface AuthorityRelocationFence {
@@ -7,26 +6,6 @@ export interface AuthorityRelocationFence {
   readonly nodeGeneration: bigint;
   readonly ownerId: string;
   readonly ownerLeaseGeneration: bigint;
-}
-
-export interface AuthorityRelocationCompletion {
-  readonly acceptedRequests: bigint;
-  readonly completedResults: bigint;
-  readonly pendingDeliveries: bigint;
-  readonly reference: string | null;
-  readonly sha256: string | null;
-}
-
-function initialRelocationCompletion(acceptedRequests: bigint): AuthorityRelocationCompletion {
-  if (acceptedRequests < 0n || acceptedRequests > 0xffffffffffffffffn)
-    completionDataLost('Accepted request count is invalid.');
-  return {
-    acceptedRequests,
-    completedResults: 0n,
-    pendingDeliveries: 0n,
-    reference: null,
-    sha256: null
-  };
 }
 
 export interface AuthorityRelocation {
@@ -46,7 +25,6 @@ export interface AuthorityRelocation {
   readonly coordinator: AuthorityRelocationFence & { readonly expectedStoreVersion: string };
   readonly sourceInventorySha256: string;
   readonly applicationVersion: bigint;
-  readonly completion?: AuthorityRelocationCompletion;
 }
 
 export function isPreparedAuthorityRelocation(
@@ -58,14 +36,12 @@ export function isPreparedAuthorityRelocation(
 
 export function commitAuthorityRelocation(
   relocation: AuthorityRelocation | undefined,
-  aggregateId: string,
-  acceptedRequests = 0n
+  aggregateId: string
 ): AuthorityRelocation | undefined {
   if (!isPreparedAuthorityRelocation(relocation, aggregateId)) return undefined;
   return {
     ...relocation,
-    phase: 'committed',
-    completion: initialRelocationCompletion(acceptedRequests)
+    phase: 'committed'
   };
 }
 
@@ -163,24 +139,21 @@ export function decodeAuthorityAggregate(value: unknown): {
     (phase !== 'preparing' && phase !== 'captured' && phase !== 'aborted' && target === null)
   )
     throw new TypeError('Authority relocation target does not match its phase.');
-  return {
-    marker,
-    relocation: {
-      relocationId: text(state.relocationId),
-      phase,
-      source: fence(state.source),
-      target,
-      coordinator: {
-        ...fence(state.coordinator),
-        expectedStoreVersion: text(object(state.coordinator).expectedStoreVersion)
-      },
-      sourceInventorySha256: text(state.sourceInventorySha256),
-      applicationVersion: integer(state.applicationVersion),
-      ...(state.completion === undefined
-        ? {}
-        : { completion: decodeAuthorityRelocationCompletion(state.completion) })
-    }
+  const relocation: AuthorityRelocation = {
+    relocationId: text(state.relocationId),
+    phase,
+    source: fence(state.source),
+    target,
+    coordinator: {
+      ...fence(state.coordinator),
+      expectedStoreVersion: text(object(state.coordinator).expectedStoreVersion)
+    },
+    sourceInventorySha256: text(state.sourceInventorySha256),
+    applicationVersion: integer(state.applicationVersion)
   };
+  if (Object.keys(state).length !== Object.keys(relocation).length)
+    throw new TypeError('Authority relocation contains unknown fields.');
+  return { marker, relocation };
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -223,24 +196,4 @@ function fence(value: unknown): AuthorityRelocationFence {
     ownerId: text(item.ownerId),
     ownerLeaseGeneration: nonzeroInteger(item.ownerLeaseGeneration)
   };
-}
-
-export function decodeAuthorityRelocationCompletion(value: unknown): AuthorityRelocationCompletion {
-  const item = object(value);
-  const completion = {
-    acceptedRequests: integer(item.acceptedRequests),
-    completedResults: integer(item.completedResults),
-    pendingDeliveries: integer(item.pendingDeliveries),
-    reference: item.reference === null ? null : text(item.reference),
-    sha256: item.sha256 === null ? null : text(item.sha256)
-  };
-  if (
-    completion.completedResults > completion.acceptedRequests ||
-    completion.pendingDeliveries > completion.completedResults ||
-    (completion.reference === null) !== (completion.sha256 === null) ||
-    (completion.reference === null) !== (completion.completedResults === 0n) ||
-    (completion.sha256 !== null && !/^[0-9a-f]{64}$/.test(completion.sha256))
-  )
-    completionDataLost('Invalid completion counts or reference.');
-  return completion;
 }

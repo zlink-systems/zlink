@@ -174,11 +174,11 @@ test('fixed previous Node ZLAR and canonical ZLAU slot records are compatibility
   }
 });
 
-const aggregateGolden = require('../../../../runtime/protocol/golden/authority-aggregate-relocation-v1.json');
+const aggregateGolden = require('./helpers/authority-relocation-golden');
 const {
   decodeAuthorityAggregate
 } = require('../../packages/framework/dist/runtime/locations/authority-relocation-record');
-for (const vector of aggregateGolden.cases.filter(
+for (const vector of aggregateGolden.filter(
   (item) => item.expect === 'accept' && item.aggregate.aggregateId === undefined
 )) {
   test(`provider writes and rewrites common golden ${vector.name}`, async () => {
