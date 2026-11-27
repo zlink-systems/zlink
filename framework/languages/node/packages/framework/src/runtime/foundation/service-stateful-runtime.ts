@@ -75,7 +75,6 @@ import {
   ServiceStaleGenerationError,
   ServiceStatefulRegistry,
   ServiceTerminalOperationRegistry,
-  RELOCATION_REPLY_RETENTION_MS,
   type ServiceActorRef,
   type ServiceActorState,
   type ServiceSessionBinding,
@@ -1761,9 +1760,7 @@ export class ServiceStatefulRuntime {
       this.operations.context(replyRouteId) !== operation.low
     )
       return undefined;
-    return this.operations.reply(replyRouteId, result, RELOCATION_REPLY_RETENTION_MS)
-      ? 'terminalReceived'
-      : 'alreadyTerminal';
+    return this.operations.reply(replyRouteId, result) ? 'terminalReceived' : 'alreadyTerminal';
   }
 
   async sendToInstanceSpot(

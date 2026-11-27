@@ -4042,41 +4042,30 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             }
           })
     });
-    let requestSource: ServiceWireRequestSourceFence = {
-      ownerId: localOwner.ownerId,
-      leaseGeneration: localOwner.leaseGeneration,
-      nodeRid: localStatus.routingId,
-      nodeGeneration: localStatus.lifecycleGeneration
-    };
     if (status === undefined) {
       const accepted = this.options.actorTransfer.relayCanonicalMaintenanceTerminal(
         relay.operation.high.toString(16).padStart(16, '0') +
           relay.operation.low.toString(16).padStart(16, '0'),
         relay.replyRouteId.toString(),
-        handoffResultFromRelay(relay),
+        () => handoffResultFromRelay(relay),
         sourceNodeRid
       );
-      if (accepted.status === 'notAcknowledged' || accepted.source === undefined) {
+      if (accepted === 'notAcknowledged') {
         throw new Error('Canonical relocation reply relay collided with another source route.');
       }
-      requestSource = handoffSourceFence(accepted.source);
-      if (
-        !sameRequestSource(requestSource, {
-          ownerId: localOwner.ownerId,
-          leaseGeneration: localOwner.leaseGeneration,
-          nodeRid: localStatus.routingId,
-          nodeGeneration: localStatus.lifecycleGeneration
-        })
-      )
-        throw new Error('Relocation reply relay request-source fence changed after capture.');
-      status = accepted.status;
+      status = accepted;
     }
     const ack: ServiceMaintenanceReplyRelayAck = {
       relocation: relay.relocation,
       coordinator: relay.coordinator,
       operation: relay.operation,
       replyRouteId: relay.replyRouteId,
-      requestSource,
+      requestSource: {
+        ownerId: localOwner.ownerId,
+        leaseGeneration: localOwner.leaseGeneration,
+        nodeRid: localStatus.routingId,
+        nodeGeneration: localStatus.lifecycleGeneration
+      },
       status
     };
     if (

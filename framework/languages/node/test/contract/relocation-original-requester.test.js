@@ -14,9 +14,6 @@ const {
   RequestResult,
   SubmitResult
 } = require('../../packages/framework/dist/runtime/backend/runtime-values');
-const {
-  OperationRegistry
-} = require('../../packages/framework/dist/runtime/foundation/operation-registry');
 
 function deliver(runtime, sourceNodeRid, frames) {
   return runtime.tryHandleControl('mesh', {
@@ -29,15 +26,16 @@ function deliver(runtime, sourceNodeRid, frames) {
 }
 
 async function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled = false) {
-  let submitted;
+  let submission;
   const requester = new ServiceStatefulRuntime(
     {
       setServiceIngress() {},
       isPeerRouteReady: () => true,
       peerLifecycleGeneration: (rid) => (rid === 'B' ? 8n : undefined),
       requestService(_rid, parts) {
-        submitted = parts;
-        return new Promise(() => {});
+        return new Promise((reply) => {
+          submission = { parts, reply };
+        });
       }
     },
     String(sourceRid),
@@ -52,27 +50,37 @@ async function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEn
     metadata: new Map(),
     correlationId: 'original-A'
   });
-  const pending = requester.requestToActor(
-    { nodeRid: 'B', actorId: 'actor', generation: 1n },
-    { packetName: 'Probe', contentType: 'application/json', payload: Buffer.from('{}') },
-    1000,
-    undefined,
-    undefined,
-    undefined,
-    {
-      actor: { nodeRid: 'B', actorId: 'actor', generation: 1n },
-      targetNodeGeneration: 8n,
-      authorityOwnerGeneration: 1n,
-      ownerLeaseGeneration: 3n
-    }
-  );
-  const operation = wire.decodeStatefulHeader(submitted[0]).operation;
+  function startRequest() {
+    const actor = { nodeRid: 'B', actorId: 'actor', generation: 1n };
+    const pending = requester.requestToActor(
+      actor,
+      { packetName: 'Probe', contentType: 'application/json', payload: Buffer.from('{}') },
+      1000,
+      undefined,
+      undefined,
+      undefined,
+      {
+        actor,
+        targetNodeGeneration: 8n,
+        authorityOwnerGeneration: 1n,
+        ownerLeaseGeneration: 3n
+      }
+    );
+    const { parts, reply } = submission;
+    return {
+      pending,
+      operation: wire.decodeStatefulHeader(parts[0]).operation,
+      replyDirectly: () => reply([wire.encodeStatefulReply(pending.id, RequestResult.Ok, 0)])
+    };
+  }
+  const { pending, operation, replyDirectly } = startRequest();
   const source = {
     ownerId: 'owner-A',
     leaseGeneration: 9n,
     nodeRid: sourceRid,
     nodeGeneration: 7n
   };
+  const requesterOwner = { ownerId: source.ownerId, leaseGeneration: source.leaseGeneration };
   const coordinator = {
     ownerId: `owner-${targetRid}`,
     leaseGeneration: 4n,
@@ -111,12 +119,12 @@ async function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEn
   };
   const receiver = new ZLinkHostServiceRelocationRuntime({
     meshNode: () => node,
-    currentOwner: () => ({ ownerId: 'owner-A', leaseGeneration: 9n }),
+    currentOwner: () => requesterOwner,
     locationStore: () => store,
     liveDescriptors: async () => descriptors,
     actorTransfer: {
       relayCanonicalMaintenanceTerminal() {
-        throw new Error('B reply capability was used');
+        return 'alreadyTerminal';
       }
     }
   });
@@ -211,6 +219,9 @@ async function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEn
   });
   return {
     requester,
+    requesterOwner,
+    startRequest,
+    replyDirectly,
     replies,
     targetStore,
     targetOptions,
@@ -313,6 +324,65 @@ for (const targetRid of ['C', 'D']) {
   });
 }
 
+test('a relay after a direct result is discarded and acknowledged as alreadyTerminal', async () => {
+  const f = await fixture();
+  try {
+    f.replyDirectly();
+    const direct = await f.pending.promise;
+    await deliver(
+      f.receiver,
+      'C',
+      wire.encodeMaintenanceReplyRelay({
+        relocation: { high: 0n, low: 1n },
+        operation: f.operation,
+        replyRouteId: f.pending.id,
+        coordinator: f.coordinator,
+        targetAttemptGeneration: 1n,
+        participantId: 1n,
+        sequence: 1n,
+        terminalResult: RequestResult.TimedOut,
+        failureCode: 0
+      })
+    );
+    assert.equal(direct.terminalResult, RequestResult.Ok);
+    assert.equal(f.acks[0].status, 'alreadyTerminal');
+    assert.deepEqual(f.acks[0].requestSource, f.source);
+    assert.equal(f.requester.pendingOperationCount, 0);
+  } finally {
+    await f.target.dispose();
+    f.requester.close();
+  }
+});
+
+test('an unauthenticated coordinator gets no ACK for an unknown operation', async () => {
+  const f = await fixture();
+  try {
+    f.replyDirectly();
+    await f.pending.promise;
+    await assert.rejects(
+      deliver(
+        f.receiver,
+        'C',
+        wire.encodeMaintenanceReplyRelay({
+          relocation: { high: 0n, low: 1n },
+          operation: f.operation,
+          replyRouteId: f.pending.id,
+          coordinator: { ...f.coordinator, leaseGeneration: f.coordinator.leaseGeneration + 1n },
+          targetAttemptGeneration: 1n,
+          participantId: 1n,
+          sequence: 1n,
+          terminalResult: RequestResult.Ok,
+          failureCode: 0
+        })
+      ),
+      /not the exact admitted source fence/
+    );
+    assert.equal(f.acks.length, 0);
+  } finally {
+    f.requester.close();
+  }
+});
+
 test('command 33 and 46 preserve the original requester binary RID', async () => {
   const rid = routingIds.decodeRoutingId('\ufffd', 'ff');
   const f = await fixture('C', false, rid);
@@ -413,19 +483,74 @@ test('the target rejects an ACK whose original source generation changed', async
   }
 });
 
-test('relocation terminal tombstones reuse the operation registry and expire on its existing scan', async () => {
-  let now = 0;
-  const registry = new OperationRegistry({ now: () => now });
-  const pending = registry.register(10, 'registry', 15n);
-  assert.equal(registry.complete(pending.id, 'reply', 100), true);
-  assert.equal(await pending.promise, 'reply');
-  assert.equal(registry.isPending(pending.id), false);
-  assert.equal(registry.context(pending.id), 15n);
-  assert.equal(registry.size, 0);
-  assert.equal(registry.complete(pending.id, 'duplicate', 100), false);
-  now = 101;
-  registry.expire(now, 102);
-  assert.equal(registry.context(pending.id), undefined);
+test('a current requester ACK leaves an earlier lease row pending', async () => {
+  const f = await fixture();
+  f.replyDirectly();
+  await f.pending.promise;
+  f.requesterOwner.leaseGeneration += 1n;
+
+  const send = f.targetNode.sendInfrastructureControlFrames;
+  let reportFirstDelivery;
+  const firstDelivery = new Promise((resolve) => {
+    reportFirstDelivery = resolve;
+  });
+  f.targetNode.sendInfrastructureControlFrames = async (rid, parts) => {
+    try {
+      await send(rid, parts);
+      reportFirstDelivery({});
+    } catch (error) {
+      reportFirstDelivery({ error });
+    }
+    return SubmitResult.Ok;
+  };
+  const completion = f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
+    index: 0,
+    ok: true,
+    response: { answer: 42 }
+  });
+
+  try {
+    const { error } = await Promise.race([firstDelivery, completion.then(() => ({}))]);
+    assert.equal(f.acks[0]?.status, 'alreadyTerminal');
+    assert.deepEqual(f.acks[0].requestSource, {
+      ...f.source,
+      leaseGeneration: f.requesterOwner.leaseGeneration
+    });
+    assert.match(error?.message ?? '', /does not match its durable source fence/);
+    assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 1);
+    assert.equal((await f.replies.rows())[0].state, 'pending');
+    f.targetStore.readOwnerLease = async () => ({ kind: 'missing' });
+    await completion;
+    assert.equal((await f.replies.rows())[0].state, 'sourceLeaseExpired');
+  } finally {
+    await f.target.dispose();
+    await completion.catch(() => {});
+    f.requester.close();
+  }
+});
+
+test('the requester registry tracks only requests awaiting direct or relayed results', async () => {
+  const f = await fixture();
+  const direct = [f.startRequest(), f.startRequest()];
+  const results = Promise.all([f.pending.promise, ...direct.map(({ pending }) => pending.promise)]);
+  try {
+    assert.equal(f.requester.pendingOperationCount, 3);
+    for (const request of direct) request.replyDirectly();
+    await Promise.all(direct.map(({ pending }) => pending.promise));
+    assert.equal(f.requester.pendingOperationCount, 1);
+    await f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
+      index: 0,
+      ok: true,
+      response: { answer: 42 }
+    });
+    assert.equal((await results).length, 3);
+    assert.equal(f.requester.pendingOperationCount, 0);
+    assert.equal(f.requester.nextMaintenanceDeadlineMs(), Infinity);
+  } finally {
+    await f.target.dispose();
+    f.requester.close();
+    await results.catch(() => {});
+  }
 });
 
 for (const local of [false, true]) {

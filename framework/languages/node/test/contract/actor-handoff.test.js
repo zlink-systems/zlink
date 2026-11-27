@@ -3055,18 +3055,19 @@ test('Message Follow keeps opaque node identities that share the same display te
     'terminalReceived'
   );
   assert.equal(await terminalReply, 'opaque-target');
-  const duplicate = coordinator.acceptRelocatedTerminalRelay(
-    terminalPacket.messageFollowContext.operationId,
-    terminalPacket.source.replyRouteId,
-    undefined,
-    terminal,
-    sourceA,
-    2n,
-    'actor-1'
+  assert.equal(coordinator[inspectRuntime]().replyRouteCount, 0);
+  assert.equal(
+    coordinator.acceptRelocatedTerminalRelay(
+      terminalPacket.messageFollowContext.operationId,
+      terminalPacket.source.replyRouteId,
+      undefined,
+      () => assert.fail('a duplicate terminal must not be read'),
+      sourceA,
+      2n,
+      'actor-1'
+    ),
+    'alreadyTerminal'
   );
-  assert.equal(duplicate.status, 'alreadyTerminal');
-  assert.equal(routingIds.routingIdsEqual(duplicate.source.nodeRid, sourceB), true);
-  assert.equal(routingIds.routingIdsEqual(duplicate.source.nodeRid, sourceA), false);
 });
 
 test('Message Follow accepts legacy visited owner keys without weakening opaque RID fences', () => {

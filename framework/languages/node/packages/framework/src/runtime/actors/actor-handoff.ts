@@ -14,7 +14,6 @@ import {
   type MessageFollowSuppressionFence
 } from '../foundation/message-follow-suppression-registry';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
-import { RELOCATION_REPLY_RETENTION_MS } from '../foundation/service-stateful-registry';
 import type { ServiceActorRouteFence } from '../foundation/service-stateful-wire-codec';
 import { OPERATION_IDENTITY_BYTES } from '../foundation/operation-identity';
 import { UINT64_BYTES } from '@zlink-systems/stream-wire';
@@ -94,11 +93,6 @@ export interface ZLinkActorHandoffRequestSource {
 
 export type ZLinkActorHandoffTerminalAck =
   'terminalReceived' | 'alreadyTerminal' | 'notAcknowledged';
-
-export interface ZLinkActorHandoffTerminalAcceptance {
-  readonly status: ZLinkActorHandoffTerminalAck;
-  readonly source?: ZLinkActorHandoffRequestSource;
-}
 
 export interface ZLinkActorHandoffResult {
   readonly index: number;
@@ -198,7 +192,6 @@ interface ReplyRoute {
   deadline?: ReturnType<typeof setTimeout>;
   targetNodeRid?: RoutingId;
   targetAuthorityOwnerGeneration?: bigint;
-  delivered: boolean;
 }
 
 interface ActiveHandoff {
@@ -1049,16 +1042,28 @@ export class ZLinkActorHandoffCoordinator {
           sourceEvidence: handoff.sourceEvidence,
           sourceOwner: handoff.sourceOwner,
           resolve,
-          reject,
-          delivered: false
+          reject
         };
-        route.deadline = setTimeout(() => {
-          if (this.replyRoutes.get(source.replyRouteId) !== route) return;
-          this.replyRoutes.delete(source.replyRouteId);
-          if (!route.delivered)
-            route.reject(new Error('Relocation reply route retention expired.'));
-        }, RELOCATION_REPLY_RETENTION_MS);
-        route.deadline.unref();
+        if (requestOperation !== undefined) {
+          const settle = (finish: () => void) => {
+            if (this.replyRoutes.get(source.replyRouteId) !== route) return;
+            this.removeReplyRoute(source.replyRouteId);
+            finish();
+          };
+          void requestOperation.promise.then(
+            (value) => settle(() => route.resolve(value)),
+            (error) => settle(() => route.reject(error))
+          );
+        } else if (context.deadlineUnixMs !== undefined) {
+          route.deadline = setTimeout(
+            () => {
+              this.removeReplyRoute(source.replyRouteId);
+              route.reject(actorDeadlineExceeded(actorId));
+            },
+            Math.max(0, context.deadlineUnixMs - Date.now())
+          );
+          route.deadline.unref();
+        }
         this.replyRoutes.set(source.replyRouteId, route);
         handoff.pending.push({
           packet: requestPacket,
@@ -1319,49 +1324,47 @@ export class ZLinkActorHandoffCoordinator {
       packet.messageFollowContext.operationId,
       source.replyRouteId,
       source,
-      result,
+      () => result,
       sourceNodeRid,
       targetAuthorityOwnerGeneration,
       actorId
-    ).status;
+    );
   }
 
   acceptRelocatedTerminalRelay(
     operationId: string,
     replyRouteId: string,
     source: ZLinkActorHandoffRequestSource | undefined,
-    result: ZLinkActorHandoffResult,
+    readResult: () => ZLinkActorHandoffResult,
     sourceNodeRid: RoutingId,
     targetAuthorityOwnerGeneration: bigint | undefined,
     actorId?: string
-  ): ZLinkActorHandoffTerminalAcceptance {
-    if (replyRouteId.length === 0) return { status: 'notAcknowledged' };
+  ): ZLinkActorHandoffTerminalAck {
     const route = this.replyRoutes.get(replyRouteId);
-    if (route === undefined) return { status: 'notAcknowledged' };
+    if (route === undefined || route.operationId !== operationId) {
+      return source === undefined ? 'alreadyTerminal' : 'notAcknowledged';
+    }
     const exactSource = source ?? route.source;
     if (
       !requestSourcesEqual(route.source, exactSource) ||
       (actorId !== undefined && route.actorId !== actorId) ||
-      route.operationId !== operationId ||
       route.targetNodeRid === undefined ||
       !routingIdsEqual(route.targetNodeRid, sourceNodeRid) ||
       route.targetAuthorityOwnerGeneration === undefined ||
       (targetAuthorityOwnerGeneration !== undefined &&
         route.targetAuthorityOwnerGeneration !== targetAuthorityOwnerGeneration)
     ) {
-      return { status: 'notAcknowledged' };
+      return 'notAcknowledged';
     }
     try {
       if (this.options.validateReplySource(route.sourceEvidence) !== true) {
-        return { status: 'notAcknowledged' };
+        return 'notAcknowledged';
       }
     } catch {
-      return { status: 'notAcknowledged' };
+      return 'notAcknowledged';
     }
-    if (route.delivered) {
-      return { status: 'alreadyTerminal', source: terminalRequestSource(route) };
-    }
-    route.delivered = true;
+    const result = readResult();
+    this.removeReplyRoute(replyRouteId);
     if (result.ok) {
       route.resolve(result.response);
     } else if (result.errorKind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded) {
@@ -1369,7 +1372,7 @@ export class ZLinkActorHandoffCoordinator {
     } else {
       route.reject(new Error(result.error ?? 'Actor handoff replay failed.'));
     }
-    return { status: 'terminalReceived', source: terminalRequestSource(route) };
+    return 'terminalReceived';
   }
 
   private captureRequestSource(
@@ -2140,16 +2143,6 @@ function requestSourcesEqual(
     /^[1-9][0-9]*$/.test(actual.ownerLeaseGeneration) &&
     /^[1-9][0-9]*$/.test(actual.nodeGeneration)
   );
-}
-
-function terminalRequestSource(route: ReplyRoute): ZLinkActorHandoffRequestSource {
-  return Object.freeze({
-    ...route.source,
-    // The durable packet keeps its legacy text field. The local ACK path can
-    // restore the exact binary RID from the captured owner fence without
-    // changing that packet wire shape.
-    nodeRid: messageFollowOwnerNodeRid(route.sourceOwner)
-  });
 }
 
 function actorLocationStale(actorId: string): ZLinkFrameworkException {
