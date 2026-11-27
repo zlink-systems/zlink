@@ -117,6 +117,8 @@ public sealed class SpotRelayTests
         await fixture.Barriers.Reader.ReadAsync(ct);
         fixture.Clock.Advance(TimeSpan.FromMilliseconds(100));
 
+        // Wait for the snapshot that carries this input's feedback. Wakeup timing decides
+        // which ticks get a snapshot (a late wakeup runs up to four ticks), so no tick is fixed.
         NetworkSyncSnapshotV1 snapshot;
         do
         {
@@ -138,16 +140,22 @@ public sealed class SpotRelayTests
         await fixture.Barriers.Reader.ReadAsync(ct);
         fixture.Clock.Advance(TimeSpan.FromMilliseconds(100));
 
+        // The feedback rides the next flushed snapshot, which may come before tick 8 applies.
+        Feedback? accepted = null;
         do
         {
             snapshot = await snapshots.ReadAsync(ct);
-        } while (snapshot.Anchor.Tick < 9);
-        var accepted = Assert.IsType<Feedback>(snapshot.InputFeedback);
+            if (snapshot.InputFeedback?.T1Us == 456)
+                accepted = snapshot.InputFeedback;
+        } while (accepted is null || snapshot.Anchor.Tick < 8);
+        Assert.NotNull(accepted);
         Assert.Equal("Accepted", accepted.Disposition);
         Assert.Equal(456UL, accepted.T1Us);
         Assert.Equal(66_667, accepted.ArrivalMarginUs);
         Assert.Equal(8UL, snapshot.LastAppliedInputTick);
-        Assert.Equal(19, snapshot.State);
+        // Tick 8 applies input 7 and action 5; each later tick reuses the held input 7.
+        Assert.InRange(snapshot.Anchor.Tick, 8UL, 13UL);
+        Assert.Equal(12 + 7 * (int)(snapshot.Anchor.Tick - 8), snapshot.State);
     }
 
     private static async Task CheckDelayedAdmissionAsync(
