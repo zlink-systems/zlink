@@ -165,7 +165,17 @@ int main ()
     const auto actor_transfer_coordinator =
       read_text_file (root / "framework/src/runtime/spots/actor_transfer_coordinator.cpp");
     const auto mesh_node_host_service =
-      read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
+      read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp")
+      + read_text_file (root
+                        / "framework/src/runtime/mesh/mesh_node_host_actor_creation_completion.cpp")
+      + read_text_file (root
+                        / "framework/src/runtime/mesh/mesh_node_host_actor_creation_target.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_actor_lifecycle.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_descriptors.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_dispatch.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_operations.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_placement.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_user_spot.cpp");
     const auto framework_message =
       read_text_file (include_root / "zlink/framework/contracts/messaging/message.hpp");
     const auto serializer_header =
