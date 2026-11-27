@@ -64,7 +64,15 @@ public final class ZLinkAggregateRelocationCoordinator {
     }
 
     public record ExpectedParticipant(
-            String authorityKey, long objectGeneration, long sourceAuthorityOwnerGeneration) {
+            String authorityKey,
+            long objectGeneration,
+            long sourceAuthorityOwnerGeneration,
+            String storeVersion) {
+        public ExpectedParticipant(
+                String authorityKey, long objectGeneration, long sourceAuthorityOwnerGeneration) {
+            this(authorityKey, objectGeneration, sourceAuthorityOwnerGeneration, null);
+        }
+
         public ExpectedParticipant {
             if (authorityKey == null
                     || authorityKey.isBlank()
@@ -476,6 +484,16 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                                                 .sourceAuthorityOwnerGeneration())
                                                             throw new IllegalStateException(
                                                                     "Source capture authority fence differs");
+                                                        if (participant.storeVersion() != null
+                                                                && !participant
+                                                                        .storeVersion()
+                                                                        .equals(
+                                                                                snapshot
+                                                                                        .storeVersion())) {
+                                                            throw new AuthorityConflictException(
+                                                                    new ZLinkAuthorityConflict(
+                                                                            snapshot));
+                                                        }
                                                         entries.add(
                                                                 new ZLinkAuthorityEntry(
                                                                         participant.authorityKey(),

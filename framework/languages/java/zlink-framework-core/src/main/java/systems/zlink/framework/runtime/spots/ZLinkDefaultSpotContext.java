@@ -1305,7 +1305,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         }
     }
 
-    private static Class<?> loadTimerHandler(ClassLoader loader, String name) {
+    static Class<?> loadTimerHandler(ClassLoader loader, String name) {
         try {
             return Class.forName(name, false, loader);
         } catch (ClassNotFoundException error) {

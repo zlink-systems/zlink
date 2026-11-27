@@ -378,6 +378,25 @@ final class ZLinkSpotActivationFactory {
             Class<? extends ZLinkInstanceSpot> spotType,
             ZLinkBackendSpot backendSpot,
             systems.zlink.framework.execution.ZLinkSerialExecutionQueue ownerQueue) {
+        return activateInstance(meshName, nodeRid, spotType, backendSpot, ownerQueue, null);
+    }
+
+    CompletionStage<ZLinkInstanceSpotActivation> activateInstanceRelocation(
+            String meshName,
+            RoutingId nodeRid,
+            Class<? extends ZLinkInstanceSpot> spotType,
+            ZLinkBackendSpot backendSpot,
+            byte[] timerEnvelope) {
+        return activateInstance(meshName, nodeRid, spotType, backendSpot, null, timerEnvelope);
+    }
+
+    private CompletionStage<ZLinkInstanceSpotActivation> activateInstance(
+            String meshName,
+            RoutingId nodeRid,
+            Class<? extends ZLinkInstanceSpot> spotType,
+            ZLinkBackendSpot backendSpot,
+            ZLinkSerialExecutionQueue ownerQueue,
+            byte[] timerEnvelope) {
         DefaultInstanceSpotContext context =
                 new DefaultInstanceSpotContext(
                         host,
@@ -410,22 +429,30 @@ final class ZLinkSpotActivationFactory {
                     context.bind(spot, preparedActivation);
                     spot.configure();
                     context.closeRegistration(spotType);
-                    return spot.onInitialize()
-                            .thenApply(
-                                    ignored -> {
-                                        // Instance Spots do not register Logical Multicast
-                                        // handlers.
-                                        registerDispatchHandler(
-                                                backendSpot,
-                                                preparedActivation::handleDispatchEvent,
-                                                preparedActivation::admitRoute,
-                                                message -> null,
-                                                preparedActivation::admitActor);
-                                        return preparedActivation;
-                                    });
+                    CompletionStage<Void> initialized;
+                    if (timerEnvelope == null) {
+                        initialized = spot.onInitialize();
+                    } else {
+                        context.stageTimerRelocationEnvelope(timerEnvelope);
+                        initialized = CompletableFuture.completedFuture(null);
+                    }
+                    return initialized.thenApply(
+                            ignored -> {
+                                // Instance Spots do not register Logical Multicast
+                                // handlers.
+                                registerDispatchHandler(
+                                        backendSpot,
+                                        preparedActivation::handleDispatchEvent,
+                                        preparedActivation::admitRoute,
+                                        message -> null,
+                                        preparedActivation::admitActor);
+                                return preparedActivation;
+                            });
                 };
         return (ownerQueue == null
-                        ? context.prepareActivation(initialize)
+                        ? (timerEnvelope == null
+                                ? context.prepareActivation(initialize)
+                                : context.prepareRelocationTarget(initialize))
                         : ZLinkSerialExecutionQueue.manageCurrent(
                                 context.runLifecycleExecution(initialize)
                                         .exceptionallyCompose(
