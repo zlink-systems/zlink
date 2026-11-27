@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/mesh_node_vertical_cases.hpp"
+#include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink.hpp>
 #include <atomic>
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -65,7 +66,7 @@ struct local_route_probe_state_t
 {
     std::mutex mutex;
     std::condition_variable changed;
-    bool gate_open = false;
+    zlink::framework::task_completion_source_t<void> release;
     int entered = 0;
     int completed = 0;
     std::vector<std::string> values;
@@ -81,24 +82,28 @@ class local_route_probe_handler_t
   public:
     explicit local_route_probe_handler_t (local_route_probe_state_t &state) : _state (state) {}
 
-    void handle (const local_route_probe_message_t &message,
-                 const zlink::framework::route_message_context_t &context)
+    zlink::framework::task_t<void> handle (const local_route_probe_message_t &message,
+                                           const zlink::framework::route_message_context_t &context)
     {
-        std::unique_lock lock (_state.mutex);
-        ++_state.entered;
-        // v11 MessageContext: node-direct dispatch has no ChannelName, so the router channel
-        // identity travels in the Mesh name and only the source node RID is added.
-        _state.last_mesh_name = context.mesh_name.value_or ("<none>");
-        _state.last_channel_name = context.channel_name.value_or ("<none>");
-        _state.last_packet_name = context.packet_name;
-        _state.last_content_type = context.content_type.value_or ("<none>");
-        _state.last_source_node_rid = context.source_node_rid.to_string ();
-        _state.values.push_back (message.value);
+        {
+            std::lock_guard lock (_state.mutex);
+            ++_state.entered;
+            // Node-direct dispatch carries the mesh name and source node RID.
+            _state.last_mesh_name = context.mesh_name.value_or ("<none>");
+            _state.last_channel_name = context.channel_name.value_or ("<none>");
+            _state.last_packet_name = context.packet_name;
+            _state.last_content_type = context.content_type.value_or ("<none>");
+            _state.last_source_node_rid = context.source_node_rid.to_string ();
+            _state.values.push_back (message.value);
+        }
         _state.changed.notify_all ();
         if (message.value == "throw")
             throw std::runtime_error ("local route probe failure");
-        _state.changed.wait (lock, [this] { return _state.gate_open; });
-        ++_state.completed;
+        co_await _state.release.task ();
+        {
+            std::lock_guard lock (_state.mutex);
+            ++_state.completed;
+        }
         _state.changed.notify_all ();
     }
 
@@ -203,8 +208,8 @@ void verify_local_node_submit_bridge ()
     };
     verify_released_capacity ();
 
-    // Node pipelines have no gate. Both another Node and this Node's successor
-    // enter before the first handler completes (02 §2).
+    // Both another Node and this Node's successor enter while the first handler
+    // remains suspended (execution gate §2).
     auto independent = encode ("independent-owner", "independent-mesh");
     assert (
       service.submit_local_node_send (independent_node, independent.items ()).result ().value ()
@@ -227,11 +232,7 @@ void verify_local_node_submit_bridge ()
     }
     verify_released_capacity ();
 
-    {
-        std::lock_guard lock (probe->mutex);
-        probe->gate_open = true;
-    }
-    probe->changed.notify_all ();
+    (void) probe->release.complete (zlink::framework::result_t<void>::success ());
     {
         std::unique_lock lock (probe->mutex);
         assert (probe->changed.wait_for (lock, 1s, [&] { return probe->completed == 3; }));
