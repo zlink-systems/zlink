@@ -9,211 +9,64 @@ import "C"
 
 import (
 	"errors"
-	"fmt"
 	"syscall"
+
+	contracts "zlink.systems/zlink/contracts"
 )
 
-type ZlinkError interface {
-	error
-	Code() int
-	InternalErrno() int
-}
+type (
+	ZlinkError   = contracts.ZlinkError
+	SubmitError  = contracts.SubmitError
+	RequestError = contracts.RequestError
+	RecvError    = contracts.RecvError
+	HandlerError = contracts.HandlerError
+	CloseError   = contracts.CloseError
+	BindError    = contracts.BindError
+	ConnectError = contracts.ConnectError
+	ConfigError  = contracts.ConfigError
+)
 
-type SubmitError struct {
-	Result      SubmitResult
-	nativeErrno int
-}
-
-type RequestError struct {
-	Result      RequestResult
-	nativeErrno int
-}
-
-type RecvError struct {
-	Result      RecvResult
-	nativeErrno int
-}
-
-// isNoData reports whether err is a RecvError carrying the no-data result —
-// the signal a non-blocking receive raises when nothing was available.
+// isNoData reports whether a non-blocking receive found no message.
 func isNoData(err error) bool {
 	var recvErr *RecvError
 	return errors.As(err, &recvErr) && recvErr.Result == RecvNoData
 }
 
-type HandlerError struct {
-	Result      HandlerResult
-	nativeErrno int
+// nativeStrerror formats a captured errno only when Error() is called.
+func nativeStrerror(errno int) string {
+	return C.GoString(C.zlink_strerror(C.int(denormalizeNativeErrno(errno))))
 }
 
-type CloseError struct {
-	Result      CloseResult
-	nativeErrno int
+func newSubmitError(result SubmitResult, errno int) *SubmitError {
+	return contracts.NewSubmitError(result, normalizeNativeErrno(errno), nativeStrerror)
 }
 
-type BindError struct {
-	Result      BindResult
-	nativeErrno int
+func newRequestError(result RequestResult, errno int) *RequestError {
+	return contracts.NewRequestError(result, normalizeNativeErrno(errno), nativeStrerror)
 }
 
-type ConnectError struct {
-	Result      ConnectResult
-	nativeErrno int
+func newRecvError(result RecvResult, errno int) *RecvError {
+	return contracts.NewRecvError(result, normalizeNativeErrno(errno), nativeStrerror)
 }
 
-type ConfigError struct {
-	Result      ConfigResult
-	nativeErrno int
+func newHandlerError(result HandlerResult, errno int) *HandlerError {
+	return contracts.NewHandlerError(result, normalizeNativeErrno(errno), nativeStrerror)
 }
 
-func (e *SubmitError) Error() string {
-	return formatError("submit", int(e.Result), e.internalErrno())
+func newCloseError(result CloseResult, errno int) *CloseError {
+	return contracts.NewCloseError(result, normalizeNativeErrno(errno), nativeStrerror)
 }
 
-func (e *SubmitError) Code() int { return int(e.Result) }
-
-func (e *SubmitError) InternalErrno() int { return e.internalErrno() }
-
-func (e *SubmitError) Unwrap() error { return errnoToError(e.internalErrno()) }
-
-func (e *RequestError) Error() string {
-	return formatError("request", int(e.Result), e.internalErrno())
+func newBindError(result BindResult, errno int) *BindError {
+	return contracts.NewBindError(result, normalizeNativeErrno(errno), nativeStrerror)
 }
 
-func (e *RequestError) Code() int { return int(e.Result) }
-
-func (e *RequestError) InternalErrno() int { return e.internalErrno() }
-
-func (e *RequestError) Unwrap() error { return errnoToError(e.internalErrno()) }
-
-func (e *RecvError) Error() string {
-	return formatError("recv", int(e.Result), e.internalErrno())
+func newConnectError(result ConnectResult, errno int) *ConnectError {
+	return contracts.NewConnectError(result, normalizeNativeErrno(errno), nativeStrerror)
 }
 
-func (e *RecvError) Code() int { return int(e.Result) }
-
-func (e *RecvError) InternalErrno() int { return e.internalErrno() }
-
-func (e *RecvError) Unwrap() error { return errnoToError(e.internalErrno()) }
-
-func (e *HandlerError) Error() string {
-	return formatError("handler", int(e.Result), e.internalErrno())
-}
-
-func (e *HandlerError) Code() int { return int(e.Result) }
-
-func (e *HandlerError) InternalErrno() int { return e.internalErrno() }
-
-func (e *HandlerError) Unwrap() error { return errnoToError(e.internalErrno()) }
-
-func (e *CloseError) Error() string {
-	return formatError("close", int(e.Result), e.internalErrno())
-}
-
-func (e *CloseError) Code() int { return int(e.Result) }
-
-func (e *CloseError) InternalErrno() int { return e.internalErrno() }
-
-func (e *CloseError) Unwrap() error { return errnoToError(e.internalErrno()) }
-
-func (e *BindError) Error() string {
-	return formatError("bind", int(e.Result), e.internalErrno())
-}
-
-func (e *BindError) Code() int { return int(e.Result) }
-
-func (e *BindError) InternalErrno() int { return e.internalErrno() }
-
-func (e *BindError) Unwrap() error { return errnoToError(e.internalErrno()) }
-
-func (e *ConnectError) Error() string {
-	return formatError("connect", int(e.Result), e.internalErrno())
-}
-
-func (e *ConnectError) Code() int { return int(e.Result) }
-
-func (e *ConnectError) InternalErrno() int { return e.internalErrno() }
-
-func (e *ConnectError) Unwrap() error { return errnoToError(e.internalErrno()) }
-
-func (e *ConfigError) Error() string {
-	return formatError("config", int(e.Result), e.internalErrno())
-}
-
-func (e *ConfigError) Code() int { return int(e.Result) }
-
-func (e *ConfigError) InternalErrno() int { return e.internalErrno() }
-
-func (e *ConfigError) Unwrap() error { return errnoToError(e.internalErrno()) }
-
-func (e *SubmitError) internalErrno() int {
-	if e == nil {
-		return 0
-	}
-	return normalizeNativeErrno(e.nativeErrno)
-}
-
-func (e *RequestError) internalErrno() int {
-	if e == nil {
-		return 0
-	}
-	return normalizeNativeErrno(e.nativeErrno)
-}
-
-func (e *RecvError) internalErrno() int {
-	if e == nil {
-		return 0
-	}
-	return normalizeNativeErrno(e.nativeErrno)
-}
-
-func (e *HandlerError) internalErrno() int {
-	if e == nil {
-		return 0
-	}
-	return normalizeNativeErrno(e.nativeErrno)
-}
-
-func (e *CloseError) internalErrno() int {
-	if e == nil {
-		return 0
-	}
-	return normalizeNativeErrno(e.nativeErrno)
-}
-
-func (e *BindError) internalErrno() int {
-	if e == nil {
-		return 0
-	}
-	return normalizeNativeErrno(e.nativeErrno)
-}
-
-func (e *ConnectError) internalErrno() int {
-	if e == nil {
-		return 0
-	}
-	return normalizeNativeErrno(e.nativeErrno)
-}
-
-func (e *ConfigError) internalErrno() int {
-	if e == nil {
-		return 0
-	}
-	return normalizeNativeErrno(e.nativeErrno)
-}
-
-func formatError(kind string, code int, nativeErrno int) string {
-	if nativeErrno != 0 {
-		return fmt.Sprintf("%s error (%d): %s", kind, code, C.GoString(C.zlink_strerror(C.int(denormalizeNativeErrno(nativeErrno)))))
-	}
-	return fmt.Sprintf("%s error (%d)", kind, code)
-}
-
-func errnoToError(errno int) error {
-	if errno == 0 {
-		return nil
-	}
-	return syscall.Errno(normalizeNativeErrno(errno))
+func newConfigError(result ConfigResult, errno int) *ConfigError {
+	return contracts.NewConfigError(result, normalizeNativeErrno(errno), nativeStrerror)
 }
 
 // cgoErrno returns the errno that the cgo two-value call form captured on the
@@ -266,7 +119,7 @@ func submitErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCode == SubmitOK {
 		return nil
 	}
-	return &SubmitError{Result: resultCode, nativeErrno: cgoErrno(cerr)}
+	return newSubmitError(resultCode, cgoErrno(cerr))
 }
 
 // requestCompletionError maps a terminal completion result without consulting
@@ -277,7 +130,7 @@ func requestCompletionError(result RequestResult) error {
 	if result == RequestOK {
 		return nil
 	}
-	return &RequestError{Result: result, nativeErrno: fallbackRequestErrno(result)}
+	return newRequestError(result, fallbackRequestErrno(result))
 }
 
 func recvErrorFromCall[T resultCodeValue](result T, cerr error) error {
@@ -285,7 +138,7 @@ func recvErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCode == RecvOK {
 		return nil
 	}
-	return &RecvError{Result: resultCode, nativeErrno: cgoErrno(cerr)}
+	return newRecvError(resultCode, cgoErrno(cerr))
 }
 
 func handlerErrorFromCall[T resultCodeValue](result T, cerr error) error {
@@ -293,7 +146,7 @@ func handlerErrorFromCall[T resultCodeValue](result T, cerr error) error {
 		return nil
 	}
 	errno := cgoErrno(cerr)
-	return &HandlerError{Result: HandlerResult(resultCodeInt(result)), nativeErrno: errno}
+	return newHandlerError(HandlerResult(resultCodeInt(result)), errno)
 }
 
 func closeErrorFromCall[T resultCodeValue](result T, cerr error) error {
@@ -301,7 +154,7 @@ func closeErrorFromCall[T resultCodeValue](result T, cerr error) error {
 		return nil
 	}
 	errno := cgoErrno(cerr)
-	return &CloseError{Result: CloseResult(resultCodeInt(result)), nativeErrno: errno}
+	return newCloseError(CloseResult(resultCodeInt(result)), errno)
 }
 
 func bindErrorFromCall[T resultCodeValue](result T, cerr error) error {
@@ -309,7 +162,7 @@ func bindErrorFromCall[T resultCodeValue](result T, cerr error) error {
 		return nil
 	}
 	errno := cgoErrno(cerr)
-	return &BindError{Result: BindResult(resultCodeInt(result)), nativeErrno: errno}
+	return newBindError(BindResult(resultCodeInt(result)), errno)
 }
 
 func connectErrorFromCall[T resultCodeValue](result T, cerr error) error {
@@ -317,7 +170,7 @@ func connectErrorFromCall[T resultCodeValue](result T, cerr error) error {
 		return nil
 	}
 	errno := cgoErrno(cerr)
-	return &ConnectError{Result: ConnectResult(resultCodeInt(result)), nativeErrno: errno}
+	return newConnectError(ConnectResult(resultCodeInt(result)), errno)
 }
 
 func configErrorFromCall[T resultCodeValue](result T, cerr error) error {
@@ -325,36 +178,36 @@ func configErrorFromCall[T resultCodeValue](result T, cerr error) error {
 		return nil
 	}
 	errno := cgoErrno(cerr)
-	return &ConfigError{Result: ConfigResult(resultCodeInt(result)), nativeErrno: errno}
+	return newConfigError(ConfigResult(resultCodeInt(result)), errno)
 }
 
 func validationError(format string, args ...any) error {
-	return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+	return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 }
 
 func stateError(format string, args ...any) error {
-	return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+	return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
 }
 
 func configErrorFromErrno(errno int) error {
 	switch errno {
 	case int(C.EFAULT):
-		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: errno}
+		return newConfigError(ConfigInvalidHandle, errno)
 	case int(C.EINVAL), int(C.EMSGSIZE):
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: errno}
+		return newConfigError(ConfigInvalidArgument, errno)
 	case int(C.ENOTSUP):
-		return &ConfigError{Result: ConfigNotSupported, nativeErrno: errno}
+		return newConfigError(ConfigNotSupported, errno)
 	case int(C.EBUSY), int(C.ESHUTDOWN), int(C.ESTALE), int(C.EALREADY),
 		int(C.ENOTCONN), int(C.ETIMEDOUT), int(C.EPROTO):
-		return &ConfigError{Result: ConfigInvalidState, nativeErrno: errno}
+		return newConfigError(ConfigInvalidState, errno)
 	case int(C.ENOENT):
-		return &ConfigError{Result: ConfigNotFound, nativeErrno: errno}
+		return newConfigError(ConfigNotFound, errno)
 	case int(C.EEXIST):
-		return &ConfigError{Result: ConfigConflict, nativeErrno: errno}
+		return newConfigError(ConfigConflict, errno)
 	case int(C.ENOBUFS):
-		return &ConfigError{Result: ConfigBufferTooSmall, nativeErrno: errno}
+		return newConfigError(ConfigBufferTooSmall, errno)
 	default:
-		return &ConfigError{Result: ConfigInternalError, nativeErrno: errno}
+		return newConfigError(ConfigInternalError, errno)
 	}
 }
 

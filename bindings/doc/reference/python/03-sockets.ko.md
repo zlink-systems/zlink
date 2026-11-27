@@ -226,11 +226,15 @@ if sub.subscribe_into(msg):
 | `SubSocket` | `sub_options` | 타입별 option facade |
 | | `connect(endpoint)` / `disconnect(endpoint)` | peer 주소로 connect/disconnect |
 | | `set_subscription(topic)` / `unset_subscription(topic)` | topic filter를 추가/제거; 구독은 누적된다 |
-| | `subscription_at(index)` | `(filter, is_pattern)` tuple, 또는 `None` — 해당 index의 filter |
+| | `subscription_at(index)` | 해당 index의 `(filter, is_pattern)`. Core가 `ENOENT`를 반환하면 `None` |
 | | `subscribe_into(topic_message, *, flags=0)` | `topic_message`를 다음 매칭 publish로 채움 |
 | `XPubSocket` | `pub_options` / `connect` / `disconnect` / `publish` | `PubSocket`과 같은 형태 |
 | | `receive_subscription_event_into(event, *, flags=0)` | `event`를 다음 subscribe/unsubscribe로 채움 |
 | `XSubSocket` | `sub_options` / `connect` / `disconnect` / `set_subscription` / `unset_subscription` / `subscription_at` / `subscribe_into` | **`SubSocket`과 member 집합이 동일한, 완전히 독립적인 `Protocol` 선언** — 일치하는 형태 외엔 둘을 연결하는 공유 기반 타입이 없다 |
+
+바인딩은 자체 버퍼를 넘겨 `zlink_subscription_at`를 호출한다. 빈 filter를 포함해 성공하면
+조회를 끝낸다. Core가 `ENOBUFS`를 반환하면 Core가 알려 준 길이로 한 번 더 호출한다.
+그 밖의 Core 실패는 `ConfigError`를 발생시킨다.
 
 **Completion result.** `subscribe_into`/
 `receive_subscription_event_into`는 위 `DONT_WAIT`에서 `False`

@@ -52,7 +52,8 @@ struct public_host_runtime_test_access_t
     {
         public_host_runtime_t::relocation_target_attempt_t attempt;
         attempt.prepare = prepare;
-        attempt.cutover_received = !verified_restore.reference.empty ();
+        if (!verified_restore.reference.empty ())
+            attempt.phase = public_host_runtime_t::relocation_target_phase_t::cutover_received;
         attempt.restore_identity = std::move (verified_restore);
         attempt.sources = {source};
         attempt.targets = {target};

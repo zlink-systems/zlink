@@ -5,6 +5,7 @@
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/dispatch/host_capacity_runtime.hpp"
 #include "runtime/streams/stream_host_ingress.hpp"
+#include "runtime/streams/stream_startup_test_probe.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/utils/poll_interval_wait.hpp"
 #include <boost/asio/post.hpp>
@@ -234,7 +235,7 @@ stream_host_service_t::listener_t::listener_t (
   detail::stream_session_factory_t session_factory,
   service_provider_t &services,
   detail::delay_owner_t *delay_owner,
-  std::atomic_bool &stop,
+  stream_host_service_t &host,
   std::shared_ptr<std::atomic_bool> drain_flag,
   std::stop_token shutdown_cancellation,
   std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring,
@@ -253,7 +254,8 @@ stream_host_service_t::listener_t::listener_t (
     _session_factory (std::move (session_factory)),
     _services (&services),
     _delay_owner (delay_owner),
-    _stop (&stop),
+    _host (host),
+    _stop (&host._transport_stop),
     _drain_flag (std::move (drain_flag)),
     _shutdown_cancellation (std::move (shutdown_cancellation)),
     _monitoring (std::move (monitoring)),
@@ -277,6 +279,25 @@ stream_host_service_t::listener_t::listener_t (
         if (_active_metric)
             _active_metric->Add (0, {{"transport", _metric_transport}});
     }
+}
+
+bool stream_host_service_t::listener_t::start_ingress ()
+{
+    // Serialize the initial transport ingress launch with the admission seal.
+    const bool started = _host.with_listeners ([&] (const listeners_t &) {
+        if (_host._admission.load (std::memory_order_relaxed) != admission_t::accepting)
+            return false;
+        if (!_core_socket)
+            start_boost_accept ();
+        return true;
+    });
+    if (!started)
+        _bound_endpoint.clear ();
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+    if (started)
+        probe_stream_startup (stream_startup_event_t::accept_started);
+#endif
+    return started;
 }
 
 void stream_host_service_t::listener_t::run ()
@@ -327,7 +348,10 @@ void stream_host_service_t::listener_t::run ()
     }
     if (const auto endpoint = socket_endpoint_text (_acceptor.local_endpoint ()))
         _bound_endpoint = stream_endpoint_scheme (_stream) + *endpoint;
-    start_boost_accept ();
+    if (!start_ingress ()) {
+        boost::system::error_code ignored;
+        _acceptor.close (ignored);
+    }
     mark_started ();
     _io.run ();
 }
@@ -442,14 +466,14 @@ void stream_host_service_t::listener_t::mark_start_failed (std::string message)
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
 std::size_t stream_host_service_test_access_t::active_session_count (stream_host_service_t &service)
 {
-    return service._listeners.at (0)->active_session_count ();
+    return service.listener_snapshot ().at (0)->active_session_count ();
 }
 
 std::function<void ()>
 stream_host_service_test_access_t::observe_shutdown (stream_host_service_t &service,
                                                      stream_host_shutdown_test_hooks_t hooks)
 {
-    auto listener = service._listeners.at (0);
+    auto listener = service.listener_snapshot ().at (0);
     listener->_active_streams_lane
       .run ([listener, hooks = std::move (hooks)] () mutable {
           listener->_shutdown_test_hooks = std::move (hooks);
@@ -504,9 +528,12 @@ stream_host_service_t::~stream_host_service_t ()
 
 task_t<void> stream_host_service_t::start (service_provider_t &services)
 {
-    _services = &services;
-    _stop.store (false, std::memory_order_release);
     try {
+        with_listeners ([this] (listeners_t &) {
+            set_admission_locked (admission_t::accepting);
+            if (_admission.load (std::memory_order_relaxed) == admission_t::accepting)
+                _transport_stop.store (false, std::memory_order_release);
+        });
         if (_monitoring)
             _ingress->connect_metrics (_monitoring->metric_provider);
         for (const auto &stream : _streams) {
@@ -520,19 +547,26 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
                                           : advertise->second;
             validate_stream_listener_identity (stream, advertise_host);
             auto listener = std::make_shared<listener_t> (
-              _runtime, stream, advertise_host, factory->second, services, _delay_owner, _stop,
+              _runtime, stream, advertise_host, factory->second, services, _delay_owner, *this,
               _drain_flag, _shutdown_cancellation, _monitoring, _runtime_failures, _mesh_node,
               _application_jobs, *_ingress, _session_replacement_callback_timeout, _liveness_io);
-            auto *raw = listener.get ();
-            _listeners.push_back (std::move (listener));
-            _threads.emplace_back ([raw] { raw->run_guarded (); });
-            raw->wait_started ();
+            with_listeners ([&] (listeners_t &listeners) { listeners.push_back (listener); });
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+            probe_stream_startup (stream_startup_event_t::before_bind);
+#endif
+            _threads.emplace_back ([listener] { listener->run_guarded (); });
+            listener->wait_started ();
             if (_listener_statuses)
                 _listener_statuses->update (listener_kind_t::stream, stream.name,
-                                            raw->listener_endpoint ());
+                                            listener->listener_endpoint ());
         }
-        if (!_listeners.empty ()) {
+        const bool start_liveness = with_listeners ([&] (const listeners_t &listeners) {
+            if (listeners.empty () || _transport_stop.load (std::memory_order_relaxed))
+                return false;
             _liveness_io.restart ();
+            return true;
+        });
+        if (start_liveness) {
             _liveness_thread = std::thread ([this] {
                 const auto keep_alive = asio::make_work_guard (_liveness_io);
                 try {
@@ -556,16 +590,35 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
         }
     }
     catch (...) {
-        stop ();
+        stop_listeners (admission_t::inactive);
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+        probe_stream_startup (stream_startup_event_t::rollback_complete);
+#endif
         throw;
     }
     return task_t<void> (result_t<void>::success ());
 }
 
+void stream_host_service_t::set_admission_locked (admission_t next) noexcept
+{
+    if (_admission.load (std::memory_order_relaxed) != admission_t::sealed)
+        _admission.store (next, std::memory_order_release);
+}
+
+stream_host_service_t::listeners_t stream_host_service_t::listener_snapshot ()
+{
+    return with_listeners ([] (const listeners_t &listeners) { return listeners; });
+}
+
+void stream_host_service_t::seal_application_dispatch () noexcept
+{
+    with_listeners ([this] (const listeners_t &) { set_admission_locked (admission_t::sealed); });
+}
+
 void stream_host_service_t::notify_sessions_closing (stream_close_reason_t reason,
                                                      std::string_view diagnostic) noexcept
 {
-    for (const auto &listener : _listeners) {
+    for (const auto &listener : listener_snapshot ()) {
         if (listener) {
             try {
                 listener->notify_sessions_closing (reason, diagnostic);
@@ -580,7 +633,7 @@ void stream_host_service_t::notify_sessions_closing (stream_close_reason_t reaso
 void stream_host_service_t::force_close_sessions (stream_close_reason_t reason,
                                                   std::string_view diagnostic) noexcept
 {
-    for (const auto &listener : _listeners) {
+    for (const auto &listener : listener_snapshot ()) {
         if (listener) {
             try {
                 listener->force_close_sessions (reason, diagnostic);
@@ -595,10 +648,14 @@ void stream_host_service_t::force_close_sessions (stream_close_reason_t reason,
 bool stream_host_service_t::drain_sessions_until (
   std::chrono::steady_clock::time_point deadline) noexcept
 {
-    for (const auto &listener : _listeners) {
+    const auto listeners = listener_snapshot ();
+    for (const auto &listener : listeners) {
         if (!listener)
             continue;
         try {
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+            probe_stream_startup (stream_startup_event_t::before_drain_listener, listener);
+#endif
             listener->begin_drain_sessions ();
         }
         catch (...) {
@@ -608,7 +665,7 @@ bool stream_host_service_t::drain_sessions_until (
     }
     while (std::chrono::steady_clock::now () < deadline) {
         bool drained = true;
-        for (const auto &listener : _listeners) {
+        for (const auto &listener : listeners) {
             if (listener && listener->active_session_count () != 0) {
                 drained = false;
                 break;
@@ -618,34 +675,48 @@ bool stream_host_service_t::drain_sessions_until (
             return true;
         zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (10));
     }
-    return std::all_of (_listeners.begin (), _listeners.end (), [] (const auto &listener) {
+    return std::all_of (listeners.begin (), listeners.end (), [] (const auto &listener) {
         return !listener || listener->active_session_count () == 0;
     });
 }
 
-void stream_host_service_t::request_stop () noexcept
+stream_host_service_t::listeners_t stream_host_service_t::request_listener_stop (admission_t next)
 {
-    _stop.store (true, std::memory_order_release);
+    auto listeners = with_listeners ([&] (const listeners_t &owned) {
+        set_admission_locked (next);
+        _transport_stop.store (true, std::memory_order_release);
+        return owned;
+    });
     _liveness_io.stop ();
     if (_application_jobs)
         _application_jobs->stop ();
-    for (auto &listener : _listeners) {
+    for (const auto &listener : listeners)
         listener->request_stop ();
-    }
+    return listeners;
+}
+
+void stream_host_service_t::request_stop () noexcept
+{
+    (void) request_listener_stop (admission_t::sealed);
 }
 
 void stream_host_service_t::stop () noexcept
 {
-    request_stop ();
+    stop_listeners (admission_t::sealed);
+}
+
+void stream_host_service_t::stop_listeners (admission_t next) noexcept
+{
+    auto listeners = request_listener_stop (next);
     if (_liveness_thread.joinable ())
         _runtime_failures->capture ([&] { _liveness_thread.join (); });
-    for (auto &listener : _listeners)
+    for (const auto &listener : listeners)
         _runtime_failures->capture ([&] { listener->stop_connections (); });
     for (auto &thread : _threads)
         if (thread.joinable ())
             _runtime_failures->capture ([&] { thread.join (); });
     std::erase_if (_threads, [] (auto &thread) { return !thread.joinable (); });
-    std::erase_if (_listeners, [&] (auto &listener) {
+    std::erase_if (listeners, [&] (const auto &listener) {
         const bool connections_closed =
           _runtime_failures->capture ([&] { listener->stop_connections (); });
         const bool resources_closed =
@@ -655,7 +726,7 @@ void stream_host_service_t::stop () noexcept
               [&] { _listener_statuses->remove (listener_kind_t::stream, listener->name ()); });
         return connections_closed && resources_closed;
     });
-    _services = nullptr;
+    with_listeners ([&] (listeners_t &owned) { owned.swap (listeners); });
 }
 
 } // namespace zlink::framework::runtime

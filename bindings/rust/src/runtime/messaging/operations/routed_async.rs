@@ -7,110 +7,122 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use crate::error::{SubmitError, SubmitResult, ZlinkError};
-use crate::ffi;
-use crate::internal::{CompletionEntry, CompletionOwner, RoutedHandle};
-use crate::message::{Message, RoutingId};
-use crate::messaging_operations::{
-    Empty, MessageParts, RequestOp, RequestOpStorage, RequestSubmission,
+use crate::contracts::errors::errors::{SubmitError, SubmitResult, ZlinkError};
+use crate::contracts::messaging::message::{Message, RoutingId};
+use crate::contracts::messaging::operations::{
+    Empty, RequestOp, RequestOpStorage, RequestSubmission,
 };
-use crate::native_errors::submit_error_from_rc;
+use crate::internal::MessageParts;
+use crate::internal::{CompletionEntry, CompletionOwner};
+use crate::runtime::errors::native_errors::submit_error_from_rc;
+use crate::runtime::native::ffi;
 
 use super::send_ops::{check_submit_result, is_writable_wait, submit_shared_message};
 
-pub(crate) fn dealer_request_op(
-    routed: Arc<RoutedHandle>,
-    completion_owner: Arc<CompletionOwner>,
-) -> RequestOp<Empty> {
-    RequestOp {
-        inner: RequestOpStorage {
-            routed,
-            completion_owner,
-            peer_rid: None,
-            parts: MessageParts::default(),
-            timeout: Duration::ZERO,
-        },
-        _state: std::marker::PhantomData,
-    }
-}
-
-pub(crate) fn router_request_op(
-    routed: Arc<RoutedHandle>,
-    completion_owner: Arc<CompletionOwner>,
-    peer_rid: RoutingId,
-) -> RequestOp<Empty> {
-    RequestOp {
-        inner: RequestOpStorage {
-            routed,
-            completion_owner,
-            peer_rid: Some(peer_rid),
-            parts: MessageParts::default(),
-            timeout: Duration::ZERO,
-        },
-        _state: std::marker::PhantomData,
-    }
-}
-
-pub(crate) fn submit_routed_request(
-    mut operation: RequestOpStorage,
-) -> Result<RequestSubmission, ZlinkError> {
-    validate_request(&operation)?;
-    let owner = Arc::clone(&operation.completion_owner);
-    owner.ensure_public_owner()?;
-    let (entry, context) = owner.register_request()?;
-    match submit_request_attempt(&mut operation, &entry, context) {
-        Ok(RequestAttempt::Admitted) => {
-            entry.admission_succeeded();
-            Ok(RequestSubmission {
-                result: SubmitResult::Ok,
-                admitted: Box::pin(std::future::ready(Ok(()))),
-                reply: Box::pin(RequestReplyFuture::new(entry, Arc::clone(&owner), context)),
-            })
+impl crate::internal::SocketStorage {
+    pub(crate) fn dealer_request_op(&self) -> RequestOp<Empty> {
+        let routed = self.routed_handle.as_ref().expect("DEALER handle").clone();
+        let completion_owner = self
+            .completion_owner
+            .as_ref()
+            .expect("DEALER completion owner")
+            .clone();
+        RequestOp {
+            inner: RequestOpStorage {
+                routed,
+                completion_owner,
+                peer_rid: None,
+                parts: MessageParts::default(),
+                timeout: Duration::ZERO,
+            },
+            _state: std::marker::PhantomData,
         }
-        Ok(RequestAttempt::Waiting) => Ok(RequestSubmission {
-            result: SubmitResult::Backpressured,
-            admitted: Box::pin(RequestAdmissionFuture {
-                operation: Some(operation),
-                entry: Arc::clone(&entry),
-                owner: Arc::clone(&owner),
-                context,
-                waiting_for_writable: true,
-                finished: false,
+    }
+}
+
+impl crate::internal::SocketStorage {
+    pub(crate) fn router_request_op(&self, peer_rid: RoutingId) -> RequestOp<Empty> {
+        let routed = self.routed_handle.as_ref().expect("ROUTER handle").clone();
+        let completion_owner = self
+            .completion_owner
+            .as_ref()
+            .expect("ROUTER completion owner")
+            .clone();
+        RequestOp {
+            inner: RequestOpStorage {
+                routed,
+                completion_owner,
+                peer_rid: Some(peer_rid),
+                parts: MessageParts::default(),
+                timeout: Duration::ZERO,
+            },
+            _state: std::marker::PhantomData,
+        }
+    }
+}
+
+impl RequestOpStorage {
+    pub(crate) fn submit_routed_request(self) -> Result<RequestSubmission, ZlinkError> {
+        let mut operation = self;
+        validate_request(&operation)?;
+        let owner = Arc::clone(&operation.completion_owner);
+        owner.ensure_public_owner()?;
+        let (entry, context) = owner.register_request()?;
+        match submit_request_attempt(&mut operation, &entry, context) {
+            Ok(RequestAttempt::Admitted) => {
+                entry.admission_succeeded();
+                Ok(RequestSubmission {
+                    result: SubmitResult::Ok,
+                    admitted: Box::pin(std::future::ready(Ok(()))),
+                    reply: Box::pin(RequestReplyFuture::new(entry, Arc::clone(&owner), context)),
+                })
+            }
+            Ok(RequestAttempt::Waiting) => Ok(RequestSubmission {
+                result: SubmitResult::Backpressured,
+                admitted: Box::pin(RequestAdmissionFuture {
+                    operation: Some(operation),
+                    entry: Arc::clone(&entry),
+                    owner: Arc::clone(&owner),
+                    context,
+                    waiting_for_writable: true,
+                    finished: false,
+                }),
+                reply: Box::pin(RequestReplyFuture::new(entry, Arc::clone(&owner), context)),
             }),
-            reply: Box::pin(RequestReplyFuture::new(entry, Arc::clone(&owner), context)),
-        }),
-        Err(failure) => {
-            if failure.live_token {
-                if entry.detach() {
+            Err(failure) => {
+                if failure.live_token {
+                    if entry.detach() {
+                        owner.unregister(context);
+                    }
+                } else {
                     owner.unregister(context);
                 }
-            } else {
-                owner.unregister(context);
+                Err(failure.error.into())
             }
-            Err(failure.error.into())
         }
     }
 }
 
-pub(crate) fn submit_routed_request_sync(
-    mut operation: RequestOpStorage,
-) -> Result<Vec<Message>, ZlinkError> {
-    validate_request(&operation)?;
-    let owner = Arc::clone(&operation.completion_owner);
-    let (entry, user_context) = owner.register_request()?;
-    let submission = (|| {
-        let completion_id = submit_request_parts(&mut operation, 0, user_context)?;
-        if completion_id == 0 {
-            return Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO));
+impl RequestOpStorage {
+    pub(crate) fn submit_routed_request_sync(self) -> Result<Vec<Message>, ZlinkError> {
+        let mut operation = self;
+        validate_request(&operation)?;
+        let owner = Arc::clone(&operation.completion_owner);
+        let (entry, user_context) = owner.register_request()?;
+        let submission = (|| {
+            let completion_id = submit_request_parts(&mut operation, 0, user_context)?;
+            if completion_id == 0 {
+                return Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO));
+            }
+            entry.publish_request(completion_id);
+            Ok(())
+        })();
+        if let Err(error) = submission {
+            owner.unregister(user_context);
+            return Err(error.into());
         }
-        entry.publish_request(completion_id);
-        Ok(())
-    })();
-    if let Err(error) = submission {
-        owner.unregister(user_context);
-        return Err(error.into());
+        owner.wait_request_inline(&entry)
     }
-    owner.wait_request_inline(&entry)
 }
 
 /// Managed DONTWAIT REQUEST.
@@ -293,7 +305,8 @@ fn submit_request_attempt(
         .peer_rid
         .as_ref()
         .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
-    let timeout_ms = duration_to_timeout_ms(operation.timeout);
+    let timeout_ms =
+        duration_to_timeout_ms(operation.timeout).map_err(RequestAttemptError::without_token)?;
     let mut completion_id = 0;
     let handle = operation.routed.handle();
     if handle.is_null() {
@@ -352,7 +365,7 @@ fn submit_request_parts(
         .peer_rid
         .as_ref()
         .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
-    let timeout_ms = duration_to_timeout_ms(operation.timeout);
+    let timeout_ms = duration_to_timeout_ms(operation.timeout)?;
     let mut completion_id = 0;
     let (rc, errno) = submit_shared_message(&mut operation.parts, |parts, count| unsafe {
         ffi::zlink_request(
@@ -370,10 +383,12 @@ fn submit_request_parts(
     Ok(completion_id)
 }
 
-fn duration_to_timeout_ms(duration: Duration) -> u32 {
+/// Zero means no timeout; a sub-millisecond timeout rounds up to 1 ms. A
+/// timeout beyond Core's `u32` milliseconds is rejected, never clamped.
+fn duration_to_timeout_ms(duration: Duration) -> Result<u32, SubmitError> {
     if duration.is_zero() {
-        0
-    } else {
-        duration.as_millis().clamp(1, u32::MAX as u128) as u32
+        return Ok(0);
     }
+    u32::try_from(duration.as_millis().max(1))
+        .map_err(|_| SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL))
 }

@@ -116,7 +116,9 @@ task_t<void> actor_transfer_coordinator_t::wait_for_source_completions ()
     const auto completions = co_await _lane.run_task ([this] {
         std::vector<std::shared_ptr<lane_completion_waiter_t>> result;
         for (auto &[key, move] : _moves) {
-            if (move.phase == actor_move_phase_t::local || is_source_move (move))
+            if (move.phase == actor_move_phase_t::local
+                || move.phase == actor_move_phase_t::local_completion_failed
+                || is_source_move (move))
                 result.push_back (close_completion_on_lane (move));
         }
         return result;
@@ -174,12 +176,15 @@ result_t<void> actor_transfer_coordinator_t::try_claim_source_on_lane (const std
 }
 
 result_t<void> actor_transfer_coordinator_t::try_reserve_source (const std::string &actor_key,
-                                                                 std::string transfer_id)
+                                                                 std::string transfer_id,
+                                                                 bool pending_relocation_request)
 {
     return _lane
       .run ([&, this] {
           return try_claim_source_on_lane (
-            actor_key, {actor_move_phase_t::source_reserved, std::move (transfer_id)});
+            actor_key, {.phase = actor_move_phase_t::source_reserved,
+                        .transfer_id = std::move (transfer_id),
+                        .pending_relocation_request_at_reservation = pending_relocation_request});
       })
       .get ();
 }
@@ -198,6 +203,17 @@ result_t<void> actor_transfer_coordinator_t::try_begin_local (const std::string 
           return try_claim_source_on_lane (actor_key, {actor_move_phase_t::local, std::string{}});
       })
       .get ();
+}
+
+task_t<void> actor_transfer_coordinator_t::mark_local_completion_failed (std::string actor_key)
+{
+    return _lane.run_task ([this, actor_key = std::move (actor_key)] {
+        const auto found = _moves.find (actor_key);
+        if (found != _moves.end () && found->second.phase == actor_move_phase_t::local) {
+            found->second.local_completion_sealed_at = std::chrono::steady_clock::now ();
+            found->second.phase = actor_move_phase_t::local_completion_failed;
+        }
+    });
 }
 
 result_t<void> actor_transfer_coordinator_t::try_begin_source_remote (const std::string &actor_key,
@@ -361,11 +377,18 @@ handoff_append_result_t
 actor_transfer_coordinator_t::try_append_backlog_unlocked (const std::string &actor_key,
                                                            handoff_packet_t &packet)
 {
-    if (!blocks_dispatch_on_lane (actor_key))
+    const auto *move = blocking_move_on_lane (actor_key);
+    if (!move)
         return handoff_append_result_t::not_moving;
+    if (move->phase == actor_move_phase_t::local_completion_failed) {
+        // A native record can reach the Actor after its FIFO already admitted it.
+        const auto *record =
+          packet.application_record ? packet.application_record->identity () : nullptr;
+        if (!record || record->actor_admitted_at == std::chrono::steady_clock::time_point::min ()
+            || record->actor_admitted_at > move->local_completion_sealed_at)
+            return handoff_append_result_t::join_completion_failed;
+    }
     const auto backlog_found = _backlogs.find (actor_key);
-    const auto backlog_size =
-      backlog_found == _backlogs.end () ? std::size_t{0} : backlog_found->second.size ();
     if (packet.is_request) {
         const auto request_id = packet.metadata.find (actor_request_id_key);
         if (request_id != packet.metadata.end () && !request_id->second.empty ()
@@ -906,21 +929,26 @@ actor_transfer_coordinator_t::remove_message_follow_on_lane (
     return removed;
 }
 
-bool actor_transfer_coordinator_t::blocks_dispatch_on_lane (const std::string &actor_key) const
+const actor_transfer_coordinator_t::move_state_t *
+actor_transfer_coordinator_t::blocking_move_on_lane (const std::string &actor_key) const
 {
     const auto found = _moves.find (actor_key);
-    return found != _moves.end () && found->second.phase != actor_move_phase_t::source_reserved;
+    if (found == _moves.end () || found->second.phase == actor_move_phase_t::source_reserved)
+        return nullptr;
+    return &found->second;
 }
 
 bool actor_transfer_coordinator_t::blocks_dispatch (const std::string &actor_key) const
 {
-    return _lane.run_checked ([&, this] { return blocks_dispatch_on_lane (actor_key); }).get ();
+    return _lane.run_checked ([&, this] { return blocking_move_on_lane (actor_key) != nullptr; })
+      .get ();
 }
 
 task_t<bool> actor_transfer_coordinator_t::blocks_dispatch_async (std::string actor_key) const
 {
-    return _lane.run_task (
-      [this, actor_key = std::move (actor_key)] { return blocks_dispatch_on_lane (actor_key); });
+    return _lane.run_task ([this, actor_key = std::move (actor_key)] {
+        return blocking_move_on_lane (actor_key) != nullptr;
+    });
 }
 
 
@@ -944,6 +972,19 @@ actor_transfer_coordinator_t::transfer_id (const std::string &actor_key) const
           return found == _moves.end () || found->second.transfer_id.empty ()
                    ? std::nullopt
                    : std::make_optional (found->second.transfer_id);
+      })
+      .get ();
+}
+
+bool actor_transfer_coordinator_t::reserved_with_pending_relocation_request (
+  const std::string &actor_key) const
+{
+    return _lane
+      .run ([&] {
+          const auto found = _moves.find (actor_key);
+          return found != _moves.end ()
+                 && found->second.phase == actor_move_phase_t::source_reserved
+                 && found->second.pending_relocation_request_at_reservation;
       })
       .get ();
 }
