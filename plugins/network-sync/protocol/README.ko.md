@@ -15,6 +15,6 @@
 
 `match_id`는 불투명한 매치 식별자입니다. `epoch`, `tick`, `target_tick`, `last_snapshot_tick`, `last_applied_input_tick`, `probe_id`, `action_id`는 각각 세대·틱 또는 식별 순번입니다. `t1_us`, `hold_us`, `since_tick_us`, `arrival_margin_us`, `tick_us`의 단위는 마이크로초입니다. `tick_us`는 양수이고 `arrival_margin_us`만 음수를 허용합니다. `tick`은 최신 완료 틱입니다. `input_feedback`은 해당 입력의 관측값이고 `used_fallback_input`은 마지막 적용 입력 틱의 대체 입력 사용 여부입니다.
 
-`u64`, `positive_u64`, `i64`는 표의 범위를 따르는 64비트 정수이며 10진 JSON 문자열로 표현합니다. `disposition`은 `wire-v1.json`의 `enums`에 선언한 이름을 대소문자까지 맞춰 JSON 문자열로 표현합니다. 선언하지 않은 이름, JSON 숫자, 숫자 ordinal 문자열은 거부합니다. 정수와 enum 표현은 [framework-json-v1 §5](../../../doc/framework/common/spec/server/00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)를 따릅니다.
+`u64`, `positive_u64`, `i64`는 표의 범위를 따르는 64비트 정수이며 10진 JSON 문자열로 표현합니다. `disposition`은 `wire-v1.json`의 `enums`에 선언한 이름을 대소문자까지 맞춰 JSON 문자열로 표현합니다. 선언하지 않은 이름, JSON 숫자, 숫자 ordinal 문자열은 거부합니다. 정수와 enum 표현은 [framework-json-v1 §5](../../../framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)를 따릅니다.
 
-검증: `python3 framework/plugins/network-sync/protocol/validate.py`. 이 검증은 정의와 fixture만 검사하며 실제 언어별 serializer의 적합성 시험을 대신하지 않습니다.
+검증: `python3 plugins/network-sync/protocol/validate.py`. 이 검증은 정의와 fixture만 검사하며 실제 언어별 serializer의 적합성 시험을 대신하지 않습니다.
