@@ -1161,6 +1161,16 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
             if (context.serial_queue)
                 context.serial_queue->cancel_pending ();
         }
+        // Host relocation §14 waits for cancellation to settle without a time limit;
+        // report what is still pending past the deadline so a stuck drain names its cause.
+        const auto pending =
+          std::ranges::count_if (plan.join_deliveries, [] (const task_t<void> &terminal) {
+              return !terminal.await_ready ();
+          });
+        if (pending != 0)
+            node.runtime_failures ()->report (std::make_exception_ptr (std::runtime_error (
+              "Spot drain passed its deadline with " + std::to_string (pending)
+              + " Actor Join deliveries still settling")));
     }
     // Join ready can still publish controls until its claim or cancellation settles.
     for (const auto &delivery : plan.join_deliveries)
