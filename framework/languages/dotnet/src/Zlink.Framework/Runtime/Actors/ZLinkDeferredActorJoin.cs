@@ -317,8 +317,7 @@ internal sealed class ZLinkDeferredActorJoin(
                 {
                     await relayed.SourceCleanup().ConfigureAwait(false);
                 }
-                catch (Locations.ZLinkAuthorityUnsettledAtStopException)
-                    when (completion is null)
+                catch (Locations.ZLinkAuthorityUnsettledAtStopException) when (completion is null)
                 {
                     //  Host relocation §14: the stop deadline passed with the authority
                     //  undecided. The stopping node does not settle it, so the waiting
