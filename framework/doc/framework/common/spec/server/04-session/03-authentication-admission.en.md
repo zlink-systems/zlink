@@ -279,7 +279,8 @@ Instance Spot default mesh), or the name of a STREAM registration with stage 2 o
     zero permits; nodes holding an earlier incarnation's permits treat them as returned after the report Response with the new
     epoch and don't count them again, so right after an incarnation change the limit can be exceeded briefly, by at most the
     number of permits that were executing or whose answer was in flight at the change (including a grant from the earlier
-    incarnation that arrives late).
+    incarnation that arrives late). A handler still running on a node whose owner lease ended and whose permits were reclaimed
+    counts as the same kind of temporary overshoot.
 - The estimated wait `estimatedWaitMs` is `ceil(position × 1000 / r)`, where r is the number of tickets issued in the last
   30 seconds divided by 30 (per second). When r is 0, it's `position × 1000`. The result is clamped to 2^31 − 1.
   `position` is the 1-based position across the mesh.
