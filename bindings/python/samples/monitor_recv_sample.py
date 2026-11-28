@@ -1,6 +1,7 @@
 import socket as _socket
 
 import zlink
+from sample_support import CONNECTION_TIMEOUT_MS
 
 
 def _reserve_tcp_port():
@@ -36,7 +37,7 @@ def main():
                             events = zlink.create_poll_events(2)
                             pending = {0, 1}
                             while pending:
-                                if poller.wait(events, 5000) == 0:
+                                if poller.wait(events, CONNECTION_TIMEOUT_MS) == 0:
                                     raise TimeoutError("monitor sample expected CONNECTION_READY")
                                 for index in range(events.ready_count):
                                     slot = events.slot(index)
