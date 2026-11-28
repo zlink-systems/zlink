@@ -4123,11 +4123,26 @@ internal sealed partial class ZLinkProviderLocationRepository
         AggregateRecord aggregate
     )
     {
-        using var deadline = new CancellationTokenSource(AmbiguousReconciliationTimeout);
-        await NormalizeCommittedAggregateAsync(fence, aggregate, deadline.Token)
-            .AsTask()
-            .WaitAsync(deadline.Token)
-            .ConfigureAwait(false);
+        using var deadline = new CancellationTokenSource(AmbiguousReconciliationTimeout, _time);
+        var cancellationToken = deadline.Token;
+        try
+        {
+            await NormalizeCommittedAggregateAsync(fence, aggregate, cancellationToken)
+                .AsTask()
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error)
+            when (error.CancellationToken == cancellationToken
+                && cancellationToken.IsCancellationRequested
+            )
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Normalization of committed aggregate '{fence.AggregateId:N}' exceeded its internal deadline.",
+                innerException: error
+            );
+        }
     }
 
     private static bool AggregateParticipantsEqual(

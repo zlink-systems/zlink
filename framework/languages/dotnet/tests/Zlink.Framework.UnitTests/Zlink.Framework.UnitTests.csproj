@@ -274,6 +274,7 @@
         <Compile Include="Runtime/SpotNodeInitializerTests.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.AggregatePublication.cs"/>
+        <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.AggregateCommitNormalization.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.CapacityReservation.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.FormatMigration.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.OwnerTokenReleaseWait.cs"/>
