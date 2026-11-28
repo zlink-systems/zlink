@@ -214,6 +214,9 @@ run_group() {
         Python) env_options=("${python_env[@]}") ;;
     esac
     options+=(--latency-duration 5 --monitor-hwm-bytes 4096000)
+    # C forwards --io-threads to run_comparison.py, which rejects it; C already
+    # defaults to 4 server and 4 client I/O threads (C baseline run.log).
+    if [[ $label != C ]]; then options+=(--io-threads 4); fi
 
     [[ ! -e "$out" && ! -L "$out" ]] || fail "Result directory already exists: $out"
     if (( execute )); then
@@ -226,7 +229,7 @@ run_group() {
     measure=("${common_env[@]}" "${env_options[@]}" "$run_one" "$name" \
         "$self" --execute --locked-runner "$stage/${runners[lang]}" \
         --reuse-build --pattern "$pattern" --transports tcp --msg-sizes "$run_sizes" \
-        --runs 1 --duration 5 --clients 100 --part-count 2 --io-threads 4 \
+        --runs 1 --duration 5 --clients 100 --part-count 2 \
         --connect-concurrency 128 --connect-ready-timeout-ms 10000 --server-ready-timeout-ms 10000 \
         --server-shutdown-timeout-ms 5000 --server-bind-port 0 --auto-hwm-profile balanced \
         --transport-transition-ms 3000 --pattern-transition-ms 3000 --sndtimeo 200 --rcvtimeo 200 \

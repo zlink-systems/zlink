@@ -91,13 +91,13 @@ internal static class ZLinkStreamControlFrames
         ZLinkManagedStream stream,
         ZlinkStreamHeader header,
         ReadOnlyMemory<byte> payload,
-        ILogger logger
+        ZLinkMessageFlowTracer flow
     )
     {
         if (header.Name == ZlinkStreamControlProtocol.HeartbeatPingName)
         {
             if (payload.Length != 0)
-                LogIgnoredControl(stream, header.Name, payload.Length, logger);
+                LogIgnoredControl(stream, header.Name, payload.Length, flow);
             SendHeartbeatPong(stream);
             return;
         }
@@ -105,7 +105,7 @@ internal static class ZLinkStreamControlFrames
         if (header.Name == ZlinkStreamControlProtocol.HeartbeatPongName)
         {
             if (payload.Length != 0)
-                LogIgnoredControl(stream, header.Name, payload.Length, logger);
+                LogIgnoredControl(stream, header.Name, payload.Length, flow);
             return;
         }
 
@@ -117,7 +117,7 @@ internal static class ZLinkStreamControlFrames
 
         if (header.Name.StartsWith("$zlink.", StringComparison.Ordinal))
         {
-            LogIgnoredControl(stream, header.Name, payload.Length, logger);
+            LogIgnoredControl(stream, header.Name, payload.Length, flow);
             return;
         }
 
@@ -128,10 +128,12 @@ internal static class ZLinkStreamControlFrames
         ZLinkManagedStream stream,
         string name,
         int payloadLength,
-        ILogger logger
+        ZLinkMessageFlowTracer flow
     )
     {
-        logger.LogDebug(
+        flow.LogDiagnostic(
+            LogLevel.Debug,
+            null,
             "Ignored STREAM control name={ControlName} payloadBytes={PayloadBytes} peerSessionRid={PeerSessionRid}",
             name,
             payloadLength,

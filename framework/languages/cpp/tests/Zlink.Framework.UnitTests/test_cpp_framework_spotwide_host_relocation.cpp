@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
+#include "../support/aggregate_page_read_fixture.hpp"
 #include <zlink/json.hpp>
 #include <zlink/framework.hpp>
 #include "runtime/locations/in_memory_store_providers.hpp"
@@ -608,6 +609,146 @@ TEST (SpotWideHostRelocation, GetOrCreateReturnsExistingRelocationTarget)
     EXPECT_EQ (existing.value ().spot.object_generation (), current->object_generation);
     EXPECT_EQ (current->object_generation, created.value ().spot.object_generation ());
     EXPECT_EQ (factory_calls.load (), calls_after_relocation);
+}
+
+TEST (SpotWideHostRelocation, RestoreDeadlinePreservesSourceWhileAggregateCommitIsHeld)
+{
+    using namespace fw::runtime;
+    joins_t joins;
+    in_memory_location_store_t store;
+    auto locations = std::make_shared<fw::test::paused_aggregate_commit_store_t> (store);
+    auto relocations = std::make_shared<in_memory_relocation_store_t> ();
+    const auto configure = [&] (host_t &host, const char *rid) {
+        auto &options = host.app.add_zlink_framework ();
+        options.configure_locations ().owner_lease_renew_interval = 10ms;
+        options.configure_locations ().owner_lease_fencing_margin = 1ms;
+        options.add_location_store (locations);
+        options.add_relocation_store (relocations);
+        options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
+        host.app.logging ().use_file (std::string (rid) + "-preserve.flow");
+        options.add_route_mesh (mesh_name)
+          .set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from (rid))
+          .listen ("tcp://127.0.0.1:0")
+          .add_entry_spot<entry_t> ([] (fw::entry_spot_context_t context) {
+              return std::make_shared<entry_t> (std::move (context));
+          })
+          .add_actor_factory<member_t, member_factory_t> (
+            actor_type, std::make_shared<member_factory_t> (joins),
+            [] (auto &factory) { factory.recreate_on_relocation (); })
+          .add_spot_factory<room_t> (
+            room_type,
+            [] (fw::spot_context_t context) {
+                return std::make_shared<room_t> (std::move (context));
+            },
+            [] (auto &factory) { factory.recreate_on_relocation (); });
+    };
+    host_t source, target;
+    fw::test::scope_exit_t release_commit (
+      [&] { locations->release.complete (fw::result_t<void>::success ()); });
+    configure (source, source_rid);
+    source.start ();
+    ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (room_id), room_type)
+                   .async ()
+                   .result ());
+    const fw::actor_id_t actor_id ("preserved-member");
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (actor_id, actor_type)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (services.get_required<fw::actor_client_t> ()
+                   .send (actor_id, enter_t{room_id})
+                   .async ()
+                   .result ());
+    {
+        std::unique_lock lock (joins.mutex);
+        ASSERT_TRUE (
+          joins.changed.wait_for (lock, wait_budget, [&] { return joins.accepted == 1; }));
+    }
+    configure (target, target_rid);
+    target.start ();
+    ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+    auto &routes = services.get_required<fw::route_mesh_runtime_t> ();
+    ASSERT_TRUE (observe ([&] { return routes.snapshot (mesh_name).ready_peer_count == 1; }));
+
+    const auto key = spot_authority_key (room_id);
+    provider_location_repository_t repository (*locations);
+    const auto read_authority = [&] {
+        return std::get<fw::authority_snapshot_t> (
+          repository.read_authority (key).result ().value ());
+    };
+    // The observation window includes the source's first settlement poll after Restore expires.
+    auto moving =
+      source.app.relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = 2s});
+    ASSERT_TRUE (observe ([&] { return locations->commit_waiting.task ().await_ready (); }))
+      << "Target did not submit the aggregate commit";
+    const auto marker = *locations->commit_waiting.task ().result ().value ();
+    const auto read_record = [&] (const fw::store_key_t &record_key) {
+        const auto read = store.read (record_key).result ().value ();
+        return nlohmann::json::parse (std::get<fw::store_found_t> (read).value.bytes);
+    };
+    const auto read_capacity = [&] (const char *rid) -> std::optional<fw::placement_capacity_t> {
+        const auto page = repository.list_mesh_nodes (mesh_name).result ().value ();
+        const auto descriptor = std::ranges::find (page.items, zlink::routing_id_t::from (rid),
+                                                   &fw::mesh_node_descriptor_t::rid);
+        if (descriptor == page.items.end ())
+            return std::nullopt;
+        return descriptor->capacity;
+    };
+    const auto before = read_authority ();
+    ASSERT_TRUE (before.aggregate && before.aggregate->relocation);
+    ASSERT_EQ (before.aggregate->relocation->phase, "prepared");
+    ASSERT_EQ (read_record (marker).at ("state"), "prepared");
+    const auto target_before = read_capacity (target_rid);
+    ASSERT_TRUE (target_before);
+    ASSERT_EQ (target_before->spots.reserved, 1);
+    ASSERT_EQ (target_before->actors.reserved, 1);
+    const auto source_before = read_capacity (source_rid);
+    ASSERT_TRUE (source_before);
+
+    ASSERT_TRUE (observe ([&] { return read_record (marker).at ("state") == "aborted"; }))
+      << "Source Preserve did not abort the aggregate at the Restore deadline";
+    const auto after = read_authority ();
+    ASSERT_TRUE (after.aggregate && after.aggregate->relocation);
+    EXPECT_EQ (after.aggregate->relocation->phase, "aborted");
+    EXPECT_NE (after.store_version, before.store_version);
+    EXPECT_EQ (after.owner.owner_id, before.owner.owner_id);
+    EXPECT_EQ (after.owner.lease_generation, before.owner.lease_generation);
+    EXPECT_EQ (after.object_generation, before.object_generation);
+    EXPECT_EQ (after.authority_owner_generation, before.authority_owner_generation);
+    EXPECT_EQ (after.payload, before.payload);
+    const auto source_after = read_capacity (source_rid);
+    ASSERT_TRUE (source_after);
+    EXPECT_EQ (source_after->spots.reserved, source_before->spots.reserved);
+    EXPECT_EQ (source_after->spots.active, source_before->spots.active);
+    EXPECT_EQ (source_after->actors.reserved, source_before->actors.reserved);
+    EXPECT_EQ (source_after->actors.active, source_before->actors.active);
+    ASSERT_EQ (source_after->spot_types.size (), source_before->spot_types.size ());
+    for (std::size_t index = 0; index < source_after->spot_types.size (); ++index) {
+        const auto &before_type = source_before->spot_types[index];
+        const auto &after_type = source_after->spot_types[index];
+        EXPECT_EQ (after_type.stable_type, before_type.stable_type);
+        EXPECT_EQ (after_type.object_kind, before_type.object_kind);
+        EXPECT_EQ (after_type.usage.reserved, before_type.usage.reserved);
+        EXPECT_EQ (after_type.usage.active, before_type.usage.active);
+        EXPECT_EQ (after_type.usage.limit, before_type.usage.limit);
+    }
+    EXPECT_EQ (source_after->spots.limit, source_before->spots.limit);
+    EXPECT_EQ (source_after->actors.limit, source_before->actors.limit);
+    const auto target_after = read_capacity (target_rid);
+    ASSERT_TRUE (target_after);
+    EXPECT_EQ (target_after->spots.reserved, 0);
+    EXPECT_EQ (target_after->spots.active, 0);
+    EXPECT_EQ (target_after->actors.reserved, 0);
+    EXPECT_EQ (target_after->actors.active, 0);
+    release_commit.run ();
+    ASSERT_TRUE (observe ([&] { return locations->commit_applied.task ().await_ready (); }));
+    EXPECT_FALSE (locations->commit_applied.task ().result ().value ());
+    ASSERT_TRUE (observe ([&] { return moving.await_ready (); }));
+    EXPECT_EQ (read_authority ().store_version, after.store_version);
 }
 
 TEST (SpotWideHostRelocation, AbortRunsAcceptedSpotPrefixWithoutNewIngress)

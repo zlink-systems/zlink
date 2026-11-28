@@ -339,7 +339,8 @@ public sealed class MessageFlowDeliveryTests(Xunit.Abstractions.ITestOutputHelpe
             tracer.Trace(Event("overflow-normal"));
             tracer.TraceDispatchError(Failure("overflow-error"));
             tracer.Trace(Event("overflow-drop") with { Outcome = ZLinkMessageFlowOutcome.Dropped });
-            Assert.Equal(before.Overflow + 3, owner.State.Overflow);
+            tracer.LogDiagnostic(LogLevel.Debug, null, "{packet}", "overflow-diagnostic");
+            Assert.Equal(before.Overflow + 4, owner.State.Overflow);
             Assert.Equal(before.Wakes + 1, owner.State.Wakes);
             Assert.Equal(0, Interlocked.Read(ref metric));
         }
@@ -356,7 +357,7 @@ public sealed class MessageFlowDeliveryTests(Xunit.Abstractions.ITestOutputHelpe
                     meter.DisableMeasurementEvents(published);
             }
         }
-        Assert.Equal(3, Interlocked.Read(ref metric));
+        Assert.Equal(4, Interlocked.Read(ref metric));
         Assert.NotEqual(Environment.CurrentManagedThreadId, metricThread);
         Assert.Equal(
             Enumerable
@@ -388,12 +389,14 @@ public sealed class MessageFlowDeliveryTests(Xunit.Abstractions.ITestOutputHelpe
             active.Trace(Event("active"));
             Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
             a.Trace(Event("retired"));
+            a.LogDiagnostic(LogLevel.Debug, null, "{packet}", "retired-diagnostic");
             b.Trace(Event("other-host"));
             var old = hostA.Current;
             hostA.Dispose();
             Assert.True(old.Retired);
             Assert.Equal(1, ZLinkMessageFlowDelivery.Shared.State.Pending);
             a.Trace(Event("closed"));
+            a.LogDiagnostic(LogLevel.Debug, null, "{packet}", "closed-diagnostic");
             hostA.Renew();
             Assert.NotSame(old, hostA.Current);
             a.Trace(Event("new-generation"));

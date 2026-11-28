@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
@@ -19,7 +18,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private readonly string? _streamName;
     private bool _enqueuedForAdmission;
     private readonly ZLinkMessageFlowTracer _flow;
-    private readonly ILogger _logger;
     private readonly ZLinkStreamSessionLiveness _liveness;
     private readonly Action<LivenessTimer>? _markLivenessDue;
     private LivenessTimer? _livenessTimer;
@@ -145,10 +143,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         _markLivenessDue = markLivenessDue;
         _handlerInstances = new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
         Stream = new ZLinkManagedStream(socket, routingId, _runtime.Registration.Codecs, transport);
-        _logger = ZLinkMessageFlowTracer.GetLogger(scope.ServiceProvider);
         _flow = new ZLinkMessageFlowTracer(
             _runtime.Registration.DispatchOptions,
-            _logger,
+            ZLinkMessageFlowTracer.GetLogger(scope.ServiceProvider),
             _runtime
         );
         _liveness = new ZLinkStreamSessionLiveness(timeProvider, livenessOptions, readerLiveness);
@@ -436,7 +433,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 .RunAsync(() =>
                 {
                     _liveness.RecordInbound();
-                    ZLinkStreamControlFrames.Dispatch(Stream, decoded, payload, _logger);
+                    ZLinkStreamControlFrames.Dispatch(Stream, decoded, payload, _flow);
                     return true;
                 })
                 .ConfigureAwait(false);

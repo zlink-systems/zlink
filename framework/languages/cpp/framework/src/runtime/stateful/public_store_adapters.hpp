@@ -9,7 +9,6 @@
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_record_fields.hpp"
-#include "runtime/locations/sha256.hpp"
 #include "runtime/execution/task_result.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
@@ -17,7 +16,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
-#include <atomic>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -236,6 +234,10 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                 const auto key = authority_key (participant);
                 auto read = co_await _store->read_authority (key);
                 auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+                if (snapshot && snapshot->aggregate && snapshot->aggregate->relocation
+                    && snapshot->aggregate->relocation->phase == "aborted")
+                    snapshot->aggregate =
+                      authority_aggregate_codec::replace (snapshot->aggregate, nullptr);
                 if (!snapshot || snapshot->aggregate
                     || (&participant == &primary
                         && snapshot->store_version != fence.expected_store_version)
@@ -685,11 +687,17 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                                          const authority_snapshot_t &snapshot)
     {
         authority_put_t preserved{snapshot.payload};
-        if (snapshot.aggregate && snapshot.aggregate->relocation)
+        if (snapshot.aggregate && snapshot.aggregate->relocation) {
+            authority_aggregate_codec::json_t relocation = nullptr;
+            if (snapshot.aggregate->encoded.contains (location_record_fields::aggregateId)) {
+                relocation = snapshot.aggregate->encoded.at (location_record_fields::relocation);
+                relocation["phase"] = "aborted";
+            }
             preserved.replace_aggregate =
-              authority_aggregate_codec::replace (snapshot.aggregate, nullptr);
-        else
+              authority_aggregate_codec::replace (nullptr, std::move (relocation));
+        } else {
             clear_legacy_capture (preserved.payload);
+        }
         return infrastructure_result ([&] {
                    return _store->compare_exchange_authority (key, snapshot.store_version,
                                                               std::move (preserved));
@@ -1039,7 +1047,7 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
     aggregate_publish_result_t prepare (const std::vector<object_ref_t> &sources,
                                         std::string target_node_id,
                                         location_owner_token_t target_owner,
-                                        std::string relocation_reference,
+                                        std::string,
                                         std::uint32_t,
                                         inventory_digest_t inventory_digest,
                                         relocation_authority_fence_t source_fence) override
@@ -1064,12 +1072,11 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
           representative->aggregate->encoded.at (location_record_fields::relocation)
             .at (location_record_fields::sourceInventorySha256)
             .get_ref<const std::string &> ();
-        const auto sealed =
-          infrastructure_result ([&] {
-              return _store->read_relocation_inventory (
-                public_authority_store_adapter_t::sealed_inventory_fence (source_fence.relocation),
-                sealed_digest);
-          }).value ();
+        const auto fence =
+          public_authority_store_adapter_t::sealed_inventory_fence (source_fence.relocation);
+        const auto sealed = infrastructure_result ([&] {
+                                return _store->read_relocation_inventory (fence, sealed_digest);
+                            }).value ();
         if (!sealed || sealed->size () != sources.size ())
             return {aggregate_publish_status_t::conflict, {}, {}};
 
@@ -1096,7 +1103,7 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
             if (&source == &primary) {
                 if (participant.expected_store_version != source_fence.expected_store_version)
                     return {aggregate_publish_status_t::conflict, {}, {}};
-                participant.expected_store_version = representative->store_version;
+                participant.prepared_store_version = representative->store_version;
             }
             capacity.actor_slots += snapshot->allocation.capacity_bundle.actor_slots;
             capacity.spot_slots += snapshot->allocation.capacity_bundle.spot_slots;
@@ -1116,18 +1123,6 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
         if (target_node == nodes.items.end ())
             return {};
 
-        std::vector<std::byte> seed;
-        for (const auto value : relocation_reference)
-            seed.push_back (static_cast<std::byte> (static_cast<unsigned char> (value)));
-        for (const auto &source : sources) {
-            for (const auto value : source.key)
-                seed.push_back (static_cast<std::byte> (static_cast<unsigned char> (value)));
-        }
-        const auto digest = runtime::sha256 (seed);
-        aggregate_id_t aggregate_id;
-        std::copy_n (digest.begin (), aggregate_id.value.size (), aggregate_id.value.begin ());
-        const auto generation = _next_generation.fetch_add (1, std::memory_order_relaxed);
-
         std::sort (
           participants.begin (), participants.end (),
           [] (const auto &left, const auto &right) { return left.key.value < right.key.value; });
@@ -1135,8 +1130,8 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
         for (std::size_t index = 0; index != public_digest.value.size (); ++index)
             public_digest.value[index] = static_cast<std::byte> (inventory_digest[index]);
         aggregate_prepare_request_t request;
-        request.aggregate_id = aggregate_id;
-        request.aggregate_generation = generation;
+        request.aggregate_id = fence.aggregate_id;
+        request.aggregate_generation = fence.aggregate_generation;
         request.participants = std::move (participants);
         request.inventory_digest = public_digest;
         request.target_descriptor = {sources.front ().mesh_name, target_node->rid};
@@ -1211,7 +1206,6 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
 
   private:
     zlink::framework::location_repository_t *_store;
-    std::atomic<std::uint64_t> _next_generation{1};
 };
 
 } // namespace zlink::framework::runtime::stateful
