@@ -38,7 +38,11 @@ from ..messaging.message_materializer import (
     ReceivedMessage,
     SubscriptionEvent,
 )
-from ..messaging.request_reply import _clone_payload, _timeout_to_ms
+from ..messaging.native_parts import (
+    _consume_submitted_messages,
+    _materialize_native_parts,
+)
+from ..messaging.request_reply import _timeout_to_ms
 from ..messaging.routed_async import CompletionOwner
 from .socket_base import (
     _BindSocket,
@@ -54,7 +58,6 @@ from .socket_base import (
     _StreamOptionSocket,
     _SubscriberOptionSocket,
     _SubscriberSocket,
-    _close_native_parts,
     _grow_topic_receive_buffer,
     _native_extension,
     _new_topic_receive_buffer,
@@ -229,17 +232,22 @@ class _PublisherSendOp(_PublishOpBase):
             if not bridged:
                 raise SubmitError(SubmitResult.BACKPRESSURED, errno.EAGAIN)
             return None
-        native_parts = _clone_payload(payload)
-        part_count = len(native_parts)
-        rc = lib().zlink_publish(
-            self._socket._handle,
-            topic_bytes,
-            native_parts,
-            part_count,
-            int(self._flags),
-        )
+        native_parts = _materialize_native_parts(payload)
+        if _native_extension is not None:
+            rc, internal_errno, _ = _native_extension.submit_storage(
+                self._socket._handle, None, native_parts, int(self._flags),
+                0, None, 0, topic_bytes,
+            )
+        else:
+            rc, internal_errno = _submit_parts(
+                native_parts,
+                lambda parts, count: lib().zlink_publish(
+                    self._socket._handle, topic_bytes, parts, count, int(self._flags)
+                ),
+            )
+        _consume_submitted_messages(payload, rc)
         if rc != 0:
-            _raise_result_error(SubmitError, SubmitResult, rc, lib().zlink_errno())
+            _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
         return None
 
 
@@ -464,13 +472,9 @@ class RouterSocket(
         return _ReplyOp(lambda parts: self._reply_payload(routing_id, token, parts))
 
     def _reply_payload(self, routing_id, token, payload):
-        native_parts = _clone_payload(payload)
         if _native_extension is not None:
-            try:
-                target = _validated_routing_id_bytes(routing_id)
-            except BaseException:
-                _close_native_parts(native_parts)
-                raise
+            target = _validated_routing_id_bytes(routing_id)
+            native_parts = _materialize_native_parts(payload)
             rc, internal_errno, _ = _native_extension.submit_storage(
                 self._handle, target, native_parts, 0, 0, None,
                 _reply_token_value(token),
@@ -478,7 +482,7 @@ class RouterSocket(
         else:
             native_rid = _copy_routing_id(routing_id)
             rc, internal_errno = _submit_parts(
-                native_parts,
+                _materialize_native_parts(payload),
                 lambda parts_ptr, part_count: lib().zlink_reply(
                     self._handle,
                     ctypes.byref(native_rid),
@@ -487,6 +491,7 @@ class RouterSocket(
                     part_count,
                 ),
             )
+        _consume_submitted_messages(payload, rc)
         if rc != int(SubmitResult.OK):
             _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
 

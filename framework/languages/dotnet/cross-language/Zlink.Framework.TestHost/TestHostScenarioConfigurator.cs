@@ -4,7 +4,11 @@ using Zlink.Framework.AspNetCore;
 
 internal static class TestHostScenarioConfigurator
 {
-    public static void Configure(IServiceCollection services, TestHostOptions options)
+    public static void Configure(
+        IServiceCollection services,
+        TestHostOptions options,
+        TestHostEventSink events
+    )
     {
         switch (options.Mode)
         {
@@ -32,6 +36,10 @@ internal static class TestHostScenarioConfigurator
                 return;
             case "spot-route-client":
                 ConfigureSpotRouteClient(services, options);
+                return;
+            case "actor-destroy-owner":
+            case "actor-destroy-caller":
+                ActorDestroyHost.Configure(services, options, events);
                 return;
             case "entry-spot-source":
                 ConfigureEntryRelocation(services, options, isSource: true);
@@ -61,7 +69,6 @@ internal static class TestHostScenarioConfigurator
 
     private static void ConfigureChannelServer(IServiceCollection services, TestHostOptions options)
     {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
             var meshName =
@@ -89,7 +96,6 @@ internal static class TestHostScenarioConfigurator
 
     private static void ConfigureChannelClient(IServiceCollection services, TestHostOptions options)
     {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
             var meshName =
@@ -121,7 +127,6 @@ internal static class TestHostScenarioConfigurator
         TestHostOptions options
     )
     {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
             var channel = framework.AddFanoutChannel(
@@ -173,7 +178,6 @@ internal static class TestHostScenarioConfigurator
 
     private static void ConfigureRouteServer(IServiceCollection services, TestHostOptions options)
     {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
             var meshName =
@@ -216,7 +220,6 @@ internal static class TestHostScenarioConfigurator
         TestHostOptions options
     )
     {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
             var meshName =
@@ -253,7 +256,6 @@ internal static class TestHostScenarioConfigurator
 
     private static void ConfigureRouteClient(IServiceCollection services, TestHostOptions options)
     {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
             var meshName =
@@ -288,10 +290,12 @@ internal static class TestHostScenarioConfigurator
         bool isSource
     )
     {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         if (!string.IsNullOrWhiteSpace(options.EventFilePath))
         {
-            services.AddSingleton(new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
+            services.AddSingleton(provider => new TestHostMessageFlowListener(
+                options.EventFilePath + ".flow",
+                provider.GetRequiredService<TestHostEventSink>()
+            ));
         }
         services.AddZLinkFramework(framework =>
         {
@@ -388,7 +392,6 @@ internal static class TestHostScenarioConfigurator
         TestHostOptions options
     )
     {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddSingleton<UserSpotJoinObserver>();
         var actorId = options.ActorId ?? "cross-lang-user-spot-actor";
         if (Environment.GetEnvironmentVariable("ZLINK_CROSS_FAIL_JOIN_COMPLETION") == "1")
@@ -406,6 +409,7 @@ internal static class TestHostScenarioConfigurator
         {
             services.AddSingleton(provider => new TestHostMessageFlowListener(
                 options.EventFilePath + ".flow",
+                provider.GetRequiredService<TestHostEventSink>(),
                 provider.GetService<SealedJoinObservation>() is { } sealedJoin
                     ? sealedJoin.ObserveIngress
                     : null
@@ -489,8 +493,7 @@ internal static class TestHostScenarioConfigurator
                     "user-spot-target mode requires --peer-rid."
                 ),
             options.PlacementWeight ?? 0,
-            provider.GetService<SealedJoinObservation>(),
-            provider.GetService<TestHostMessageFlowListener>()
+            provider.GetService<SealedJoinObservation>()
         ));
     }
 
@@ -499,10 +502,12 @@ internal static class TestHostScenarioConfigurator
         TestHostOptions options
     )
     {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         if (!string.IsNullOrWhiteSpace(options.EventFilePath))
         {
-            services.AddSingleton(new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
+            services.AddSingleton(provider => new TestHostMessageFlowListener(
+                options.EventFilePath + ".flow",
+                provider.GetRequiredService<TestHostEventSink>()
+            ));
         }
         services.AddZLinkFramework(framework =>
         {
@@ -586,11 +591,13 @@ internal static class TestHostScenarioConfigurator
 
     private static void ConfigureStreamRawNode(IServiceCollection services, TestHostOptions options)
     {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddSingleton<TestHostRawStreamRecorder>();
         if (!string.IsNullOrWhiteSpace(options.EventFilePath))
         {
-            services.AddSingleton(new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
+            services.AddSingleton(provider => new TestHostMessageFlowListener(
+                options.EventFilePath + ".flow",
+                provider.GetRequiredService<TestHostEventSink>()
+            ));
         }
         services.AddZLinkFramework(framework =>
         {
@@ -625,7 +632,6 @@ internal static class TestHostScenarioConfigurator
 
     private static void ConfigureStreamClient(IServiceCollection services, TestHostOptions options)
     {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddHostedService(provider => new StreamClientStartupRequestHostedService(
             provider.GetRequiredService<TestHostEventSink>(),
             options.StreamEndpoint

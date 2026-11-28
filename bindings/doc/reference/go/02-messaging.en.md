@@ -14,7 +14,7 @@ are owned by
 [`topic_message.go`](../../../../bindings/go/internal/native/topic_message.go),
 [`subscription_event.go`](../../../../bindings/go/internal/native/subscription_event.go), and
 [`operations.go`](../../../../bindings/go/internal/native/operations.go), re-exported as aliases
-through [`contracts/messaging.go`](../../../../bindings/go/contracts/messaging.go).
+by the root package's [`root_projection.go`](../../../../bindings/go/root_projection.go).
 
 ---
 
