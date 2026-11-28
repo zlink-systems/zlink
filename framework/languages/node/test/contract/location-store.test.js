@@ -124,7 +124,7 @@ test('in-memory MeshNode NEW_CLAIM waits from its first Missing descriptor obser
   const unavailable = {
     name: 'ZLinkFrameworkException',
     kind: framework.ZLinkFrameworkErrorKind.Unavailable,
-    message: 'Fixed RID claim is waiting for the previous owner lease release delay.'
+    message: 'MeshNode fixed RID claim is within its release wait'
   };
   await assert.rejects(claim(), unavailable);
   assert.equal(store.ownerLeaseReleaseDelayForTesting.observationCountForTesting, 1);
