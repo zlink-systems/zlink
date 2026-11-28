@@ -397,6 +397,18 @@ template <typename TStream> void close_stream (TStream &stream) noexcept
     close_stream (stream.next_layer ());
 }
 
+struct tcp_read_progress_t
+{
+    // A peek has no bytes to consume. An empty value means the socket already
+    // held enough bytes to finish this read when the deadline was checked.
+    std::optional<std::size_t> remaining = 0;
+
+    struct posted_settle_t
+    {
+    };
+    std::shared_ptr<posted_settle_t> posted_settle;
+};
+
 template <typename TStream, typename Progress>
 void read_exact (TStream &socket,
                  std::span<std::uint8_t> bytes,
@@ -407,13 +419,32 @@ void read_exact (TStream &socket,
 {
     if (bytes.empty ())
         return;
-    const auto error = run_stream_async_operation (
-      io, stop,
-      [&] (auto completion) {
-          asio::async_read (socket, asio::buffer (bytes.data (), bytes.size ()),
-                            std::move (completion));
-      },
-      [&socket] { cancel_stream (socket); }, connection_stop, progress);
+    const auto cancel = [&socket] { cancel_stream (socket); };
+    boost::system::error_code error;
+    if constexpr (std::is_same_v<TStream, tcp::socket>) {
+        tcp_read_progress_t read{bytes.size (), {}};
+        error = run_stream_async_operation (
+          io, stop,
+          [&] (auto completion) {
+              asio::async_read (
+                socket, asio::buffer (bytes.data (), bytes.size ()),
+                [&] (const boost::system::error_code &error, std::size_t transferred) {
+                    if (read.remaining)
+                        read.remaining = bytes.size () - transferred;
+                    return asio::transfer_all () (error, transferred);
+                },
+                std::move (completion));
+          },
+          cancel, connection_stop, [&] { progress (&read); });
+    } else {
+        error = run_stream_async_operation (
+          io, stop,
+          [&] (auto completion) {
+              asio::async_read (socket, asio::buffer (bytes.data (), bytes.size ()),
+                                std::move (completion));
+          },
+          cancel, connection_stop, progress);
+    }
     if (error)
         throw boost::system::system_error (error);
 }
@@ -849,13 +880,14 @@ stream_host_service_t::listener_t::read_frame (TStream &socket,
     std::span<std::uint8_t> unread (prefix);
     if constexpr (std::is_same_v<TStream, tcp::socket>) {
         // A peek distinguishes an idle peer's EOF from packet readiness.
+        tcp_read_progress_t peek;
         const auto ready = run_stream_async_operation (
           io, *_stop,
           [&] (auto completion) {
               socket.async_receive (asio::buffer (prefix.data (), 1),
                                     asio::socket_base::message_peek, std::move (completion));
           },
-          [&socket] { cancel_stream (socket); }, connection_stop, progress);
+          [&socket] { cancel_stream (socket); }, connection_stop, [&] { progress (&peek); });
         if (ready)
             throw boost::system::system_error (ready);
     } else {
@@ -1222,7 +1254,7 @@ void stream_host_service_t::listener_t::handle_stream_connection (
                    || !connection_state->replacement->closing.load (std::memory_order_acquire))) {
             receive_batch_budget_t batch;
             std::optional<session_liveness_t::clock_t::time_point> ready_read_started;
-            const auto progress = [&] {
+            const auto progress = [&] (tcp_read_progress_t *read = nullptr) {
                 const auto now = session_liveness_t::clock_t::now ();
                 if (liveness_timer.expiry () <= now) {
                     if (!ready_read_started)
@@ -1232,8 +1264,36 @@ void stream_host_service_t::listener_t::handle_stream_connection (
                     if (!batch.exhausted () && now - *ready_read_started < batch.max_elapsed
                         && io.poll_one () != 0)
                         return;
-                    settle_liveness ();
-                    ready_read_started.reset ();
+                    const auto settle_receive_turn = [&] {
+                        settle_liveness ();
+                        ready_read_started.reset ();
+                    };
+                    if (!read) {
+                        settle_receive_turn ();
+                    } else if (read->remaining && !read->posted_settle) {
+                        const auto remaining = *read->remaining;
+                        boost::system::error_code error;
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+                        if (remaining != 0 && _shutdown_test_hooks.before_tcp_read_expiry_check)
+                            _shutdown_test_hooks.before_tcp_read_expiry_check (remaining);
+#endif
+                        if (remaining != 0
+                            && tcp_socket (*connection).available (error) >= remaining && !error) {
+                            read->remaining.reset ();
+                        } else {
+                            read->posted_settle =
+                              std::make_shared<tcp_read_progress_t::posted_settle_t> ();
+                            asio::post (io, [read, settle_receive_turn,
+                                             pending = std::weak_ptr (read->posted_settle)] {
+                                // A completed read returns to the reader before the next
+                                // handler. Its queued settle no longer owns this decision.
+                                if (pending.expired ())
+                                    return;
+                                read->posted_settle.reset ();
+                                settle_receive_turn ();
+                            });
+                        }
+                    }
                 }
                 io.run_one ();
             };
