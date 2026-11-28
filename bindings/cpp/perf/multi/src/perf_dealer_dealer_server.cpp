@@ -3,6 +3,7 @@
 // Measurement role: drain incoming payloads and emit server queue metrics.
 
 #include "../common/perf_common.hpp"
+#include "../common/perf_multi_measurement.hpp"
 #include "../common/perf_entry.hpp"
 #include "../common/perf_metric_header.hpp"
 
@@ -50,59 +51,6 @@ bind_dealer_endpoint (zlink::dealer_socket_t &socket, const std::string &transpo
              : perf::multi::normalize_endpoint_host (socket.options ().last_endpoint ());
 }
 
-bool drain_phase_until_idle (zlink::dealer_socket_t &server,
-                             zlink::poller_t &poller,
-                             double max_wait_seconds,
-                             int idle_wait_ms)
-{
-    if (max_wait_seconds <= 0.0)
-        return true;
-    if (idle_wait_ms <= 0)
-        idle_wait_ms = 50;
-
-    const auto deadline =
-      std::chrono::steady_clock::now ()
-      + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-        std::chrono::duration<double> (max_wait_seconds));
-    auto idle_deadline =
-      std::chrono::steady_clock::now () + std::chrono::milliseconds (idle_wait_ms);
-    std::vector<zlink::poll_event_t> events (1);
-
-    while (std::chrono::steady_clock::now () < deadline) {
-        zlink::received_t received;
-        const int rc = server.recv (received, zlink::recv_flags_t::dontwait);
-        if (rc == 0) {
-            idle_deadline =
-              std::chrono::steady_clock::now () + std::chrono::milliseconds (idle_wait_ms);
-            continue;
-        }
-
-        const int err = errno;
-        if (rc == static_cast<int> (zlink::recv_result_t::no_data) || err == EAGAIN
-            || err == EWOULDBLOCK || err == EINTR) {
-            if (err == EINTR)
-                continue;
-            if (std::chrono::steady_clock::now () >= idle_deadline)
-                return true;
-
-            const auto now = std::chrono::steady_clock::now ();
-            const auto remaining_idle =
-              std::chrono::duration_cast<std::chrono::milliseconds> (idle_deadline - now);
-            const auto remaining_total =
-              std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
-            const auto wait_ms = std::max (
-              std::chrono::milliseconds (1), std::min (remaining_idle, remaining_total));
-            events[0].revents = zlink::poll_event_flag_t::none;
-            (void) poller.wait (events.data (), events.size (), wait_ms);
-            continue;
-        }
-
-        return false;
-    }
-
-    return std::chrono::steady_clock::now () >= idle_deadline;
-}
-
 } // namespace
 
 bool perf_dealer_dealer_server (const std::string &lib_name,
@@ -145,117 +93,93 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
         if (!perf::multi::recalculate_auto_hwm (ctx))
             return false;
 
-        const int active_seconds = settings.duration_seconds > 0 ? settings.duration_seconds : 1;
-        const auto deadline =
-          std::chrono::steady_clock::now () + std::chrono::seconds (active_seconds);
-
-        bool failed = false;
+        using clock_t = std::chrono::steady_clock;
+        using perf_multi_measurement::settle_duration;
+        const int active_seconds = std::max (1, settings.duration_seconds);
+        const size_t payload_size = std::max<size_t> (msg_size, perf_metric::header_size ());
         bool auto_hwm_detail_emitted = false;
-        unsigned long long active_count = 0;
-        perf::multi::bench_latency_sampler_t latency (static_cast<size_t> (active_seconds)
-                                                      * 5000000U);
-        std::vector<zlink::poll_event_t> events (1);
-        size_t stop_count = 0;
-        bool phase_complete = false;
-        // PERF_MULTI_TEST_POLICY § 1.3.1: the receive window is bounded purely by
-        // an application clock (steady_clock deadline) plus a -1 (signal-driven)
-        // poll wait; no poller timer object is used. The client's wire-level stop
-        // token ends the phase by waking the -1 wait so the deadline can be
-        // re-checked. Matches the C reference run_receive_window
-        // (bindings/c/perf/multi/src/perf_multi_dealer_dealer_server.cpp:208-301)
-        // and its is_stop_token_message handling (lines 113-116).
-        while (std::chrono::steady_clock::now () < deadline) {
-            const size_t ready_count =
-              poller.wait (events.data (), events.size (), std::chrono::milliseconds (-1));
-            if (ready_count == 0)
-                continue;
-            if (!(static_cast<short> (events[0].revents)
-                  & static_cast<short> (zlink::poll_event_flag_t::pollin))) {
-                continue;
-            }
-
+        perf::multi::bench_latency_sampler_t latency;
+        zlink::poll_event_t event;
+        const auto receive_phase = [&] (perf_metric::phase_t phase_, clock_t::duration duration_,
+                                        uint64_t &count_) {
+            const bool paced = phase_ == perf_metric::phase_latency;
+            const auto start = clock_t::now ();
+            const auto deadline = start + duration_;
+            const auto sample_start = paced ? start + settle_duration : start;
+            const double measure_seconds = std::chrono::duration<double> (duration_).count ();
+            const double drain_seconds = msg_size >= 65536 ? std::max (10.0, measure_seconds * 2.0)
+                                                           : std::max (2.0, measure_seconds);
+            const auto drain_deadline = deadline
+                                        + std::chrono::duration_cast<clock_t::duration> (
+                                          std::chrono::duration<double> (drain_seconds));
+            size_t stop_count = 0;
             for (;;) {
+                const auto now = clock_t::now ();
+                if (now >= drain_deadline)
+                    return false;
                 zlink::received_t received;
                 const int rc = server.recv (received, zlink::recv_flags_t::dontwait);
                 if (rc != 0) {
-                    if (rc == static_cast<int> (zlink::recv_result_t::no_data) || errno == EAGAIN
-                        || errno == EWOULDBLOCK) {
-                        break;
-                    }
-                    if (errno == EINTR) {
+                    if (errno == EINTR)
                         continue;
-                    }
-                    failed = true;
-                    break;
+                    if (rc != static_cast<int> (zlink::recv_result_t::no_data) && errno != EAGAIN
+                        && errno != EWOULDBLOCK)
+                        return false;
+                    const auto remaining = perf::multi::remaining_bounded_timeout (drain_deadline);
+                    (void) poller.wait (&event, 1,
+                                        std::min (remaining, std::chrono::milliseconds (10)));
+                    continue;
                 }
 
-                const std::vector<zlink::message_t> &parts = received.parts ();
-
-                // Check the wire-level stop token before decoding the payload
-                // header (matches C reference lines 113-116). The stop token
-                // marks active-phase end; the steady_clock deadline still bounds
-                // the window.
+                const auto &parts = received.parts ();
                 if (parts.size () == 1
                     && perf::multi::is_stop_token (parts.front ().data (), parts.front ().size ())) {
-                    ++stop_count;
-                    if (stop_count >= settings.clients) {
-                        phase_complete = true;
-                        break;
-                    }
+                    if (++stop_count == settings.clients)
+                        return true;
                     continue;
                 }
-
-                if (!perf::multi::measurement_parts_valid (parts)) {
+                if (!perf::multi::measurement_parts_valid (parts))
                     continue;
-                }
-                const zlink::message_t &payload = parts.front ();
-                if (payload.size ()
-                    != std::max<size_t> (msg_size, perf_metric::header_size ()))
-                    continue;
+                const auto &payload = parts.front ();
                 perf_metric::header_t header;
-                if (!perf_metric::decode_payload_header (payload.data (), payload.size (), &header))
+                if (payload.size () != payload_size
+                    || !perf_metric::decode_payload_header (payload.data (), payload.size (),
+                                                            &header))
                     continue;
-                if (!perf_metric::is_expected (header, 1U, perf_metric::phase_active, msg_size)) {
+                const bool matched = perf_metric::is_expected (header, 1U, phase_, msg_size);
+                if (now >= sample_start && now < deadline
+                    && (matched
+                        || (paced
+                            && perf_metric::is_expected (header, 1U, perf_metric::phase_warmup,
+                                                         msg_size))))
+                    ++count_;
+                if (!matched)
                     continue;
-                }
-
-                ++active_count;
-                // PERF_MULTI_TEST_POLICY § 1.6: report the effective per-pipe
-                // auto-HWM, not the raw socket option default. The Core monitor
-                // snapshot falls back to ZLINK_OPT_SNDHWM/RCVHWM (4,096,000)
-                // while the socket still has no attached application pipe
-                // (core/src/runtime/sockets/common/socket_base_monitor.cpp:116-123),
-                // so take it on the first valid active message exactly like the
-                // C reference
-                // (bindings/c/perf/multi/src/perf_multi_dealer_dealer_server.cpp:136-142).
-                if (!auto_hwm_detail_emitted) {
+                if (paced) {
+                    latency.add (
+                      perf_metric::elapsed_latency_ns (perf_metric::now_ns (), header.sent_ts_ns));
+                } else if (!auto_hwm_detail_emitted) {
                     perf::multi::emit_auto_hwm_detail (server, "server", "server", transport,
                                                        msg_size, "dealer");
                     auto_hwm_detail_emitted = true;
                 }
-                latency.add (
-                  perf_metric::elapsed_latency_ns (perf_metric::now_ns (), header.sent_ts_ns));
             }
-            if (failed)
-                break;
-            if (phase_complete)
-                break;
-            if (std::chrono::steady_clock::now () >= deadline)
-                break;
-        }
+        };
 
-        if (failed || active_count == 0 || latency.count () == 0)
+        uint64_t active_count = 0;
+        if (!receive_phase (perf_metric::phase_active, std::chrono::seconds (active_seconds),
+                            active_count)
+            || active_count == 0)
             return false;
+        std::cout << "PHASE_DRAINED," << msg_size << ',' << active_count << std::endl;
 
-        // Match the C reference: drain the tail outside the measured active
-        // window so queued large payloads and per-socket stop tokens can reach
-        // the server before this process closes its DEALER socket.
-        const double drain_wait_s =
-          msg_size >= 65536 ? std::max (10.0, active_seconds * 2.0)
-                            : std::max (2.0, static_cast<double> (active_seconds));
-        if (!drain_phase_until_idle (server, poller, drain_wait_s, 50))
+        uint64_t paced_received = 0;
+        if (!receive_phase (perf_metric::phase_latency,
+                            settle_duration
+                              + std::chrono::seconds (settings.latency_duration_seconds),
+                            paced_received)
+            || latency.count () == 0)
             return false;
-
         const perf::multi::bench_latency_stats_t latency_stats = latency.snapshot ();
         const double throughput =
           static_cast<double> (active_count) / static_cast<double> (std::max (1, active_seconds));
@@ -263,6 +187,7 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
         perf::multi::print_result (lib_name, "DEALER_DEALER", transport, msg_size, throughput,
                                    bandwidth, latency_stats.mean_ns, latency_stats.p95_ns,
                                    latency_stats.p99_ns);
+        std::cout << "PHASE_COMPLETE," << msg_size << "," << paced_received << std::endl;
         return true;
     }
     catch (const zlink::binding_error_t &) {

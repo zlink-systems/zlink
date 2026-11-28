@@ -7,6 +7,7 @@
 #include "../common/perf_entry.hpp"
 #include "../common/perf_client_helpers.hpp"
 #include "../common/perf_metric_header.hpp"
+#include "../common/perf_multi_measurement.hpp"
 
 #include <algorithm>
 #include <any>
@@ -139,6 +140,29 @@ class dealer_dealer_client_bench_t
                                  &_result.active_count))
             co_return false;
 
+        size_t received = 0;
+        if (!perf::multi::wait_for_size_count_from_stdin (_msg_size, "PHASE_PACED,", &received))
+            co_return false;
+        const uint64_t epoch = static_cast<uint64_t> (perf_metric::now_ns ());
+        const double rate = perf_multi_measurement::target_rate (
+          received, static_cast<double> (_phase_cfg.active_seconds));
+        if (rate <= 0.0)
+            co_return false;
+        perf_multi_measurement::schedule_t schedule (rate, epoch);
+        if (!co_await run_phase (perf_metric::phase_latency,
+                                 perf_multi_measurement::settle_duration
+                                   + std::chrono::seconds (_settings.latency_duration_seconds),
+                                 NULL, &schedule))
+            co_return false;
+        size_t paced_received = 0;
+        if (!perf::multi::wait_for_size_count_from_stdin (_msg_size, "PHASE_COMPLETE,",
+                                                          &paced_received))
+            co_return false;
+        perf_multi_measurement::print_diagnostic (
+          k_pattern_result, _msg_size, _result.active_count,
+          static_cast<double> (_phase_cfg.active_seconds), schedule, received,
+          paced_received / static_cast<double> (_settings.latency_duration_seconds));
+
         std::cout << "CLIENT_DONE," << _msg_size << std::endl;
         // Keep the socket/context alive until the measuring server has consumed
         // every queued payload and per-socket stop token. With linger=0, exiting
@@ -211,7 +235,8 @@ class dealer_dealer_client_bench_t
                                          socket_state_t &state,
                                          perf_metric::phase_t phase,
                                          std::chrono::steady_clock::time_point deadline,
-                                         unsigned long long &count)
+                                         unsigned long long &count,
+                                         perf_multi_measurement::schedule_t *schedule)
     {
         if (!state.sock)
             co_return false;
@@ -220,42 +245,50 @@ class dealer_dealer_client_bench_t
         if (payload_size == 0)
             co_return false;
 
-        // async_task_t is eager. Register every sender with the shared
-        // application-thread scheduler once; after that, an immediately
-        // admitted public async send may submit the next message directly.
-        // A backpressured async result still suspends and resumes through this
-        // queue, so Core admission remains the fairness boundary.
         co_await ready_queue.schedule ();
-        while (std::chrono::steady_clock::now () < deadline) {
+        const auto deadline_ns =
+          std::chrono::duration_cast<std::chrono::nanoseconds> (deadline.time_since_epoch ())
+            .count ();
+        for (;;) {
+            const auto now = perf_metric::now_ns ();
+            if (now >= deadline_ns)
+                break;
+            if (schedule && !schedule->due (now)) {
+                co_await ready_queue.schedule ();
+                continue;
+            }
             zlink::message_t payload;
             payload.init (payload_size);
             if (!payload.valid ())
                 co_return false;
             const uint64_t seq = _seq.fetch_add (1, std::memory_order_relaxed);
-            if (!perf_metric::stamp_payload (payload.data (), payload_size, _run_id, phase,
-                                             _msg_size, seq, perf_metric::now_ns ()))
+            const perf_metric::phase_t message_phase =
+              schedule
+                  && !perf_multi_measurement::latency_sample (now, schedule->epoch_ns,
+                                                              _settings.latency_duration_seconds)
+                ? perf_metric::phase_warmup
+                : phase;
+            if (!perf_metric::stamp_payload (payload.data (), payload_size, _run_id, message_phase,
+                                             _msg_size, seq, now))
                 co_return false;
             try {
-                if (perf::multi::measurement_part_count () == 2) {
-                    zlink::message_t tail = perf::multi::measurement_empty_part ();
-                    zlink::send_submission_t submission =
-                      std::move (state.sock->send ().message (payload)).message (tail)
-                      .async ();
-                    if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
-                        co_await std::move (submission.admitted);
-                    else if (submission.result != ZLINK_SUBMIT_OK)
-                        co_return false;
-                } else {
-                    zlink::send_submission_t submission =
-                      std::move (state.sock->send ()).message (payload)
-                      .async ();
-                    if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
-                        co_await std::move (submission.admitted);
-                    else if (submission.result != ZLINK_SUBMIT_OK)
-                        co_return false;
-                }
-                if (std::chrono::steady_clock::now () < deadline)
+                auto builder = std::move (state.sock->send ()).message (payload);
+                if (perf::multi::measurement_part_count () == 2)
+                    std::move (builder).message (perf::multi::measurement_empty_part ());
+                auto submission = std::move (builder).async ();
+                const bool blocked = submission.result == ZLINK_SUBMIT_BACKPRESSURED;
+                if (!blocked && submission.result != ZLINK_SUBMIT_OK)
+                    co_return false;
+                const uint64_t due_ns = schedule ? schedule->submitted () : 0;
+                if (blocked)
+                    co_await std::move (submission.admitted);
+                const auto admitted_ns = perf_metric::now_ns ();
+                if (schedule)
+                    schedule->accepted (admitted_ns, due_ns);
+                else if (admitted_ns < deadline_ns)
                     ++count;
+                if (schedule && blocked)
+                    co_await ready_queue.schedule ();
             }
             catch (const zlink::submit_error_t &err) {
                 if (err.internal_errno () == EINTR)
@@ -268,7 +301,8 @@ class dealer_dealer_client_bench_t
 
     perf::async_task_t<bool> run_phase (perf_metric::phase_t phase,
                                         std::chrono::steady_clock::duration duration,
-                                        unsigned long long *count_out)
+                                        unsigned long long *count_out,
+                                        perf_multi_measurement::schedule_t *schedule = NULL)
     {
         if (duration <= std::chrono::steady_clock::duration::zero ()) {
             if (count_out)
@@ -282,7 +316,11 @@ class dealer_dealer_client_bench_t
         // Every sender continuation runs through the coordinator's ready queue
         // on this application thread, so this phase counter has a single writer.
         unsigned long long count = 0;
-        const auto deadline = std::chrono::steady_clock::now () + duration;
+        const auto start =
+          schedule
+            ? std::chrono::steady_clock::time_point (std::chrono::nanoseconds (schedule->epoch_ns))
+            : std::chrono::steady_clock::now ();
+        const auto deadline = start + duration;
         const auto drain_deadline =
           deadline + std::chrono::milliseconds (_settings.send_drain_timeout_ms);
         zlink::poller_t poller;
@@ -302,14 +340,13 @@ class dealer_dealer_client_bench_t
         std::vector<perf::async_task_t<bool>> senders;
         senders.reserve (_socket_states.size ());
         for (size_t i = 0; i < _socket_states.size (); ++i)
-            senders.emplace_back (
-              run_sender (coordinator.ready_queue (), _socket_states[i], phase,
-                          deadline, count));
+            senders.emplace_back (run_sender (coordinator.ready_queue (), _socket_states[i], phase,
+                                              deadline, count, schedule));
 
         try {
             if (!coordinator.run_until_senders_drained (
                   deadline, drain_deadline, senders,
-                  [] (const zlink::poll_event_t *, size_t) { return true; }))
+                  [] (const zlink::poll_event_t *, size_t) { return true; }, schedule))
                 co_return false;
         }
         catch (const zlink::binding_error_t &) {

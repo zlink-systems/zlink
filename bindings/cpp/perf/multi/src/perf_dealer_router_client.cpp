@@ -8,6 +8,8 @@
 #include "../common/perf_client_helpers.hpp"
 #include "../common/perf_metric_header.hpp"
 
+#include "../common/perf_multi_measurement.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -15,7 +17,6 @@
 #include <cstring>
 #include <memory>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace
@@ -87,10 +88,31 @@ class dealer_router_client_bench_t
         if (!setup_sockets ())
             co_return false;
 
+        unsigned long long active_sends = 0;
         bool ok = true;
         if (!co_await run_phase (perf_metric::phase_active, _phase_cfg.active_seconds,
-                                 &_result.active_count, &_result.latency))
+                                 &_result.active_count, &_result.latency, active_sends))
             ok = false;
+
+        unsigned long long paced_received = 0;
+        if (ok) {
+            const uint64_t epoch = static_cast<uint64_t> (perf_metric::now_ns ());
+            const double active_seconds = static_cast<double> (_phase_cfg.active_seconds);
+            perf_multi_measurement::schedule_t schedule (
+              perf_multi_measurement::target_rate (_result.active_count, active_seconds), epoch);
+            const double paced_seconds =
+              std::chrono::duration<double> (
+                perf_multi_measurement::settle_duration
+                + std::chrono::seconds (_settings.latency_duration_seconds))
+                .count ();
+            if (!co_await run_phase (perf_metric::phase_latency, paced_seconds, &paced_received,
+                                     &_result.latency, active_sends, &schedule))
+                ok = false;
+            perf_multi_measurement::print_diagnostic (
+              k_pattern_result, _msg_size, active_sends, active_seconds, schedule,
+              _result.active_count,
+              paced_received / static_cast<double> (_settings.latency_duration_seconds));
+        }
 
         if (ok)
             print_result ();
@@ -162,44 +184,58 @@ class dealer_router_client_bench_t
                                          socket_state_t &state,
                                          perf::multi::echo_reply_drain_t &replies,
                                          perf_metric::phase_t phase,
-                                         std::chrono::steady_clock::time_point deadline)
+                                         std::chrono::steady_clock::time_point deadline,
+                                         unsigned long long &count,
+                                         perf_multi_measurement::schedule_t *schedule)
     {
         std::vector<char> &request_buffer = state.request_buffer;
         if (!state.sock || request_buffer.empty ())
             co_return false;
-        while (std::chrono::steady_clock::now () < deadline) {
-            co_await ready_queue.schedule ();
-            if (std::chrono::steady_clock::now () >= deadline)
+
+        co_await ready_queue.schedule ();
+        const auto deadline_ns =
+          std::chrono::duration_cast<std::chrono::nanoseconds> (deadline.time_since_epoch ())
+            .count ();
+        for (;;) {
+            const auto now = perf_metric::now_ns ();
+            if (now >= deadline_ns)
                 break;
+            if (schedule && !schedule->due (now)) {
+                co_await ready_queue.schedule ();
+                continue;
+            }
             const uint64_t seq = _seq.fetch_add (1, std::memory_order_relaxed);
-            if (!perf_metric::stamp_payload (
-                  request_buffer.data (), state.payload_size, _run_id, phase, _msg_size, seq,
-                  perf_metric::now_ns ()))
+            const perf_metric::phase_t message_phase =
+              schedule
+                  && !perf_multi_measurement::latency_sample (now, schedule->epoch_ns,
+                                                              _settings.latency_duration_seconds)
+                ? perf_metric::phase_warmup
+                : phase;
+            if (!perf_metric::stamp_payload (request_buffer.data (), state.payload_size, _run_id,
+                                             message_phase, _msg_size, seq, now))
                 co_return false;
             zlink::message_t request = zlink::message_t::from (
               std::as_bytes (std::span<const char> (request_buffer.data (), state.payload_size)));
             if (!request.valid ())
                 co_return false;
             replies.submitted ();
+            bool blocked = false;
             try {
-                if (perf::multi::measurement_part_count () == 2) {
-                    zlink::message_t tail = perf::multi::measurement_empty_part ();
-                    zlink::send_submission_t submission =
-                      std::move (state.sock->send ().message (request)).message (tail)
-                      .async ();
-                    if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
-                        co_await std::move (submission.admitted);
-                    else if (submission.result != ZLINK_SUBMIT_OK)
-                        co_return false;
-                } else {
-                    zlink::send_submission_t submission =
-                      std::move (state.sock->send ()).message (request)
-                      .async ();
-                    if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
-                        co_await std::move (submission.admitted);
-                    else if (submission.result != ZLINK_SUBMIT_OK)
-                        co_return false;
-                }
+                auto builder = std::move (state.sock->send ()).message (request);
+                if (perf::multi::measurement_part_count () == 2)
+                    std::move (builder).message (perf::multi::measurement_empty_part ());
+                auto submission = std::move (builder).async ();
+                blocked = submission.result == ZLINK_SUBMIT_BACKPRESSURED;
+                if (!blocked && submission.result != ZLINK_SUBMIT_OK)
+                    co_return false;
+                const uint64_t due_ns = schedule ? schedule->submitted () : 0;
+                if (blocked)
+                    co_await std::move (submission.admitted);
+                const auto admitted_ns = perf_metric::now_ns ();
+                if (schedule)
+                    schedule->accepted (admitted_ns, due_ns);
+                else if (admitted_ns < deadline_ns)
+                    ++count;
             }
             catch (const zlink::submit_error_t &err) {
                 if (!replies.finished ())
@@ -207,13 +243,14 @@ class dealer_router_client_bench_t
                 // Connect-monitor readiness can precede the first route
                 // snapshot used by Core async admission. Keep retrying that
                 // transient condition within the active application deadline.
-                if (err.result () == zlink::submit_result_t::not_connected
-                    || err.result () == zlink::submit_result_t::not_found)
-                    continue;
-                if (err.internal_errno () == EINTR)
-                    continue;
-                co_return false;
+                if (err.result () != zlink::submit_result_t::not_connected
+                    && err.result () != zlink::submit_result_t::not_found
+                    && err.internal_errno () != EINTR)
+                    co_return false;
+                blocked = true;
             }
+            if (!schedule || blocked)
+                co_await ready_queue.schedule ();
         }
         co_return true;
     }
@@ -246,9 +283,11 @@ class dealer_router_client_bench_t
     }
 
     perf::async_task_t<bool> run_phase (perf_metric::phase_t phase,
-                                        int seconds,
+                                        double seconds,
                                         unsigned long long *count_out,
-                                        perf::multi::bench_latency_stats_t *lat_out)
+                                        perf::multi::bench_latency_stats_t *lat_out,
+                                        unsigned long long &active_sends,
+                                        perf_multi_measurement::schedule_t *schedule = NULL)
     {
         if (seconds <= 0) {
             if (count_out)
@@ -269,8 +308,13 @@ class dealer_router_client_bench_t
             // otherwise signal-driven wait. POLLIN and public async send
             // progress share this poller, so no periodic wakeup fallback is
             // required.
+            const auto start = schedule ? std::chrono::steady_clock::time_point (
+                                            std::chrono::nanoseconds (schedule->epoch_ns))
+                                        : std::chrono::steady_clock::now ();
             const auto deadline =
-              std::chrono::steady_clock::now () + std::chrono::seconds (seconds);
+              start
+              + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+                std::chrono::duration<double> (seconds));
             // C echo client (perf_multi_client_helpers.hpp): the teardown window
             // is max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS, 3 s per active second)
             // because small messages can fill every per-client Core queue.
@@ -285,13 +329,13 @@ class dealer_router_client_bench_t
             std::vector<perf::async_task_t<bool>> senders;
             senders.reserve (_socket_states.size ());
             for (size_t i = 0; i < _socket_states.size (); ++i)
-                senders.emplace_back (
-                  run_sender (coordinator.ready_queue (), _socket_states[i], replies, phase,
-                              deadline));
+                senders.emplace_back (run_sender (coordinator.ready_queue (), _socket_states[i],
+                                                  replies, phase, deadline, active_sends,
+                                                  schedule));
 
-            const auto dispatch_ready =
-              [this, phase, deadline, lat_out, &latency, &count, &replies] (
-                const zlink::poll_event_t *events_, size_t ready_count) {
+            const auto dispatch_ready = [this, phase, deadline, lat_out, &latency, &count, &replies,
+                                         schedule] (const zlink::poll_event_t *events_,
+                                                    size_t ready_count) {
                 for (size_t i = 0; i < ready_count; ++i) {
                     const size_t slot_index = events_[i].slot;
                     if (slot_index >= _socket_states.size ())
@@ -318,18 +362,25 @@ class dealer_router_client_bench_t
                             if (recv_rc > 0) {
                                 continue;
                             }
-                            if (!perf_metric::is_expected (header, _run_id, phase,
-                                                          _msg_size)) {
+                            if (schedule
+                                && perf_metric::is_expected (
+                                  header, _run_id, perf_metric::phase_warmup, _msg_size)) {
+                                if (!replies.finished ())
+                                    return false;
+                                continue;
+                            }
+                            if (!perf_metric::is_expected (header, _run_id, phase, _msg_size)) {
                                 continue;
                             }
 
                             if (!replies.finished ())
                                 return false;
-                            if (std::chrono::steady_clock::now () >= deadline)
+                            if (phase == perf_metric::phase_active
+                                && std::chrono::steady_clock::now () >= deadline)
                                 continue;
 
                             ++count;
-                            if (lat_out && phase == perf_metric::phase_active) {
+                            if (lat_out && phase == perf_metric::phase_latency) {
                                 const int64_t now_ns = perf_metric::now_ns ();
                                 if (header.sent_ts_ns > 0
                                     && now_ns >= header.sent_ts_ns) {
@@ -345,8 +396,8 @@ class dealer_router_client_bench_t
                 }
                 return true;
             };
-            if (!coordinator.run_until_senders_drained (
-                  deadline, drain_deadline, senders, dispatch_ready)) {
+            if (!coordinator.run_until_senders_drained (deadline, drain_deadline, senders,
+                                                        dispatch_ready, schedule, true)) {
                 co_return false;
             }
 
@@ -362,7 +413,7 @@ class dealer_router_client_bench_t
                 co_return false;
 
             if (count == 0
-                || (lat_out && phase == perf_metric::phase_active && latency.count () == 0))
+                || (lat_out && phase == perf_metric::phase_latency && latency.count () == 0))
                 co_return false;
 
             if (count_out)

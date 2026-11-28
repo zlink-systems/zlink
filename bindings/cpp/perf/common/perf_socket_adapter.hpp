@@ -3,6 +3,7 @@
 #define ZLINK_CPP_PERF_SOCKET_ADAPTER_HPP
 
 #include "perf_socket_options_adapter.hpp"
+#include "../multi/common/perf_multi_measurement.hpp"
 
 #include <zlink.hpp>
 
@@ -20,6 +21,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -90,6 +92,18 @@ class application_ready_queue_t
 
     schedule_awaiter_t schedule () noexcept { return schedule_awaiter_t (*this); }
 
+    size_t local_size () const noexcept { return _ready.size (); }
+
+    bool resume_next ()
+    {
+        if (_ready.empty ())
+            return false;
+        const auto continuation = _ready.front ();
+        _ready.pop_front ();
+        continuation.resume ();
+        return true;
+    }
+
     std::function<void (std::function<void ()>)> continuation_scheduler ()
     {
         const std::shared_ptr<remote_state_t> remote = _remote;
@@ -111,20 +125,34 @@ class application_ready_queue_t
       size_t maximum_ = std::numeric_limits<size_t>::max ())
     {
         const size_t local_round = std::min (maximum_, _ready.size ());
+        take_remote_snapshot (maximum_ - local_round);
+        for (size_t i = 0; i < local_round; ++i)
+            resume_next ();
+        return local_round + run_remote_snapshot ();
+    }
+
+    void run_remote_round ()
+    {
+        take_remote_snapshot (std::numeric_limits<size_t>::max ());
+        run_remote_snapshot ();
+    }
+
+  private:
+    void take_remote_snapshot (size_t maximum_)
+    {
         _remote_batch.clear ();
         {
             std::lock_guard<std::mutex> lock (_remote->mutex);
-            const size_t remote_round = std::min (maximum_ - local_round,
-                                                  _remote->pending.size ());
+            const size_t remote_round = std::min (maximum_, _remote->pending.size ());
             _remote_batch.reserve (remote_round);
             for (size_t i = 0; i < remote_round; ++i) {
                 _remote_batch.emplace_back (std::move (_remote->pending.front ()));
                 _remote->pending.pop_front ();
             }
         }
-        return run_snapshot (local_round, _remote_batch.size ());
     }
 
+  public:
     size_t wait_and_run_ready_round (
       size_t maximum_ = std::numeric_limits<size_t>::max ())
     {
@@ -168,28 +196,11 @@ class application_ready_queue_t
         remote_->changed.notify_one ();
     }
 
-    size_t run_snapshot (size_t local_round_, size_t remote_round_)
+    size_t run_remote_snapshot ()
     {
-        size_t ran = 0;
-        while (ran < local_round_) {
-            if (_ready.empty ())
-                break;
-            const std::coroutine_handle<> continuation = _ready.front ();
-            _ready.pop_front ();
-            if (continuation)
-                continuation.resume ();
-            ++ran;
-        }
-
-        size_t remote_ran = 0;
-        while (remote_ran < remote_round_) {
-            std::function<void ()> &callback = _remote_batch[remote_ran];
-            if (callback)
-                callback ();
-            ++remote_ran;
-            ++ran;
-        }
-        return ran;
+        for (auto &callback : _remote_batch)
+            callback ();
+        return _remote_batch.size ();
     }
 
     std::shared_ptr<remote_state_t> _remote;
@@ -222,11 +233,12 @@ class application_poller_coordinator_t
     application_ready_queue_t &ready_queue () noexcept { return _ready; }
 
     template <typename TTask, typename TDispatch>
-    bool run_until_senders_drained (
-      const std::chrono::steady_clock::time_point &active_deadline_,
-      const std::chrono::steady_clock::time_point &drain_deadline_,
-      const std::vector<TTask> &senders_,
-      TDispatch &&dispatch_)
+    bool run_until_senders_drained (const std::chrono::steady_clock::time_point &active_deadline_,
+                                    const std::chrono::steady_clock::time_point &drain_deadline_,
+                                    const std::vector<TTask> &senders_,
+                                    TDispatch &&dispatch_,
+                                    perf_multi_measurement::schedule_t *pace_ = NULL,
+                                    bool receives_replies_ = false)
     {
         const auto all_senders_done = [&senders_] {
             return std::all_of (
@@ -234,29 +246,48 @@ class application_poller_coordinator_t
               [] (const TTask &sender_) { return sender_.done (); });
         };
 
+        using clock_t = std::chrono::steady_clock;
+        using perf_multi_measurement::schedule_t;
+        const auto ns = [] (clock_t::time_point time_) {
+            return std::chrono::duration_cast<std::chrono::nanoseconds> (time_.time_since_epoch ())
+              .count ();
+        };
+
         for (;;) {
-            const size_t resumed = _ready.run_ready_round (_source_count);
-            const auto now = std::chrono::steady_clock::now ();
-            if (now >= active_deadline_ && all_senders_done ())
+            const auto now = clock_t::now ();
+            const bool sending = now < active_deadline_;
+            size_t resumed = 0;
+            if (!pace_ || !sending)
+                resumed = _ready.run_ready_round (_source_count);
+            else if (pace_->due (ns (now)))
+                resumed = _ready.resume_next ();
+
+            const auto current = clock_t::now ();
+            if (current >= active_deadline_ && all_senders_done ())
                 return true;
-            if (now >= drain_deadline_)
+            if (current >= drain_deadline_)
                 return false;
 
-            const auto wait_deadline =
-              now < active_deadline_ ? active_deadline_ : drain_deadline_;
-            const auto remaining = wait_deadline - now;
-            const auto remaining_ms =
-              std::chrono::duration_cast<std::chrono::milliseconds> (remaining);
-            const std::chrono::milliseconds wait =
-              resumed != 0
-                ? std::chrono::milliseconds::zero ()
-                : std::chrono::milliseconds (
-                    std::max<int64_t> (1, remaining_ms.count ()));
+            if (sending && current >= active_deadline_ && _ready.local_size () != 0)
+                continue;
+            auto wake = ns (current < active_deadline_ ? active_deadline_ : drain_deadline_);
+            const bool local_ready = _ready.local_size () != 0;
+            if (pace_ && current < active_deadline_ && local_ready)
+                wake = std::min<uint64_t> (wake, pace_->next_ns ());
+            const auto wait = !pace_ && resumed != 0 ? std::chrono::milliseconds::zero ()
+                                                     : schedule_t::wait_ms (ns (current), wake);
+            if (pace_ && !receives_replies_ && _ready.local_size () == senders_.size ()) {
+                if (wait.count () != 0)
+                    std::this_thread::sleep_for (wait);
+                continue;
+            }
             const size_t ready_count =
               _poller.wait (_events.data (), _events.size (), wait);
             if (ready_count != 0
                 && !dispatch_ (_events.data (), ready_count))
                 return false;
+            if (pace_)
+                _ready.run_remote_round ();
         }
     }
 

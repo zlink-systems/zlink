@@ -8,12 +8,15 @@
 #include "../common/perf_client_helpers.hpp"
 #include "../common/perf_metric_header.hpp"
 
+#include "../common/perf_multi_measurement.hpp"
+
 #include <algorithm>
 #include <any>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <memory>
+#include <limits>
 #include <vector>
 
 namespace
@@ -23,6 +26,10 @@ static const char *k_pattern_env = "PUBSUB";
 static const char *k_pattern_result = "PUBSUB";
 static const char *k_topic = "bench";
 static const uint32_t k_run_id = 1U;
+static constexpr size_t k_receive_batch = 64;
+static constexpr auto k_receive_poll = std::chrono::milliseconds (10);
+static constexpr auto k_drain_quiet = std::chrono::milliseconds (50);
+static constexpr auto k_drain_duration = std::chrono::seconds (10);
 struct phase_config_t
 {
     int active_seconds;
@@ -124,15 +131,17 @@ class pubsub_client_bench_t
         _monitors (),
         _sockets (),
         _poller (),
-        _poll_events (),
+        _poll_events (settings.clients),
         _phase_cfg (),
         _result (),
-        _failure_stage ("init")
+        _latency_reference (),
+        _inflight_floor ((std::numeric_limits<uint64_t>::max) ()),
+        _paced_target_rate (0.0),
+        _failure_stage ("setup_sockets")
     {
         _holders.reserve (_settings.clients);
         _monitors.reserve (_settings.clients);
         _sockets.reserve (_settings.clients);
-        _poll_events.reserve (_settings.clients);
 
         _phase_cfg.active_seconds = std::max (1, _settings.duration_seconds);
     }
@@ -148,8 +157,9 @@ class pubsub_client_bench_t
             return false;
         }
 
-        if (!run_active_until_stop_token (std::chrono::seconds (_phase_cfg.active_seconds),
-                                          &_result.active_count, &_result.latency))
+        std::vector<uint64_t> active_received (_sockets.size (), 0);
+        _failure_stage = "active_receive";
+        if (!run_active (active_received))
             return false;
 
         if (_result.active_count == 0) {
@@ -157,7 +167,32 @@ class pubsub_client_bench_t
             return false;
         }
 
-        print_result ();
+        _failure_stage = "active_phase_done";
+        if (!perf::multi::wait_for_phase_done_from_stdin (
+              _msg_size, static_cast<int> (perf_metric::phase_active)))
+            return false;
+        _failure_stage = "active_drain";
+        if (!drain_until_idle ())
+            return false;
+        const uint64_t minimum =
+          *std::min_element (active_received.begin (), active_received.end ());
+        if (minimum == 0) {
+            _failure_stage = "no_active_data_on_subscriber";
+            return false;
+        }
+        std::cout << "PHASE_DRAINED," << _msg_size << ',' << minimum << std::endl;
+        const double target_rate = perf_multi_measurement::target_rate (
+          minimum, static_cast<double> (_phase_cfg.active_seconds));
+        bool caught_up = false;
+        uint64_t paced_received = 0;
+        _failure_stage = "paced_receive";
+        if (!run_paced (target_rate, &caught_up, &paced_received))
+            return false;
+        if (caught_up)
+            print_result ();
+        else
+            print_invalid_latency ();
+        std::cout << "PHASE_COMPLETE," << _msg_size << ',' << paced_received << std::endl;
         std::cout << "CLIENT_DONE," << _msg_size << std::endl;
         return true;
     }
@@ -216,94 +251,201 @@ class pubsub_client_bench_t
         return !_sockets.empty ();
     }
 
-    // Active aggregation is bounded by the application clock. The server's
-    // wire-level stop token still ends the phase early when delivered, but a
-    // lost stop token must not leave the client parked in poll forever after
-    // the active deadline has already elapsed.
-    bool run_active_until_stop_token (std::chrono::milliseconds duration,
-                                      unsigned long long *count_out,
-                                      perf::multi::bench_latency_stats_t *lat_out)
+    bool run_active (std::vector<uint64_t> &received_)
     {
-        if (duration.count () <= 0) {
-            if (count_out)
-                *count_out = 0;
-            if (lat_out)
-                *lat_out = perf::multi::bench_latency_stats_t ();
-            return true;
-        }
+        const auto deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (_phase_cfg.active_seconds);
+        std::vector<bool> stop_seen (_sockets.size (), false);
 
-        if (_sockets.empty ())
-            return false;
-
-        perf::multi::bench_latency_sampler_t latency;
-        unsigned long long count = 0;
-        const auto deadline = std::chrono::steady_clock::now () + duration;
-        bool phase_done = false;
-
-        while (!phase_done) {
-            const auto now = std::chrono::steady_clock::now ();
-            if (now >= deadline)
-                break;
-            std::chrono::milliseconds poll_wait =
-              std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
-            if (poll_wait.count () <= 0)
-                poll_wait = std::chrono::milliseconds (1);
-            poll_wait = std::min (poll_wait, std::chrono::milliseconds (100));
-
-            if (_poll_events.size () < _sockets.size ())
-                _poll_events.resize (_sockets.size ());
-            const size_t poll_rc =
+        while (std::chrono::steady_clock::now () < deadline) {
+            const auto poll_wait =
+              std::min (perf::multi::remaining_bounded_timeout (deadline), k_receive_poll);
+            const size_t ready =
               _poller.wait (_poll_events.data (), _poll_events.size (), poll_wait);
-            if (poll_rc == 0) {
-                if (std::chrono::steady_clock::now () >= deadline)
-                    break;
+            for (size_t i = 0; i < ready; ++i) {
+                const size_t slot = _poll_events[i].slot;
+                if (slot >= _sockets.size () || stop_seen[slot])
+                    continue;
+                for (size_t n = 0; n < k_receive_batch; ++n) {
+                    if (std::chrono::steady_clock::now () >= deadline)
+                        return true;
+                    perf_metric::header_t header = {};
+                    const pubsub_recv_result_t rc =
+                      recv_one_pubsub_message (*_sockets[slot], _msg_size, &header);
+                    if (rc == pubsub_recv_error)
+                        return false;
+                    if (rc == pubsub_recv_empty)
+                        break;
+                    if (rc == pubsub_recv_stop) {
+                        stop_seen[slot] = true;
+                        if (std::all_of (stop_seen.begin (), stop_seen.end (),
+                                         [] (bool stopped) { return stopped; }))
+                            return true;
+                        break;
+                    }
+                    if (header.phase == perf_metric::phase_active
+                        && std::chrono::steady_clock::now () < deadline) {
+                        ++_result.active_count;
+                        ++received_[slot];
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    bool drain_until_idle ()
+    {
+        const auto deadline = std::chrono::steady_clock::now () + k_drain_duration;
+        auto idle_since = std::chrono::steady_clock::now ();
+        while (std::chrono::steady_clock::now () < deadline) {
+            const size_t ready =
+              _poller.wait (_poll_events.data (), _poll_events.size (), k_receive_poll);
+            if (ready == 0) {
+                if (std::chrono::steady_clock::now () - idle_since >= k_drain_quiet)
+                    return true;
                 continue;
             }
-
-            for (size_t i = 0; i < poll_rc; ++i) {
-                const size_t slot_index = _poll_events[i].slot;
-                if (slot_index >= _sockets.size ())
+            for (size_t i = 0; i < ready; ++i) {
+                const size_t slot = _poll_events[i].slot;
+                if (slot >= _sockets.size ())
                     continue;
-                zlink::sub_socket_t *sock = _sockets[slot_index];
-                if (!sock)
-                    continue;
-
-                for (;;) {
-                    if (std::chrono::steady_clock::now () >= deadline) {
-                        phase_done = true;
-                        break;
-                    }
+                for (size_t n = 0; n < k_receive_batch; ++n) {
                     perf_metric::header_t header = {};
-                    const pubsub_recv_result_t recv_rc =
-                      recv_one_pubsub_message (*sock, _msg_size, &header);
-                    if (recv_rc == pubsub_recv_error)
+                    const pubsub_recv_result_t rc =
+                      recv_one_pubsub_message (*_sockets[slot], _msg_size, &header);
+                    if (rc == pubsub_recv_error)
                         return false;
-                    if (recv_rc == pubsub_recv_empty)
+                    if (rc == pubsub_recv_empty)
                         break;
-                    if (recv_rc == pubsub_recv_stop) {
-                        phase_done = true;
+                    idle_since = std::chrono::steady_clock::now ();
+                }
+            }
+        }
+        return false;
+    }
+
+    bool run_paced (double target_rate, bool *caught_up_out, uint64_t *received_out)
+    {
+        perf_multi_measurement::catch_up_tracker_t tracker (target_rate);
+        perf::multi::bench_latency_sampler_t latency;
+        perf::multi::bench_latency_sampler_t reference;
+        _paced_target_rate = target_rate;
+        std::vector<uint64_t> paced_received (_sockets.size (), 0);
+        std::vector<uint64_t> latency_received (_sockets.size (), 0);
+        std::vector<bool> stop_seen (_sockets.size (), false);
+        uint64_t epoch = 0;
+        uint64_t catch_up_at = 0;
+        uint64_t next_progress_ns = 0;
+        const uint64_t duration_ns =
+          static_cast<uint64_t> (_settings.latency_duration_seconds) * 1000000000ULL;
+        const uint64_t outer_deadline =
+          static_cast<uint64_t> (perf_metric::now_ns ()) + 2 * duration_ns;
+        uint64_t last_payload_ns = static_cast<uint64_t> (perf_metric::now_ns ());
+        const auto drain_deadline =
+          outer_deadline
+          + std::chrono::duration_cast<std::chrono::nanoseconds> (k_drain_duration).count ();
+        while (static_cast<uint64_t> (perf_metric::now_ns ()) < drain_deadline) {
+            const uint64_t now = static_cast<uint64_t> (perf_metric::now_ns ());
+            const uint64_t sample_end =
+              catch_up_at != 0 ? catch_up_at + duration_ns : outer_deadline;
+            if (now >= sample_end
+                && (std::all_of (stop_seen.begin (), stop_seen.end (),
+                                 [] (bool stopped) { return stopped; })
+                    || now - last_payload_ns >= static_cast<uint64_t> (
+                         std::chrono::duration_cast<std::chrono::nanoseconds> (k_drain_quiet)
+                           .count ())))
+                break;
+            const size_t ready =
+              _poller.wait (_poll_events.data (), _poll_events.size (), k_receive_poll);
+            for (size_t i = 0; i < ready; ++i) {
+                const size_t slot = _poll_events[i].slot;
+                if (slot >= _sockets.size ())
+                    continue;
+                for (size_t n = 0; n < k_receive_batch; ++n) {
+                    perf_metric::header_t header = {};
+                    const pubsub_recv_result_t rc =
+                      recv_one_pubsub_message (*_sockets[slot], _msg_size, &header);
+                    if (rc == pubsub_recv_error)
+                        return false;
+                    if (rc == pubsub_recv_empty)
+                        break;
+                    last_payload_ns = static_cast<uint64_t> (perf_metric::now_ns ());
+                    if (rc == pubsub_recv_stop) {
+                        stop_seen[slot] = true;
                         break;
                     }
 
-                    if (header.phase != static_cast<uint8_t> (perf_metric::phase_active)
-                        || std::chrono::steady_clock::now () >= deadline) {
+                    if (header.phase != perf_metric::phase_warmup
+                        && header.phase != perf_metric::phase_latency)
                         continue;
-                    }
-
-                    ++count;
-                    if (lat_out) {
+                    ++paced_received[slot];
+                    if (epoch == 0 && header.sent_ts_ns > 0)
+                        epoch = static_cast<uint64_t> (header.sent_ts_ns);
+                    reference.add (
+                      perf_metric::elapsed_latency_ns (perf_metric::now_ns (), header.sent_ts_ns));
+                    if (catch_up_at != 0 && header.phase == perf_metric::phase_latency
+                        && header.sent_ts_ns > 0
+                        && static_cast<uint64_t> (header.sent_ts_ns) < catch_up_at + duration_ns) {
+                        ++latency_received[slot];
                         latency.add (perf_metric::elapsed_latency_ns (perf_metric::now_ns (),
                                                                       header.sent_ts_ns));
                     }
                 }
             }
-        }
+            if (epoch != 0 && catch_up_at == 0 && now <= epoch + duration_ns) {
+                const uint64_t minimum =
+                  *std::min_element (paced_received.begin (), paced_received.end ());
+                const uint64_t scheduled =
+                  perf_multi_measurement::scheduled_count (target_rate, epoch, now);
+                const uint64_t in_flight = scheduled > minimum ? scheduled - minimum : 0;
+                if (now >= next_progress_ns) {
+                    _inflight_floor = std::min (_inflight_floor, in_flight);
+                    std::cout << "PUBSUB_CATCHUP_PROGRESS," << _msg_size << ','
+                              << (now - epoch) / 1e9 << ',' << in_flight << ',' << minimum << ','
+                              << scheduled << ',' << target_rate << std::endl;
+                    next_progress_ns = now + 1000000000ULL;
+                }
 
-        if (count_out)
-            *count_out = count;
-        if (lat_out)
-            *lat_out = latency.snapshot ();
+                if (tracker.observe (now, minimum, scheduled)) {
+                    catch_up_at = now;
+                    std::cout << "PHASE_CATCHUP," << _msg_size << std::endl;
+                    std::cout << "PUBSUB_CATCHUP_DIAG," << _msg_size << ',' << (now - epoch) / 1e9
+                              << ',' << tracker.in_flight_at_catch_up () << std::endl;
+                }
+            }
+        }
+        *caught_up_out = catch_up_at != 0 && latency.count () > 0;
+        *received_out = *std::min_element (latency_received.begin (), latency_received.end ());
+        _result.latency = latency.snapshot ();
+        _latency_reference = reference.snapshot ();
+        if (_inflight_floor == (std::numeric_limits<uint64_t>::max) ())
+            _inflight_floor = 0;
         return true;
+    }
+
+    void print_invalid_latency () const
+    {
+        const double throughput =
+          static_cast<double> (_result.active_count) / _phase_cfg.active_seconds;
+        const std::string prefix = "RESULT," + _lib_name + "," + k_pattern_result + "," + _transport
+                                   + "," + std::to_string (_msg_size);
+        std::cout << prefix << ",throughput," << throughput << std::endl;
+        std::cout << prefix << ",bandwidth," << throughput * _msg_size / 1000000.0 << std::endl;
+        for (const char *metric : {"latency", "latency_p95", "latency_p99"})
+            std::cout << prefix << ',' << metric << ",invalid:receiver_not_caught_up_by_deadline"
+                      << std::endl;
+        const std::string reference_prefix = "REFERENCE," + _lib_name + "," + k_pattern_result + ","
+                                             + _transport + "," + std::to_string (_msg_size);
+        std::cout << reference_prefix << ",latency_ref_p50,"
+                  << _latency_reference.p50_ns / 1000000.0 << std::endl;
+        std::cout << reference_prefix << ",latency_ref_p99,"
+                  << _latency_reference.p99_ns / 1000000.0 << std::endl;
+        std::cout << reference_prefix << ",inflight_floor," << _inflight_floor << std::endl;
+        std::cout << reference_prefix << ",inflight_floor_ms,"
+                  << (_paced_target_rate > 0.0 ? _inflight_floor / _paced_target_rate * 1000.0
+                                               : 0.0)
+                  << std::endl;
     }
 
     void print_result () const
@@ -329,6 +471,9 @@ class pubsub_client_bench_t
 
     phase_config_t _phase_cfg;
     bench_result_t _result;
+    perf::multi::bench_latency_stats_t _latency_reference;
+    uint64_t _inflight_floor;
+    double _paced_target_rate;
     const char *_failure_stage;
 };
 
@@ -351,14 +496,17 @@ bool perf_pubsub_client (const std::string &lib_name,
       perf::multi::resolve_multi_bench_settings ();
 
     pubsub_client_bench_t bench (transport, lib_name, msg_size, endpoint, settings);
-    if (!bench.run ()) {
+    try {
+        if (bench.run ())
+            return true;
+    }
+    catch (const zlink::binding_error_t &err) {
+        std::cerr << "PUBSUB_CLIENT_ERROR," << err.what () << std::endl;
+    }
         std::cerr << "PUBSUB_CLIENT_FAIL,stage=" << bench.failure_stage ()
                   << ",transport=" << transport << ",size=" << msg_size
                   << ",active=" << bench.active_count () << std::endl;
         return false;
-    }
-
-    return true;
 }
 
 int main (int argc, char **argv)
