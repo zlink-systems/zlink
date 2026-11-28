@@ -375,6 +375,7 @@ allocation-free draining.
 
 - Message/routed receive fills a caller-provided `Received` object, created with `Received.Create()`, and returns `bool`.
 - Raw `SUB`/`XSUB` subscribe APIs fill a caller-provided `TopicMessage` or `SubscriptionEvent` object and return `bool`.
+- `SubscriptionAt(index)` on SUB and XSUB returns `null` when the index has no entry. The query rule is [the common Subscription Query](../README.en.md#subscription-query).
 - `TopicMessage.ReleaseForReuse()` releases the current parts and metadata while retaining the
   internal topic receive buffers for a later `Subscribe` call. It is valid only while the
   `TopicMessage` is open; after terminal `Dispose()` it throws `ObjectDisposedException` and

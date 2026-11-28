@@ -813,11 +813,37 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             ),
             "messages.flow"
         );
+        var timeline = new FailureTimeline(
+            "warmReply",
+            "dropRecorded",
+            "listenerReceived",
+            "waitStarted",
+            "waitEnded"
+        );
+        string? observedSpotId = null;
+        // Observe the completed drop before the existing file listener handles it.
+        using var dropObserver = new ActivityListener
+        {
+            ShouldListenTo = activitySource =>
+                activitySource.Name == ZLinkTelemetry.ActivitySourceName,
+            ActivityStopped = activity =>
+            {
+                if (
+                    Volatile.Read(ref observedSpotId) is { } id
+                    && IsDrop(activity)
+                    && Equals(activity.GetTagItem("spot_id"), id)
+                )
+                    timeline.Mark("dropRecorded");
+            },
+        };
+        ActivitySource.AddActivityListener(dropObserver);
         using var flow = new TestHostMessageFlowListener(flowPath);
         await using var host = await SpotCloseHost.StartAsync();
         await host.RequestInstanceAsync($"factory-warm-{Guid.NewGuid():N}");
+        timeline.Mark("warmReply");
         await using var source = await StartPeerAsync(host, registerInstanceFactory: false);
         var spotId = $"factory-failed-{Guid.NewGuid():N}";
+        Volatile.Write(ref observedSpotId, spotId);
         var activities = new ConcurrentBag<Activity>();
         var diagnostic = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -831,15 +857,11 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             ActivityStopped = activity =>
             {
                 if (
-                    (
-                        activity.OperationName == "zlink.dispatch_error"
-                        || (
-                            activity.OperationName == "zlink.message_flow"
-                            && Equals(activity.GetTagItem("phase"), "dropped")
-                        )
-                    ) && Equals(activity.GetTagItem("spot_id"), spotId)
+                    (activity.OperationName == "zlink.dispatch_error" || IsDrop(activity))
+                    && Equals(activity.GetTagItem("spot_id"), spotId)
                 )
                 {
+                    timeline.Mark("listenerReceived");
                     activities.Add(activity);
                     diagnostic.TrySetResult();
                 }
@@ -849,35 +871,57 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         host.State.OnReinitialize = _ =>
             throw new ZLinkFrameworkException(kind, "Instance factory failed.");
         var flowId = Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamFlowId.Create();
-        if (request)
+        try
         {
-            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                source.RequestInstanceAsync(spotId)
+            if (request)
+            {
+                var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                    source.RequestInstanceAsync(spotId)
+                );
+                Assert.Equal(kind, failure.Kind);
+            }
+            else
+            {
+                using (ZLinkFlowContext.EnterExisting(flowId, ZLinkFlowOrigin.Inbound))
+                    await source.SendInstanceAsync(spotId, "factory-failed");
+            }
+            timeline.Mark("waitStarted");
+            try
+            {
+                await diagnostic.Task.WaitAsync(Wait);
+            }
+            finally
+            {
+                timeline.Mark("waitEnded");
+            }
+            var record = Assert.Single(activities);
+            Assert.Equal(
+                request ? "zlink.dispatch_error" : "zlink.message_flow",
+                record.OperationName
             );
-            Assert.Equal(kind, failure.Kind);
+            Assert.Equal("instance_spot", record.GetTagItem("surface"));
+            Assert.Equal(request ? reason : "activation_rejected", record.GetTagItem("reason"));
+            if (request)
+                Assert.Equal("reply_error", record.GetTagItem("action"));
+            else
+            {
+                Assert.Equal("dropped", record.GetTagItem("phase"));
+                Assert.Equal("dropped", record.GetTagItem("outcome"));
+                Assert.Equal(flowId, record.GetTagItem("flow_id"));
+                Assert.Equal("inbound", record.GetTagItem("flow_origin"));
+            }
+            Assert.Equal(request ? "request" : "send", record.GetTagItem("message_kind"));
+            Assert.Equal(nameof(ZLinkFrameworkException), record.GetTagItem("error_type"));
+            Assert.Equal("Instance factory failed.", record.GetTagItem("error_message"));
         }
-        else
+        catch (Exception error) when (FailureTimeline.IsTimingFailure(error))
         {
-            using (ZLinkFlowContext.EnterExisting(flowId, ZLinkFlowOrigin.Inbound))
-                await source.SendInstanceAsync(spotId, "factory-failed");
+            throw timeline.Rethrow(error);
         }
-        await diagnostic.Task.WaitAsync(Wait);
-        var record = Assert.Single(activities);
-        Assert.Equal(request ? "zlink.dispatch_error" : "zlink.message_flow", record.OperationName);
-        Assert.Equal("instance_spot", record.GetTagItem("surface"));
-        Assert.Equal(request ? reason : "activation_rejected", record.GetTagItem("reason"));
-        if (request)
-            Assert.Equal("reply_error", record.GetTagItem("action"));
-        else
-        {
-            Assert.Equal("dropped", record.GetTagItem("phase"));
-            Assert.Equal("dropped", record.GetTagItem("outcome"));
-            Assert.Equal(flowId, record.GetTagItem("flow_id"));
-            Assert.Equal("inbound", record.GetTagItem("flow_origin"));
-        }
-        Assert.Equal(request ? "request" : "send", record.GetTagItem("message_kind"));
-        Assert.Equal(nameof(ZLinkFrameworkException), record.GetTagItem("error_type"));
-        Assert.Equal("Instance factory failed.", record.GetTagItem("error_message"));
+
+        static bool IsDrop(Activity activity) =>
+            activity.OperationName == "zlink.message_flow"
+            && Equals(activity.GetTagItem("phase"), "dropped");
     }
 
     [Theory]

@@ -733,19 +733,33 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         auto release = std::exchange (preparation->release_aliases, {});
         if (!release)
             return preparation->terminal.task ();
-        auto settle = [preparation, release = std::move (release)] (result_t<void> result) mutable {
+        // The terminal is published after the lifecycle barrier has completed. Barrier
+        // completion releases the node and schedules the next drain on the executors, so a
+        // waiter that resumes at the terminal (the host closing its executors after a
+        // failed startup) must not run ahead of that tail.
+        auto settle = [preparation, release = std::move (release)] (
+                        result_t<void> result, const auto &complete_barrier) mutable {
             std::atomic_store (&preparation->admission,
                                std::shared_ptr<const preparation_t::admission_t>{});
             // The terminal publisher consumes this operation's alias chain once;
             // every other publisher waits for the same task.
             result = release (std::move (result));
+            try {
+                complete_barrier (result);
+            }
+            catch (...) {
+                preparation->terminal.complete (result);
+                throw;
+            }
             preparation->terminal.complete (result);
             return result;
         };
         const auto activated = preparation->lifecycle->activate_async (
           [self = shared_from_this (), cleanup = std::move (cleanup), settle] (auto complete) {
               auto finish = [settle, complete] (result_t<void> result) mutable {
-                  complete (settle (std::move (result)));
+                  (void) settle (std::move (result), [&complete] (const result_t<void> &settled) {
+                      complete (settled);
+                  });
               };
               if (!cleanup) {
                   finish (result_t<void>::success ());
@@ -760,7 +774,7 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
               }
           });
         if (!activated)
-            settle (activated);
+            (void) settle (activated, [] (const result_t<void> &) {});
         return preparation->terminal.task ();
     }
 
@@ -2471,6 +2485,11 @@ class spot_node_runtime_t
       actor_ref_t actor_ref,
       std::string actor_key,
       std::optional<runtime::protocol::actor_route_fence_t> source_fence = std::nullopt);
+    // Releases the early Leave reservations this actor's source holds, without
+    // touching its move, backlog or Store authority. A stopping source whose
+    // relocation authority stays unsettled still ends its own bookkeeping so the
+    // host drain can finish.
+    task_t<void> release_source_actor_leave_reservations (actor_ref_t actor_ref);
     task_t<void>
     complete_remote_actor_transfer (const actor_ref_t &source_actor,
                                     const actor_ref_t &target_actor,

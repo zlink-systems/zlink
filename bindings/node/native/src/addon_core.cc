@@ -2907,6 +2907,9 @@ napi_value socket_try_subscription_event (napi_env env, napi_callback_info info)
     }
 }
 
+// Same default as the other bindings use for option and subscription queries.
+constexpr size_t k_default_option_buffer_size = 256;
+
 napi_value subscription_at (napi_env env, napi_callback_info info)
 {
     napi_value argv[2];
@@ -2922,32 +2925,34 @@ napi_value subscription_at (napi_env env, napi_callback_info info)
     uint32_t index = 0;
     napi_get_value_uint32 (env, argv[1], &index);
 
-    std::vector<char> filter (256, '\0');
+    std::vector<char> filter (k_default_option_buffer_size, '\0');
     size_t filter_len = filter.size ();
     int is_pattern = 0;
-    for (;;) {
-        zlink_config_result_t rc = zlink_subscription_at (handle, static_cast<size_t> (index),
-                                                          filter.data (), &filter_len, &is_pattern);
-        if (rc == ZLINK_CONFIG_OK) {
-            napi_value obj;
-            napi_create_object (env, &obj);
-            napi_value filter_value;
-            napi_create_string_utf8 (env, filter.data (), filter_len, &filter_value);
-            napi_set_named_property (env, obj, "filter", filter_value);
-            napi_value pattern_value;
-            napi_get_boolean (env, is_pattern != 0, &pattern_value);
-            napi_set_named_property (env, obj, "isPattern", pattern_value);
-            return obj;
-        }
-        if (rc == ZLINK_CONFIG_NOT_FOUND) {
-            napi_value none;
-            napi_get_null (env, &none);
-            return none;
-        }
-        if (rc != ZLINK_CONFIG_BUFFER_TOO_SMALL)
-            return throw_result_error (env, "subscription_at failed", rc);
-        filter.assign (filter_len > 0 ? filter_len : 1, '\0');
+    const size_t native_index = static_cast<size_t> (index);
+    zlink_config_result_t rc =
+      zlink_subscription_at (handle, native_index, filter.data (), &filter_len, &is_pattern);
+    if (rc == ZLINK_CONFIG_BUFFER_TOO_SMALL) {
+        filter.resize (filter_len);
+        rc = zlink_subscription_at (handle, native_index, filter.data (), &filter_len, &is_pattern);
     }
+
+    if (rc == ZLINK_CONFIG_NOT_FOUND) {
+        napi_value none;
+        napi_get_null (env, &none);
+        return none;
+    }
+    if (rc != ZLINK_CONFIG_OK)
+        return throw_result_error (env, "subscription_at failed", rc);
+
+    napi_value obj;
+    napi_create_object (env, &obj);
+    napi_value filter_value;
+    napi_create_string_utf8 (env, filter.data (), filter_len, &filter_value);
+    napi_set_named_property (env, obj, "filter", filter_value);
+    napi_value pattern_value;
+    napi_get_boolean (env, is_pattern != 0, &pattern_value);
+    napi_set_named_property (env, obj, "isPattern", pattern_value);
+    return obj;
 }
 
 napi_value socket_stream_recv_packet (napi_env env, napi_callback_info info)

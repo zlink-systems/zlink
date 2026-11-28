@@ -1,7 +1,7 @@
 #[path = "perf_common.rs"]
 mod common;
 
-use std::io::{self, BufRead};
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
 use zlink::{Message, SubmitResult};
 
@@ -13,7 +13,7 @@ fn main() {
     let settings = common::MultiSettings::from_env();
 
     let ctx = common::perf_server_context();
-    let pub_sock = ctx.pub_socket().expect("pub");
+    let pub_sock = ctx.create_pub_socket().expect("pub");
     common::apply_multi_hwm(&pub_sock, &settings);
     pub_sock
         .common_options()
@@ -36,19 +36,7 @@ fn main() {
     let endpoint = pub_sock.last_endpoint().expect("endpoint");
     common::print_ready(&endpoint);
 
-    let stdin = io::stdin();
-    let mut start_seen = false;
-    for line in stdin.lock().lines() {
-        let line = line.unwrap_or_default();
-        if line.trim() == format!("START,{}", args.msg_size) {
-            start_seen = true;
-            break;
-        }
-        if matches!(line.trim(), "STOP" | "QUIT") {
-            return;
-        }
-    }
-    if !start_seen {
+    if !common::wait_for_start_stdin(args.msg_size) {
         return;
     }
     ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
@@ -114,4 +102,6 @@ fn main() {
             Err(err) => panic!("stop token publish failed: {err}"),
         }
     }
+    println!("PHASE_DONE,{},{}", args.msg_size, common::PHASE_ACTIVE);
+    io::stdout().flush().expect("flush phase completion");
 }
