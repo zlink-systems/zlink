@@ -40,11 +40,12 @@ TOTAL=0
 
 run_test_file() {
     local name="$1"
+    shift
     local log_file
     log_file="$(mktemp)"
     TOTAL=$((TOTAL + 1))
     echo -n "  $name ... "
-    if cargo test --test "$name" -- --test-threads=1 >"$log_file" 2>&1; then
+    if cargo test --test "$name" -- --test-threads=1 "$@" >"$log_file" 2>&1; then
         echo "PASS"
         PASS=$((PASS + 1))
     else
@@ -82,6 +83,7 @@ run_test_file receive_failure_tests
 run_test_file routed_async_tests
 run_test_file boundary_tests
 run_test_file option_tests
+run_test_file optional_socket_duration_tests
 run_test_file subscription_at_tests
 run_test_file flow_state_tests
 run_test_file ownership_tests
@@ -89,17 +91,73 @@ run_test_file monitor_tests
 run_test_file context_poller_close_tests
 run_test_file connection_attempt_tests
 
-run_test_file typed_monitor_tests
-run_test_file timer_wait_tests
-run_test_file raw_poll_tests
-run_test_file proxy_tests
-run_test_file optional_socket_duration_tests
+run_test_file closed_submission_tests
+run_test_file missing_received_context_tests
+run_test_file duration_boundary_tests
+run_test_file endpoint_boundary_tests
+run_test_file envelope_state_tests
 run_test_file peer_weight_boundary_tests
 run_test_file routed_option_getter_tests
-run_test_file stream_recv_mode_boundary_tests
-run_test_file multipart_close_tests
+run_test_file typed_monitor_tests
 run_test_file tls_tests
-run_test_file duration_boundary_tests
+run_test_file timer_wait_tests
+run_test_file raw_poll_tests
+run_test_file multipart_close_tests
+run_test_file proxy_tests
+run_test_file error_catalog_tests
+run_test_file internal_errno_tests
+run_test_file socket_thread_traits_tests
+run_test_file raw_reply_backpressure_tests
+run_test_file router_move_reply_tests
+run_test_file stream_recv_mode_boundary_tests
+
+run_ownership_guard() {
+    local shim="$1" suite="$2" test="$3" marker="$4" log_file
+    log_file="$(mktemp)"
+    TOTAL=$((TOTAL + 1))
+    echo -n "  $test ... "
+    if LD_PRELOAD="$shim${LD_PRELOAD:+:$LD_PRELOAD}" ZLINK_AUDIT_MARKER="$marker" \
+        cargo test --test "$suite" -- --ignored --exact "$test" --test-threads=1 \
+            >"$log_file" 2>&1 && [[ -s "$marker" ]]; then
+        echo "PASS"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL"
+        cat "$log_file"
+        FAIL=$((FAIL + 1))
+    fi
+    rm -f "$log_file"
+}
+
+if [[ "$(uname -s)" == Linux ]]; then
+    GUARD_DIR="$(mktemp -d)"
+    trap 'rm -rf "$GUARD_DIR"' EXIT
+    SEND_SHIM="$GUARD_DIR/send_no_wait_token_shim.so"
+    if "${CC:-cc}" -shared -fPIC -I"$PROJECT_DIR/include" -o "$SEND_SHIM" \
+        "$SCRIPT_DIR/test_support/send_no_wait_token_shim.c"; then
+        LD_PRELOAD="$SEND_SHIM${LD_PRELOAD:+:$LD_PRELOAD}" \
+            run_test_file send_without_wait_token_tests \
+                --ignored --exact send_without_wait_token_returns_backpressure
+    else
+        echo "  SEND without wait token shim ... FAIL"
+        TOTAL=$((TOTAL + 1))
+        FAIL=$((FAIL + 1))
+    fi
+    GUARD_SHIM="$GUARD_DIR/message_ownership_shim.so"
+    if "${CC:-cc}" -shared -fPIC -I"$PROJECT_DIR/include" -o "$GUARD_SHIM" \
+        "$SCRIPT_DIR/test_support/message_ownership_shim.c" -ldl; then
+        run_ownership_guard "$GUARD_SHIM" ownership_tests \
+            multipart_recv_adopts_parts_into_uninitialized_message_slots "$GUARD_DIR/adopt"
+        run_ownership_guard "$GUARD_SHIM" ownership_tests \
+            blocking_send_and_reply_do_not_copy_message_parts "$GUARD_DIR/copy"
+        run_ownership_guard "$GUARD_SHIM" behavior_tests \
+            stream_packet_receive_propagates_message_init_failure "$GUARD_DIR/init"
+    else
+        echo "  message ownership shim ... FAIL"
+        TOTAL=$((TOTAL + 1))
+        FAIL=$((FAIL + 1))
+    fi
+fi
 
 TOTAL=$((TOTAL + 1))
 echo -n "  samples ... "

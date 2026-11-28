@@ -10,10 +10,9 @@ use std::time::Duration;
 mod test_support;
 
 use zlink::{
-    AtomicCounter, CompletionKind, Context, Message, MonitorEvent, Received, RecvError, RecvFlags,
-    RequestSubmission, RidDuplicatePolicy, RoutingId, SendFlags, SendResult, SendSubmission,
-    SocketMonitor, Stopwatch, StreamSocket, SubmitRetryMode, SubscriptionEvent, Thread,
-    TopicMessage, XPubSocket,
+    AtomicCounter, Context, Message, MonitorEvent, Received, RecvError, RecvFlags,
+    RequestSubmission, RidDuplicatePolicy, RoutingId, SendFlags, SendSubmission, SocketMonitor,
+    Stopwatch, StreamSocket, SubmitRetryMode, SubscriptionEvent, Thread, TopicMessage, XPubSocket,
 };
 
 fn assert_send_submission(_: Result<SendSubmission, zlink::SubmitError>) {}
@@ -302,26 +301,4 @@ fn socket_monitor_has_recv() {
     // Monitor exposes recv()
     let _recv: fn(&SocketMonitor) -> Result<MonitorEvent, RecvError> = SocketMonitor::recv;
     let _ = mon;
-}
-
-// ---------------------------------------------------------------------------
-// SendResult is explicit enum, not bool
-// ---------------------------------------------------------------------------
-
-#[test]
-fn send_result_is_explicit_enum() {
-    // Verify SendResult has three distinct variants
-    let sent = SendResult::Sent;
-    let bp = SendResult::Backpressured;
-    let nr = SendResult::NotReady;
-    assert!(sent.is_sent());
-    assert!(!bp.is_sent());
-    assert!(!nr.is_sent());
-}
-
-#[test]
-fn completion_kind_exposes_writable_abi_value() {
-    assert_eq!(CompletionKind::Send as i32, 1);
-    assert_eq!(CompletionKind::Request as i32, 2);
-    assert_eq!(CompletionKind::Writable as i32, 3);
 }

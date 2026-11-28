@@ -22,8 +22,7 @@ bindings/rust/target/doc/zlink/index.html
 - Domain objects (`Message`, error types, enums)
 - FFI internals (`zlink::ffi`) are private and excluded
 
-The current approved crate payload contains the Core 0.17.0 ABI with the 0.17.0
-Linux x86_64 runtime. Other target triples fail during build until a matching native
+This crate version targets the Core 1.26.0 ABI and Linux x86_64 runtime. Other target triples fail during build until a matching native
 runtime has passed the Core package provenance and clean-consumer checks.
 
 ## Single-part receive
@@ -41,7 +40,7 @@ Read any metadata you need before consuming the envelope.
   `SubmitResult::Backpressured` with `EAGAIN` and a nonzero wait token. Core
   retains the token, user context, and target, but never the payload.
 - Once the target can accept another attempt, Core enqueues
-  `CompletionKind::Writable` and wakes pollers with `POLLOUT`. WRITABLE grants
+  a WRITABLE record and wakes pollers with `POLLOUT`. WRITABLE grants
   one retry; it is not notification that the original SEND succeeded.
 - ROUTER and STREAM sends to a routing ID that has no route fail as
   `SubmitResult::NotConnected` without a wait token.
@@ -54,9 +53,9 @@ completion records through NO_DATA after `POLLOUT`, matches the token, user
 context, and routed target, then resubmits that packet. A repeated backpressure
 result arms the new token and repeats the same state transition. After REQUEST
 admission, its reply stage waits for the existing REQUEST reply or terminal
-completion. Async REQUEST requires a public `POLLCOMPLETION` owner before
-submission. An ownerless SEND may complete immediately, but if it encounters
-backpressure its submit fails immediately with `SubmitResult::InvalidState`.
+completion. Async SEND and REQUEST require a public `POLLCOMPLETION` owner
+before submission. Without an owner, the binding returns
+`SubmitResult::InvalidState` before calling Core.
 The binding never creates a background completion thread.
 
 Registering a socket with a public `Poller` for `POLLCOMPLETION` gives
@@ -66,11 +65,9 @@ without a public owner drains its own completion on the calling thread.
 Register a `SocketMonitor` with `Poller::add_monitor`; monitors accept only `POLLIN` and are drained with `recv_with_flags(RecvFlags::DONT_WAIT)` after readiness.
 REQUEST admission can use the same WRITABLE path. A successful REQUEST FINAL
 reserves a different nonzero completion ID and then completes with its reply or
-terminal result through `CompletionKind::Request` and `POLLCOMPLETION`.
+terminal result through `POLLCOMPLETION`.
 
-`CompletionKind::Send` remains public with ABI value `1`, but it is reserved:
-ordinary SEND success never produces that record. `CompletionKind::Request`
-is `2`, and `CompletionKind::Writable` is `3`. PUB/XPUB publish remains a
+PUB/XPUB publish remains a
 synchronous one-shot and produces neither SEND nor WRITABLE completions;
 `SendFlags::DONT_WAIT` backpressure is returned as `SubmitError` with
 `SubmitResult::Backpressured` and native `EAGAIN`.

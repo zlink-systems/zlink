@@ -1,5 +1,5 @@
 use std::time::Duration;
-use zlink::{ConfigResult, Context};
+use zlink::{ConfigResult, Context, Message};
 
 #[test]
 fn options_reject_nonintegral_milliseconds_and_overflow() {
@@ -42,6 +42,23 @@ fn options_reject_nonintegral_milliseconds_and_overflow() {
     assert_eq!(
         router.router_options().request_timeout().unwrap(),
         Duration::from_millis(1)
+    );
+}
+
+#[test]
+fn request_rejects_nonintegral_timeout_before_submission() {
+    let ctx = Context::new().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
+    let error = dealer
+        .request()
+        .message(Message::try_from(b"request").unwrap())
+        .timeout(Duration::from_nanos(1))
+        .submit_sync()
+        .err()
+        .expect("invalid timeout");
+    assert!(
+        matches!(error, zlink::ZlinkError::Submit(error) if error.code == zlink::SubmitResult::InvalidArgument),
+        "{error:?}"
     );
 }
 

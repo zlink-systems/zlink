@@ -12,7 +12,7 @@
 //!   `send` consumes messages and suppresses drop.
 //! - **Message diagnostics** via [`Message::ref_count`].
 //! - **Domain objects**: [`Received`], [`TopicMessage`], [`SubscriptionEvent`],
-//!   [`SendResult`], [`RoutingId`].
+//!   [`SubmitResult`], [`RoutingId`].
 //! - **Socket capability isolation**: each socket type exposes only its own
 //!   capabilities (e.g. `PubSocket` has no `recv`).
 
@@ -50,7 +50,6 @@ pub use contracts::eventing::poller::{
 };
 pub use contracts::eventing::timer::Timer;
 pub use contracts::messaging::message::{Message, multipart_close};
-pub use contracts::messaging::operation_contracts::{CompletionKind, SendResult};
 pub use contracts::messaging::operations::{
     Empty, PublishOp, Ready, ReplyOp, RequestOp, RequestSubmission, SendOp, SendSubmission,
 };
