@@ -2,6 +2,8 @@
 
 package systems.zlink.contracts.messaging;
 
+import systems.zlink.contracts.errors.ErrorCategory;
+import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.messaging.ReplyOperation;
@@ -13,6 +15,7 @@ import systems.zlink.contracts.messaging.SendSubmitOperation;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.internal.ContractAccess;
+import systems.zlink.internal.NativeErrorCodes;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -620,15 +623,12 @@ public final class Received implements AutoCloseable {
 
     /** Returns the first payload part. */
     public Message firstPart() {
-        ArrayList<Message> parts = realizedParts;
-        if (!closed && cursor == null && parts != null && !parts.isEmpty()) {
-            return parts.get(0);
-        }
         ensureOpen();
         ensureRealizedThrough(0);
-        if (realizedParts.isEmpty())
-            throw new ZlinkRecvException(RecvResult.NO_DATA);
-        return realizedParts.get(0);
+        ArrayList<Message> parts = realizedParts;
+        if (parts == null || parts.isEmpty())
+            throw ZlinkException.fromErrno(ErrorCategory.RECV, NativeErrorCodes.EINVAL);
+        return parts.get(0);
     }
 
     /** Returns the only payload part or throws when the result is multipart. */
@@ -929,7 +929,7 @@ public final class Received implements AutoCloseable {
     }
 
     private void ensureRealizedThrough(int index) {
-        while (!closed && realizedParts.size() <= index && cursor != null) {
+        while (!closed && cursor != null && realizedParts.size() <= index) {
             Message next = cursor.nextPartOrNull();
             if (next == null) {
                 cursor = null;
