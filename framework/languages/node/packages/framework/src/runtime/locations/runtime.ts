@@ -1,4 +1,3 @@
-import { SeverityNumber } from '@opentelemetry/api-logs';
 import type { ZLinkExecutionDecision } from '../admission';
 import {
   createInternalFrameworkException,
@@ -16,7 +15,6 @@ import {
   ZLinkInternalMeshNodeWriteIntent,
   type ZLinkMeshNodeWriteIntent
 } from './domain-store-contract';
-import { messageFlowDelivery } from '../diagnostics/message-flow-delivery';
 import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import {
   zlinkRuntimeDefaultLocationOptions,
@@ -1043,16 +1041,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         stopSignal?.throwIfAborted();
       }
     } catch (error) {
-      if (stopSignal?.aborted === true) {
-        messageFlowDelivery().submit(undefined, {
-          eventName: 'location.startup_claim_cleanup_abandoned',
-          timestamp: new Date(),
-          severityNumber: SeverityNumber.WARN,
-          severityText: 'WARN',
-          body: 'Stop deadline expired during startup claim cleanup. The lease will expire by TTL.',
-          attributes: { owner_id: this.ownerId }
-        });
-      }
+      // #5996: when stopSignal is aborted, emit location.startup_claim_cleanup_abandoned here
       this.recordFailure(errorMessage(error));
       throw new ZLinkOwnerCleanupError(error);
     }

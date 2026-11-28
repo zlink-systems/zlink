@@ -1,6 +1,4 @@
-import type { LogRecord } from '@opentelemetry/api-logs';
 import { Worker } from 'node:worker_threads';
-import type { ZLinkTelemetryRecord } from './message-flow-record';
 
 // The process owner counts records until the worker takes them, including batches
 // already posted to its port. Only the worker decrements in-transit records.
@@ -29,7 +27,7 @@ export interface ZLinkTelemetryLease {
 }
 
 export interface ZLinkTelemetryDelivery<T = unknown> {
-  readonly lease?: SharedArrayBuffer;
+  readonly lease: SharedArrayBuffer;
   readonly record: T;
 }
 
@@ -138,17 +136,14 @@ export class ZLinkMessageFlowDelivery {
     return this.enabled() && Atomics.load(lease.retired, 0) === 0;
   }
 
-  submit(lease: ZLinkTelemetryLease, record: ZLinkTelemetryRecord): void;
-  submit(lease: undefined, record: LogRecord): void;
-  submit(lease: ZLinkTelemetryLease | undefined, record: ZLinkTelemetryRecord | LogRecord): void {
-    // Process diagnostics can arrive while the worker is starting.
-    if (lease === undefined ? this.failure !== undefined : !this.accepts(lease)) return;
+  submit(lease: ZLinkTelemetryLease, record: unknown): void {
+    if (!this.accepts(lease)) return;
     if (Atomics.load(this.state, TelemetryState.Pending) === MESSAGE_FLOW_PENDING_LIMIT) {
       Atomics.add(this.counters, TelemetryCounter.Overflow, 1n);
       return;
     }
     Atomics.add(this.state, TelemetryState.Pending, 1);
-    this.pending.push({ lease: lease?.retired.buffer as SharedArrayBuffer | undefined, record });
+    this.pending.push({ lease: lease.retired.buffer as SharedArrayBuffer, record });
     if (this.workerReady && !this.executing && this.scheduled === undefined) {
       this.scheduled = setImmediate(() => {
         this.scheduled = undefined;

@@ -45,7 +45,7 @@ module.exports = HostStopSourceProof;
 
 for (const mode of ['bootstrap', 'none', 'main-only', 'logger', 'trace', 'both', 'false-enabled', 'registered-noop',
   'error-filter', 'blocked', 'blocked-trace', 'overflow-width', 'failures', 'fallback-failure', 'logger-init-failure', 'trace-init-failure', 'lease-renewal',
-  'throwing-preload', 'worker-start-failure', 'worker-exit', 'role-counter-width', 'common-helper', 'process-diagnostic']) {
+  'throwing-preload', 'worker-start-failure', 'worker-exit', 'role-counter-width', 'common-helper']) {
   test(`message-flow process delivery: ${mode}`, () => {
     const result = spawnSync(process.execPath, ['--require', fixture, scenario], {
       cwd: root,

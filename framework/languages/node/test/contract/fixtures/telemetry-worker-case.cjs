@@ -94,29 +94,6 @@ async function stopHost(telemetryLease) {
   } finally {
     threads.Worker = Worker;
   }
-  if (mode === 'process-diagnostic') {
-    const delivered = new Promise((resolve) => {
-      owner.worker.on('message', function onMessage(message) {
-        if (message !== delivery.TELEMETRY_WORKER_AVAILABLE || owner.executing) return;
-        owner.worker.off('message', onMessage);
-        resolve();
-      });
-    });
-    owner.submit(undefined, {
-      eventName: 'location.startup_claim_cleanup_abandoned',
-      severityText: 'WARN',
-      attributes: { owner_id: 'startup-owner' }
-    });
-    await stopHost(delivery.openTelemetryLease());
-    await delivered;
-    const records = rows().filter(row => row.kind === 'log');
-    assert.equal(records.length, 1);
-    assert.equal(records[0].thread, 'worker');
-    assert.equal(records[0].value.eventName, 'location.startup_claim_cleanup_abandoned');
-    assert.equal(records[0].value.attributes.owner_id, 'startup-owner');
-    console.log(`PASS ${mode}`);
-    return;
-  }
   if (mode === 'throwing-preload' || mode === 'worker-start-failure' || mode === 'worker-exit') {
     let published = false;
     let readyFailure;

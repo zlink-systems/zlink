@@ -494,8 +494,6 @@ test('direct startup claim cleanup abandons a pending claim when the Stop deadli
 
   assert.deepEqual(claim.calls, []);
   assert.equal(sweep.mock.callCount(), 0);
-  assert.equal(claim.diagnostics.length, 1);
-  assert.equal(claim.diagnostics[0].attributes.owner_id, runtime.ownerId);
   assert.equal((await store.readOwnerLease(runtime.ownerId)).kind, 'found');
 });
 
@@ -534,9 +532,7 @@ test(
     assert.equal(stopped.reason.cause?.name, 'DeadlineExceededError');
     assert.deepEqual(claim.calls, []);
     assert.equal(sweep.mock.callCount(), 0);
-    assert.equal(claim.diagnostics.length, 1);
-    assert.equal(claim.diagnostics[0].eventName, 'location.startup_claim_cleanup_abandoned');
-    assert.equal(claim.diagnostics[0].attributes.owner_id, runtime.ownerId);
+    // #5996: emit location.startup_claim_cleanup_abandoned here
     assert.deepEqual(timers.map(({ delayMs }) => delayMs), [30_000]);
     assert.deepEqual(clearedTimers, [0]);
     assert.equal((await store.readOwnerLease(runtime.ownerId)).kind, 'missing');
