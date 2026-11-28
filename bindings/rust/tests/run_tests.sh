@@ -38,14 +38,14 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-run_test_file() {
+run_check() {
     local name="$1"
     shift
     local log_file
     log_file="$(mktemp)"
     TOTAL=$((TOTAL + 1))
     echo -n "  $name ... "
-    if cargo test --test "$name" -- --test-threads=1 "$@" >"$log_file" 2>&1; then
+    if "$@" >"$log_file" 2>&1; then
         echo "PASS"
         PASS=$((PASS + 1))
     else
@@ -56,21 +56,17 @@ run_test_file() {
     rm -f "$log_file"
 }
 
+run_test_file() {
+    local name="$1"
+    shift
+    run_check "$name" cargo test --test "$name" -- --test-threads=1 "$@"
+}
+
 echo "Running test suites:"
 echo ""
 
-TOTAL=$((TOTAL + 1))
-echo -n "  lib_tests ... "
-LIB_LOG="$(mktemp)"
-if cargo test --lib -- --test-threads=1 >"$LIB_LOG" 2>&1; then
-    echo "PASS"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL"
-    cat "$LIB_LOG"
-    FAIL=$((FAIL + 1))
-fi
-rm -f "$LIB_LOG"
+run_check perf_builds bash "$SCRIPT_DIR/build_perf.sh"
+run_check lib_tests cargo test --lib -- --test-threads=1
 
 run_test_file surface_tests
 run_test_file single_part_or_throw_tests
@@ -159,18 +155,7 @@ if [[ "$(uname -s)" == Linux ]]; then
     fi
 fi
 
-TOTAL=$((TOTAL + 1))
-echo -n "  samples ... "
-SAMPLES_LOG="$(mktemp)"
-if "$PROJECT_DIR/samples/run_samples.sh" >"$SAMPLES_LOG" 2>&1; then
-    echo "PASS"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL"
-    cat "$SAMPLES_LOG"
-    FAIL=$((FAIL + 1))
-fi
-rm -f "$SAMPLES_LOG"
+run_check samples "$PROJECT_DIR/samples/run_samples.sh"
 
 echo ""
 echo "=== Summary ==="
