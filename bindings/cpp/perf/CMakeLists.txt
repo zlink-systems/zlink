@@ -144,7 +144,7 @@ if(ZLINK_CPP_REGISTER_CTEST AND UNIX AND NOT WIN32)
       "PERF_FAIL_FAST=1 PERF_TIMEOUT_SECONDS=20 ${PERF_ROOT_DIR}/run_binding_multi.sh --reuse-build --pattern DEALER_DEALER --transports tcp --msg-sizes 64 --duration 1 --runs 1 --clients 2 --connect-concurrency 2 --results-tag ctest_cpp_multi_dealer_dealer_runtime_smoke"
   )
   set_tests_properties(perf_cpp_multi_dealer_dealer_runtime_smoke PROPERTIES
-    LABELS "perf-regression"
+    LABELS "perf-regression;perf-measurement"
     TIMEOUT 90
     WORKING_DIRECTORY "${ZLINK_REPO_ROOT_DIR}"
   )

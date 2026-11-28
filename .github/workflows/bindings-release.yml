@@ -670,9 +670,13 @@ jobs:
         run: |
           cmake -S bindings/cpp -B build_cpp_release \
             -DZLINK_CPP_CORE_BUILD_DIR="${{ github.workspace }}/core/build_bindings_release" \
-            -DZLINK_CPP_BUILD_TESTS=ON
+            -DZLINK_CPP_BUILD_TESTS=ON \
+            -DZLINK_CPP_BUILD_BENCHMARKS=ON
           cmake --build build_cpp_release --parallel
           ctest --test-dir build_cpp_release --output-on-failure -R test_cpp_
+
+      - name: Run C++ perf regressions
+        run: bash bindings/cpp/tests/run_perf_tests.sh build_cpp_release
 
       - name: Package
         # The C++ binding is a source unit: CMakeLists, cmake config template,
