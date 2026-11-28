@@ -81,25 +81,38 @@ internal static class OutageCanonicalStoreReader
         return (owner, checked((long)lease));
     }
 
-    internal static bool IsSteadyReady(byte[] payload)
+    internal sealed record ActorPayload(
+        byte State,
+        byte OperationKind,
+        string ActorId,
+        string ActorType,
+        string Spot,
+        byte SpotKind,
+        RoutingId OwnerRid,
+        ulong NodeGeneration,
+        bool SteadyReady
+    );
+
+    internal static ActorPayload ReadActorPayload(byte[] payload)
     {
         var body = AuthorityBody(payload);
         var operation = body.U8();
-        var kind = body.U8();
+        if (body.U8() != 1)
+            throw new InvalidDataException("Expected an Actor authority payload.");
         var actor = new Reader(body.Take(body.U16()));
-        _ = actor.Text8(); // actorType
-        _ = actor.Text8(); // actorId
+        var actorType = actor.Text8();
+        var actorId = actor.Text8();
         var state = actor.U8();
-        _ = actor.Text8(); // currentSpotId
+        var spot = actor.Text8();
         actor.Skip(8); // currentSpotGeneration
         var spotKind = actor.U8();
         _ = body.Text8(); // ownerId
         body.Skip(8); // ownerLeaseGeneration
         _ = body.Text8(); // ownerMeshName
-        _ = body.Text8(); // ownerNodeRid
-        body.Skip(8); // ownerNodeGeneration
-        return operation == 0
-            && kind == 1
+        var ownerRid = RoutingId.From(body.Take(body.U8()));
+        var nodeGeneration = body.U64();
+        var steadyReady =
+            operation == 0
             && state == 1
             && actor.End
             && spotKind is 1 or 2
@@ -108,6 +121,28 @@ internal static class OutageCanonicalStoreReader
             && body.U8() == 0
             && body.U32() == 0 // no activation recovery state
             && body.End;
+        return new(
+            state,
+            operation,
+            actorId,
+            actorType,
+            spot,
+            spotKind,
+            ownerRid,
+            nodeGeneration,
+            steadyReady
+        );
+    }
+
+    internal static bool IsSteadyReady(byte[] payload) => ReadActorPayload(payload).SteadyReady;
+
+    internal static int ReadPlacementWeight(ReadOnlyMemory<byte> bytes)
+    {
+        using var document = Record(bytes);
+        return document
+            .RootElement.GetProperty("descriptor")
+            .GetProperty("placementWeight")
+            .GetInt32();
     }
 
     private static readonly Lazy<MethodInfo> ReadAuthorityAggregate = new(() =>
@@ -192,6 +227,8 @@ internal static class OutageCanonicalStoreReader
         internal ushort U16() => BinaryPrimitives.ReadUInt16BigEndian(Take(2));
 
         internal uint U32() => BinaryPrimitives.ReadUInt32BigEndian(Take(4));
+
+        internal ulong U64() => BinaryPrimitives.ReadUInt64BigEndian(Take(8));
 
         internal string Text8() => new UTF8Encoding(false, true).GetString(Take(U8()));
     }

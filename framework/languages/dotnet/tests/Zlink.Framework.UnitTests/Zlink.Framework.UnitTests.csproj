@@ -102,6 +102,7 @@
         <Compile Include="Runtime/SpotActorDispatchErrorReasonTests.cs"/>
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
+        <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostEventSink.cs" Link="Support/TestHostEventSink.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
         <Compile Include="Configuration/FanoutPublisherConfigurationTests.cs"/>
         <Compile Include="Configuration/StartupDependencyMetadataTests.cs"/>
