@@ -96,15 +96,15 @@ bool is_defined (codec_t codec)
     return false;
 }
 
-result_t<void> validate_header (const stream_header_t &header)
+result_t<void> validate_header (const stream_header_t &header, header_flags_t flags)
 {
     if (!is_defined (header.kind) || !is_defined (header.codec)
-        || (static_cast<std::uint8_t> (header.flags) & ~known_flags) != 0) {
+        || (static_cast<std::uint8_t> (flags) & ~known_flags) != 0) {
         return result_t<void>::failure (error_code_t::frame_decode_failed,
                                         "Unknown stream header enum value.");
     }
-    const auto has_request_seq = has_flag (header.flags, header_flags_t::has_request_seq);
-    const auto has_metadata = has_flag (header.flags, header_flags_t::has_metadata);
+    const auto has_request_seq = has_flag (flags, header_flags_t::has_request_seq);
+    const auto has_metadata = has_flag (flags, header_flags_t::has_metadata);
     if (header.kind == message_kind_t::send && has_request_seq) {
         return result_t<void>::failure (error_code_t::frame_decode_failed,
                                         "Send packet must not contain a request sequence.");
@@ -120,7 +120,7 @@ result_t<void> validate_header (const stream_header_t &header)
                                         "Error packet must use the JSON codec.");
     }
     if (header.kind == message_kind_t::control) {
-        if (header.flags != header_flags_t::none || header.codec != codec_t::raw || has_request_seq
+        if (flags != header_flags_t::none || header.codec != codec_t::raw || has_request_seq
             || has_metadata || header.actor_slot) {
             return result_t<void>::failure (error_code_t::frame_decode_failed,
                                             "Control packet must use raw codec and no flags.");
@@ -157,35 +157,35 @@ result_t<void> validate_header (const stream_header_t &header)
 
 } // namespace
 
-result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_t &source) const
+result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_t &header) const
 {
-    auto header = source;
+    auto flags = header.flags;
     if (header.request_seq) {
-        set_flag (header.flags, header_flags_t::has_request_seq);
+        set_flag (flags, header_flags_t::has_request_seq);
     } else {
-        clear_flag (header.flags, header_flags_t::has_request_seq);
+        clear_flag (flags, header_flags_t::has_request_seq);
     }
     if (!header.metadata.values.empty ()) {
-        set_flag (header.flags, header_flags_t::has_metadata);
+        set_flag (flags, header_flags_t::has_metadata);
     } else {
-        clear_flag (header.flags, header_flags_t::has_metadata);
+        clear_flag (flags, header_flags_t::has_metadata);
     }
     if (!header.correlation_id.empty ()) {
-        set_flag (header.flags, header_flags_t::has_correlation_id);
+        set_flag (flags, header_flags_t::has_correlation_id);
     } else {
-        clear_flag (header.flags, header_flags_t::has_correlation_id);
+        clear_flag (flags, header_flags_t::has_correlation_id);
     }
-    clear_flag (header.flags, flow_field_flag);
+    clear_flag (flags, flow_field_flag);
     if (header.actor_slot) {
-        set_flag (header.flags, header_flags_t::has_actor_slot);
+        set_flag (flags, header_flags_t::has_actor_slot);
     } else {
-        clear_flag (header.flags, header_flags_t::has_actor_slot);
+        clear_flag (flags, header_flags_t::has_actor_slot);
     }
     if (header.correlation_id.size () > std::numeric_limits<std::uint8_t>::max ()) {
         return result_t<std::vector<std::uint8_t>>::failure (error_code_t::validation_failed,
                                                              "Correlation id is too large.");
     }
-    if (auto validation = validate_header (header); !validation) {
+    if (auto validation = validate_header (header, flags); !validation) {
         return result_t<std::vector<std::uint8_t>>::failure (validation.error ()->code,
                                                              validation.error ()->message);
     }
@@ -205,7 +205,7 @@ result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_
     bytes.push_back (flow_id_codec_t::format_marker);
     bytes.push_back (static_cast<std::uint8_t> (header.kind));
     bytes.push_back (static_cast<std::uint8_t> (header.codec));
-    bytes.push_back (static_cast<std::uint8_t> (header.flags));
+    bytes.push_back (static_cast<std::uint8_t> (flags));
     if (header.request_seq) {
         write_u64 (bytes, *header.request_seq);
     }
@@ -316,7 +316,7 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
         return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
                                                    "Helper header contains trailing bytes.");
     }
-    if (auto validation = validate_header (header); !validation) {
+    if (auto validation = validate_header (header, header.flags); !validation) {
         return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
                                                    validation.error ()->message);
     }
