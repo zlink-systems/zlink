@@ -35,10 +35,18 @@ pub fn reply_turn(replies: &mut usize) -> bool {
 
 pub const SETTLE_NS: u64 = 500_000_000;
 pub const SECOND_NS: u64 = 1_000_000_000;
+const CATCH_UP_WINDOW_NS: u64 = 500_000_000;
 const RECEIVE_QUANTUM: u64 = 1;
+const NS_PER_MS: u64 = 1_000_000;
+const RECHECK_BELOW_MS: u64 = 1;
+const MAX_WAIT_MS: u64 = 50;
 
 pub fn wait_ms(now: u64, until: u64) -> i64 {
-    (until.saturating_sub(now) / 1_000_000).min(50) as i64
+    let remaining_ms = until.saturating_sub(now) / NS_PER_MS;
+    if remaining_ms < RECHECK_BELOW_MS {
+        return 0;
+    }
+    remaining_ms.min(MAX_WAIT_MS) as i64
 }
 
 pub fn active_receive(received: u64, deadline: u64) -> bool {
@@ -155,13 +163,22 @@ pub struct CatchUp {
 }
 
 impl CatchUp {
-    pub fn observe(&mut self, now: u64, received: &[u64], scheduled: u64) -> bool {
+    pub fn observe(
+        &mut self,
+        now: u64,
+        received: &[u64],
+        scheduled: u64,
+        target_rate: f64,
+    ) -> bool {
+        if target_rate <= 0.0 {
+            return false;
+        }
         let Some(minimum) = received.iter().min() else {
             return false;
         };
         self.in_flight = scheduled.saturating_sub(*minimum);
         if !self.received.is_empty() && self.in_flight <= self.start_in_flight {
-            if now - self.start_ns < SETTLE_NS {
+            if now - self.start_ns < CATCH_UP_WINDOW_NS {
                 return false;
             }
             let expected = scheduled - self.scheduled;

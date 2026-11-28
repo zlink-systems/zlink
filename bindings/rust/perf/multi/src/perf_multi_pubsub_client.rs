@@ -181,7 +181,7 @@ fn main() {
                     next_progress = now + common::SECOND_NS;
                 }
                 if elapsed <= latency_seconds * common::SECOND_NS
-                    && tracker.observe(now, &paced_counts, scheduled)
+                    && tracker.observe(now, &paced_counts, scheduled, schedule.rate)
                 {
                     let seconds = elapsed as f64 / common::SECOND_NS as f64;
                     catch_up = Some(seconds);
