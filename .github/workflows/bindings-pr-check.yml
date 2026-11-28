@@ -1,0 +1,162 @@
+name: Bindings PR Check
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+    paths:
+      - 'bindings/rust/**'
+      - 'core/include/**'
+      - 'bindings/go/**'
+      - 'bindings/python/**'
+      - 'bindings/doc/**'
+      - '.github/workflows/bindings-pr-check.yml'
+  merge_group:
+    types: [checks_requested]
+  push:
+    branches:
+      - 'mergify/merge-queue/**'
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Select binding checks
+    # Mergify batch branches run on push even if Mergify also opens a draft PR.
+    if: >-
+      !startsWith(github.head_ref, 'mergify/merge-queue/') &&
+      (vars.ZLINK_BINDINGS_PR_CHECK_ENABLED == 'true' ||
+        (github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'ci-trial'))) &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci-trial')
+    runs-on: ubuntu-24.04
+    outputs:
+      rust: ${{ steps.select.outputs.rust }}
+      go: ${{ steps.select.outputs.go }}
+      python: ${{ steps.select.outputs.python }}
+      docs: ${{ steps.select.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select checks from changed paths
+        id: select
+        shell: bash
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
+          TRIAL: ${{ vars.ZLINK_BINDINGS_PR_CHECK_ENABLED != 'true' }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) range="$PR_BASE...$PR_HEAD" ;;
+            merge_group) range="$GROUP_BASE..$GROUP_HEAD" ;;
+            push) range="origin/main...$GITHUB_SHA" ;;
+            *) exit 1 ;;
+          esac
+
+          changed="$RUNNER_TEMP/bindings-changed-files"
+          git diff --no-renames --name-only -z "$range" -- > "$changed"
+
+          rust=false go=false python=false docs=false
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              bindings/rust/*|core/include/*) rust=true ;;
+              bindings/go/*) go=true ;;
+              bindings/python/*) python=true ;;
+              bindings/doc/*) docs=true ;;
+              .github/workflows/bindings-pr-check.yml)
+                if [[ "$TRIAL" == true ]]; then
+                  rust=true go=true python=true docs=true
+                fi
+                ;;
+            esac
+          done < "$changed"
+          printf 'rust=%s\ngo=%s\npython=%s\ndocs=%s\n' \
+            "$rust" "$go" "$python" "$docs" >> "$GITHUB_OUTPUT"
+
+  check:
+    name: Bindings ${{ matrix.name }}
+    needs: changes
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scope: rust
+            name: Rust
+          - scope: go
+            name: Go
+          - scope: python
+            name: Python
+          - scope: docs
+            name: document links
+    env:
+      ZLINK_CORE_SOURCE: release
+    steps:
+      # Keep each named queue check successful when its paths did not change.
+      - name: No matching changes
+        if: needs.changes.outputs[matrix.scope] == 'false'
+        run: echo 'No matching binding changes.'
+
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs[matrix.scope] == 'true'
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.scope == 'rust' && needs.changes.outputs.rust == 'true'
+
+      - uses: actions/setup-go@v6
+        if: matrix.scope == 'go' && needs.changes.outputs.go == 'true'
+        with:
+          go-version-file: bindings/go/go.mod
+          cache: false
+
+      - uses: actions/setup-python@v6
+        if: >-
+          (matrix.scope == 'python' || matrix.scope == 'docs') &&
+          needs.changes.outputs[matrix.scope] == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Prepare verified Linux x64 Core release
+        if: matrix.scope != 'docs' && needs.changes.outputs[matrix.scope] == 'true'
+        shell: bash
+        run: |
+          core_prefix="$(bash scripts/local-package/core/fetch-release.sh \
+            --platform linux-x64 --cache-dir "$RUNNER_TEMP/zlink-core")"
+          printf 'ZLINK_CORE_PACKAGE_PREFIX=%s\n' "$core_prefix" >> "$GITHUB_ENV"
+
+      - name: Test Rust binding and build perf crates
+        if: matrix.scope == 'rust' && needs.changes.outputs.rust == 'true'
+        env:
+          CARGO_BUILD_JOBS: '8'
+        run: nice -n 10 bash bindings/rust/tests/run_tests.sh
+
+      - name: Test Go binding and perf module
+        if: matrix.scope == 'go' && needs.changes.outputs.go == 'true'
+        env:
+          GOFLAGS: '-p=8'
+        run: |
+          export CGO_CFLAGS="-I$ZLINK_CORE_PACKAGE_PREFIX/include"
+          export CGO_LDFLAGS="-L$ZLINK_CORE_PACKAGE_PREFIX/lib -Wl,-rpath,$ZLINK_CORE_PACKAGE_PREFIX/lib"
+          nice -n 10 bash bindings/go/tests/run_tests.sh
+
+      - name: Build Python native extension and test binding
+        if: matrix.scope == 'python' && needs.changes.outputs.python == 'true'
+        run: |
+          bash scripts/local-package/native/sync-local-core-libs.sh python
+          python -m pip install pytest
+          nice -n 10 python -m pip install -e ./bindings/python
+          python -c 'from zlink._native import _zlink_native'
+          nice -n 10 bash bindings/python/tests/run_tests.sh
+
+      - name: Check document links and anchors
+        if: matrix.scope == 'docs' && needs.changes.outputs.docs == 'true'
+        run: |
+          python -m pip install 'pymdown-extensions>=10.0'
+          python3 doc/site/scripts/check_doc_links.py
