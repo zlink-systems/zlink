@@ -1563,7 +1563,7 @@ lowercase canonical UUID(8-4-4-4-12)이고 `aggregateGeneration`과 `index`·`le
 | Participant의 membership 변경 | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
 
 **Relocation의 key 값.** Relocation(§9.1의 `aggregate.relocation`)이 이 절의 record를 쓸 때
-`aggregateId`는 그 `relocationId`이고 `aggregateGeneration`은 `1`이다. Source는 target을 고르기 전 seal 때
+`aggregateId`는 그 `relocationId`이고 `aggregateGeneration`은 `1`이다. 단, aggregate 기록이 없는 Actor 하나의 이동은 목록을 쓰지 않는다(위 `sourceInventorySha256` 문단). 그 밖의 relocation에서 Source는 target을 고르기 전 seal 때
 이 목록을 한 번 쓰고, target 시도(`target.attemptGeneration`)가 바뀌어도 같은 목록을 그대로 쓴다.
 
 **Participant 변경 bytes.** Participant의 새 authority payload record와 membership 변경 record는
@@ -1652,7 +1652,9 @@ Page 분할은 저장 bytes만으로 정해서, 같은 목록은 어느 언어�
 - Authority의 `aggregate.relocation.sourceInventorySha256`도 seal 때 고정한 이동 대상 목록 root의
   `digestSha256`과 같은 값이다. 항목의 `expectedStoreVersion`은 준비 때 읽은 값이므로 이 값은 `preparing`
   뒤에 바뀌지 않는다. Aggregate 기록이 없는 Actor 하나의 이동은 그 Actor 하나를 항목으로 가진 목록의
-  root `digestSha256`을 쓴다.
+  root `digestSha256`을 쓴다. 한 항목 목록은 authority record만으로 다시 만들 수 있으므로 이 이동은 목록 root·page·participant
+  record를 저장하지 않는다(아래 「Relocation의 key 값」의 예외). Target은 읽은 authority record로 한 항목 목록을 만들어 root `digestSha256`을
+  계산하고 `sourceInventorySha256`과 비교하며, Store에서 목록 record를 읽지 않는다.
 
 목록 root, page와 participant 변경 bytes record는 한 번 쓰면 바꾸지 않는다. 같은
 `(aggregateId, aggregateGeneration)`의 record를 다른 내용으로 다시 쓰지 않으며, 다른 내용이 필요하면
