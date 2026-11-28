@@ -22,10 +22,17 @@ enum class telemetry_event_kind_t
 bool process_telemetry_has_provider (const dispatch_options_t &options,
                                      telemetry_event_kind_t kind) noexcept;
 
+struct runtime_diagnostic_t
+{
+    log_level_t level;
+    std::string message;
+    std::vector<log_field_t> fields;
+};
+
 struct telemetry_record_t
 {
     std::uint64_t registration = 0;
-    std::variant<message_flow_event_t, message_dispatch_error_event_t> event;
+    std::variant<message_flow_event_t, message_dispatch_error_event_t, runtime_diagnostic_t> event;
     message_flow_log_mode_t mode = message_flow_log_mode_t::off;
     bool include_sizes = false;
     std::optional<diagnostic_event_sink_t::exception_summary_t> error;
@@ -48,6 +55,11 @@ void bind_process_telemetry_metrics (
   opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> meter);
 void retire_process_telemetry (std::uint64_t registration) noexcept;
 void submit_process_telemetry (telemetry_record_t record) noexcept;
+void submit_runtime_diagnostic (logger_t<> logger,
+                                log_level_t level,
+                                std::string message,
+                                std::vector<log_field_t> fields,
+                                std::uint64_t registration = 0) noexcept;
 std::atomic<std::uint64_t> &telemetry_traced_count () noexcept;
 std::atomic<std::uint64_t> &telemetry_reported_count () noexcept;
 std::atomic<std::uint64_t> &telemetry_failure_count () noexcept;

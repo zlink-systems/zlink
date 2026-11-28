@@ -420,8 +420,15 @@ try {
             zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
         }
     }
+    catch (const std::exception &error) {
+        if (!detail::is_cancellation_exception (error)
+            || !_state->delays.stop_token ().stop_requested ())
+            startup_failure = std::current_exception ();
+    }
     catch (...) {
         startup_failure = std::current_exception ();
+    }
+    if (startup_failure) {
         _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
     }
 

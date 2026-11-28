@@ -14,15 +14,16 @@ namespace zlink::framework::runtime
 class location_host_service_t final : public hosted_service_t
 {
   public:
-    explicit location_host_service_t (zlink::routing_id_t node_rid) :
-        _node_rid (std::move (node_rid))
+    explicit location_host_service_t (zlink::routing_id_t node_rid,
+                                      const detail::delay_owner_t *host_stop = nullptr) :
+        _node_rid (std::move (node_rid)), _host_stop (host_stop)
     {
     }
 
     task_t<void> start (service_provider_t &services) override
     {
         _runtime = &services.get_required<location_runtime_t> ();
-        _runtime->start (_node_rid);
+        _runtime->start (_node_rid, {}, _host_stop);
         return task_t<void> (result_t<void>::success ());
     }
 
@@ -36,6 +37,7 @@ class location_host_service_t final : public hosted_service_t
 
   private:
     zlink::routing_id_t _node_rid = zlink::routing_id_t::from (std::uint32_t{0});
+    const detail::delay_owner_t *_host_stop = nullptr;
     location_runtime_t *_runtime = nullptr;
 };
 

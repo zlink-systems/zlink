@@ -578,9 +578,6 @@ void app_t::_apply_zlink_framework ()
           options.configure_dispatch (),
           _state->logging.factory ().create ("zlink.framework.dispatch"));
     }
-    detail::dispatch_options_access_t::bind_telemetry (options.configure_dispatch (),
-                                                       _state->monitoring->metric_provider,
-                                                       _state->monitoring->metric_meter);
     const auto http_snapshot = options.http ().snapshot ();
     const auto job_queue_configuration = runtime::resolve_application_job_queue_configuration (
       options.application_job_queue_profile (), options.max_queued_application_jobs (),
@@ -763,6 +760,11 @@ void app_t::_apply_zlink_framework ()
     auto location_provider = _state->services.build_provider ();
     const auto locations = location_provider.get<runtime::location_runtime_t> ();
     auto *location_runtime = locations ? &locations->get () : nullptr;
+    const auto diagnostics_registration = detail::dispatch_options_access_t::bind_telemetry (
+      options.configure_dispatch (), _state->monitoring->metric_provider,
+      _state->monitoring->metric_meter, location_runtime != nullptr);
+    if (location_runtime)
+        location_runtime->bind_diagnostics_registration (diagnostics_registration);
     actor_gateway_runtime.bind_serializers (_state->serializers);
     actor_gateway_runtime.set_dispatch (options.configure_dispatch ());
     auto channel_runtime = detail::channel_runtime_t::from (_state->zlink.message_bus ());
@@ -904,7 +906,8 @@ void app_t::_apply_zlink_framework ()
     }
     const auto location_owner = detail::location_owner_node_rid (mesh_node_registrations);
     if (location_runtime)
-        add_hosted_service (std::make_unique<runtime::location_host_service_t> (location_owner));
+        add_hosted_service (
+          std::make_unique<runtime::location_host_service_t> (location_owner, &_state->delays));
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes;
     const auto callback_registrations = mesh_node_registrations;
     runtime::mesh_node_host_service_t *mesh_node_service = nullptr;

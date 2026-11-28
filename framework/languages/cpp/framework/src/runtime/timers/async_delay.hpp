@@ -70,12 +70,17 @@ class delay_owner_t
     void request_stop (
       std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now ()) noexcept
     {
-        std::lock_guard lock (_mutex);
-        if (_stop_at)
-            return;
-        _stop_at = deadline;
-        wake_workers_locked ();
+        {
+            std::lock_guard lock (_mutex);
+            if (_stop_at)
+                return;
+            _stop_at = deadline;
+            wake_workers_locked ();
+        }
+        _stop_requested.request_stop ();
     }
+
+    std::stop_token stop_token () const noexcept { return _stop_requested.get_token (); }
 
     std::optional<std::chrono::steady_clock::time_point> stop_deadline () const noexcept
     {
@@ -107,6 +112,7 @@ class delay_owner_t
             wake_workers_locked ();
             workers.swap (_workers);
         }
+        _stop_requested.request_stop ();
         for (auto &worker : workers)
             worker->thread.join ();
     }
@@ -239,6 +245,7 @@ class delay_owner_t
 
     std::mutex &_mutex;
     std::optional<std::chrono::steady_clock::time_point> _stop_at;
+    std::stop_source _stop_requested;
     std::vector<std::shared_ptr<worker_t>> _workers;
 };
 

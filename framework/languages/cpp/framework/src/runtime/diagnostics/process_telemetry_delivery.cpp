@@ -269,7 +269,7 @@ class process_telemetry_delivery_t
         std::list<telemetry_record_t> unscheduled;
         try {
             std::lock_guard lock (_mutex);
-            if (!_registrations.contains (record.registration))
+            if (record.registration != 0 && !_registrations.contains (record.registration))
                 return;
             if (_pending.size () == pending_capacity) {
                 dropped_count.fetch_add (1, std::memory_order_relaxed);
@@ -359,8 +359,14 @@ class process_telemetry_delivery_t
                 try {
                     if (std::holds_alternative<message_flow_event_t> (record.event))
                         log_flow (record);
-                    else
+                    else if (std::holds_alternative<message_dispatch_error_event_t> (record.event))
                         log_error (record);
+                    else {
+                        const auto &diagnostic = std::get<runtime_diagnostic_t> (record.event);
+                        diagnostic_event_sink_t::log_if_configured (
+                          record.logger, diagnostic.level, diagnostic.message, diagnostic.fields,
+                          logger_failure);
+                    }
                 }
                 catch (...) {
                     failure (provider_role_t::logger);
@@ -427,6 +433,18 @@ void retire_process_telemetry (std::uint64_t registration) noexcept
 void submit_process_telemetry (telemetry_record_t record) noexcept
 {
     delivery ().submit (std::move (record));
+}
+void submit_runtime_diagnostic (logger_t<> logger,
+                                log_level_t level,
+                                std::string message,
+                                std::vector<log_field_t> fields,
+                                std::uint64_t registration) noexcept
+{
+    telemetry_record_t record;
+    record.registration = registration;
+    record.event = runtime_diagnostic_t{level, std::move (message), std::move (fields)};
+    record.logger = std::move (logger);
+    submit_process_telemetry (std::move (record));
 }
 std::atomic<std::uint64_t> &telemetry_traced_count () noexcept
 {

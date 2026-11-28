@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/configuration/configuration.hpp>
+#include <zlink/framework/contracts/configuration/detail/host_defaults.hpp>
 #include <zlink/framework/contracts/configuration/lifecycle.hpp>
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/framework/contracts/configuration/framework_options.hpp>
@@ -97,7 +98,7 @@ class app_t
     task_t<relocation_result_t> relocate (relocation_options_t options,
                                           std::stop_token wait_cancellation = {});
     task_t<termination_result_t>
-    shutdown (std::chrono::milliseconds deadline = std::chrono::seconds (30),
+    shutdown (std::chrono::milliseconds deadline = detail::default_stop_timeout,
               std::stop_token wait_cancellation = {});
     framework_runtime_state_t runtime_state () const noexcept;
     bool is_ready () const noexcept;

@@ -136,7 +136,7 @@ class app_state_t
         bool started = false;
         bool terminal = false;
         termination_result_t result{};
-        std::chrono::milliseconds deadline{30000};
+        std::chrono::milliseconds deadline{default_stop_timeout};
         std::optional<std::chrono::system_clock::time_point> deadline_at;
         std::vector<std::shared_ptr<termination_waiter_t>> waiters;
         std::thread worker;

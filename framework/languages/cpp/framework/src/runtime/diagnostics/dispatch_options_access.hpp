@@ -130,15 +130,18 @@ class dispatch_options_access_t
     {
         return static_cast<bool> (options._dispatch_error_observer);
     }
-    static void
+    static std::uint64_t
     bind_telemetry (dispatch_options_t &options,
                     runtime::metric_provider_t provider,
-                    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> meter)
+                    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> meter,
+                    bool runtime_diagnostics = false)
     {
-        ensure_registration (options);
-        if (options._telemetry_registration)
-            bind_process_telemetry_metrics (options._telemetry_registration->id,
-                                            std::move (provider), std::move (meter));
+        ensure_registration (options, runtime_diagnostics);
+        if (!options._telemetry_registration)
+            return 0;
+        const auto registration = options._telemetry_registration->id;
+        bind_process_telemetry_metrics (registration, std::move (provider), std::move (meter));
+        return registration;
     }
 
     static void retire_telemetry (const dispatch_options_t &options) noexcept
@@ -187,10 +190,12 @@ class dispatch_options_access_t
     }
 
   private:
-    static void ensure_registration (dispatch_options_t &options)
+    static void ensure_registration (dispatch_options_t &options,
+                                     bool runtime_diagnostics = false)
     {
         if (!options._telemetry_registration
-            && process_telemetry_has_provider (options, telemetry_event_kind_t::any))
+            && (runtime_diagnostics
+                || process_telemetry_has_provider (options, telemetry_event_kind_t::any)))
             options._telemetry_registration = register_process_telemetry ();
     }
 };

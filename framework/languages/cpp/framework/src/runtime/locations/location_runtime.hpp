@@ -7,10 +7,13 @@
 #include <zlink/framework/detail/deadline_scheduler.hpp>
 
 #include "runtime/diagnostics/runtime_metrics.hpp"
+#include "runtime/diagnostics/process_telemetry_delivery.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/execution/infrastructure_wait_guard.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include <runtime/locations/location_repository.hpp>
 
+#include <zlink/framework/contracts/configuration/detail/host_defaults.hpp>
 #include <zlink/framework/contracts/locations/options.hpp>
 #include <zlink/framework/contracts/locations/stores.hpp>
 
@@ -214,6 +217,14 @@ class location_runtime_t
         std::string message;
     };
 
+    struct startup_claim_t
+    {
+        std::optional<task_t<owner_lease_claim_result_t>> claim;
+        std::optional<task_t<owner_lease_read_result_t>> confirmation;
+        std::stop_source stop;
+        std::optional<std::chrono::steady_clock::time_point> stop_deadline;
+    };
+
     struct heartbeat_attempt_t
     {
         explicit heartbeat_attempt_t (location_runtime_t *runtime,
@@ -237,6 +248,7 @@ class location_runtime_t
         std::function<void ()> expire;
         std::optional<task_t<lease_renew_outcome_t>> task;
         std::shared_ptr<store_outage_t> requested_outage;
+        startup_claim_t *startup = nullptr;
     };
 
     struct repository_operation_t
@@ -717,6 +729,11 @@ class location_runtime_t
         _monitoring = std::move (monitoring);
     }
 
+    void bind_diagnostics_registration (std::uint64_t registration) noexcept
+    {
+        _diagnostics_registration = registration;
+    }
+
     const std::shared_ptr<framework::detail::monitoring_runtime_state_t> &
     monitoring () const noexcept
     {
@@ -771,61 +788,105 @@ class location_runtime_t
         return _lane->run_checked ([this] { return _last_error; }).get ();
     }
 
-    void start (zlink::routing_id_t node_rid, std::stop_token cancellation = {})
+    void start (zlink::routing_id_t node_rid,
+                std::stop_token caller_cancellation = {},
+                const detail::delay_owner_t *host_stop = nullptr)
     {
-        if (_lifecycle.exchange (lifecycle_t::started) == lifecycle_t::started)
-            return;
         static_cast<void> (node_rid);
+        auto startup = std::make_shared<startup_claim_t> ();
         auto heartbeat = std::make_shared<heartbeat_owner_t> ();
-        std::atomic_store_explicit (&_heartbeat_state, heartbeat, std::memory_order_release);
-        std::chrono::steady_clock::time_point operation_started_at;
+        {
+            std::lock_guard lock (_startup_mutex);
+            if (_lifecycle.exchange (lifecycle_t::started) == lifecycle_t::started)
+                return;
+            _startup = startup;
+            std::atomic_store_explicit (&_heartbeat_state, heartbeat, std::memory_order_release);
+        }
+        std::stop_source cancellation_source;
+        const auto cancel = [&] { cancellation_source.request_stop (); };
+        std::stop_callback caller_stopped (caller_cancellation, cancel);
+        std::stop_callback runtime_stopped (startup->stop.get_token (), cancel);
+        std::stop_callback host_stopped (host_stop ? host_stop->stop_token () : std::stop_token{},
+                                         cancel);
+        const auto cancellation = cancellation_source.get_token ();
+        const auto throw_cancelled = [] {
+            std::rethrow_exception (
+              detail::make_cancellation_exception ("location runtime startup was cancelled"));
+        };
         try {
             if (cancellation.stop_requested ())
-                std::rethrow_exception (
-                  detail::make_cancellation_exception ("location runtime startup was cancelled"));
+                throw_cancelled ();
             const auto format =
               infrastructure_result ([&] { return _store->ensure_store_format (cancellation); });
-            operation_started_at = std::chrono::steady_clock::now ();
+            if (cancellation.stop_requested ())
+                throw_cancelled ();
+            const auto operation_started_at = std::chrono::steady_clock::now ();
             const auto deadline_at = operation_started_at + _options.owner_lease_renew_timeout;
             if (format) {
-                renew_owner_lease_once_at (operation_started_at, deadline_at, cancellation);
+                renew_owner_lease_once_at (operation_started_at, deadline_at, cancellation,
+                                           startup.get ());
             } else {
                 if (format.error_kind () != framework_error_kind_t::unavailable)
                     format.value ();
                 record_failure (format.error ()->what ());
             }
-            if (cancellation.stop_requested ()) {
-                if (format)
-                    release_cancelled_claim (deadline_at);
-                std::rethrow_exception (
-                  detail::make_cancellation_exception ("location runtime startup was cancelled"));
+            {
+                std::lock_guard lock (_startup_mutex);
+                if (cancellation.stop_requested () || startup->stop_deadline)
+                    throw_cancelled ();
+                _heartbeat = std::thread (
+                  [this, heartbeat = std::move (heartbeat), operation_started_at] {
+#ifndef NDEBUG
+                      runtime::infrastructure_wait_guard::infrastructure_scope_t scope (this);
+#endif
+                      heartbeat_loop (std::move (heartbeat), operation_started_at);
+                  });
+                _startup.reset ();
+                _startup_finished.notify_all ();
             }
         }
         catch (...) {
             // The host only stops services that completed startup.
-            _lifecycle.store (lifecycle_t::needs_drain, std::memory_order_release);
-            stop ();
+            const auto deadline = [&] {
+                std::lock_guard lock (_startup_mutex);
+                if (!cancellation.stop_requested () && !startup->stop_deadline)
+                    return std::optional<std::chrono::steady_clock::time_point>{};
+                if (const auto host_deadline = host_stop ? host_stop->stop_deadline () : std::nullopt)
+                    return host_deadline;
+                if (!startup->stop_deadline)
+                    startup->stop_deadline =
+                      std::chrono::steady_clock::now () + detail::default_stop_timeout;
+                return startup->stop_deadline;
+            }();
+            if (deadline)
+                release_cancelled_claim (*startup, *deadline);
+            stop_heartbeat ();
+            infrastructure_result ([this] { return drain_repository_operations (); }).value ();
+            {
+                std::lock_guard lock (_startup_mutex);
+                _lifecycle.store (lifecycle_t::stopped, std::memory_order_release);
+                _startup.reset ();
+                _startup_finished.notify_all ();
+            }
+            if (deadline)
+                throw_cancelled ();
             throw;
         }
-        _heartbeat = std::thread ([this, heartbeat = std::move (heartbeat), operation_started_at] {
-#ifndef NDEBUG
-            runtime::infrastructure_wait_guard::infrastructure_scope_t scope (this);
-#endif
-            heartbeat_loop (std::move (heartbeat), operation_started_at);
-        });
     }
 
-    void stop () noexcept
+    void stop (std::chrono::steady_clock::time_point deadline_at =
+                 std::chrono::steady_clock::now () + detail::default_stop_timeout) noexcept
     {
+        auto lock = await_startup_stop (deadline_at);
         const auto previous = _lifecycle.exchange (lifecycle_t::stopped);
+        lock.unlock ();
         if (previous == lifecycle_t::idle || previous == lifecycle_t::stopped)
             return;
 
         stop_heartbeat ();
         infrastructure_result ([this] { return drain_repository_operations (); }).value ();
         if (previous == lifecycle_t::started)
-            static_cast<void> (cleanup_owner_records (std::chrono::steady_clock::now ()
-                                                      + _options.owner_lease_renew_timeout));
+            static_cast<void> (cleanup_owner_records (deadline_at));
     }
 
     /* Drain owner cleanup (graceful-drain-handoff §4-5): stops the lease
@@ -836,9 +897,11 @@ class location_runtime_t
                           std::nullopt) noexcept
     {
         const auto deadline_at = requested_deadline_at.value_or (
-          std::chrono::steady_clock::now () + _options.owner_lease_renew_timeout);
+          std::chrono::steady_clock::now () + detail::default_stop_timeout);
+        auto lock = await_startup_stop (deadline_at);
         auto started = lifecycle_t::started;
         _lifecycle.compare_exchange_strong (started, lifecycle_t::needs_drain);
+        lock.unlock ();
         stop_heartbeat ();
         return cleanup_owner_records (deadline_at);
     }
@@ -997,6 +1060,25 @@ class location_runtime_t
 
 
   private:
+    std::unique_lock<std::mutex>
+    await_startup_stop (std::chrono::steady_clock::time_point deadline_at)
+    {
+        std::unique_lock lock (_startup_mutex);
+        if (const auto startup = _startup) {
+            // The first Stop owns the standalone deadline, including an implicit Stop
+            // from caller cancellation. The host supplies its own published deadline.
+            if (!startup->stop_deadline)
+                startup->stop_deadline = deadline_at;
+            lock.unlock ();
+            startup->stop.request_stop ();
+            lock.lock ();
+            infrastructure_wait_guard::condition_wait (
+              _startup_finished, lock, [&] { return _startup != startup; }, "location/startup stop",
+              infrastructure_wait_guard::wait_relation_t::dependent_completion);
+        }
+        return lock;
+    }
+
     void require_stop () const noexcept
     {
         // Store work and lease deadlines can exist before start().
@@ -1290,11 +1372,13 @@ class location_runtime_t
     owner_lease_renew_result_t
     renew_owner_lease_once_at (std::chrono::steady_clock::time_point started_at,
                                std::chrono::steady_clock::time_point deadline_at,
-                               std::stop_token cancellation)
+                               std::stop_token cancellation,
+                               startup_claim_t *startup = nullptr)
     {
         auto heartbeat = std::make_shared<heartbeat_owner_t> ();
         auto attempt = std::make_shared<heartbeat_attempt_t> (this, started_at, deadline_at,
                                                               heartbeat, cancellation);
+        attempt->startup = startup;
         auto pending = heartbeat_renew_once_async (attempt);
         auto completed =
           detail::observe_task_result_for (pending, remaining_until (deadline_at), cancellation);
@@ -1309,6 +1393,8 @@ class location_runtime_t
                 expire ();
             completed = detail::task_result_access_t::read (pending);
         }
+        if (startup && cancellation.stop_requested ())
+            return owner_lease_stale_t{};
         auto outcome = completed->value ();
         if (outcome.rejection)
             throw owner_lease_claim_rejected_error_t{*outcome.rejection, deadline_at,
@@ -1334,8 +1420,12 @@ class location_runtime_t
 
     template <typename T>
     static task_t<std::optional<result_t<T>>>
-    await_heartbeat_store (task_t<T> pending, std::weak_ptr<heartbeat_attempt_t> weak_attempt)
+    await_heartbeat_store (task_t<T> pending,
+                           std::weak_ptr<heartbeat_attempt_t> weak_attempt,
+                           std::optional<task_t<T>> *retained = nullptr)
     {
+        // Startup keeps the Store task when the renew observation ends.
+        auto &request = retained ? retained->emplace (std::move (pending)) : pending;
         auto attempt = weak_attempt.lock ();
         auto heartbeat = attempt ? attempt->heartbeat.lock () : nullptr;
         if (!attempt || !heartbeat || heartbeat->stop.load (std::memory_order_acquire)
@@ -1353,11 +1443,11 @@ class location_runtime_t
             };
         }
         detail::observe_task_terminal (
-          pending, [weak_attempt, completion] (const result_t<T> &result) {
-              if (auto active = weak_attempt.lock ()) {
+          request, [weak_attempt, completion, clock = attempt->runtime->_lease_now,
+                    deadline_at = attempt->deadline_at] (const result_t<T> &result) {
+              if (!weak_attempt.expired ()) {
                   completion->complete (result_t<std::optional<result_t<T>>>::success (
-                    remaining_until (active->deadline_at, (*active->runtime->_lease_now) ())
-                        > std::chrono::milliseconds::zero ()
+                    remaining_until (deadline_at, (*clock) ()) > std::chrono::milliseconds::zero ()
                       ? std::optional<result_t<T>>{result}
                       : std::nullopt));
               }
@@ -1782,7 +1872,8 @@ class location_runtime_t
                      <= std::chrono::milliseconds::zero ())
                 co_return std::nullopt;
             auto response = co_await await_heartbeat_store (
-              runtime->_store->read_owner_lease (runtime->_owner_id), attempt);
+              runtime->_store->read_owner_lease (runtime->_owner_id), attempt,
+              attempt->startup ? &attempt->startup->confirmation : nullptr);
             if (!response) {
                 co_await heartbeat_communication_failure (attempt);
                 co_return std::nullopt;
@@ -1850,8 +1941,9 @@ class location_runtime_t
                       ->outage;
                   return runtime->current_owner_token_unchecked ();
               });
-            if (auto heartbeat = attempt->heartbeat.lock ();
-                heartbeat && heartbeat->stop.load (std::memory_order_acquire))
+            if (const auto heartbeat = attempt->heartbeat.lock ();
+                attempt->cancellation.stop_requested ()
+                || (heartbeat && heartbeat->stop.load (std::memory_order_acquire)))
                 co_return outcome;
             if (owner_token) {
                 std::string failure = "owner lease renewal timed out";
@@ -1972,23 +2064,26 @@ class location_runtime_t
                 }
             }
 
-            const auto format = co_await await_heartbeat_store (
-              runtime->_store->ensure_store_format (attempt->cancellation), attempt);
-            if (!format || !*format) {
-                co_await heartbeat_communication_failure (attempt);
-                const auto *error = format ? format->error () : nullptr;
-                co_await heartbeat_failure (
-                  attempt, error ? error->what ()
-                                 : (format ? "Location Store conversion failed"
-                                           : "Location Store conversion timed out"));
-                co_return outcome;
+            if (!attempt->startup) {
+                const auto format = co_await await_heartbeat_store (
+                  runtime->_store->ensure_store_format (attempt->cancellation), attempt);
+                if (!format || !*format) {
+                    co_await heartbeat_communication_failure (attempt);
+                    const auto *error = format ? format->error () : nullptr;
+                    co_await heartbeat_failure (
+                      attempt, error ? error->what ()
+                                     : (format ? "Location Store conversion failed"
+                                               : "Location Store conversion timed out"));
+                    co_return outcome;
+                }
             }
 
             std::string failure = "owner lease claim timed out";
             std::optional<owner_lease_claim_result_t> claim;
             try {
-                if (auto heartbeat = attempt->heartbeat.lock ();
-                    heartbeat && heartbeat->stop.load (std::memory_order_acquire))
+                if (const auto heartbeat = attempt->heartbeat.lock ();
+                    attempt->cancellation.stop_requested ()
+                    || (heartbeat && heartbeat->stop.load (std::memory_order_acquire)))
                     co_return outcome;
                 if (remaining_until (attempt->deadline_at, (*attempt->runtime->_lease_now) ())
                     <= std::chrono::milliseconds::zero ()) {
@@ -1998,13 +2093,18 @@ class location_runtime_t
                 auto response = co_await await_heartbeat_store (
                   runtime->_store->claim_owner_lease (runtime->_owner_id,
                                                       runtime->_options.owner_lease_ttl),
-                  attempt);
+                  attempt, attempt->startup ? &attempt->startup->claim : nullptr);
                 if (response)
                     claim = response->value ();
             }
             catch (const std::exception &error) {
+                if (attempt->startup && !attempt->startup->claim)
+                    attempt->startup->claim.emplace (
+                      detail::current_exception_result<owner_lease_claim_result_t> ());
                 failure = error.what ();
             }
+            if (attempt->startup && attempt->cancellation.stop_requested ())
+                co_return outcome;
             if (!claim) {
                 if (!attempt->cancellation.stop_requested ()) {
                     auto exact = co_await heartbeat_confirm (attempt, failure);
@@ -2070,46 +2170,62 @@ class location_runtime_t
         co_return outcome;
     }
 
-    void release_cancelled_claim (std::chrono::steady_clock::time_point deadline_at) noexcept
+    void release_cancelled_claim (const startup_claim_t &startup,
+                                  std::chrono::steady_clock::time_point deadline_at) noexcept
     {
+        auto token = current_owner_token_unchecked ();
+        if (!startup.claim && !token)
+            return;
+        struct stop_deadline_exceeded_t {};
+        const auto await_cleanup = [deadline_at] (auto submit) {
+            if (std::chrono::steady_clock::now () >= deadline_at)
+                throw stop_deadline_exceeded_t{};
+            const auto &pending = submit ();
+            auto completed = pending.result_for (remaining_until (deadline_at));
+            if (!completed || std::chrono::steady_clock::now () >= deadline_at)
+                throw stop_deadline_exceeded_t{};
+            return std::move (*completed);
+        };
         try {
-            auto token = current_owner_token_unchecked ();
-            if (!token) {
-                const auto remaining = remaining_until (deadline_at);
-                if (remaining <= std::chrono::milliseconds::zero ()) {
-                    record_failure ("owner lease cancellation read timed out");
+            if (startup.claim) {
+                const auto claim = await_cleanup ([&] () -> const auto & { return *startup.claim; });
+                if (claim) {
+                    const auto *claimed = std::get_if<owner_lease_claimed_t> (&claim.value ());
+                    if (!claimed)
+                        return;
+                    token = claimed->token;
+                } else if (const auto *error = claim.error ()) {
+                    record_failure (error->what ());
+                }
+                // Reuse a §10 read already submitted after the claim's terminal response.
+                const auto read = startup.confirmation
+                                    ? await_cleanup ([&] () -> const auto & {
+                                          return *startup.confirmation;
+                                      })
+                                    : await_cleanup ([&] {
+                                          return _store->read_owner_lease (_owner_id);
+                                      });
+                const auto *found = std::get_if<owner_lease_found_t> (&read.value ());
+                if (found && found->token.owner_id == _owner_id
+                    && (!token || found->token.lease_generation == token->lease_generation)) {
+                    token = found->token;
                 } else {
-                    auto read_task = _store->read_owner_lease (_owner_id);
-                    const auto read_response = read_task.result_for (remaining);
-                    if (!read_response) {
-                        record_failure ("owner lease cancellation read timed out");
-                    } else if (!read_response->has_value ()) {
-                        record_failure (read_response->error ()
-                                          ? read_response->error ()->what ()
-                                          : "owner lease cancellation read failed");
-                    } else if (const auto *found =
-                                 std::get_if<owner_lease_found_t> (&read_response->value ());
-                               found != nullptr && found->token.owner_id == _owner_id) {
-                        token = found->token;
-                    }
+                    token.reset ();
                 }
             }
-            if (token) {
-                const auto remaining = remaining_until (deadline_at);
-                if (remaining <= std::chrono::milliseconds::zero ()) {
-                    record_failure ("owner lease cancellation release timed out");
-                } else {
-                    auto release_task = _store->release_owner_lease (*token, deadline_at);
-                    const auto released = release_task.result_for (remaining);
-                    if (!released) {
-                        record_failure ("owner lease cancellation release timed out");
-                    } else if (!released->has_value ()) {
-                        record_failure (released->error ()
-                                          ? released->error ()->what ()
-                                          : "owner lease cancellation release failed");
-                    }
-                }
-            }
+            if (token)
+                await_cleanup ([&] { return _store->release_owner_lease (*token, deadline_at); })
+                  .value ();
+        }
+        catch (const stop_deadline_exceeded_t &) {
+            constexpr auto message = "Stop deadline expired during startup claim cleanup";
+            if (_monitoring)
+                detail::submit_runtime_diagnostic (
+                  _monitoring->diagnostics_logger, log_level_t::warn, message,
+                  {{"event_id", "location.startup_claim_cleanup_abandoned"},
+                   {"owner_id", _owner_id}},
+                  _diagnostics_registration);
+            record_failure (message);
         }
         catch (const std::exception &error) {
             record_failure (error.what ());
@@ -2281,6 +2397,10 @@ class location_runtime_t
     std::atomic_bool _draining = false;
     std::vector<std::pair<std::string, std::string>> _metric_scopes;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
+    std::uint64_t _diagnostics_registration = 0;
+    std::mutex _startup_mutex;
+    std::condition_variable _startup_finished;
+    std::shared_ptr<startup_claim_t> _startup;
     mutable std::atomic<lifecycle_t> _lifecycle{lifecycle_t::idle};
     std::thread _heartbeat;
     std::shared_ptr<heartbeat_owner_t> _heartbeat_state = std::make_shared<heartbeat_owner_t> ();
