@@ -6,7 +6,7 @@ export class ZLinkOwnerLeaseReleaseDelayPendingError extends ZLinkFrameworkExcep
     super(
       ZLinkFrameworkErrorKind.Unavailable,
       previousOwnerObserved
-        ? 'Fixed RID claim is waiting for the previous owner lease release delay.'
+        ? 'Previous MeshNode owner lease is within its release wait'
         : 'MeshNode fixed RID claim is within its release wait'
     );
   }
