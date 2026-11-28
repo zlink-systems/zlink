@@ -88,6 +88,11 @@ export interface ZLinkActorPacketDelivery {
   readonly requestTerminal?: ZLinkActorRequestTerminal;
   readonly messageFollowOrigin?: ZLinkMessageFollowOrigin;
   readonly sourceSessionRid?: RoutingId;
+  /**
+   * Set only for a local Session SEND relay: the Entry FIFO calls it at admission, which
+   * completes the caller (Submit and completion §4). Its presence also marks the delivery
+   * as one whose accepted-handler failure is reported as a dispatch error only (§15).
+   */
   readonly onLocalSendAdmitted?: () => void;
 }
 

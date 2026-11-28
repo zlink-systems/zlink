@@ -916,6 +916,8 @@ export class ZLinkActorPacketRelay {
     try {
       const runtime = this.requireSpotNodeRuntime();
       if (frameHeader.kind === ZLinkStreamMessageKind.Send) {
+        // Returned without await: submitLocalActorSend owns header/body from here and
+        // closes them once in its own finally, so the catch below must not see its errors.
         return this.submitLocalActorSend(runtime, actor, header, body);
       }
       let responseSubmission: Promise<boolean> | undefined;
