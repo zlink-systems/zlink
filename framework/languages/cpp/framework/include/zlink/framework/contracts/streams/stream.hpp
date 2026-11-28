@@ -341,6 +341,11 @@ struct stream_authentication_options_t
     std::optional<std::string> packet_name;
     std::optional<std::int64_t> max_concurrent;
     std::chrono::milliseconds retry_delay{500};
+    bool queue_enabled = false;
+    std::optional<std::string> queue_key;
+    std::optional<std::string> queue_previous_key;
+    std::optional<std::int64_t> global_limit;
+    std::optional<std::string> queue_mesh_name;
 };
 }
 
