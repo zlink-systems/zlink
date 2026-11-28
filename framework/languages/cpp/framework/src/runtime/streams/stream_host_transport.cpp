@@ -19,7 +19,6 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
-#include <iostream>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -256,7 +255,6 @@ namespace websocket = beast::websocket;
 using detail::stream_error_payload;
 using stream_host_detail::session_creation_failed_diagnostic;
 using stream_host_detail::socket_endpoint_text;
-using stream_host_detail::stream_trace_enabled;
 using stream_host_detail::stream_uses_tls;
 using stream_host_detail::stream_uses_websocket;
 
@@ -519,7 +517,7 @@ void validate_stream_frame_size (std::size_t header_size,
 }
 
 using stream_write_completion_t =
-  std::function<void (const boost::system::error_code &, std::size_t)>;
+  std::function<void (const boost::system::error_code &, bool asio_completed)>;
 using stream_write_start_t = std::function<void (stream_write_completion_t)>;
 
 } // namespace
@@ -621,16 +619,21 @@ void stream_host_service_t::listener_t::start_next_stream_write (
     }
     const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
     try {
-        operation->start (
-          [this, weak_owner, operation] (const boost::system::error_code &error, std::size_t) {
-              if (const auto owner = weak_owner.lock ()) {
-                  finish_stream_write (owner, operation,
-                                       result_t<boost::system::error_code>::success (error));
-              } else {
-                  operation->complete (
-                    result_t<boost::system::error_code>::success (asio::error::operation_aborted));
-              }
-          });
+        operation->start ([this, weak_owner, operation] (const boost::system::error_code &error,
+                                                         bool asio_completed) {
+            if (const auto owner = weak_owner.lock ()) {
+                if (stream_host_detail::stream_trace_enabled () && asio_completed) {
+                    trace_stream_host_enabled ("write-asio-complete", nullptr,
+                                               error ? "result=failure" : "result=success",
+                                               operation.get ());
+                }
+                finish_stream_write (owner, operation,
+                                     result_t<boost::system::error_code>::success (error));
+            } else {
+                operation->complete (
+                  result_t<boost::system::error_code>::success (asio::error::operation_aborted));
+            }
+        });
     }
     catch (...) {
         finish_stream_write (owner, operation,
@@ -715,6 +718,7 @@ void stream_host_service_t::listener_t::handle_boost_accept (
 {
     if (error) {
         if (!_stop->load (std::memory_order_acquire)) {
+            flush_stream_trace ("accept-failed");
             _accept_retry_timer.expires_after (std::chrono::milliseconds (100));
             _accept_retry_timer.async_wait ([this] (const boost::system::error_code &retry_error) {
                 if (!retry_error) {
@@ -728,7 +732,7 @@ void stream_host_service_t::listener_t::handle_boost_accept (
         close_connection (connection->socket);
         return;
     }
-    trace_stream_host ("accept", _stream);
+    trace_stream_host (this, "accept");
     track_socket (connection);
     if (stream_uses_websocket (_stream)) {
         auto websocket_connection =
@@ -912,7 +916,7 @@ stream_host_service_t::listener_t::read_frame (TStream &socket,
                                                              : "STREAM header decode failed");
     }
     auto decoded_header = header.value ();
-    trace_stream_host ("read-frame", _stream, decoded_header,
+    trace_stream_host (this, "read-frame", &decoded_header,
                        "payload_bytes=" + std::to_string (payload_bytes.size ()));
     return frame_t{decoded_header, message_from_bytes (payload_bytes)};
 }
@@ -972,7 +976,7 @@ stream_host_service_t::listener_t::read_frame (websocket_stream_t &socket,
                                                              : "STREAM header decode failed");
     }
     auto decoded_header = header.value ();
-    trace_stream_host ("read-frame", _stream, decoded_header,
+    trace_stream_host (this, "read-frame", &decoded_header,
                        "payload_bytes=" + std::to_string (payload_bytes.size ()));
     return frame_t{decoded_header, message_from_bytes (payload_bytes)};
 }
@@ -988,7 +992,7 @@ stream_host_service_t::listener_t::encode_frame_bytes (const stream_header_t &he
                                      encoded_frame.error () ? encoded_frame.error ()->what ()
                                                             : "STREAM frame encode failed");
     }
-    trace_stream_host ("write-frame", _stream, header,
+    trace_stream_host (this, "write-frame", &header,
                        "payload_bytes=" + std::to_string (payload.size ()));
     return std::make_shared<std::vector<std::uint8_t>> (std::move (encoded_frame.value ()));
 }
@@ -1009,9 +1013,9 @@ stream_host_service_t::listener_t::queue_frame (const std::shared_ptr<tcp_connec
             asio::async_write (*connection, asio::buffer (*frame),
                                [frame, completion = std::move (completion)] (
                                  const boost::system::error_code &write_error,
-                                 std::size_t bytes) mutable { completion (write_error, bytes); });
+                                 std::size_t) mutable { completion (write_error, true); });
         } else {
-            completion (asio::error::operation_aborted, 0);
+            completion (asio::error::operation_aborted, false);
         }
     });
 }
@@ -1028,14 +1032,12 @@ stream_host_service_t::listener_t::queue_frame (
     return queue_stream_write_operation (owner, [weak_connection, frame] (auto completion) mutable {
         if (const auto connection = weak_connection.lock ()) {
             connection->binary (true);
-            connection->async_write (
-              asio::buffer (*frame),
-              [frame, completion = std::move (completion)] (
-                const boost::system::error_code &write_error, std::size_t bytes) mutable {
-                  completion (write_error, bytes);
-              });
+            connection->async_write (asio::buffer (*frame),
+                                     [frame, completion = std::move (completion)] (
+                                       const boost::system::error_code &write_error,
+                                       std::size_t) mutable { completion (write_error, true); });
         } else {
-            completion (asio::error::operation_aborted, 0);
+            completion (asio::error::operation_aborted, false);
         }
     });
 }
@@ -1056,9 +1058,10 @@ stream_host_service_t::listener_t::submit_frame (std::shared_ptr<tcp_connection_
     if (admission_reply)
         admission_reply->complete ();
     const auto error = co_await operation->completion.task ();
+    trace_stream_host (this, "write-completion", &header,
+                       error ? "result=failure" : "result=success", operation.get ());
     if (error)
         throw framework_exception_t (framework_error_kind_t::unavailable, error.message ());
-    trace_stream_host ("write-completion", _stream, header, "result=success");
     co_return;
 }
 
@@ -1094,6 +1097,11 @@ void stream_host_service_t::listener_t::handle_stream_connection (
   tcp::socket *tracked_socket,
   asio::io_context &io)
 {
+    struct trace_flush_t
+    {
+        listener_t &listener;
+        ~trace_flush_t () { listener.flush_stream_trace ("connection-end"); }
+    } trace_flush{*this};
     const auto established = session_liveness_t::clock_t::now ();
     auto cleanup = std::unique_ptr<tcp::socket, std::function<void (tcp::socket *)>> (
       tracked_socket, [this] (tcp::socket *socket) {
@@ -1354,13 +1362,13 @@ void stream_host_service_t::listener_t::handle_stream_connection (
                     continue;
                 }
                 const auto header = received_frame.header;
-                trace_stream_host ("dispatch-submit", _stream, header);
+                trace_stream_host (this, "dispatch-submit", &header);
                 auto dispatched = _ingress.publish (
                   _runtime, session, stream, header, received_frame.payload,
                   std::move (application_permit),
                   [this, owner, connection, connection_state, header, stream,
                    liveness] (const result_t<void> &result) {
-                      trace_stream_host ("dispatch-complete", _stream, header,
+                      trace_stream_host (this, "dispatch-complete", &header,
                                          std::string ("result=")
                                            + (result ? "success" : "failure"));
                       if (!result) {
@@ -1410,41 +1418,28 @@ void stream_host_service_t::listener_t::handle_stream_connection (
             session_transport_error.emplace (stream_session_error_t::transport_error,
                                              error.what ());
         }
-        if (stream_trace_enabled ()) {
-            std::cerr << "zlink-cpp-stream-trace side=server stage=connection-error stream="
-                      << _stream.name << " endpoint=" << _stream.bind_endpoint << " error=\""
-                      << error.what () << "\"" << std::endl;
-        }
+        trace_stream_host (this, "connection-error", nullptr,
+                           std::string ("error=\"") + error.what () + "\"");
     }
     catch (const stream_message_size_exceeded_t &error) {
-        trace_stream_host ("message-size-rejected", _stream, std::nullopt,
+        trace_stream_host (this, "message-size-rejected", nullptr,
                            "errno=EMSGSIZE limit=" + std::to_string (error.max_message_size ())
                              + " header_bytes=" + std::to_string (error.header_size ())
                              + " payload_bytes=" + std::to_string (error.payload_size ()));
     }
     catch (const framework_exception_t &error) {
         report_control_failure ([] { return std::current_exception (); });
-        if (stream_trace_enabled ()) {
-            std::cerr << "zlink-cpp-stream-trace side=server stage=connection-error stream="
-                      << _stream.name << " endpoint=" << _stream.bind_endpoint << " error=\""
-                      << error.what () << "\"" << std::endl;
-        }
+        trace_stream_host (this, "connection-error", nullptr,
+                           std::string ("error=\"") + error.what () + "\"");
     }
     catch (const std::exception &error) {
         report_control_failure ([] { return std::current_exception (); });
-        if (stream_trace_enabled ()) {
-            std::cerr << "zlink-cpp-stream-trace side=server stage=connection-error stream="
-                      << _stream.name << " endpoint=" << _stream.bind_endpoint << " error=\""
-                      << error.what () << "\"" << std::endl;
-        }
+        trace_stream_host (this, "connection-error", nullptr,
+                           std::string ("error=\"") + error.what () + "\"");
     }
     catch (...) {
         report_control_failure ([] { return std::current_exception (); });
-        if (stream_trace_enabled ()) {
-            std::cerr << "zlink-cpp-stream-trace side=server stage=connection-error stream="
-                      << _stream.name << " endpoint=" << _stream.bind_endpoint
-                      << " error=\"unknown\"" << std::endl;
-        }
+        trace_stream_host (this, "connection-error", nullptr, "error=\"unknown\"");
     }
     liveness_timer.cancel ();
     finish_transport ();
@@ -1460,12 +1455,12 @@ void stream_host_service_t::listener_t::handle_stream_connection (
                                     session_transport_error, forced,
                                     stopping] (std::function<void ()> retired) {
             if (!stopping) {
-                trace_stream_host ("dispatch-disconnected-begin", self->_stream);
+                trace_stream_host (self.get (), "dispatch-disconnected-begin");
             }
             auto disconnected = [self, connection_state,
                                  retired = std::move (retired)] (const result_t<void> &) {
                 auto completed = [self, connection_state, retired] (const result_t<void> &) {
-                    trace_stream_host ("dispatch-disconnected-end", self->_stream);
+                    trace_stream_host (self.get (), "dispatch-disconnected-end");
                     retired ();
                 };
                 auto submitted = self->_runtime.dispatch_disconnected_async (
@@ -1520,8 +1515,11 @@ void stream_host_service_t::listener_t::handle_tls_connection (
         }
     }
     catch (const boost::system::system_error &) {
-        const std::lock_guard<std::mutex> lock (_sockets_mutex);
-        _sockets.erase (&connection->next_layer ());
+        {
+            const std::lock_guard<std::mutex> lock (_sockets_mutex);
+            _sockets.erase (&connection->next_layer ());
+        }
+        flush_stream_trace ("handshake-failed");
         return;
     }
     handle_stream_connection (owner, connection, &connection->next_layer (), owner->io);
@@ -1549,8 +1547,11 @@ void stream_host_service_t::listener_t::handle_websocket_connection (
         connection->binary (true);
     }
     catch (const boost::system::system_error &) {
-        const std::lock_guard<std::mutex> lock (_sockets_mutex);
-        _sockets.erase (&connection->next_layer ());
+        {
+            const std::lock_guard<std::mutex> lock (_sockets_mutex);
+            _sockets.erase (&connection->next_layer ());
+        }
+        flush_stream_trace ("handshake-failed");
         return;
     }
     handle_stream_connection (owner, connection, &connection->next_layer (), owner->io);

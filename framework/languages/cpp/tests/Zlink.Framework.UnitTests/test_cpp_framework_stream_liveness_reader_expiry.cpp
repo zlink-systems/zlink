@@ -2,6 +2,7 @@
 #include "../support/stream_liveness_fixture.hpp"
 
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/streams/stream_host_service_internal.hpp"
 
 #include <boost/asio/post.hpp>
 
@@ -13,6 +14,7 @@ using namespace stream_liveness_test;
 
 void check_reader_expiry (std::string_view transport, std::string_view frame_kind)
 {
+    const bool trace = rt::stream_host_detail::stream_trace_enabled ();
     const bool partial = frame_kind.starts_with ("partial");
     const bool slow_read = frame_kind.ends_with ("-slow-read");
     const bool check_available = frame_kind.ends_with ("-available");
@@ -89,7 +91,10 @@ void check_reader_expiry (std::string_view transport, std::string_view frame_kin
           }
           release.set_value ();
           reader_guard.pending = false;
-          const auto result_deadline = steady_clock::now () + 5s;
+          constexpr auto observation_window = 5s;
+          const auto released_at = steady_clock::now ();
+          const auto result_deadline = released_at + observation_window;
+          steady_clock::time_point header_released_at;
           if (check_available) {
               require (header_remaining.wait_until (result_deadline) == std::future_status::ready,
                        "Reader did not reach the TCP header expiry check");
@@ -104,11 +109,29 @@ void check_reader_expiry (std::string_view transport, std::string_view frame_kin
               require (peer.writes == 2 && socket && socket->available () == supplied,
                        "The server socket did not hold the exact test byte count");
               release_check.set_value ();
+              if (trace)
+                  header_released_at = steady_clock::now ();
               check_guard.pending = false;
           }
           while (!peer.pongs && !peer.reason && !peer.closed
                  && steady_clock::now () < result_deadline)
               client.advance ();
+          if (trace) {
+              const auto observed_at = steady_clock::now ();
+              const auto ns = [] (steady_clock::time_point at) {
+                  return std::chrono::duration_cast<std::chrono::nanoseconds> (
+                           at.time_since_epoch ())
+                    .count ();
+              };
+              std::cout << "reader-expiry release_return_ns=" << ns (released_at);
+              if (check_available)
+                  std::cout << " header_release_return_ns=" << ns (header_released_at);
+              std::cout << " observation_end_ns=" << ns (observed_at) << " outcome="
+                        << (peer.pongs                     ? "pong"
+                            : (peer.reason || peer.closed) ? "close"
+                                                           : "timeout")
+                        << '\n';
+          }
           if (slow_read)
               require (reader_delayed.wait_until (result_deadline) == std::future_status::ready,
                        "TCP reader did not execute the read delay");

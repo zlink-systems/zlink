@@ -165,7 +165,7 @@ task_t<void> stream_host_service_t::listener_t::send_core_frame (
                   : error.result (),
           error.what ());
     }
-    trace_stream_host ("core-write", _stream, header,
+    trace_stream_host (this, "core-write", &header,
                        "rid=" + rid.to_hex () + " bytes=" + std::to_string (frame_bytes)
                          + " result=admitted");
     co_return;
@@ -314,7 +314,7 @@ void stream_host_service_t::listener_t::run_core_stream ()
                             break;
                         }
                         if (error.internal_errno () == EMSGSIZE) {
-                            trace_stream_host ("core-recv-size-rejected", _stream, std::nullopt,
+                            trace_stream_host (this, "core-recv-size-rejected", nullptr,
                                                "errno=EMSGSIZE limit="
                                                  + std::to_string (_stream.max_message_size));
                             break;
@@ -329,7 +329,7 @@ void stream_host_service_t::listener_t::run_core_stream ()
                     batch.account (6u + header_bytes + payload_bytes);
                     process_core_packet (packet, std::move (*reserved), received_at);
                     if (routing_id) {
-                        trace_stream_host ("core-recv", _stream, std::nullopt,
+                        trace_stream_host (this, "core-recv", nullptr,
                                            "rid=" + routing_id->to_hex ()
                                              + " header_bytes=" + std::to_string (header_bytes)
                                              + " payload_bytes=" + std::to_string (payload_bytes));
@@ -578,6 +578,7 @@ void stream_host_service_t::listener_t::finalize_core_session (
     auto scope = std::move (current->scope);
     lock.unlock ();
     scope.close ();
+    flush_stream_trace ("connection-end");
     forget_retiring_session (retirement_id, current.get ());
 }
 
@@ -684,6 +685,8 @@ void stream_host_service_t::listener_t::disconnect_core_peer (const zlink::routi
                     retire_core_rejection_locked (found->second);
             }
         }
+        if (!current)
+            flush_stream_trace ("connection-failed");
     }
     catch (...) {
         detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([] {
@@ -770,7 +773,7 @@ bool stream_host_service_t::listener_t::dispatch_core_packet (
   application_job_queue_t::permit_t application_permit,
   session_liveness_t::clock_t::time_point received_at)
 {
-    trace_stream_host ("core-frame", _stream, header,
+    trace_stream_host (this, "core-frame", &header,
                        "rid=" + rid.to_hex ()
                          + " payload_bytes=" + std::to_string (payload.size ()));
     if (header.kind () == stream_message_kind_t::control) {
@@ -824,13 +827,13 @@ bool stream_host_service_t::listener_t::dispatch_core_packet (
 
         std::lock_guard session_lock (current->gate);
         if (current->connected && !current->closing) {
-            trace_stream_host ("core-dispatch-submit", _stream, header, "rid=" + rid.to_hex ());
+            trace_stream_host (this, "core-dispatch-submit", &header, "rid=" + rid.to_hex ());
             auto dispatched = _ingress.publish (
               _runtime, *current->session, current->stream, header, payload,
               std::move (application_permit),
               [this, current, rid, header] (const result_t<void> &result) {
                   trace_stream_host (
-                    "core-dispatch-complete", _stream, header,
+                    this, "core-dispatch-complete", &header,
                     std::string ("result=") + (result ? "success" : "failure")
                       + (result
                            ? std::string ()
@@ -863,7 +866,7 @@ bool stream_host_service_t::listener_t::dispatch_core_packet (
     }
     if (rejected) {
         trace_stream_host (
-          "core-dispatch-rejected", _stream, header,
+          this, "core-dispatch-rejected", &header,
           "rid=" + rid.to_hex ()
             + " kind=" + std::to_string (static_cast<int> (rejected->error_kind ()))
             + " error=" + (rejected->error () ? rejected->error ()->what () : "unknown"));

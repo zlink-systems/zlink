@@ -100,20 +100,15 @@ bool stream_uses_websocket (const stream_snapshot_t &stream);
 bool stream_uses_tls (const stream_snapshot_t &stream);
 std::optional<std::string> socket_endpoint_text (const tcp::endpoint &endpoint);
 bool stream_trace_enabled ();
-void trace_stream_host_enabled (std::string_view stage,
-                                const stream_snapshot_t &stream,
-                                std::optional<stream_header_t> header = std::nullopt,
-                                std::string_view detail = {});
 
 extern const char session_creation_failed_diagnostic[];
 } // namespace stream_host_detail
 
-// Avoid building detail strings or copying an optional header unless the
-// explicitly requested low-level diagnostic trace is enabled.
-#define trace_stream_host(...)                                                                     \
+// Build diagnostic arguments only when STREAM tracing is enabled.
+#define trace_stream_host(listener, ...)                                                           \
     do {                                                                                           \
         if (stream_host_detail::stream_trace_enabled ())                                           \
-            stream_host_detail::trace_stream_host_enabled (__VA_ARGS__);                           \
+            (listener)->trace_stream_host_enabled (__VA_ARGS__);                                   \
     } while (false)
 
 class stream_host_service_t::listener_t : public std::enable_shared_from_this<listener_t>
@@ -137,6 +132,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 stream_host_ingress_t &ingress,
                 std::chrono::milliseconds session_replacement_callback_timeout,
                 asio::io_context &liveness_io);
+
+    ~listener_t ();
 
     using session_liveness_t = runtime::session_liveness_t;
 
@@ -371,6 +368,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
 
   public:
     void close_core_resources ();
+    void flush_stream_trace (std::string_view reason) noexcept;
 
   private:
     bool begin_actor_binding_replacement (
@@ -575,6 +573,15 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                       std::shared_ptr<websocket_stream_t> connection);
 
     void handle_connection (std::shared_ptr<tcp_connection_t> connection);
+
+    void trace_stream_host_enabled (std::string_view stage,
+                                    const stream_header_t *header = nullptr,
+                                    std::string_view detail = {},
+                                    const void *operation = nullptr) noexcept;
+
+    struct trace_buffer_t;
+    std::mutex _trace_mutex;
+    std::unique_ptr<trace_buffer_t> _trace_buffer;
 
     detail::stream_runtime_t _runtime;
     stream_snapshot_t _stream;

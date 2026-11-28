@@ -10,9 +10,11 @@
 #include "runtime/utils/poll_interval_wait.hpp"
 #include <boost/asio/post.hpp>
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
-#include <iostream>
+#include <deque>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 
 namespace zlink::framework::runtime::stream_host_detail
@@ -68,25 +70,6 @@ const char *stream_kind_name (stream_message_kind_t kind)
 }
 
 } // namespace
-
-void trace_stream_host_enabled (std::string_view stage,
-                                const stream_snapshot_t &stream,
-                                std::optional<stream_header_t> header,
-                                std::string_view detail)
-{
-    std::cerr << "zlink-cpp-stream-trace side=server stage=" << stage << " stream=" << stream.name
-              << " endpoint=" << stream.bind_endpoint;
-    if (header) {
-        std::cerr << " seq="
-                  << (header->request_seq () ? std::to_string (*header->request_seq ()) : "-")
-                  << " name=" << header->packet_name ()
-                  << " kind=" << stream_kind_name (header->kind ());
-    }
-    if (!detail.empty ()) {
-        std::cerr << " " << detail;
-    }
-    std::cerr << std::endl;
-}
 
 } // namespace zlink::framework::runtime::stream_host_detail
 
@@ -227,6 +210,96 @@ std::string stream_listener_advertised_endpoint (std::string bound_endpoint,
 }
 
 } // namespace
+
+struct stream_host_service_t::listener_t::trace_buffer_t
+{
+    static constexpr std::size_t max_bytes = 256 * 1024;
+    std::deque<std::string> lines;
+    std::size_t bytes = 0;
+    std::size_t dropped = 0;
+};
+
+stream_host_service_t::listener_t::~listener_t () = default;
+
+void stream_host_service_t::listener_t::trace_stream_host_enabled (std::string_view stage,
+                                                                   const stream_header_t *header,
+                                                                   std::string_view detail,
+                                                                   const void *operation) noexcept
+{
+    try {
+        const auto at =
+          operation ? std::chrono::steady_clock::now () : std::chrono::steady_clock::time_point{};
+        std::ostringstream line;
+        line.exceptions (std::ios::badbit);
+        line << "zlink-cpp-stream-trace side=server stage=" << stage << " stream=" << _stream.name
+             << " endpoint=" << _stream.bind_endpoint;
+        if (header) {
+            line << " seq="
+                 << (header->request_seq () ? std::to_string (*header->request_seq ()) : "-")
+                 << " name=" << header->packet_name ()
+                 << " kind=" << stream_host_detail::stream_kind_name (header->kind ());
+        }
+        if (operation) {
+            line << " operation=" << operation << " time_ns="
+                 << std::chrono::duration_cast<std::chrono::nanoseconds> (at.time_since_epoch ())
+                      .count ();
+        }
+        if (!detail.empty ())
+            line << ' ' << detail;
+        line << '\n';
+        auto record = std::move (line).str ();
+
+        const std::lock_guard lock (_trace_mutex);
+        if (!_trace_buffer)
+            _trace_buffer = std::make_unique<trace_buffer_t> ();
+        auto &buffer = *_trace_buffer;
+        if (record.size () > buffer.max_bytes) {
+            ++buffer.dropped;
+            return;
+        }
+        while (buffer.bytes + record.size () > buffer.max_bytes) {
+            buffer.bytes -= buffer.lines.front ().size ();
+            buffer.lines.pop_front ();
+            ++buffer.dropped;
+        }
+        const auto size = record.size ();
+        buffer.lines.push_back (std::move (record));
+        buffer.bytes += size;
+    }
+    catch (const std::bad_alloc &) {
+        // Diagnostic storage failure must not affect the transport.
+    }
+}
+
+void stream_host_service_t::listener_t::flush_stream_trace (std::string_view reason) noexcept
+{
+    if (!stream_host_detail::stream_trace_enabled ())
+        return;
+    std::unique_ptr<trace_buffer_t> buffer;
+    {
+        const std::lock_guard lock (_trace_mutex);
+        buffer = std::move (_trace_buffer);
+    }
+    if (!buffer)
+        return;
+    try {
+        std::string batch;
+        batch.reserve (buffer->bytes + 128 + _stream.name.size ());
+        for (const auto &line : buffer->lines)
+            batch += line;
+        batch += "zlink-cpp-stream-trace side=server stage=trace-flush stream=";
+        batch += _stream.name;
+        batch += " reason=";
+        batch += reason;
+        batch += " dropped=";
+        batch += std::to_string (buffer->dropped);
+        batch += '\n';
+        (void) std::fwrite (batch.data (), 1, batch.size (), stderr);
+    }
+    catch (const std::bad_alloc &) {
+        // Diagnostic storage failure must not affect shutdown.
+    }
+}
 
 stream_host_service_t::listener_t::listener_t (
   detail::stream_runtime_t runtime,
@@ -415,7 +488,7 @@ void stream_host_service_t::listener_t::request_stop () noexcept
 
 void stream_host_service_t::listener_t::stop_connections () noexcept
 {
-    trace_stream_host ("stop-connections-begin", _stream);
+    trace_stream_host (this, "stop-connections-begin");
     std::vector<std::function<void ()>> cancellers;
     {
         const std::lock_guard<std::mutex> lock (_sockets_mutex);
@@ -433,12 +506,12 @@ void stream_host_service_t::listener_t::stop_connections () noexcept
         const std::lock_guard<std::mutex> lock (_workers_mutex);
         workers.swap (_workers);
     }
-    trace_stream_host ("stop-connections-join-workers", _stream);
+    trace_stream_host (this, "stop-connections-join-workers");
     for (auto &worker : workers) {
         if (worker.joinable ())
             worker.join ();
     }
-    trace_stream_host ("stop-connections-end", _stream);
+    trace_stream_host (this, "stop-connections-end");
 }
 
 void stream_host_service_t::listener_t::mark_started ()
@@ -721,6 +794,7 @@ void stream_host_service_t::stop_listeners (admission_t next) noexcept
           _runtime_failures->capture ([&] { listener->stop_connections (); });
         const bool resources_closed =
           _runtime_failures->capture ([&] { listener->close_core_resources (); });
+        listener->flush_stream_trace ("listener-stop");
         if (_listener_statuses)
             _runtime_failures->capture (
               [&] { _listener_statuses->remove (listener_kind_t::stream, listener->name ()); });

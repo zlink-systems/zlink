@@ -359,7 +359,7 @@ bool stream_host_service_t::listener_t::begin_actor_binding_replacement (
                     {},
                     0})
         || retired.session_routing_id != state->session_rid.to_bytes ()) {
-        trace_stream_host ("actor-binding-replacement-rejected", _stream, std::nullopt,
+        trace_stream_host (this, "actor-binding-replacement-rejected", nullptr,
                            "reason=session-fence-mismatch");
         detail::trace_session_binding_control_drop (
           _runtime.dispatch_options_ref (), replacement.actor_authority.target_node_routing_id,
@@ -369,12 +369,12 @@ bool stream_host_service_t::listener_t::begin_actor_binding_replacement (
         return false;
     }
     if (!state->exact (replacement)) {
-        trace_stream_host ("actor-binding-replacement-rejected", _stream, std::nullopt,
+        trace_stream_host (this, "actor-binding-replacement-rejected", nullptr,
                            "reason=binding-fence-mismatch");
         return false;
     }
     state->closing.store (true, std::memory_order_release);
-    trace_stream_host ("actor-binding-replacement-admitted", _stream, std::nullopt,
+    trace_stream_host (this, "actor-binding-replacement-admitted", nullptr,
                        "actor=" + replacement.actor_authority.actor_id);
 
     const auto replacement_copy = replacement;
