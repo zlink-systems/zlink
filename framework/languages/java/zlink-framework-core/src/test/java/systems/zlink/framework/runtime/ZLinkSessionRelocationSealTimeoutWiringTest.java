@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -66,8 +67,9 @@ final class ZLinkSessionRelocationSealTimeoutWiringTest {
                 .registerSession(TestSession.class);
         TestSession.connected.clear();
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             var created =
                     (systems.zlink.framework.actors.ZLinkActorCreateResult.Created)
                             runtime.actorManager()
