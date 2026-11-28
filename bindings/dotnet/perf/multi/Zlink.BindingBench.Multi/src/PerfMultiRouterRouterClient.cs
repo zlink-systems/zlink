@@ -10,6 +10,7 @@ internal static class PerfMultiRouterRouterClient
     {
         int size = Math.Max(1, options.Size);
         int durationSeconds = ResolveMultiDurationSeconds(options);
+        int latencySeconds = ResolveMultiLatencyDurationSeconds(options);
         int sndTimeoutMs = ResolveMultiSndTimeoutMs(options);
         int rcvTimeoutMs = ResolveMultiRcvTimeoutMs(options);
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
@@ -70,7 +71,7 @@ internal static class PerfMultiRouterRouterClient
             {
                 result = await RunMultiRouterRouterClientLoop(pollManager,
                     slots, size, latencySampleCap, durationSeconds,
-                    sendDrainTimeoutMs).ConfigureAwait(false);
+                    latencySeconds, sendDrainTimeoutMs).ConfigureAwait(false);
             }
             finally
             {
@@ -125,12 +126,41 @@ internal static class PerfMultiRouterRouterClient
         long latencyCount)>
         RunMultiRouterRouterClientLoop(PollManager pollManager,
             RouterRouterClientSlot[] slots, int msgSize, int latencySampleCap,
-            int durationSeconds, int sendDrainTimeoutMs)
+            int durationSeconds, int latencySeconds, int sendDrainTimeoutMs)
+    {
+        var latSamples = new List<double>(latencySampleCap);
+        var activeMetrics = new RouterRouterMetrics(null, latencySampleCap);
+        long activeSends = await RunWindowAsync(pollManager, slots, msgSize,
+            PerfPhase.Active, durationSeconds, durationSeconds,
+            sendDrainTimeoutMs, activeMetrics, null).ConfigureAwait(false);
+        if (activeMetrics.MeasureCount <= 0 || activeSends <= 0)
+            return (0, 0, 0, 0, 0, 0);
+        double throughput = activeMetrics.MeasureCount / (double)durationSeconds;
+        var schedule = new MultiPacedSchedule(
+            MultiTargetRate(activeMetrics.MeasureCount, durationSeconds));
+        var latencyMetrics = new RouterRouterMetrics(latSamples, latencySampleCap);
+        _ = await RunWindowAsync(pollManager, slots, msgSize,
+            PerfPhase.Latency, durationSeconds, latencySeconds,
+            sendDrainTimeoutMs, latencyMetrics, schedule).ConfigureAwait(false);
+        PrintMultiBenchDiag("ROUTER_ROUTER_SENDSEND", msgSize, activeSends,
+            durationSeconds, schedule, activeMetrics.MeasureCount,
+            latencyMetrics.PacedReceived / (double)latencySeconds);
+        var latency = ComputeMultiLatencyStats(latSamples,
+            latencyMetrics.SampleSeen, latencyMetrics.LatencySum);
+        double p95 = Math.Max(latency.p95, latency.mean);
+        return (throughput, latency.mean, p95,
+            Math.Max(latency.p99, p95), activeMetrics.MeasureCount,
+            latencyMetrics.SampleSeen);
+    }
+
+    private static async Task<long> RunWindowAsync(PollManager pollManager,
+        RouterRouterClientSlot[] slots, int msgSize, PerfPhase phase,
+        int durationSeconds, int latencySeconds, int sendDrainTimeoutMs,
+        RouterRouterMetrics metrics, MultiPacedSchedule? schedule)
     {
         const uint runId = 1;
-        var latSamples = new List<double>(latencySampleCap);
         long seq = 0;
-        var metrics = new RouterRouterMetrics(latSamples, latencySampleCap);
+        long accepted = 0;
 
         var sockets = CollectSockets(slots);
         var eventMasks = new PollEventFlags[slots.Length];
@@ -141,9 +171,9 @@ internal static class PerfMultiRouterRouterClient
         // The same poller turn services every client socket and POLLIN.
         _ = PollSocketEvents(pollManager, sockets, eventMasks, 0);
 
-        long benchStartTicks = Stopwatch.GetTimestamp();
-        long benchDeadlineTicks = benchStartTicks
-            + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
+        long benchDeadlineTicks = schedule?.EndTicks(latencySeconds)
+            ?? Stopwatch.GetTimestamp() + durationSeconds * Stopwatch.Frequency;
+        ulong benchDeadlineNs = EpochNsFromTimestamp(benchDeadlineTicks);
         // C model (perf_multi_client_helpers.hpp drain_timeout_ms): the
         // teardown window is max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS, 3 s per
         // active second) because small-message runs can fill every per-client
@@ -151,44 +181,71 @@ internal static class PerfMultiRouterRouterClient
         long drainDeadlineTicks = PerfMultiEchoReplyDrain.DeadlineAfter(
             benchDeadlineTicks,
             Math.Max(sendDrainTimeoutMs, Math.Max(1, durationSeconds) * 3000));
-        int roundStart = 0;
+        var rotation = new MultiSenderRotation(slots.Length);
         var replies = new PerfMultiEchoReplyDrain();
-
-        while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
+        void RecordAccepted(ulong dueNs)
         {
-            // Submit once per socket per turn so every turn can also progress
-            // echoed replies and admission completions. Only a backpressured
-            // socket pauses on its exact admission stage.
-            bool submittedAny = false;
-            int start = roundStart;
-            for (int attempts = 0; attempts < slots.Length; attempts++)
+            long nowTicks = Stopwatch.GetTimestamp();
+            if (schedule != null)
             {
-                if (Stopwatch.GetTimestamp() >= benchDeadlineTicks)
+                lock (schedule)
+                    schedule.Accepted(EpochNsFromTimestamp(nowTicks), dueNs);
+            }
+            if (nowTicks < benchDeadlineTicks)
+                Interlocked.Increment(ref accepted);
+        }
+
+        (bool Submitted, bool VisitedAll) SubmitDue()
+        {
+            bool submitted = false;
+            int visited = 0;
+            for (; visited < slots.Length;)
+            {
+                ulong nowNs = EpochNs();
+                if (nowNs >= benchDeadlineNs || (schedule != null && !schedule.Due(nowNs)))
                     break;
 
-                int slotIndex = (start + attempts) % slots.Length;
-                RouterRouterClientSlot slot = slots[slotIndex];
+                RouterRouterClientSlot slot = slots[rotation.Index];
                 slot.ThrowAdmissionError();
                 if (slot.AdmissionPending)
+                {
+                    rotation.Advance();
+                    visited++;
                     continue;
+                }
                 ulong currentSeq = unchecked((ulong)++seq);
                 StampMetricHeader(slot.Payload.AsSpan(), runId,
-                    PerfPhase.Active, msgSize, currentSeq, EpochNs());
-                submittedAny = true;
-                _ = StartAdmission(slot, replies);
+                    phase, msgSize, currentSeq, nowNs);
+                if (StartAdmission(slot, replies, schedule, RecordAccepted))
+                {
+                    submitted = true;
+                    if (rotation.Accepted())
+                        visited++;
+                }
+                else
+                {
+                    rotation.Advance();
+                    visited++;
+                }
             }
-            if (slots.Length > 0)
-                roundStart = (start + 1) % slots.Length;
+            return (submitted, visited == slots.Length);
+        }
 
-            // One shared turn progresses both replies and async admissions.
-            // Only an all-backpressured round uses a bounded blocking wait.
-            int completionWaitMs = submittedAny
-                ? 0
-                : Math.Min(50,
-                    PerfMultiAdmissionSignal.RemainingTimeoutMilliseconds(
-                        benchDeadlineTicks));
+        var replyTurn = schedule == null ? null : new MultiPacedReplyTurn(
+            () => SubmitDue());
+        while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
+        {
+            var (submitted, visitedAll) = SubmitDue();
+            ulong nowNs = EpochNs();
+            int completionWaitMs = submitted ? 0
+                : schedule?.PollWaitMilliseconds(nowNs, benchDeadlineNs, visitedAll)
+                    ?? MultiPacedSchedule.MillisecondsUntil(nowNs, benchDeadlineNs);
+            long waitStart = completionWaitMs > 0 && schedule != null
+                ? Stopwatch.GetTimestamp() : 0;
             int readyCount = PollSocketEvents(pollManager, sockets,
                 eventMasks, completionWaitMs);
+            if (waitStart != 0)
+                schedule!.RecordPollWait(completionWaitMs, waitStart);
             if (readyCount <= 0)
                 continue;
 
@@ -196,8 +253,8 @@ internal static class PerfMultiRouterRouterClient
                 HandleClientEvent(pollManager, slots,
                     ReadySocketIndexAt(pollManager, i),
                     ReadySocketMaskAt(pollManager, i), msgSize,
-                    runId, PerfPhase.Active, metrics,
-                    activeDeadlineTicks: benchDeadlineTicks, replies);
+                    runId, phase, metrics, benchDeadlineTicks, replies,
+                    schedule, latencySeconds, replyTurn);
         }
 
         // Keep receiving every admitted echo inside the configured drain
@@ -212,32 +269,18 @@ internal static class PerfMultiRouterRouterClient
                     HandleClientEvent(pollManager, slots,
                         ReadySocketIndexAt(pollManager, i),
                         ReadySocketMaskAt(pollManager, i), msgSize,
-                        runId, PerfPhase.Active, metrics,
-                        benchDeadlineTicks, replies);
+                        runId, phase, metrics, benchDeadlineTicks, replies,
+                        schedule, latencySeconds);
             }).ConfigureAwait(false);
         for (int i = 0; i < slots.Length; i++)
             slots[i].ThrowAdmissionError();
 
-        long benchEndTicks = Stopwatch.GetTimestamp();
-        double elapsedSeconds = (benchEndTicks - benchStartTicks)
-            / (double)Stopwatch.Frequency;
-        double configuredSeconds = Math.Max(1.0, durationSeconds);
-        double throughput = metrics.MeasureCount / configuredSeconds;
-        // PERF_POLICY: report measured latency only. C
-        // normalize_latency_stats reports zeros when no samples and never
-        // fabricates a duration-derived latency.
-        var latency = ComputeMultiLatencyStats(latSamples,
-            metrics.SampleSeen, metrics.LatencySum);
-        double latencyNs = latency.mean;
-        double latencyP95Ns = Math.Max(latency.p95, latencyNs);
-        double latencyP99Ns = Math.Max(latency.p99, latencyP95Ns);
-
-        return (throughput, latencyNs, latencyP95Ns, latencyP99Ns,
-            metrics.MeasureCount, metrics.SampleSeen);
+        return Volatile.Read(ref accepted);
     }
 
     private static bool StartAdmission(RouterRouterClientSlot slot,
-        PerfMultiEchoReplyDrain replies)
+        PerfMultiEchoReplyDrain replies, MultiPacedSchedule? schedule,
+        Action<ulong> onAccepted)
     {
         Message message = Message.Allocate(slot.Payload.Length);
         slot.Payload.AsSpan().CopyTo(message.AsSpan());
@@ -246,16 +289,18 @@ internal static class PerfMultiRouterRouterClient
         {
             SendSubmission submission = PerfSocketIo.SendMeasurementAsync(slot.Socket,
                 slot.ServerRoutingId, message, SendFlags.None);
+            ulong dueNs = schedule?.Submitted() ?? 0;
             if (submission.Result == SubmitResult.Ok)
             {
+                onAccepted(dueNs);
                 message.Dispose();
-                return false;
+                return true;
             }
 
             slot.BeginAdmission();
             _ = AwaitRouterAdmissionAndDisposeAsync(
-                submission.Admitted, message, replies, slot);
-            return true;
+                submission.Admitted, message, replies, slot, onAccepted, dueNs);
+            return false;
         }
         catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
         {
@@ -281,12 +326,13 @@ internal static class PerfMultiRouterRouterClient
 
     private static async Task AwaitRouterAdmissionAndDisposeAsync(
         Task admission, Message message, PerfMultiEchoReplyDrain replies,
-        RouterRouterClientSlot slot)
+        RouterRouterClientSlot slot, Action<ulong> onAccepted, ulong dueNs)
     {
         Exception? failure = null;
         try
         {
             await admission.ConfigureAwait(false);
+            onAccepted(dueNs);
         }
         catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
         {
@@ -315,7 +361,8 @@ internal static class PerfMultiRouterRouterClient
         RouterRouterClientSlot[] slots,
         int slotIndex, PollEventFlags readyMask, int msgSize, uint runId,
         PerfPhase phase, RouterRouterMetrics metrics, long activeDeadlineTicks,
-        PerfMultiEchoReplyDrain replies)
+        PerfMultiEchoReplyDrain replies, MultiPacedSchedule? schedule,
+        int latencySeconds, MultiPacedReplyTurn? replyTurn = null)
     {
         _ = pollManager;
         RouterRouterClientSlot slot = slots[slotIndex];
@@ -331,10 +378,11 @@ internal static class PerfMultiRouterRouterClient
                 break;
 
             long recvTicks = Stopwatch.GetTimestamp();
-            if (phase == PerfPhase.Active)
+            replyTurn?.Received();
+            if (phase == PerfPhase.Active || phase == PerfPhase.Latency)
             {
-                // Every valid echo retires teardown work, while recvTicks keeps
-                // post-window replies out of both throughput and latency.
+                // Every valid echo retires teardown work. Active replies use
+                // the receive deadline; paced samples use the send stamp.
                 if (PerfSocketIo.TryMeasurementPayload(received.Parts,
                         out Message payloadPart)
                     && payloadPart.AsReadOnlySpan().Length
@@ -347,12 +395,23 @@ internal static class PerfMultiRouterRouterClient
                     && header.Phase == (uint)phase)
                 {
                     replies.Received();
-                    if (recvTicks >= activeDeadlineTicks)
+                    ulong nowNs = EpochNsFromTimestamp(recvTicks);
+                    if (phase == PerfPhase.Active)
+                    {
+                        if (recvTicks < activeDeadlineTicks)
+                            metrics.MeasureCount++;
                         continue;
-                    metrics.MeasureCount++;
+                    }
+                    if (schedule == null)
+                        continue;
+                    if (MultiLatencySample(nowNs, schedule.EpochNs,
+                            latencySeconds))
+                        metrics.PacedReceived++;
+                    if (!MultiLatencySample(header.SentTsNs,
+                            schedule.EpochNs, latencySeconds))
+                        continue;
                     if (metrics.LatencySamples != null && header.SentTsNs > 0)
                     {
-                        ulong nowNs = EpochNsFromTimestamp(recvTicks);
                         if (nowNs >= header.SentTsNs)
                         {
                             double sampleLatencyNs = (nowNs - header.SentTsNs)
@@ -439,6 +498,7 @@ internal static class PerfMultiRouterRouterClient
         }
 
         internal long MeasureCount { get; set; }
+        internal long PacedReceived { get; set; }
         internal List<double>? LatencySamples { get; }
         internal int LatencySampleCap { get; }
         internal long SampleSeen { get; set; }
