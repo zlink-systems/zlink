@@ -231,6 +231,9 @@ export interface ZLinkSpotManagerOptions {
     operation: () => Promise<T>,
     onFailure?: (error: unknown) => T
   ) => Promise<T>;
+  readonly entryActorSerialExecutor?: (
+    meshName: string
+  ) => import('./spot-serial-executor').ZLinkSpotSerialExecutor | undefined;
   readonly actorCountProvider?: (spotId: RoutingId) => number;
   readonly releaseActorMembers?: (meshName: string, spotId: RoutingId) => Promise<void>;
   readonly userSpotExecutionMode?: (
@@ -1834,13 +1837,31 @@ export class DefaultZLinkSpotManager {
       }
       return this.options.executeEntryActor(meshName, actorId, operation, onFailure);
     }
-    const activation = this.resolveApplicationActivation(spotId, meshName);
-    if (activation === undefined) {
+    const executor = requireUserActorSerialExecutor(
+      this.resolveApplicationActivation(spotId, meshName),
+      spotId,
+      actorId
+    );
+    return executor.executeActorLifecycle(actorId, operation, onFailure);
+  }
+
+  onAcceptedJoinCompletionFailure(actor: ZLinkActor, error: unknown): void {
+    const { meshName, spotId, actorId } = actor.context;
+    const executor =
+      spotId === undefined
+        ? this.options.entryActorSerialExecutor?.(meshName)
+        : requireUserActorSerialExecutor(
+            this.resolveApplicationActivation(spotId, meshName),
+            spotId,
+            actorId
+          );
+    if (executor === undefined) {
       throw new ZLinkConfigurationException(
-        `Actor '${actorId}' has no active Spot execution gate for '${String(spotId)}'.`
+        `Entry Spot Actor '${actorId}' has no execution gate for MeshNode '${meshName}'.`
       );
     }
-    return activation.serialExecutor.executeActorLifecycle(actorId, operation, onFailure);
+    executor.sealActorAfterFailedJoinCompletion(actorId);
+    reportActorJoinCallbackFailure(this.options, meshName, actorId, 'OnJoinCompleted', error);
   }
 
   async dispatchRoutedSpotSend(
@@ -2016,9 +2037,9 @@ export class DefaultZLinkSpotManager {
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord,
-    admit?: ZLinkMeshDispatchAdmission,
-    relocationAdmission?: import('../foundation/service-stateful-runtime').ServiceSpotTargetAdmission
+    admit?: ZLinkMeshDispatchAdmission
   ): Promise<void> {
+    const relocationAdmission = record.spotTargetAdmission;
     const spotId = owner.spotId as unknown as RoutingId | null;
     if (spotId === null) {
       throw new ZLinkConfigurationException(
@@ -3773,6 +3794,19 @@ export class DefaultZLinkSpotManager {
       messageFollowOrigin
     );
   }
+}
+
+function requireUserActorSerialExecutor(
+  activation: ZLinkSpotActivation | undefined,
+  spotId: RoutingId,
+  actorId: string
+) {
+  if (activation === undefined) {
+    throw new ZLinkConfigurationException(
+      `Actor '${actorId}' has no active Spot execution gate for '${String(spotId)}'.`
+    );
+  }
+  return activation.serialExecutor;
 }
 
 function reportActorJoinCallbackFailure(

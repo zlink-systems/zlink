@@ -317,7 +317,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
             result.actor === undefined ||
             routingIdsEqual(sourceNodeRid, result.actor.nodeRid)
           ) {
-            await notifyJoinCompletion(this.actor, operationId, result, this.messageSerializers);
+            await notifyJoinCompletion(this.actor, operationId, result, this.coordinator);
           } else {
             result.reply?.close();
           }
@@ -467,7 +467,7 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
             result.actor === undefined ||
             routingIdsEqual(sourceNodeRid, result.actor.nodeRid)
           ) {
-            await notifyJoinCompletion(this.actor, operationId, result, this.messageSerializers);
+            await notifyJoinCompletion(this.actor, operationId, result, this.coordinator);
           } else {
             result.reply?.close();
           }
@@ -593,7 +593,7 @@ async function notifyJoinCompletion(
   actor: ZLinkActor,
   operationId: { readonly high: bigint; readonly low: bigint },
   result: import('./actor-runtime-contracts').ZLinkActorJoinRuntimeResult<Message>,
-  _messageSerializers: ReadonlyMap<string, ZLinkMessageSerializer> | undefined
+  coordinator: ZLinkActorJoinCoordinator
 ): Promise<void> {
   // The completion preserves the encoded reply without exposing serializer selection.
   const reply =
@@ -615,7 +615,16 @@ async function notifyJoinCompletion(
         operationId,
         ...replyField
       };
-  await actor.onJoinCompleted?.(completion);
+  try {
+    await actor.onJoinCompleted?.(completion);
+  } catch (error) {
+    if (
+      completion.status !== 'accepted' ||
+      coordinator.onAcceptedJoinCompletionFailure === undefined
+    )
+      throw error;
+    coordinator.onAcceptedJoinCompletionFailure(actor, error);
+  }
 }
 
 async function notifyJoinFailure(

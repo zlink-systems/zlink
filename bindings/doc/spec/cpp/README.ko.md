@@ -477,6 +477,7 @@ native result를 담은 `config_error_t`를 던진다.
 - Socket family: pair, dealer, router, pub, sub, xpub, xsub, stream,
   공통 옵션, 타입 지정 socket 옵션, bind/connect/disconnect, TLS,
   callback, request/reply 표면.
+- SUB·XSUB의 `subscription_at(index)`는 해당 인덱스에 항목이 없으면 `std::nullopt`를 반환하고, 출력 인자를 받는 overload는 `false`를 반환한다. 조회 규칙은 [공통 Subscription 조회](../README.ko.md#subscription-조회)를 따른다.
 - Eventing: socket monitor, monitor event, monitor snapshot, poller, one-shot `poll(...)`,
   poll event, timer,
   readiness flag.
