@@ -178,9 +178,11 @@ func (s *socketCore) setStringOption(option C.zlink_option_t, value string) erro
 	return s.setOption(option, unsafe.Pointer(cstr), C.size_t(len(value)))
 }
 
+const defaultOptionBufferSize = 256
+
 func (s *socketCore) getStringOption(option C.zlink_option_t, capHint int) (string, error) {
 	if capHint <= 0 {
-		capHint = 256
+		capHint = defaultOptionBufferSize
 	}
 	buf := make([]byte, capHint)
 	size := C.size_t(len(buf))

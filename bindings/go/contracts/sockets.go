@@ -2,6 +2,12 @@
 
 package contracts
 
+// Subscription is a subscriber socket's filter and pattern flag.
+type Subscription struct {
+	Filter  string
+	Pattern bool
+}
+
 type SendFlags int
 
 const (

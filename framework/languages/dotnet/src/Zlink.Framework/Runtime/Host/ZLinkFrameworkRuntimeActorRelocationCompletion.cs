@@ -52,7 +52,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = true }
         );
         var cancellationToken = ShutdownToken;
-        var prefix = AdmitTransferredActorPrefix(
+        _ = AdmitTransferredActorPrefix(
             actorState,
             handoffId,
             targetAuthority.MeshName,
@@ -81,8 +81,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                         complete,
                         cancellationToken
                     );
-            }
+            },
+            frame => requests.ContainsKey((frame.RouteContext.OperationId, frame.RequestSource))
         );
+        var capturedRequests = actorState.Handoff.CapturedRequestDelivery(handoffId)!;
         Task publication;
         using (ExecutionContext.SuppressFlow())
             publication = Task.Run(() =>
@@ -95,7 +97,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     cancellationToken
                 )
             );
-        return Task.WhenAll(publication, CloseResultsAfterPrefixAsync());
+        return Task.WhenAll(publication, CloseResultsAfterRequestsAsync());
 
         ValueTask Complete(
             ZLinkActorHandoffFrame accepted,
@@ -119,17 +121,17 @@ internal sealed partial class ZLinkFrameworkRuntime
                 source,
                 [reply.ToFrame(replay.Header)]
             );
-            // The prefix owns the writer until every Actor turn has completed.
+            // Captured request turns own the writer until they have produced their results.
             if (!results.Writer.TryWrite(entry))
                 throw new InvalidOperationException("The Actor completion writer is closed.");
             return ValueTask.CompletedTask;
         }
 
-        async Task CloseResultsAfterPrefixAsync()
+        async Task CloseResultsAfterRequestsAsync()
         {
             try
             {
-                await prefix.ConfigureAwait(false);
+                await capturedRequests.ConfigureAwait(false);
             }
             finally
             {
@@ -246,7 +248,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRelocationEnvelope identity,
         ZLinkLocationOwnerToken owner,
         ZLinkStandaloneActorRelocationProgressCoordinator coordinator,
-        Func<ValueTask>? releaseAdmission = null
+        Func<ValueTask>? releaseAdmission = null,
+        Action? finishTargetStage = null
     )
     {
         var candidate = actorState.RelocationCompletionCandidate;
@@ -284,6 +287,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     if (releaseAdmission is not null)
                         await releaseAdmission().ConfigureAwait(false);
                 }
+                finishTargetStage?.Invoke();
             }
         );
     }

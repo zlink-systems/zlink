@@ -81,6 +81,7 @@ run_test_file receive_failure_tests
 run_test_file routed_async_tests
 run_test_file boundary_tests
 run_test_file option_tests
+run_test_file subscription_at_tests
 run_test_file flow_state_tests
 run_test_file ownership_tests
 run_test_file monitor_tests
