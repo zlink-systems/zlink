@@ -3,9 +3,14 @@
 #define ZLINK_CPP_RUNTIME_MESSAGING_OPERATION_SUBMIT_HPP_INCLUDED
 
 #include "operation_state.hpp"
-#include "operation_detail.hpp"
 #include "../Core/duration_conversion.hpp"
 #include "../Native/native_message_parts.hpp"
+
+#include <zlink/Contracts/Errors/errors.hpp>
+
+#include <cerrno>
+#include <utility>
+#include <vector>
 
 namespace zlink
 {
