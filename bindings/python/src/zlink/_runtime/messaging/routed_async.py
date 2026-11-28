@@ -656,14 +656,14 @@ class CompletionOwner:
         self, entry, result, internal_errno, completion_id, initial_send=False
     ):
         if completion_id != 0:
-            resubmit = self._publish_writable_locked(entry, completion_id)
-            if result == SubmitResult.BACKPRESSURED:
-                if internal_errno == errno.EAGAIN:
+            if result == SubmitResult.BACKPRESSURED and internal_errno != errno.EAGAIN:
+                result, internal_errno = SubmitResult.INTERNAL_ERROR, errno.EPROTO
+            else:
+                resubmit = self._publish_writable_locked(entry, completion_id)
+                if result == SubmitResult.BACKPRESSURED:
                     if not initial_send or self._public_owner is not None:
                         return result, resubmit
                     result, internal_errno = SubmitResult.INVALID_STATE, 0
-                elif entry.kind == ZLINK_COMPLETION_SEND:
-                    result, internal_errno = SubmitResult.INTERNAL_ERROR, errno.EPROTO
         try:
             typed_result = SubmitResult(int(result))
         except ValueError:
