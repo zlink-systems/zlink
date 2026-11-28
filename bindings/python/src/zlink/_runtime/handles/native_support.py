@@ -115,20 +115,20 @@ def _as_bytes_view(data):
 
 
 def _send_buffer(data):
+    """Return a ctypes pointer for bytes or a normalized byte view."""
     if isinstance(data, bytes):
         size = len(data)
         if size == 0:
             return None, 0, data
         return ctypes.c_char_p(data), size, data
 
-    view = _as_bytes_view(data)
-    size = view.nbytes
+    size = data.nbytes
     if size == 0:
-        return None, 0, view
-    if view.readonly:
-        raw = view.tobytes()
+        return None, 0, data
+    if data.readonly:
+        raw = data.tobytes()
         return ctypes.c_char_p(raw), size, raw
-    return ctypes.addressof((ctypes.c_char * size).from_buffer(view)), size, view
+    return ctypes.addressof((ctypes.c_char * size).from_buffer(data)), size, data
 
 
 def _validated_int32(value, *, field="value"):
@@ -233,34 +233,33 @@ def _msg_to_bytes(msg):
 
 
 def _init_msg_from_buffer(msg, data):
+    source = data if isinstance(data, bytes) else _as_bytes_view(data)
     if _native_extension is not None:
-        source = data if isinstance(data, bytes) else _as_bytes_view(data)
         rc, internal_errno = _native_extension.msg_init_buffer(msg, source)
-        if rc != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, internal_errno)
-        return
-    ptr, size, _keepalive = _send_buffer(data)
-    rc = lib().zlink_msg_init_size(ctypes.byref(msg), size)
-    if rc == 0 and size:
-        ctypes.memmove(_msg_data_ptr(msg), ptr, size)
+    else:
+        ptr, size, _keepalive = _send_buffer(source)
+        rc = lib().zlink_msg_init_size(ctypes.byref(msg), size)
+        internal_errno = lib().zlink_errno() if rc != 0 else 0
+        if rc == 0 and size:
+            ctypes.memmove(_msg_data_ptr(msg), ptr, size)
     if rc != 0:
-        _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+        _raise_result_error(ConfigError, ConfigResult, rc, internal_errno)
 
 
 def _clone_native_msg(src):
     dst = ZlinkMsg()
     if _native_extension is not None:
         rc, internal_errno = _native_extension.msg_clone(dst, src)
-        if rc != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, internal_errno)
-        return dst
-    rc = lib().zlink_msg_init(ctypes.byref(dst))
+    else:
+        native = lib()
+        rc = native.zlink_msg_init(ctypes.byref(dst))
+        if rc == 0:
+            rc = native.zlink_msg_copy(ctypes.byref(dst), ctypes.byref(src))
+            if rc != 0:
+                native.zlink_msg_close(ctypes.byref(dst))
+        internal_errno = native.zlink_errno() if rc != 0 else 0
     if rc != 0:
-        _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-    rc = lib().zlink_msg_copy(ctypes.byref(dst), ctypes.byref(src))
-    if rc != 0:
-        lib().zlink_msg_close(ctypes.byref(dst))
-        _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+        _raise_result_error(ConfigError, ConfigResult, rc, internal_errno)
     return dst
 
 
@@ -312,60 +311,6 @@ class _ReceivedPartsOwner:
             return
         _close_multipart(self._parts_ptr, self._part_count)
         self._parts_ptr = None
-        self._open_parts = [False] * self._part_count
-        self._closed = True
-
-
-class _BytesReceivedPartsOwner:
-    def __init__(self, parts):
-        self._parts = tuple(bytes(part) for part in parts)
-        self._part_count = len(self._parts)
-        self._closed = False
-        self._open_parts = [True] * self._part_count
-
-    @classmethod
-    def _from_trusted_bytes_tuple(cls, parts):
-        owner = cls.__new__(cls)
-        owner._parts = parts
-        owner._part_count = len(parts)
-        owner._closed = False
-        owner._open_parts = [True] * owner._part_count
-        return owner
-
-    def _check_open(self, index):
-        if self._closed or not self._open_parts[index]:
-            raise RuntimeError("received message is closed")
-
-    def msg(self, index):
-        self._check_open(index)
-        raise RuntimeError("received message does not own a native zlink_msg_t")
-
-    def _clone_native_part(self, index):
-        self._check_open(index)
-        return None
-
-    def size(self, index):
-        self._check_open(index)
-        return len(self._parts[index])
-
-    def data(self, index):
-        self._check_open(index)
-        return memoryview(self._parts[index])
-
-    def to_bytes(self, index):
-        self._check_open(index)
-        return self._parts[index]
-
-    def close_part(self, index):
-        if self._closed or not self._open_parts[index]:
-            return
-        self._open_parts[index] = False
-        if not any(self._open_parts):
-            self.close()
-
-    def close(self):
-        if self._closed:
-            return
         self._open_parts = [False] * self._part_count
         self._closed = True
 
