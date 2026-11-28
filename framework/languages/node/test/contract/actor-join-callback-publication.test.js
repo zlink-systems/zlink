@@ -29,10 +29,18 @@ const sourceSpotId = 'source-room';
 const spotId = 'target-room';
 const meshName = 'play';
 
-for (const remote of [false, true]) {
-  for (const captured of [0, 1]) {
+for (const { remote, failureTarget } of [
+  { remote: false },
+  { remote: true },
+  { remote: false, failureTarget: 'User Spot' },
+  { remote: false, failureTarget: 'Entry Spot' }
+]) {
+  const toEntry = failureTarget === 'Entry Spot';
+  for (const captured of failureTarget === undefined ? [0, 1] : [0]) {
     test(
-      `${remote ? 'remote' : 'same-node'} Actor Join orders authority normalization with ${captured} accepted requests`,
+      failureTarget !== undefined
+        ? `same-node Actor Join to ${failureTarget} seals dispatch after Accepted completion fails`
+        : `${remote ? 'remote' : 'same-node'} Actor Join orders authority normalization with ${captured} accepted requests`,
       { timeout: 15_000 },
       async (t) => {
         const clock = fixedRidHostClock(t);
@@ -57,6 +65,8 @@ for (const remote of [false, true]) {
         let callbackFinished = false;
         let clearing = false;
         let request;
+        let probeCalls = 0;
+        let targetSpotId = spotId;
 
         const readAuthority = () => repository.readAuthority(key);
         const write = locations.write.bind(locations);
@@ -111,6 +121,8 @@ for (const remote of [false, true]) {
             const authority = await readAuthority();
             callbackFinished = true;
             callback.resolve({ completion, authority });
+            if (failureTarget !== undefined)
+              throw new Error('same-node Accepted completion failed');
           }
         }
         class Factory {
@@ -128,7 +140,8 @@ for (const remote of [false, true]) {
         }
         class JoinHandler {
           async handle(_spot, actor, _context, message) {
-            actor.context.joinSpot(message.spotId).defer();
+            if (message.spotId === undefined) actor.context.joinEntrySpot().defer();
+            else actor.context.joinSpot(message.spotId).defer();
             if (message.spotId === sourceSpotId) return;
             joinEntered.resolve();
             await releaseJoin.promise;
@@ -136,6 +149,7 @@ for (const remote of [false, true]) {
         }
         class ProbeHandler {
           async handle(_room, _actor, _context, message) {
+            probeCalls += 1;
             const afterCallback = callbackFinished;
             handlerEntered.resolve({ afterCallback, authority: await readAuthority() });
             await releaseHandler.promise;
@@ -143,6 +157,7 @@ for (const remote of [false, true]) {
           }
         }
         class MoveHandler extends JoinHandler {}
+        class EntryProbeHandler extends ProbeHandler {}
         nest.zlinkEntrySpotActorSendHandler({
           entrySpot: () => Entry,
           actor: () => Player,
@@ -158,6 +173,11 @@ for (const remote of [false, true]) {
           actor: () => Player,
           packetName: 'Probe'
         })(ProbeHandler);
+        nest.zlinkEntrySpotActorRequestHandler({
+          entrySpot: () => Entry,
+          actor: () => Player,
+          packetName: 'Probe'
+        })(EntryProbeHandler);
 
         async function start(rid) {
           const builder = nest
@@ -177,7 +197,7 @@ for (const remote of [false, true]) {
           class Host {}
           Module({
             imports: [nest.ZLinkModule.forRoot(builder.build())],
-            providers: [JoinHandler, MoveHandler, ProbeHandler]
+            providers: [JoinHandler, MoveHandler, ProbeHandler, EntryProbeHandler]
           })(Host);
           const app = await NestFactory.createApplicationContext(Host, {
             logger: false,
@@ -199,7 +219,7 @@ for (const remote of [false, true]) {
             authority.objectGeneration
           );
           assert.equal(String(identity.actor.nodeRid), targetRid);
-          assert.equal(String(identity.spotId), spotId);
+          assert.equal(String(identity.spotId), targetSpotId);
         }
 
         await telemetry.observed();
@@ -211,6 +231,12 @@ for (const remote of [false, true]) {
             .inMesh(meshName)
             .submit();
           assert.equal(String(created.actor.nodeRid), 'source');
+          if (toEntry) {
+            const initial = await readAuthority();
+            targetSpotId = String(
+              decodeActorAuthorityIdentity(initial.payload, initial.objectGeneration).spotId
+            );
+          }
           const client = source.get(nest.ZLINK_ACTOR_CLIENT);
           const sourceRoom = await source
             .get(nest.ZLINK_SPOT_MANAGER)
@@ -231,13 +257,15 @@ for (const remote of [false, true]) {
               }
             }
           }
-          const room = await target
-            .get(nest.ZLINK_SPOT_MANAGER)
-            .getOrCreate(spotId, targetRid)
-            .inMesh(meshName)
-            .submit();
-          assert.equal(String(room.spot.nodeRid), targetRid);
-          await client.sendToActor(actorId, new Join(spotId)).submit();
+          if (!toEntry) {
+            const room = await target
+              .get(nest.ZLINK_SPOT_MANAGER)
+              .getOrCreate(spotId, targetRid)
+              .inMesh(meshName)
+              .submit();
+            assert.equal(String(room.spot.nodeRid), targetRid);
+          }
+          await client.sendToActor(actorId, new Join(toEntry ? undefined : spotId)).submit();
           await joinEntered.promise;
           if (captured) {
             const runtime = source.get(nest.ZLINK_FRAMEWORK_RUNTIME);
@@ -310,6 +338,21 @@ for (const remote of [false, true]) {
             await delay(10, undefined, { signal: t.signal });
           }
           assert.equal(callbackCount, 1);
+          if (failureTarget !== undefined) {
+            releaseHandler.resolve();
+            const started = performance.now();
+            await assert.rejects(
+              client.requestToActor(actorId, new Probe(71)).timeout(5000).submit(),
+              (error) => {
+                const elapsedMs = Math.round(performance.now() - started);
+                t.diagnostic(JSON.stringify({ elapsedMs, kind: error.kind, probeCalls }));
+                assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
+                assert.ok(elapsedMs < 4000);
+                return true;
+              }
+            );
+            assert.equal(probeCalls, 0);
+          }
           if (remote && !captured) {
             assert.deepEqual(
               { enteredBeforeClear, phaseAtCallback: authority.relocation?.phase },
@@ -321,6 +364,10 @@ for (const remote of [false, true]) {
           releaseJoin.resolve();
           releaseHandler.resolve();
           releaseClear.resolve();
+          // The failed assertion can leave accepted work parked in the provisional handoff.
+          // Clear it after measuring the late request so host shutdown can finish.
+          if (failureTarget !== undefined)
+            apps[0]?.get(nest.ZLINK_FRAMEWORK_RUNTIME).actorHandoff.cancel(actorId);
           for (const app of apps.reverse()) await app.close();
         }
       }

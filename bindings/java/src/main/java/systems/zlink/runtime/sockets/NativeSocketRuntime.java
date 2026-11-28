@@ -47,7 +47,7 @@ import java.util.Optional;
  */
 final class NativeSocketRuntime implements AutoCloseable {
     static final int DEFAULT_IO_BUFFER_SIZE = 8192;
-    private static final int SUBSCRIPTION_FILTER_BUFFER_SIZE = 256;
+    private static final int DEFAULT_OPTION_BUFFER_SIZE = 256;
     private final SocketCore socketCore;
     private final TopicPlane topicPlane;
     private final ReceivePlane receivePlane;
@@ -900,7 +900,7 @@ final class NativeSocketRuntime implements AutoCloseable {
             throw new IndexOutOfBoundsException("subscription index " + index);
         ensureOpen();
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment filter = arena.allocate(SUBSCRIPTION_FILTER_BUFFER_SIZE);
+            MemorySegment filter = arena.allocate(DEFAULT_OPTION_BUFFER_SIZE);
             MemorySegment length = arena.allocate(ValueLayout.JAVA_LONG);
             MemorySegment pattern = arena.allocate(ValueLayout.JAVA_INT);
             length.set(ValueLayout.JAVA_LONG, 0, filter.byteSize());

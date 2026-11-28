@@ -18,7 +18,7 @@ from perf_common import (
     throughput_unit,
 )
 from perf_report import SINGLE_TABLE_HEADER_LINES, single_auto_hwm_detail_lines
-from perf_runtime import configure_runtime
+from perf_runtime import configure_runtime, require_binding_runtime
 
 
 ROOT = Path(__file__).resolve().parent
@@ -49,21 +49,6 @@ POLICY_TRANSPORTS = {
     "ROUTER_ROUTER_REQREP": RAW_TRANSPORTS,
 }
 RUNNABLE_TRANSPORTS = POLICY_TRANSPORTS
-
-
-def _require_binding_runtime():
-    src_path = str(DEFAULT_PYTHONPATH.resolve())
-    if src_path not in sys.path:
-        sys.path.insert(0, src_path)
-    import zlink
-
-    try:
-        zlink.version()
-    except Exception as exc:
-        raise SystemExit(
-            "Python binding runtime is required for official perf runs. "
-            "Run `python3 setup.py build_ext --inplace --force` in bindings/python."
-        ) from exc
 
 
 def parse_args(argv):
@@ -325,7 +310,7 @@ def _build_options(args, patterns, transports, msg_sizes):
 def main(argv=None):
     start_time = time.perf_counter()
     args = parse_args(argv or sys.argv[1:])
-    _require_binding_runtime()
+    require_binding_runtime(DEFAULT_PYTHONPATH)
     if args.pin_cpu and not pin_current_process_cpu0():
         print("warning: cpu pinning requested but could not pin to cpu 0", file=sys.stderr)
     patterns = _parse_patterns(args.pattern)
