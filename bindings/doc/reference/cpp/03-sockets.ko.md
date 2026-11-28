@@ -250,15 +250,16 @@ if (sub.subscribe (msg) == 0) { /* ... */ }
 | --- | --- | --- |
 | `explicit sub_socket_t(context_t&)` | — | 그 context에 묶인 socket을 생성 |
 | `set_subscription(const std::string&)` / `unset_subscription(const std::string&)` | — | topic filter를 추가/제거; 구독은 누적된다; `void` 반환, base의 `[[nodiscard]] int`와 다름 |
-| `subscription_at(size_t, std::string&, bool* = nullptr)` | — | 해당 index의 filter를 출력 인자에 씀 |
-| `subscription_at(size_t)` | — | 값 반환 overload, `subscription_filter_t` 반환 |
+| `subscription_at(size_t, std::string&, bool* = nullptr)` | — | `bool` 반환. 항목을 찾으면 출력 인자를 채우고 `true`, 없으면 `false` |
+| `subscription_at(size_t)` | — | `std::optional<subscription_filter_t>` 반환. 항목이 없으면 `std::nullopt` |
 | `subscribe(topic_message_t&, recv_flags_t)` | `recv_flags_t::none` | 다음 매칭 publish로 envelope을 채움; `int` 반환, base의 예외를 던지는 값 반환 형태가 아님 |
 | `subscribe_part(std::optional<routing_id_t>& source_rid_out_, std::string& topic_out_, message_t& part_out_, bool& has_more_out_, recv_flags_t)` | `recv_flags_t::none` | pull 기반 single-part subscribe receive |
 | `options()` | — | `sub_socket_options_t` 반환 |
 
-`xsub_socket_t`는 `sub_socket_t`와 member 집합이 동일하다 — 모든 method가 변경
-없이 상속되는 게 아니라 각각 따로 재선언돼 있지만, SUB/XSUB 자체가 뜻하는 것
-이상으로 둘 사이에 동작이 다른 member는 없다.
+SUB와 XSUB는 두 조회 overload를 `subscriber_socket_t`에서 상속한다. 바인딩은 자체
+버퍼로 조회하며, 빈 filter도 성공한 항목으로 반환한다. Core가 `ZLINK_CONFIG_BUFFER_TOO_SMALL`을
+반환하면 Core가 알려 준 길이로 한 번 더 조회한다. `ZLINK_CONFIG_NOT_FOUND`는 항목 없음으로
+처리하고 나머지 실패에는 `config_error_t`를 던진다.
 
 **완료 결과.** `subscribe`/`subscribe_part`는 위와 같은 관례로 `int`를
 반환한다.

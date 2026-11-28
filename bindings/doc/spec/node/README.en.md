@@ -746,6 +746,7 @@ owns public Spot `GetOrCreate` inputs, results, and ownership.
 - The data-plane receive and subscribe APIs use a caller-provided result
   object for reusable storage.
 - Non-blocking no-data returns `false`, distinct from a thrown error.
+- `subscriptionAt(index)` on SUB and XSUB returns `null` when the index has no entry. The query rule is [the common Subscription Query](../README.en.md#subscription-query).
 - Each part received from a general socket, routed socket, subscription, or
   successful request result becomes a `Message` whose payload is a JavaScript-owned
   `Buffer` created by the addon. Reading the payload does not require another
