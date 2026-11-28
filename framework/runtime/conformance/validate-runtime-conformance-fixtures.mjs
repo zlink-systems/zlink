@@ -4310,7 +4310,7 @@ function validateActorJoinSealedRemote(fixture) {
   assert.deepEqual(fixture.senderLanguages, languages);
   assert.deepEqual(Object.keys(fixture.ownerLanguages).sort(), languages);
   for (const [owner, status] of Object.entries(fixture.ownerLanguages)) {
-    assert.ok(['enabled', 'expected-failure-before-owner-fix'].includes(status), `${owner}: ${status}`);
+    assert.ok(['enabled', 'expected-failure-before-5974'].includes(status), `${owner}: ${status}`);
   }
   // Node owner rejects sealed late requests on main (#5809); other owners turn on with their fixes.
   assert.equal(fixture.ownerLanguages.node, 'enabled');
