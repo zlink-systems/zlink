@@ -2,12 +2,13 @@
 
 from typing import Protocol, runtime_checkable
 
+from ..messaging.subscription_event import SubscriptionEvent
 from . import socket as _socket_contract
 from .operations import PublishOp
 
 
 @runtime_checkable
-class PubSocket(_socket_contract._DisconnectRidContract, Protocol):
+class PubSocket(_socket_contract._ConnectSocketContract, Protocol):
     """PUB socket: topic-filtered publish that drops messages with no matching
     subscriber."""
 
@@ -32,7 +33,7 @@ class PubSocket(_socket_contract._DisconnectRidContract, Protocol):
 
 
 @runtime_checkable
-class SubSocket(_socket_contract._DisconnectRidContract, Protocol):
+class SubSocket(_socket_contract._ConnectSocketContract, Protocol):
     """SUB socket: a receive-only subscriber filtered by its subscriptions."""
 
     @property
@@ -60,7 +61,7 @@ class SubSocket(_socket_contract._DisconnectRidContract, Protocol):
 
     def subscription_at(self, index):
         """Return ``(filter, is_pattern)`` for a subscription index, or
-        ``None`` when the index is absent."""
+        ``None`` when the index is absent. Raise ``ConfigError`` for Core failures."""
         ...
 
     def subscribe_into(self, topic_message, *, flags=0):
@@ -70,7 +71,7 @@ class SubSocket(_socket_contract._DisconnectRidContract, Protocol):
 
 
 @runtime_checkable
-class XPubSocket(_socket_contract._DisconnectRidContract, Protocol):
+class XPubSocket(_socket_contract._ConnectSocketContract, Protocol):
     """XPUB socket: like PUB, but also surfaces subscriber subscription and
     unsubscription events."""
 
@@ -93,14 +94,14 @@ class XPubSocket(_socket_contract._DisconnectRidContract, Protocol):
         submit."""
         ...
 
-    def receive_subscription_event_into(self, event, *, flags=0):
+    def receive_subscription_event_into(self, event: SubscriptionEvent, *, flags=0) -> bool:
         """Receive the next subscriber (un)subscription event into ``event``
         storage; ``False`` when ``DONT_WAIT`` is set and none is available."""
         ...
 
 
 @runtime_checkable
-class XSubSocket(_socket_contract._DisconnectRidContract, Protocol):
+class XSubSocket(_socket_contract._ConnectSocketContract, Protocol):
     """XSUB socket: a subscriber whose subscriptions are carried as messages."""
 
     @property
@@ -127,7 +128,7 @@ class XSubSocket(_socket_contract._DisconnectRidContract, Protocol):
 
     def subscription_at(self, index):
         """Return ``(filter, is_pattern)`` for a subscription index, or
-        ``None`` when the index is absent."""
+        ``None`` when the index is absent. Raise ``ConfigError`` for Core failures."""
         ...
 
     def subscribe_into(self, topic_message, *, flags=0):

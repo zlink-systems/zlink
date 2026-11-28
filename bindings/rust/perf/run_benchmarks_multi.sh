@@ -116,7 +116,7 @@ PATTERN_TRANSITION_MS="${PERF_MULTI_PATTERN_TRANSITION_MS:-${PERF_PATTERN_TRANSI
 SERVER_READY_TIMEOUT_MS="${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}"
 SERVER_SHUTDOWN_TIMEOUT_MS="${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}"
 CONNECT_READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}"
-MONITOR_HWM="${PERF_MULTI_MONITOR_HWM:-4096000}"
+MONITOR_HWM_BYTES="${PERF_MULTI_MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}"
 SERVER_BIND_PORT="0"
 ENV_PERF_IO_THREADS="${PERF_IO_THREADS:-}"
 ENV_MULTI_SERVER_IO_THREADS="${PERF_MULTI_SERVER_IO_THREADS:-}"
@@ -186,7 +186,7 @@ Options:
   --server-ready-timeout-ms N
   --connect-ready-timeout-ms N
                          Connection-ready timeout in ms (default: 10000).
-  --monitor-hwm N
+  --monitor-hwm-bytes BYTES  Override PERF_MULTI_MONITOR_HWM_BYTES (default: 4096000).
   --server-shutdown-timeout-ms N
   --server-bind-port N
   --auto-hwm-profile NAME
@@ -234,7 +234,14 @@ while [[ $# -gt 0 ]]; do
         --pattern-transition-ms) PATTERN_TRANSITION_MS="$2"; shift 2 ;;
         --server-ready-timeout-ms) SERVER_READY_TIMEOUT_MS="$2"; shift 2 ;;
         --connect-ready-timeout-ms) CONNECT_READY_TIMEOUT_MS="$2"; shift 2 ;;
-        --monitor-hwm) MONITOR_HWM="$2"; shift 2 ;;
+        --monitor-hwm-bytes)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --monitor-hwm-bytes requires a value." >&2
+                exit 1
+            fi
+            MONITOR_HWM_BYTES="$2"
+            shift 2
+            ;;
         --server-shutdown-timeout-ms) SERVER_SHUTDOWN_TIMEOUT_MS="$2"; shift 2 ;;
         --server-bind-port) SERVER_BIND_PORT="$2"; shift 2 ;;
         --auto-hwm-profile) AUTO_HWM_PROFILE="$2"; shift 2 ;;
@@ -255,6 +262,11 @@ if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
     exit 1
 fi
 export PERF_PART_COUNT="${PART_COUNT}"
+
+if [[ ! "${MONITOR_HWM_BYTES}" =~ ^[0-9]+$ ]]; then
+    echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
+    exit 1
+fi
 
 if [[ "${REUSE_BUILD}" -eq 1 && "${CLEAN_BUILD}" -eq 1 ]]; then
     echo "--reuse-build and --clean-build are mutually exclusive" >&2
@@ -577,7 +589,7 @@ export PERF_MULTI_DEFAULT_STREAM_CLIENTS="${EFFECTIVE_DEFAULT_STREAM_CLIENTS}"
 prepare_core_runtime
 TOTAL_TIME_ENABLED=1
 export PERF_MULTI_SERVER_BIND_PORT="${SERVER_BIND_PORT}"
-export PERF_MULTI_MONITOR_HWM="${MONITOR_HWM}"
+export PERF_MULTI_MONITOR_HWM_BYTES="${MONITOR_HWM_BYTES}"
 [[ -n "${CONNECT_CONCURRENCY}" ]] && export PERF_MULTI_CONNECT_CONCURRENCY="${CONNECT_CONCURRENCY}"
 if [[ -n "${COMMON_IO_THREADS}" ]]; then
     export PERF_IO_THREADS="${COMMON_IO_THREADS}"
@@ -670,17 +682,17 @@ shutdown_server() {
 
     if kill -0 "${pid}" 2>/dev/null; then
         write_control "${control_fd}" 'STOP\n'
-        exec {control_fd}>&- || true
-        if wait_for_pid "${pid}" "${SERVER_SHUTDOWN_TIMEOUT_SECONDS}"; then
-            return
-        fi
-        kill "${pid}" 2>/dev/null || true
-        if wait_for_pid "${pid}" 2; then
-            return
-        fi
-        kill -9 "${pid}" 2>/dev/null || true
-        wait "${pid}" 2>/dev/null || true
     fi
+    exec {control_fd}>&- || true
+    if wait_for_pid "${pid}" "${SERVER_SHUTDOWN_TIMEOUT_SECONDS}"; then
+        return
+    fi
+    kill "${pid}" 2>/dev/null || true
+    if wait_for_pid "${pid}" 2; then
+        return
+    fi
+    kill -9 "${pid}" 2>/dev/null || true
+    wait "${pid}" 2>/dev/null || true
 }
 
 wait_for_file_line() {
@@ -963,8 +975,19 @@ for run in $(seq 1 "${RUNS}"); do
                         write_control "${CLIENT_CONTROL_FD}" 'START,%s\n' "${size}"
                     fi
 
+                    ONE_WAY_DEADLINE=$((SECONDS + CLIENT_TIMEOUT_SECONDS))
+                    if [[ "${case_status}" == "success" && "${pat}" == "PUBSUB" ]]; then
+                        PHASE_DONE_LINE="PHASE_DONE,${size},1"
+                        if [[ "$(wait_for_file_prefix "${SRV_OUT}" "${PHASE_DONE_LINE}" "${CLIENT_TIMEOUT_SECONDS}")" == "${PHASE_DONE_LINE}" ]]; then
+                            write_control "${CLIENT_CONTROL_FD}" '%s\n' "${PHASE_DONE_LINE}"
+                        else
+                            case_status="fail"
+                            case_reason="publisher_phase_done_timeout"
+                        fi
+                    fi
+
                     if [[ "${case_status}" == "success" ]]; then
-                        if ! wait_for_pid "${CLIENT_PID}" "${CLIENT_TIMEOUT_SECONDS}"; then
+                        if ! wait_for_pid "${CLIENT_PID}" "$((ONE_WAY_DEADLINE - SECONDS))"; then
                             case_status="fail"
                             case_reason="binary_exit_or_timeout"
                             kill "${CLIENT_PID}" 2>/dev/null || true
@@ -976,6 +999,16 @@ for run in $(seq 1 "${RUNS}"); do
                     else
                         kill "${CLIENT_PID}" 2>/dev/null || true
                         wait "${CLIENT_PID}" 2>/dev/null || true
+                    fi
+
+                    if [[ "${case_status}" == "success" && "${pat}" == "DEALER_DEALER" ]]; then
+                        if ! wait_for_pid "${SERVER_PID}" "$((ONE_WAY_DEADLINE - SECONDS))"; then
+                            case_status="fail"
+                            case_reason="receiver_exit_timeout"
+                        elif ! wait "${SERVER_PID}"; then
+                            case_status="fail"
+                            case_reason="receiver_exit"
+                        fi
                     fi
 
                     exec {CLIENT_CONTROL_FD}>&- || true

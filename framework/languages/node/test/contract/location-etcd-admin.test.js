@@ -284,75 +284,65 @@ test('cleanup traverses more than a thousand expired records with conditional pa
   assert.equal(deleted.size, 1005);
 });
 
-test(
-  'cleanup gives each delayed page and deletion its own operation deadline',
-  { timeout: 180000 },
-  async () => {
-    const { EtcdClient } = require('../../packages/framework-locations-etcd/dist/internal/client');
-    const {
-      EtcdAdminStore
-    } = require('../../packages/framework-locations-etcd/dist/internal/admin-engine');
-    const {
-      encodeMetadata,
-      encodeClock,
-      keys
-    } = require('../../packages/framework-locations-etcd/dist/internal/encoding');
-    // The round takes about 1,008 x 20 ms = 20 s, far beyond one 1 s operation deadline, while each RPC
-    // keeps a wide margin under load. A shared deadline would fail; a per-RPC deadline completes.
-    const RPC_DELAY_MS = 20;
-    const OPERATION_TIMEOUT_MS = 1000;
-    const key = keys('cleanup-deadlines');
-    const records = Array.from({ length: 1005 }, (_, index) => ({
-      key: key.metadata(Buffer.from(String(index).padStart(4, '0'))),
-      value: encodeMetadata({ hasExpiry: true, expiresAtMs: 1n, payloadLength: 1 }),
-      mod_revision: String(index + 2)
-    }));
-    let deletes = 0;
-    const pageSizes = [];
-    const server = await fakeServer({
-      KV: {
-        range(call, callback) {
-          if (call.request.key.equals(key.clock)) {
-            callback(null, { kvs: [{ value: encodeClock(1n), mod_revision: '1' }] });
-            return;
-          }
-          const remaining = records.filter(
-            (record) => Buffer.compare(record.key, call.request.key) >= 0
-          );
-          const kvs = remaining.slice(0, 1000);
-          pageSizes.push(kvs.length);
-          setTimeout(() => callback(null, { kvs, more: remaining.length > 1000 }), RPC_DELAY_MS);
-        },
-        txn(_call, callback) {
-          deletes++;
-          setTimeout(() => callback(null, { succeeded: true }), RPC_DELAY_MS);
-        }
-      }
-    });
-    const client = new EtcdClient({
-      endpoints: [server.endpoint],
-      namespace: 'cleanup-deadlines',
-      operationTimeoutMs: OPERATION_TIMEOUT_MS
-    });
-    const stop = new AbortController();
-    const operation = client.operation.bind(client);
-    let operations = 0;
-    client.operation = (signal) => {
-      assert.equal(signal, stop.signal);
-      operations++;
-      return operation(signal);
-    };
-    try {
-      await new EtcdAdminStore(client).cleanup(stop.signal);
-      assert.deepEqual(pageSizes, [1000, 5]);
-      assert.equal(deletes, 1005);
-      assert.equal(operations, 1008);
-    } finally {
-      client.close();
-      server.close();
+test('cleanup gives each delayed page and deletion its own operation deadline', async (context) => {
+  const { EtcdClient } = require('../../packages/framework-locations-etcd/dist/internal/client');
+  const {
+    EtcdAdminStore
+  } = require('../../packages/framework-locations-etcd/dist/internal/admin-engine');
+  const {
+    encodeMetadata,
+    encodeClock,
+    keys
+  } = require('../../packages/framework-locations-etcd/dist/internal/encoding');
+  const rpcDelayMs = 20;
+  const operationTimeoutMs = 1000;
+  const startedAt = 0;
+  context.mock.timers.enable({ apis: ['Date'], now: startedAt });
+
+  const namespace = 'cleanup-deadlines';
+  const key = keys(namespace);
+  const records = Array.from({ length: 1005 }, (_, index) => ({
+    key: key.metadata(Buffer.from(String(index).padStart(4, '0'))),
+    value: encodeMetadata({ hasExpiry: true, expiresAtMs: 1n, payloadLength: 1 }),
+    mod_revision: String(index + 2)
+  }));
+  const pageSizes = [];
+  let deletes = 0;
+  const client = new EtcdClient({
+    endpoints: ['http://127.0.0.1:1'],
+    namespace,
+    operationTimeoutMs
+  });
+  const stop = new AbortController();
+  const createOperation = context.mock.method(client, 'operation');
+  context.mock.method(client, 'rpc', async (service, method, request, operation) => {
+    assert.equal(service, 'KV');
+    assert.equal(operation.signal, stop.signal);
+    assert.equal(operation.deadline.getTime(), Date.now() + operationTimeoutMs);
+    context.mock.timers.tick(rpcDelayMs);
+    if (method === 'range') {
+      if (request.key.equals(key.clock))
+        return { kvs: [{ value: encodeClock(1n), mod_revision: '1' }] };
+      const remaining = records.filter((record) => Buffer.compare(record.key, request.key) >= 0);
+      const kvs = remaining.slice(0, 1000);
+      pageSizes.push(kvs.length);
+      return { kvs, more: remaining.length > 1000 };
     }
+    assert.equal(method, 'txn');
+    deletes++;
+    return { succeeded: true };
+  });
+
+  try {
+    await new EtcdAdminStore(client).cleanup(stop.signal);
+    assert.deepEqual(pageSizes, [1000, 5]);
+    assert.equal(deletes, 1005);
+    assert.equal(createOperation.mock.callCount(), 1008);
+    assert.ok(Date.now() - startedAt > operationTimeoutMs);
+  } finally {
+    client.close();
   }
-);
+});
 
 test('cleanup skips corrupt metadata in the middle of a page and retains its pair', async () => {
   const { EtcdClient } = require('../../packages/framework-locations-etcd/dist/internal/client');

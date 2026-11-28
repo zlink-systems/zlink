@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub use crate::results::{
+pub use crate::contracts::errors::results::{
     BindResult, CloseResult, ConfigResult, ConnectResult, HandlerResult, RecvResult, RequestResult,
     SubmitResult,
 };
@@ -12,7 +12,9 @@ macro_rules! define_error_type {
         pub struct $name {
             /// The typed result code that classifies this failure.
             pub code: $result,
-            /// The underlying native errno, or 0 when none.
+            /// The underlying internal errno, or 0 when none. Prefer
+            /// [`internal_errno`](Self::internal_errno); this field name is kept
+            /// for compatibility until the next breaking release.
             pub native_errno: i32,
         }
 
@@ -27,9 +29,15 @@ macro_rules! define_error_type {
                 self.code
             }
 
-            /// Returns the underlying native errno, or 0 when none.
-            pub const fn native_errno(&self) -> i32 {
+            /// Returns the underlying internal errno, or 0 when none.
+            pub const fn internal_errno(&self) -> i32 {
                 self.native_errno
+            }
+
+            /// Deprecated name of [`internal_errno`](Self::internal_errno).
+            #[deprecated(note = "use internal_errno")]
+            pub const fn native_errno(&self) -> i32 {
+                self.internal_errno()
             }
         }
 
@@ -140,8 +148,14 @@ impl ZlinkError {
         }
     }
 
-    /// Returns the underlying native errno, or 0 when none.
+    /// Deprecated name of [`internal_errno`](Self::internal_errno).
+    #[deprecated(note = "use internal_errno")]
     pub fn native_errno(&self) -> i32 {
+        self.internal_errno()
+    }
+
+    /// Returns the underlying internal errno, or 0 when none.
+    pub fn internal_errno(&self) -> i32 {
         match self {
             Self::Submit(err) => err.native_errno,
             Self::Request(err) => err.native_errno,

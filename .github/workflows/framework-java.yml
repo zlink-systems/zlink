@@ -195,6 +195,34 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "ZLINK_LIBRARY_PATH=$runtime"
           Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $corePrefix "bin")
 
+      - name: Prepare the Core release runtime for the Node binding
+        if: ${{ !inputs.skip_tests && startsWith(matrix.target.name, 'linux-') }}
+        id: node-core
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/framework-node-core-runtime.sh "${{ matrix.target.core_platform }}"
+
+      - name: Build the checkout Node binding package
+        if: ${{ !inputs.skip_tests && startsWith(matrix.target.name, 'linux-') }}
+        uses: ./.github/actions/node-binding-package
+        with:
+          core-prefix: ${{ steps.node-core.outputs.prefix }}
+
+      - name: Build the local-package pin of @zlink-systems/http-client
+        if: ${{ !inputs.skip_tests && startsWith(matrix.target.name, 'linux-') }}
+        run: bash scripts/ci/framework-node-http-client.sh .artifacts/wsl
+
+      - name: Pin framework install to the checkout Node binding package
+        if: ${{ !inputs.skip_tests && startsWith(matrix.target.name, 'linux-') }}
+        working-directory: framework/languages/node
+        run: bash ../../../scripts/ci/framework-node-pin-binding.sh "${{ steps.node-core.outputs.binding_version }}"
+
+      - name: Install framework dependencies
+        if: ${{ !inputs.skip_tests && startsWith(matrix.target.name, 'linux-') }}
+        working-directory: framework/languages/node
+        run: bash ../../../scripts/ci/framework-node-install.sh
+
       # Redis-backed tests fail instead of skipping once the job provides Redis (#4542).
       - name: Start Redis for Redis-backed tests
         if: ${{ !inputs.skip_tests && startsWith(matrix.target.name, 'linux-') }}
@@ -236,7 +264,7 @@ jobs:
         run: |
           .\scripts\ci\framework-java-test-results.ps1 `
             -Mode summarize `
-            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results", "framework/languages/java/zlink-framework-locations-redis/build/test-results", "framework/languages/java/zlink-framework-locations-etcd/build/test-results" `
+            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results", "framework/languages/java/zlink-framework-locations-redis/build/test-results", "framework/languages/java/zlink-framework-locations-etcd/build/test-results", "framework/languages/java/zlink-framework-kotlin/build/test-results", "framework/languages/java/zlink-framework-testkit/build/test-results", "framework/languages/java/zlink-framework-provider-abstractions/build/test-results", "framework/languages/java/zlink-framework-codec-protobuf/build/test-results", "framework/languages/java/zlink-framework-codec-msgpack/build/test-results", "framework/languages/java/zlink-http-client/build/test-results", "framework/languages/java/zlink-http-client-kotlin/build/test-results", "framework/languages/java/zlink-stream-connector/build/test-results" `
             -OutputPath ".artifacts/framework-java-results/${{ matrix.target.name }}" `
             -Platform "${{ matrix.target.name }}" `
             -MinimumTests $env:FRAMEWORK_JAVA_MIN_TESTS

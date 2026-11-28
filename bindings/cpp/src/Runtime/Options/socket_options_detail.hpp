@@ -97,7 +97,7 @@ template <> struct option_traits<socket_option_id>
 
     static size_t string_cap (socket_option_id option_)
     {
-        return option_ == socket_option_id::last_endpoint ? 1024u : 256u;
+        return option_ == socket_option_id::last_endpoint ? 1024u : default_option_buffer_size;
     }
 };
 
@@ -166,10 +166,7 @@ template <> struct option_traits<pub_option_id>
         return zlink_set_pub_option (handle_, option_, value_, size_);
     }
 
-    static size_t string_cap (pub_option_id)
-    {
-        return 256u;
-    }
+    static size_t string_cap (pub_option_id) { return default_option_buffer_size; }
 };
 
 template <> struct option_traits<sub_option_id>

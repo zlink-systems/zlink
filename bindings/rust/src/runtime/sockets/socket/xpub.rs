@@ -1,7 +1,7 @@
-use crate::core_context::Context;
-use crate::error::ConfigError;
-use crate::ffi;
-use crate::socket_contracts::XPubSocket;
+use crate::contracts::core::context::Context;
+use crate::contracts::errors::errors::ConfigError;
+use crate::contracts::sockets::pubsub_sockets::XPubSocket;
+use crate::runtime::native::ffi;
 
 use super::SocketInner;
 
@@ -18,8 +18,4 @@ impl XPubSocket {
 
 pub(crate) fn xpub_inner(socket: &XPubSocket) -> &SocketInner {
     &socket.inner
-}
-
-pub(crate) fn xpub_inner_mut(socket: &mut XPubSocket) -> &mut SocketInner {
-    &mut socket.inner
 }

@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsPackable>true</IsPackable>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetLockFilePath Condition="'$(ZLinkFrameworkTargetFrameworks)' == 'net8.0'">$(MSBuildThisFileDirectory)packages.net8.lock.json</NuGetLockFilePath>
     <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
     <Description>Official etcd Location Store provider for the ZLink .NET framework.</Description>
     <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>

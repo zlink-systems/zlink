@@ -428,7 +428,7 @@ fn poller_wait_with_no_event_capacity_reports_core_config_error() {
     match error {
         ZlinkError::Config(config) => {
             assert_eq!(config.code(), zlink::ConfigResult::InvalidArgument);
-            assert_eq!(config.native_errno(), libc::EINVAL);
+            assert_eq!(config.internal_errno(), libc::EINVAL);
         }
         other => panic!("expected Core configuration error, got {other:?}"),
     }
@@ -520,7 +520,7 @@ fn ownerless_async_request_fails_fast_and_reacquires_through_public_poller() {
 
 #[test]
 fn completion_owner_source_has_no_background_reactor() {
-    let source = include_str!("../src/internal/completion_owner.rs");
+    let source = include_str!("../src/runtime/messaging/completion_owner.rs");
     for forbidden in [
         "std::thread::spawn",
         "runtime_loop",
@@ -639,10 +639,7 @@ fn submit_result_backpressure_admits_after_writable_then_completes_reply() {
         .common_options()
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
-    router
-        .common_options()
-        .set_receive_timeout(5000)
-        .unwrap();
+    router.common_options().set_receive_timeout(5000).unwrap();
     router
         .bind("inproc://rust-submit-result-backpressured")
         .unwrap();
@@ -860,4 +857,16 @@ fn reply_token_from_closed_router_is_rejected_by_recreated_router() {
         .submit()
         .unwrap_err();
     assert_eq!(error.code(), SubmitResult::InvalidArgument);
+}
+
+#[test]
+#[allow(deprecated)]
+fn internal_errno_and_deprecated_native_errno_return_the_same_value() {
+    use zlink::{ConfigError, ConfigResult, ZlinkError};
+    let error = ConfigError::new(ConfigResult::InvalidArgument, libc::EINVAL);
+    assert_eq!(error.internal_errno(), libc::EINVAL);
+    assert_eq!(error.native_errno(), error.internal_errno());
+    let wrapped = ZlinkError::from(error);
+    assert_eq!(wrapped.internal_errno(), libc::EINVAL);
+    assert_eq!(wrapped.native_errno(), wrapped.internal_errno());
 }

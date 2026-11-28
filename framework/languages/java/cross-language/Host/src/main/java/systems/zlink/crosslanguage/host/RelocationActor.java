@@ -19,13 +19,16 @@ public final class RelocationActor implements ZLinkActor {
     private final String actorId;
     private final ZLinkActorContext context;
     private final EventSink sink;
+    private final SealedJoinObservation sealedJoin;
     private byte[] applicationState = new byte[0];
     private int stateVersion;
 
-    public RelocationActor(String actorId, ZLinkActorContext context, EventSink sink) {
+    public RelocationActor(String actorId, ZLinkActorContext context, EventSink sink,
+        SealedJoinObservation sealedJoin) {
         this.actorId = actorId;
         this.context = context;
         this.sink = sink;
+        this.sealedJoin = sealedJoin;
         INSTANCES.put(actorId, this);
         CREATIONS.computeIfAbsent(actorId, ignored -> new java.util.concurrent.atomic.AtomicInteger()).incrementAndGet();
     }
@@ -34,6 +37,9 @@ public final class RelocationActor implements ZLinkActor {
      * actorJoin failure surfaces on the source side. */
     @Override
     public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
+        if (completion instanceof ZLinkActorJoinCompletion.Accepted accepted) {
+            sealedJoin.failCompletion(actorId, accepted.actor().nodeRid().toString());
+        }
         if (sink != null) {
             switch (completion) {
                 case ZLinkActorJoinCompletion.Accepted accepted -> sink.append(

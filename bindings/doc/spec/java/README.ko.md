@@ -537,6 +537,7 @@ Typed socket contract는 해당 socket 타입에 의미 있는 기능만 더한�
 - `SubSocket`: subscribe와 subscription event 수신.
 - `XPubSocket`: publish와 subscription event 수신.
 - `XSubSocket`: public 바인딩 contract가 정의하는 send와 subscription 제어.
+- SUB·XSUB의 `subscriptionAt(index)`는 해당 인덱스에 항목이 없으면 `Optional.empty()`를 반환한다. 조회 규칙은 [공통 Subscription 조회](../README.ko.md#subscription-조회)를 따른다.
 - `StreamSocket`: RAW recv, PACKET recv, stream send.
 
 Runtime은 record마다 Core whole-message API를 한 번 호출하며 native part 배열과 count를 내부에서

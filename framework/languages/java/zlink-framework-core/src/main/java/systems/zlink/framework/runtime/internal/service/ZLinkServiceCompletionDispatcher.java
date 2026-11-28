@@ -30,9 +30,21 @@ public final class ZLinkServiceCompletionDispatcher {
         return caller;
     }
 
+    /** Publishes every public lifecycle result in a new completion turn (spec 01 §11). */
+    public static <T> CompletionStage<T> deliverLifecycle(CompletionStage<T> source) {
+        var caller = ZLinkCompletionBridge.<T>newCancellationFuture();
+        connect(source, caller, false);
+        return caller;
+    }
+
     /** Connects a caller view only after its owner has published that shared view. */
     public static <T> void deliver(CompletionStage<T> source, CompletableFuture<T> caller) {
-        Delivery<T> delivery = new Delivery<>(source, caller);
+        connect(source, caller, true);
+    }
+
+    private static <T> void connect(
+            CompletionStage<T> source, CompletableFuture<T> caller, boolean reuseTurn) {
+        Delivery<T> delivery = new Delivery<>(source, caller, reuseTurn);
         INSTANCE.register(delivery);
         source.whenComplete(delivery);
     }
@@ -125,11 +137,14 @@ public final class ZLinkServiceCompletionDispatcher {
 
     private static final class Delivery<T> extends WorkItem implements BiConsumer<T, Throwable> {
         private final CompletableFuture<T> caller;
+        private final boolean reuseTurn;
         private T value;
         private Throwable failure;
 
-        private Delivery(CompletionStage<T> source, CompletableFuture<T> caller) {
+        private Delivery(
+                CompletionStage<T> source, CompletableFuture<T> caller, boolean reuseTurn) {
             this.caller = caller;
+            this.reuseTurn = reuseTurn;
             ZLinkCompletionBridge.forwardCancellation(caller, source);
         }
 
@@ -137,7 +152,7 @@ public final class ZLinkServiceCompletionDispatcher {
         public void accept(T value, Throwable failure) {
             this.value = value;
             this.failure = failure;
-            if (isCurrentCompletion()) run();
+            if (reuseTurn && isCurrentCompletion()) run();
             else INSTANCE.post(this);
         }
 

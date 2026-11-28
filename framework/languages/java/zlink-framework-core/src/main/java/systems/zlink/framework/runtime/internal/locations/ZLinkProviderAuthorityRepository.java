@@ -383,10 +383,18 @@ final class ZLinkProviderAuthorityRepository {
                                         .thenApply(visible -> new ZLinkAuthorityConflict(visible));
                             }
                             AuthorityRecord current = decode(found.value().bytes());
-                            if (current.aggregate() != null
-                                    || (!(mutation instanceof ZLinkAuthorityRestore)
-                                            && current.allocation().state()
-                                                    != ZLinkPlacementAllocationState.ACTIVE)) {
+                            if (current.aggregate() != null) {
+                                return preservePreparedSource(
+                                        rowKey,
+                                        found,
+                                        current,
+                                        expectation,
+                                        mutation,
+                                        opaqueCancellation);
+                            }
+                            if (!(mutation instanceof ZLinkAuthorityRestore)
+                                    && current.allocation().state()
+                                            != ZLinkPlacementAllocationState.ACTIVE) {
                                 return projectRead(read, opaqueCancellation)
                                         .thenApply(
                                                 visible ->
@@ -620,6 +628,121 @@ final class ZLinkProviderAuthorityRepository {
                                                         mutation);
                                             });
                         });
+    }
+
+    /**
+     * Relocation Preserve and target NewOwner compete on the prepared aggregate marker. The same
+     * write changes the source authority version and releases the target reservation.
+     */
+    private CompletionStage<ZLinkAuthorityWriteResult> preservePreparedSource(
+            ZLinkStoreKey rowKey,
+            ZLinkStoreReadFound found,
+            AuthorityRecord current,
+            ZLinkAuthorityExpectation expectation,
+            ZLinkAuthorityMutation mutation,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        var participant = current.aggregate();
+        if (!(expectation instanceof ZLinkAuthorityExpectFound expected)
+                || !expected.storeVersion().equals(current.visibleStoreVersion())
+                || current.allocation().state() != ZLinkPlacementAllocationState.ACTIVE
+                || !(mutation instanceof ZLinkAuthorityPut put)
+                || put.preserved() != null
+                || !put.replaceRelocation()
+                || current.relocation() == null
+                || !current.relocation().relocationId().equals(participant.aggregateId())
+                || !current.relocation().phase("aborted").equals(put.relocation())
+                || !Arrays.equals(current.payload(), put.payload())) {
+            return projectRead(found, cancellation)
+                    .thenApply(
+                            visible ->
+                                    new ZLinkAuthorityConflict(
+                                            visible, ZLinkFrameworkErrorKind.UNAVAILABLE));
+        }
+        var fence =
+                new ZLinkAggregateFence(
+                        participant.aggregateId(), participant.aggregateGeneration());
+        var marker = aggregateKey(fence);
+        return provider.read(marker, cancellation)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkStoreReadFound markerFound)) {
+                                return readAuthorityConflict(rowKey, cancellation);
+                            }
+                            var root = aggregateRecord(markerFound.value().bytes());
+                            var aggregate = decodeAggregate(root, fence);
+                            if (aggregate.state() != AGGREGATE_PREPARED) {
+                                return readAuthorityConflict(rowKey, cancellation);
+                            }
+                            var owner =
+                                    new ZLinkLocationOwnerToken(
+                                            current.ownerId(), current.ownerLeaseGeneration());
+                            List<ZLinkStoreCondition> conditions = new ArrayList<>();
+                            conditions.add(
+                                    new ZLinkStoreVersionCondition(
+                                            rowKey, found.value().version()));
+                            conditions.add(
+                                    new ZLinkStoreVersionCondition(
+                                            marker, markerFound.value().version()));
+                            return requireLiveOwner(owner, conditions, cancellation)
+                                    .thenCompose(
+                                            live -> {
+                                                if (!live) {
+                                                    return readAuthorityConflict(
+                                                            rowKey, cancellation);
+                                                }
+                                                var next =
+                                                        current.withAggregate(null, null)
+                                                                .withRelocation(put.relocation());
+                                                List<ZLinkStoreMutation> mutations =
+                                                        new ArrayList<>();
+                                                mutations.add(
+                                                        new ZLinkStorePut(
+                                                                rowKey, encode(next), null));
+                                                mutations.add(
+                                                        new ZLinkStorePut(
+                                                                marker,
+                                                                ZLinkAggregateInventoryStore
+                                                                        .canonical(
+                                                                                root.put(
+                                                                                        "state",
+                                                                                        "aborted")),
+                                                                null));
+                                                releasePreparedCapacity(aggregate, mutations);
+                                                return write(
+                                                                new ZLinkStoreWriteRequest(
+                                                                        conditions, mutations),
+                                                                cancellation)
+                                                        .thenCompose(
+                                                                result -> {
+                                                                    if (result
+                                                                            instanceof
+                                                                            ZLinkStoreWriteApplied
+                                                                                    applied) {
+                                                                        var version =
+                                                                                applied.putVersions()
+                                                                                        .get(
+                                                                                                rowKey);
+                                                                        return completed(
+                                                                                stored(
+                                                                                        next,
+                                                                                        version
+                                                                                                .value(),
+                                                                                        applied
+                                                                                                .storeNow()));
+                                                                    }
+                                                                    return readAuthorityConflict(
+                                                                            rowKey, cancellation);
+                                                                });
+                                            });
+                        });
+    }
+
+    private CompletionStage<ZLinkAuthorityWriteResult> readAuthorityConflict(
+            ZLinkStoreKey rowKey,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        return provider.read(rowKey, cancellation)
+                .thenCompose(read -> projectRead(read, cancellation))
+                .thenApply(ZLinkAuthorityConflict::new);
     }
 
     private static boolean descriptorMatchesTarget(
@@ -2854,15 +2977,7 @@ final class ZLinkProviderAuthorityRepository {
                                     new ZLinkStoreVersionCondition(key, found.value().version()));
                             List<ZLinkStoreMutation> mutations = new ArrayList<>();
                             mutations.add(new ZLinkStoreDelete(key));
-                            if (aggregate.state() == AGGREGATE_PREPARED) {
-                                var deltas = new ZLinkCapacityCounters();
-                                deltas.change(
-                                        aggregate.targetDescriptor(),
-                                        aggregate.capacityBundle(),
-                                        -1,
-                                        0);
-                                deltas.appendTo(mutations);
-                            }
+                            releasePreparedCapacity(aggregate, mutations);
                             return write(
                                             new ZLinkStoreWriteRequest(conditions, mutations),
                                             opaqueCancellation)
@@ -2894,6 +3009,15 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                 .STALE));
                                             });
                         });
+    }
+
+    private static void releasePreparedCapacity(
+            PreparedAggregate aggregate, List<ZLinkStoreMutation> mutations) {
+        if (aggregate.state() == AGGREGATE_PREPARED) {
+            var deltas = new ZLinkCapacityCounters();
+            deltas.change(aggregate.targetDescriptor(), aggregate.capacityBundle(), -1, 0);
+            deltas.appendTo(mutations);
+        }
     }
 
     CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken owner) {
@@ -4648,19 +4772,25 @@ final class ZLinkProviderAuthorityRepository {
         return ZLinkAggregateInventoryStore.canonical(root);
     }
 
+    private static ObjectNode aggregateRecord(byte[] bytes) {
+        return ZLinkAggregateInventoryStore.object(
+                bytes,
+                "aggregateId",
+                "aggregateGeneration",
+                "state",
+                "participantCount",
+                "inventoryDigestSha256",
+                "targetDescriptor",
+                "targetDescriptorLifecycleGeneration",
+                "targetOwner",
+                "capacity");
+    }
+
     private static PreparedAggregate decodeAggregate(byte[] bytes, ZLinkAggregateFence fence) {
-        var root =
-                ZLinkAggregateInventoryStore.object(
-                        bytes,
-                        "aggregateId",
-                        "aggregateGeneration",
-                        "state",
-                        "participantCount",
-                        "inventoryDigestSha256",
-                        "targetDescriptor",
-                        "targetDescriptorLifecycleGeneration",
-                        "targetOwner",
-                        "capacity");
+        return decodeAggregate(aggregateRecord(bytes), fence);
+    }
+
+    private static PreparedAggregate decodeAggregate(ObjectNode root, ZLinkAggregateFence fence) {
         var descriptor =
                 ZLinkAggregateInventoryStore.object(
                         root.get("targetDescriptor"), "meshName", "routingIdHex");

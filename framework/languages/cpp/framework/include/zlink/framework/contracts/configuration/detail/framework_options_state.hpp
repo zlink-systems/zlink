@@ -102,6 +102,11 @@ inline bool is_valid_automatic_routing_id_prefix (std::string_view value) noexce
  * generation without exposing the random source in an installed header. */
 std::string new_uuid_v4 ();
 
+inline zlink::routing_id_t new_automatic_routing_id (const std::string &prefix)
+{
+    return zlink::routing_id_t::from (prefix + "-" + new_uuid_v4 ());
+}
+
 enum class handler_group_kind_t
 {
     request = 0,

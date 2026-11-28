@@ -1715,7 +1715,7 @@ TEST (CppFrameworkSampleParity, SampleActorDestroyFlowStaysInEntrySpot)
 {
     const auto cpp_root = cpp_language_root ();
     const auto stream_host =
-      read_text_file (cpp_root / "framework/src/runtime/streams/stream_host_service.cpp");
+      read_text_file (cpp_root / "framework/src/runtime/streams/stream_host_session.cpp");
     EXPECT_NE (stream_host.find ("session_actor_manager_access_t::disconnect"), std::string::npos)
       << "framework stream host must detach session actor bindings on disconnect";
     struct sample_lifecycle_case_t

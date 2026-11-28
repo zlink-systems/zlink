@@ -11,13 +11,20 @@ from ...contracts.errors.codes import (
     ConnectResult,
 )
 from ...contracts.eventing.codes import MonitorEventMask
+from ...contracts.sockets.connection_attempt import (
+    ConnectionAttempt,
+    ConnectionAttemptState,
+    ConnectionFailure,
+    ConnectionFailureKind,
+    ConnectionFailureStage,
+)
 from ...contracts.sockets.codes import (
     ReceiveFlowState,
     RecvResult,
     SocketType,
     SubmitResult,
 )
-from ..._native.ffi import ZlinkMsg, ZlinkRoutingId, lib
+from ..._native.ffi import ZlinkConnectionAttempt, ZlinkMsg, ZlinkRoutingId, lib
 from ..buffers.payload_buffers import (
     _bool_bytes,
     _int32_bytes,
@@ -50,9 +57,9 @@ from ..messaging.message_materializer import (
 )
 from ..messaging.native_parts import _payload_parts
 from ..handles.native_support import (
-    _BytesReceivedPartsOwner,
     _ReceivedPartsOwner,
     _close_multipart,
+    _native_extension,
     _as_bytes_view,
     _copy_routing_id,
     _recv_native_parts,
@@ -64,17 +71,6 @@ from ..handles.native_support import (
     _send_buffer,
 )
 
-try:
-    from ..._native import _zlink_native as _native_extension
-except ImportError:  # pragma: no cover - exercised when extension is not built.
-    _native_extension = None
-
-
-_native_recv_owner = (
-    getattr(_native_extension, "recv_owner", None)
-    if _native_extension is not None
-    else None
-)
 _native_subscribe_owner = (
     getattr(_native_extension, "subscribe_owner", None)
     if _native_extension is not None
@@ -82,10 +78,14 @@ _native_subscribe_owner = (
 )
 
 
+_DEFAULT_OPTION_BUFFER_SIZE = 256
+_DEFAULT_TOPIC_RECEIVE_BUFFER_SIZE = 256
+
+
 def _new_topic_receive_buffer(initial_buffer=None):
     if initial_buffer is None:
-        buffer = ctypes.create_string_buffer(256)
-        return buffer, buffer, 256
+        buffer = ctypes.create_string_buffer(_DEFAULT_TOPIC_RECEIVE_BUFFER_SIZE)
+        return buffer, buffer, len(buffer)
     capacity = len(initial_buffer)
     return (
         initial_buffer,
@@ -300,47 +300,9 @@ class _BaseSocket:
             _raise_result_error(SubmitError, SubmitResult, rc, err)
         return True
 
-    def _recv_parts_via_native_bridge(self, flags):
-        if _native_extension is None:
-            return None
-        if _native_recv_owner is not None:
-            result = _native_recv_owner(int(self._socket_handle.handle), int(flags))
-            if result is False:
-                return False
-            if result is None:
-                return None
-            rc, err, routing, owner = result
-            if int(rc) != 0:
-                _raise_result_error(RecvError, RecvResult, rc, err)
-            routing_id = RoutingId.from_(routing) if routing is not None else None
-            return routing_id, owner
-
-        result = _native_extension.recv_parts(
-            int(self._socket_handle.handle), int(flags)
-        )
-        if result is None:
-            return None
-        rc, err, routing, parts = result
-        if int(rc) != 0:
-            _raise_result_error(RecvError, RecvResult, rc, err)
-        routing_id = RoutingId.from_(routing) if routing is not None else None
-        return routing_id, _BytesReceivedPartsOwner._from_trusted_bytes_tuple(parts)
-
-    def _recv_owner_via_native_bridge(self, flags):
-        if _native_recv_owner is None:
-            return None
-        result = _native_recv_owner(int(self._socket_handle.handle), int(flags))
-        if result is False:
-            return False
-        if result is None:
-            return None
-        rc, err, _routing, owner = result
-        if int(rc) != 0:
-            _raise_result_error(RecvError, RecvResult, rc, err)
-        return owner
-
     def _set_raw_option(self, setter, option, value):
-        ptr, size, keepalive = _send_buffer(value)
+        source = value if isinstance(value, bytes) else _as_bytes_view(value)
+        ptr, size, keepalive = _send_buffer(source)
         rc = setter(
             self._handle,
             int(option),
@@ -554,6 +516,65 @@ class _ConnectSocket(_Socket):
         if rc != 0:
             _raise_result_error(ConnectError, ConnectResult, rc, lib().zlink_errno())
 
+    def connection_attempts_snapshot(self):
+        """Returns one :class:`ConnectionAttempt` per current outbound
+        connection registration as one atomic snapshot. A successful snapshot
+        clears ``PollEventFlag.POLLCONNECT`` readiness unless a later change
+        raced with it.
+
+        :raises ConfigError: when Core rejects the snapshot request.
+        """
+        capacity = 8
+        endpoint_capacity = 1024
+        while True:
+            attempts = (ZlinkConnectionAttempt * capacity)()
+            endpoint_bytes = ctypes.create_string_buffer(endpoint_capacity)
+            count = ctypes.c_size_t()
+            required = ctypes.c_size_t()
+            rc = lib().zlink_socket_connection_attempts_snapshot(
+                self._handle,
+                attempts,
+                capacity,
+                ctypes.byref(count),
+                endpoint_bytes,
+                endpoint_capacity,
+                ctypes.byref(required),
+            )
+            if rc == ConfigResult.BUFFER_TOO_SMALL:
+                # Core reports the sizes it needs; the set can grow before the retry.
+                if count.value <= capacity and required.value <= endpoint_capacity:
+                    raise ConfigError(ConfigResult.INTERNAL_ERROR, 0)
+                capacity = max(capacity, count.value)
+                endpoint_capacity = max(endpoint_capacity, required.value)
+                continue
+            if rc != 0:
+                _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+            if count.value > capacity or required.value > endpoint_capacity:
+                raise ConfigError(ConfigResult.INTERNAL_ERROR, 0)
+            raw = endpoint_bytes.raw
+            for a in attempts[: count.value]:
+                end = a.endpoint_offset + a.endpoint_length
+                # The row validation lives here only: tokens are nonzero and the
+                # endpoint is NUL-terminated inside the reported byte count.
+                if a.intent_id == 0 or a.revision == 0 or end >= required.value or raw[end] != 0:
+                    raise ConfigError(ConfigResult.INTERNAL_ERROR, 0)
+            return [
+                ConnectionAttempt(
+                    raw[a.endpoint_offset : a.endpoint_offset + a.endpoint_length].decode("utf-8"),
+                    a.intent_id,
+                    a.revision,
+                    a.last_failure_id,
+                    ConnectionAttemptState(a.state),
+                    ConnectionFailure(
+                        ConnectionFailureKind(a.last_failure.kind),
+                        ConnectionFailureStage(a.last_failure.stage),
+                        a.last_failure.normalized_errno,
+                        a.last_failure.disconnect_reason,
+                    ),
+                )
+                for a in attempts[: count.value]
+            ]
+
 
 class _EndpointSocket(_BindSocket, _ConnectSocket):
     pass
@@ -601,7 +622,7 @@ class _RouterOptionSocket(_Socket):
     def _set_router_bytes_option(self, option, value):
         self._set_router_option(option, bytes(_as_bytes_view(value)))
 
-    def _get_router_bytes_option(self, option, size: int = 256):
+    def _get_router_bytes_option(self, option, size: int = _DEFAULT_OPTION_BUFFER_SIZE):
         return self._get_router_option(option, size)
 
 
@@ -658,13 +679,7 @@ class _MessageSocket(_Socket):
                 ReceivedMessage, RoutingId,
             )
         try:
-            bridged = self._recv_parts_via_native_bridge(flags)
-            if bridged is False:
-                return False
-            if bridged is None:
-                routing, owner = _recv_native_parts(self._handle, flags)
-            else:
-                routing, owner = bridged
+            routing, owner = _recv_native_parts(self._handle, flags)
         except RecvError as ex:
             if (int(flags) & 1) and ex.result == RecvResult.NO_DATA:
                 return False
@@ -746,45 +761,25 @@ class _SubscriberSocket(_Socket):
     def subscription_at(self, index):
         if index < 0:
             raise ConfigError(ConfigResult.INVALID_ARGUMENT, _errno.EINVAL)
-        size = ctypes.c_size_t(0)
-        is_pattern = ctypes.c_int(0)
-        rc = lib().zlink_subscription_at(
-            self._handle,
-            ctypes.c_size_t(index),
-            None,
-            ctypes.byref(size),
-            ctypes.byref(is_pattern),
+        native = lib()
+        index = ctypes.c_size_t(index)
+        buffer = ctypes.create_string_buffer(_DEFAULT_OPTION_BUFFER_SIZE)
+        size = ctypes.c_size_t(len(buffer))
+        is_pattern = ctypes.c_int()
+        rc = native.zlink_subscription_at(
+            self._handle, index, buffer, ctypes.byref(size), ctypes.byref(is_pattern)
         )
-        if rc != 0 and size.value == 0:
-            if ConfigResult(rc) == ConfigResult.NOT_FOUND:
-                return None
-            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-        if size.value == 0:
-            rc = lib().zlink_subscription_at(
-                self._handle,
-                ctypes.c_size_t(index),
-                None,
-                ctypes.byref(size),
-                ctypes.byref(is_pattern),
+        if rc == ConfigResult.BUFFER_TOO_SMALL:
+            buffer = ctypes.create_string_buffer(size.value)
+            rc = native.zlink_subscription_at(
+                self._handle, index, buffer, ctypes.byref(size), ctypes.byref(is_pattern)
             )
-            if rc != 0:
-                if ConfigResult(rc) == ConfigResult.NOT_FOUND:
-                    return None
-                _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-            return ("", bool(is_pattern.value))
-        buffer = ctypes.create_string_buffer(size.value)
-        rc = lib().zlink_subscription_at(
-            self._handle,
-            ctypes.c_size_t(index),
-            buffer,
-            ctypes.byref(size),
-            ctypes.byref(is_pattern),
-        )
-        if rc != 0:
-            if ConfigResult(rc) == ConfigResult.NOT_FOUND:
-                return None
-            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-        return (buffer.raw[:size.value].decode("utf-8"), bool(is_pattern.value))
+        if rc == ConfigResult.NOT_FOUND:
+            return None
+        if rc != ConfigResult.OK:
+            _raise_result_error(ConfigError, ConfigResult, rc, native.zlink_errno())
+        return (ctypes.string_at(buffer, size.value).decode("utf-8"), bool(is_pattern.value))
+
 
 _BaseSocket._OPTION_SET_ROUTES = (
     ((5,), "routing IDs", _RoutingIdSocket,

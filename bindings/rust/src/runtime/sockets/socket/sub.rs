@@ -1,8 +1,8 @@
 use super::SocketInner;
-use crate::core_context::Context;
-use crate::error::ConfigError;
-use crate::ffi;
-use crate::socket_contracts::SubSocket;
+use crate::contracts::core::context::Context;
+use crate::contracts::errors::errors::ConfigError;
+use crate::contracts::sockets::pubsub_sockets::SubSocket;
+use crate::runtime::native::ffi;
 
 impl SubSocket {
     pub(crate) fn new(ctx: &Context) -> Result<Self, ConfigError> {
@@ -17,8 +17,4 @@ impl SubSocket {
 
 pub(crate) fn sub_inner(socket: &SubSocket) -> &SocketInner {
     &socket.inner
-}
-
-pub(crate) fn sub_inner_mut(socket: &mut SubSocket) -> &mut SocketInner {
-    &mut socket.inner
 }

@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Flow;
@@ -31,6 +32,7 @@ import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotCreateReq;
 import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotDiscoveryProbeReq;
 import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotDiscoveryProbeRes;
 import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotJoinRes;
+import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotLateSend;
 import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotProbeReq;
 import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotProbeRes;
 import systems.zlink.framework.actors.ZLinkActorClient;
@@ -133,6 +135,11 @@ public final class Program {
     }
 
     @Bean
+    SealedJoinObservation sealedJoinObservation(HostArgs args, EventSink sink) {
+        return new SealedJoinObservation(args, sink);
+    }
+
+    @Bean
     ZLinkLocationStore relocationLocationStore(HostArgs args) {
         String redisEndpoint = args.option("redis-endpoint", null);
         if (redisEndpoint == null || redisEndpoint.isBlank()) {
@@ -160,6 +167,7 @@ public final class Program {
     @Bean
     ZLinkFrameworkConfigurer crossLanguageFramework(
         HostArgs args,
+        SealedJoinObservation sealedJoin,
         ObjectProvider<ZLinkLocationStore> locationStoreProvider,
         ObjectProvider<ZLinkRedisRelocationStore> relocationStoreProvider) {
         // The store beans are null in modes without --redis-endpoint
@@ -233,9 +241,8 @@ public final class Program {
                 // section 9) -- this host never selects the transport.
                 boolean target = "user-spot-target".equals(mode);
                 String meshName = args.require("mesh-name");
-                // Message-flow evidence lands in the host log (the framework
-                // traces through SLF4J); no <event-file>.flow is produced by
-                // the Java host, so no canonical-28 wire probe exists here.
+                // Framework message flow is emitted through SLF4J. The sealed
+                // Join observer captures it; Java does not log the wire command.
                 options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
                 if (locationStore != null) {
                     options.addLocationStore(locationStore);
@@ -250,11 +257,14 @@ public final class Program {
                     // the source always wins the Actor's initial placement.
                     .setPlacementWeight(100);
                 mesh.channelName(meshName).server();
-                mesh.addRouteRequestHandler(
-                    UserSpotDiscoveryProbeHandler.class,
-                    UserSpotDiscoveryProbeReq.class,
-                    UserSpotDiscoveryProbeRes.class);
                 mesh.objects().client();
+                if (!target && System.getenv("ZLINK_CROSS_LATE_REQUEST_TIMEOUT_MS") != null) {
+                    return;
+                }
+                mesh.addRouteRequestHandler(
+                        UserSpotDiscoveryProbeHandler.class,
+                        UserSpotDiscoveryProbeReq.class,
+                        UserSpotDiscoveryProbeRes.class);
                 var objects = mesh.objects().server();
                 // The target registers an Entry Spot too: without it the
                 // arriving Actor has no local Entry Spot placement path.
@@ -410,16 +420,15 @@ public final class Program {
             // Optional reciprocal barrier: the harness touches this file once
             // BOTH sides have observed the peer, matching the Node source.
             String startFile = args.option("start-file", null);
-            if (startFile != null && !startFile.isBlank()) {
-                Path path = Path.of(startFile);
-                long startDeadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
-                while (!Files.exists(path)) {
-                    if (System.nanoTime() >= startDeadline) {
-                        sink.append("user-spot-source-start-timeout|file=" + startFile);
-                        return;
-                    }
-                    sleepQuietly(25);
-                }
+            if (startFile != null && !startFile.isBlank() && !awaitStartFile(Path.of(startFile))) {
+                sink.append("user-spot-source-start-timeout|file=" + startFile);
+                return;
+            }
+
+            String timeout = System.getenv("ZLINK_CROSS_LATE_REQUEST_TIMEOUT_MS");
+            if (timeout != null) {
+                probeSealedActor(sink, actorClient, actorId, timeout, Path.of(startFile + ".request"));
+                return;
             }
 
             ZLinkActorCreateResult created = actors
@@ -510,7 +519,8 @@ public final class Program {
                 startDaemon("user-spot-target-discovery",
                     () -> observeSourcePeer(sink, routes, meshRuntime, meshName, sourceNodeRid));
             }
-            if (args.option("outage-control-prefix", null) == null) {
+            if (args.option("outage-control-prefix", null) == null
+                && !SealedJoinObservation.injectsCompletionFailure()) {
                 startDaemon("user-spot-target-probe",
                     () -> probeJoinedActor(sink, observer, actorClient, actorId, targetNodeRid));
             }
@@ -895,6 +905,65 @@ public final class Program {
             cause = cause.getCause();
         }
         return null;
+    }
+
+    private static boolean awaitStartFile(Path path) throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        while (!Files.exists(path)) {
+            if (System.nanoTime() >= deadline) {
+                return false;
+            }
+            Thread.sleep(25);
+        }
+        return true;
+    }
+
+    private static void probeSealedActor(
+            EventSink sink,
+            ZLinkActorClient actors,
+            String actorId,
+            String timeoutMs,
+            Path requestFile)
+            throws InterruptedException, TimeoutException {
+        try {
+            actors.sendToActor(actorId, new UserSpotLateSend("late-send"))
+                    .submit()
+                    .toCompletableFuture()
+                    .get();
+            sink.append("late-actor-send|submitted=true");
+        } catch (ExecutionException failure) {
+            sink.append("late-actor-send|submitted=false|message=" + describe(failure));
+        }
+
+        if (!awaitStartFile(requestFile)) {
+            throw new TimeoutException("Timed out waiting for " + requestFile);
+        }
+        Duration timeout = Duration.ofMillis(Long.parseLong(timeoutMs));
+        long started = System.nanoTime();
+        String kind = "success";
+        String message = "";
+        try {
+            actors.requestToActor(actorId, new UserSpotProbeReq("late-request"))
+                    .timeout(timeout)
+                    .submit(UserSpotProbeRes.class)
+                    .toCompletableFuture()
+                    .get();
+        } catch (ExecutionException failure) {
+            Throwable cause = failure.getCause();
+            kind =
+                    cause instanceof ZLinkFrameworkException frameworkFailure
+                            ? frameworkFailure.kind().name().toLowerCase(Locale.ROOT)
+                            : cause.getClass().getSimpleName();
+            message = describe(failure);
+        }
+        long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+        sink.append(
+                "late-actor-request|kind="
+                        + kind
+                        + "|elapsedMs="
+                        + elapsed
+                        + "|message="
+                        + message);
     }
 
     private static String describe(Throwable error) {
