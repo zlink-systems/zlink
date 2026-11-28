@@ -48,6 +48,7 @@ void bind_process_telemetry_metrics (
   opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> meter);
 void retire_process_telemetry (std::uint64_t registration) noexcept;
 void submit_process_telemetry (telemetry_record_t record) noexcept;
+void submit_process_telemetry_log (const logger_t<> &logger, log_record_t record);
 std::atomic<std::uint64_t> &telemetry_traced_count () noexcept;
 std::atomic<std::uint64_t> &telemetry_reported_count () noexcept;
 std::atomic<std::uint64_t> &telemetry_failure_count () noexcept;

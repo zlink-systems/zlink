@@ -295,6 +295,20 @@ class process_telemetry_delivery_t
         }
     }
 
+    void submit_log (const logger_t<> &logger, log_record_t record)
+    {
+        // Host state logs outlive host retirement and use the process worker's FIFO.
+        if (!_executor.try_submit_internal ([logger, record = std::move (record)] {
+                try {
+                    diagnostic_event_sink_t::log_snapshot (logger, record, logger_failure);
+                }
+                catch (...) {
+                    logger_failure ();
+                }
+            }))
+            telemetry_failure_count ().fetch_add (1, std::memory_order_relaxed);
+    }
+
     void failure (provider_role_t role) noexcept
     {
         telemetry_failure_count ().fetch_add (1, std::memory_order_relaxed);
@@ -427,6 +441,10 @@ void retire_process_telemetry (std::uint64_t registration) noexcept
 void submit_process_telemetry (telemetry_record_t record) noexcept
 {
     delivery ().submit (std::move (record));
+}
+void submit_process_telemetry_log (const logger_t<> &logger, log_record_t record)
+{
+    delivery ().submit_log (logger, std::move (record));
 }
 std::atomic<std::uint64_t> &telemetry_traced_count () noexcept
 {

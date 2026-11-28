@@ -975,27 +975,19 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     const auto deadline_at = state.delays.stop_deadline ().value ();
     auto monitoring = detail::monitoring_runtime_t (state.monitoring);
     auto emit_state = [&] (detail::drain_state_t drain_state) {
-        try {
-            monitoring.publish_drain (detail::drain_event_t{drain_state});
-        }
-        catch (...) {
-        }
+        monitoring.publish_drain (detail::drain_event_t{drain_state});
     };
 
     emit_state (detail::drain_state_t::draining);
 
     shutdown_progress_t result = shutdown_completed_t{};
-    bool force_state_emitted = false;
     auto force = [&] (shutdown_force_reason_t reason) {
         if (!std::holds_alternative<shutdown_completed_t> (result))
             return;
         result = shutdown_forced_t{reason};
         if (reason == shutdown_force_reason_t::deadline_exceeded)
             state.termination_operation.cleanup_cancellation.request_stop ();
-        if (!force_state_emitted) {
-            force_state_emitted = true;
-            emit_state (detail::drain_state_t::force_stopping);
-        }
+        emit_state (detail::drain_state_t::force_stopping);
     };
 
     while (std::chrono::steady_clock::now () < deadline_at) {

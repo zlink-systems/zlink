@@ -18,10 +18,12 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include <zlink.hpp>
 #include <zlink/framework.hpp>
+#include <atomic>
 #include <cassert>
 #include <barrier>
 #include <condition_variable>
 #include <future>
+#include <memory>
 #include <string_view>
 
 namespace
@@ -602,28 +604,26 @@ int main (int argc, char **argv)
     if (owner == "host-stop" || owner == "host-timer" || owner == "host-runtime-report") {
         auto app = zlink::framework::app_t::create ();
         app.add_zlink_framework ();
+        const bool runtime_report = owner == "host-runtime-report";
+        auto observed_failure = std::make_shared<std::atomic_bool> (false);
+        app.logging ().use_callback_sink ([observed_failure, runtime_report] (const auto &record) {
+            const auto matches =
+              runtime_report ? record.message.find ("runtime-only failure") != std::string::npos
+                             : record.level == zlink::framework::log_level_t::critical;
+            if (matches)
+                observed_failure->store (true);
+        });
         if (owner == "host-stop")
             app.advanced ()
               .zlink ()
               .channel ("close-failure")
               .enable_publisher (false)
               .bind ("tcp://127.0.0.1:0");
-        app.add_hosted_service (std::make_unique<failing_stop_service_t> (
-          app, owner == "host-timer", owner == "host-runtime-report"));
+        app.add_hosted_service (
+          std::make_unique<failing_stop_service_t> (app, owner == "host-timer", runtime_report));
         const auto exit_code = app.run (0, nullptr);
-        if (owner == "host-runtime-report") {
-            assert (exit_code == 0);
-            const auto &records = app.logging ().captured_records ();
-            assert (std::any_of (records.begin (), records.end (), [] (const auto &record) {
-                return record.message.find ("runtime-only failure") != std::string::npos;
-            }));
-            return 0;
-        }
-        assert (exit_code != 0);
-        const auto &records = app.logging ().captured_records ();
-        assert (std::any_of (records.begin (), records.end (), [] (const auto &record) {
-            return record.level == zlink::framework::log_level_t::critical;
-        }));
+        assert ((exit_code == 0) == runtime_report);
+        assert (observed_failure->load ());
         return 0;
     }
     if (owner == "stream-worker" || owner == "stream-worker-no-monitoring") {

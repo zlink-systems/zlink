@@ -960,17 +960,18 @@ bool verify_source_waiter_host_ownership (bool completion_first = false,
     };
     auto first_host = make_host (first);
     auto second_host = make_host (second);
-    std::promise<void> drain_entered;
-    auto drain_started = drain_entered.get_future ();
-    std::atomic_bool drain_signalled{false};
-    second_host.logging ().use_callback_sink ([&] (const log_record_t &record) {
-        if (record.message == "zlink.runtime.host.termination_changed") {
-            for (const auto &field : record.fields)
-                if (field.key == "state" && field.value == "draining"
-                    && !drain_signalled.exchange (true))
-                    drain_entered.set_value ();
-        }
-    });
+    auto drain_entered = std::make_shared<std::promise<void>> ();
+    auto drain_started = drain_entered->get_future ();
+    auto drain_signalled = std::make_shared<std::atomic_bool> (false);
+    second_host.logging ().use_callback_sink (
+      [drain_entered, drain_signalled] (const log_record_t &record) {
+          if (record.message == "zlink.runtime.host.termination_changed") {
+              for (const auto &field : record.fields)
+                  if (field.key == "state" && field.value == "draining"
+                      && !drain_signalled->exchange (true))
+                      drain_entered->set_value ();
+          }
+      });
     char command[] = "task-source-host";
     char *argv[] = {command};
     int first_exit = -1, second_exit = -1;
@@ -1688,19 +1689,52 @@ int main (int test_argc, char **test_argv)
         std::ofstream existing_rotating_log (rotating_log_path);
         existing_rotating_log << "old";
     }
-    std::vector<zlink::framework::log_record_t> observed_logs;
+    auto observed_logs = std::make_shared<std::vector<zlink::framework::log_record_t>> ();
     app.logging ()
       .use_console ()
       .use_file (log_path.string ())
       .use_rotating_file (rotating_log_path.string (), {.max_file_size = 1, .max_files = 2})
-      .use_callback_sink (
-        [&] (const zlink::framework::log_record_t &record) { observed_logs.push_back (record); })
+      .use_callback_sink ([observed_logs] (const zlink::framework::log_record_t &record) {
+          if (record.category == "app-host-test" || record.category == "app-default-logger")
+              observed_logs->push_back (record);
+      })
       .use_async ({.queue_capacity = 128})
       .use_backend (zlink::framework::logging_backend_t::structured)
       .set_min_level (zlink::framework::log_level_t::debug);
     auto logger = app.logging ().factory ().create ("app-host-test");
     logger.debug ("startup", {{"node", "alpha"}});
     logger.trace ("filtered");
+
+    if (!app.logging ().console_enabled () || app.logging ().level () != "debug") {
+        return 6;
+    }
+    const auto app_host_log =
+      std::find_if (observed_logs->begin (), observed_logs->end (), [] (const auto &record) {
+          return record.category == "app-host-test" && record.message == "startup";
+      });
+    if (!app.logging ().async_enabled ()
+        || app.logging ().backend () != zlink::framework::logging_backend_t::structured
+        || app.logging ().file_paths ().empty () || app_host_log == observed_logs->end ()
+        || app_host_log->fields.empty () || app_host_log->fields.front ().key != "node"
+        || app.logging ().captured_records ().empty ()) {
+        return 7;
+    }
+    {
+        std::ifstream log_file (log_path);
+        std::string line;
+        std::getline (log_file, line);
+        if (line.find ("startup") == std::string::npos
+            || line.find ("node=alpha") == std::string::npos) {
+            return 11;
+        }
+    }
+    if (!std::filesystem::exists (rotating_log_path.string () + ".1")) {
+        return 38;
+    }
+    if (!std::filesystem::exists (rotating_log_path)
+        || std::filesystem::file_size (rotating_log_path) == 0) {
+        return 40;
+    }
 
     bool zlink_configured = false;
     correlation_middleware_t::before_count = 0;
@@ -2155,40 +2189,6 @@ int main (int test_argc, char **test_argv)
     if (!missing_required_value_rejected) {
         return 39;
     }
-    if (!app.logging ().console_enabled () || app.logging ().level () != "debug") {
-        return 6;
-    }
-    const auto app_host_log =
-      std::find_if (observed_logs.begin (), observed_logs.end (), [] (const auto &record) {
-          return record.category == "app-host-test" && record.message == "startup";
-      });
-    if (!app.logging ().async_enabled ()
-        || app.logging ().backend () != zlink::framework::logging_backend_t::structured
-        || app.logging ().file_paths ().empty () || app_host_log == observed_logs.end ()
-        || app_host_log->fields.empty () || app_host_log->fields.front ().key != "node"
-        || app.logging ().captured_records ().empty ()) {
-        return 7;
-    }
-    {
-        std::ifstream log_file (log_path);
-        std::string line;
-        std::getline (log_file, line);
-        if (line.find ("startup") == std::string::npos
-            || line.find ("node=alpha") == std::string::npos) {
-            return 11;
-        }
-    }
-    if (!std::filesystem::exists (rotating_log_path.string () + ".1")) {
-        return 38;
-    }
-    // Runtime diagnostics can legitimately rotate the initial application
-    // record out of a two-file, one-byte test window. The contract here is
-    // that rotation occurred and the active file still contains records.
-    if (!std::filesystem::exists (rotating_log_path)
-        || std::filesystem::file_size (rotating_log_path) == 0) {
-        return 40;
-    }
-
     struct singleton_service_t
     {
         int value = 7;
@@ -2296,8 +2296,7 @@ int main (int test_argc, char **test_argv)
     provider.get_required<zlink::framework::logger_factory_t> ()
       .create ("app-default-logger")
       .info ("resolved");
-    const auto captured_records = app.logging ().captured_records ();
-    if (std::none_of (captured_records.begin (), captured_records.end (), [] (const auto &record) {
+    if (std::none_of (observed_logs->begin (), observed_logs->end (), [] (const auto &record) {
             return record.category == "app-default-logger";
         })) {
         return 42;

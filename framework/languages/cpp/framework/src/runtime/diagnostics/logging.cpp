@@ -2,6 +2,7 @@
 
 #include <zlink/framework/contracts/configuration/logging.hpp>
 
+#include "runtime/diagnostics/diagnostic_event_sink.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
@@ -140,24 +141,10 @@ bool is_log_enabled (const std::shared_ptr<logging_state_t> &state, int level) n
       .get ();
 }
 
-void emit_log (const std::shared_ptr<logging_state_t> &state,
-               int level,
-               const std::string &category,
-               const std::string &message,
-               std::vector<log_field_t> fields,
-               void (*failure) () noexcept)
+static void write_log_record (const std::shared_ptr<logging_state_t> &state,
+                              const log_record_t &record,
+                              void (*failure) () noexcept)
 {
-    if (!is_log_enabled (state, level)) {
-        return;
-    }
-
-    log_record_t record{static_cast<log_level_t> (level),
-                        category,
-                        message,
-                        std::move (fields),
-                        std::chrono::system_clock::now (),
-                        std::this_thread::get_id ()};
-
     std::vector<logging_builder_t::sink_t> callbacks;
     std::vector<std::string> files;
     std::vector<rotating_file_options_t> rotations;
@@ -210,6 +197,32 @@ void emit_log (const std::shared_ptr<logging_state_t> &state,
                 message_flow_tracer_t::record_observer_failure ();
         }
     }
+}
+
+void emit_log (const std::shared_ptr<logging_state_t> &state,
+               int level,
+               const std::string &category,
+               const std::string &message,
+               std::vector<log_field_t> fields,
+               void (*failure) () noexcept)
+{
+    if (!is_log_enabled (state, level))
+        return;
+    const log_record_t record{static_cast<log_level_t> (level),
+                              category,
+                              message,
+                              std::move (fields),
+                              std::chrono::system_clock::now (),
+                              std::this_thread::get_id ()};
+    write_log_record (state, record, failure);
+}
+
+void diagnostic_event_sink_t::log_snapshot (const logger_t<> &logger,
+                                            const log_record_t &record,
+                                            void (*failure) () noexcept)
+{
+    if (logger.is_enabled (record.level))
+        write_log_record (logger._state, record, failure);
 }
 
 } // namespace zlink::framework::detail

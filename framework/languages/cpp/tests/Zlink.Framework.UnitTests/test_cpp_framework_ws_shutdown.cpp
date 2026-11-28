@@ -26,6 +26,12 @@ struct ws_shutdown_probe_t
     bool destroyed = false;
 };
 
+struct shutdown_log_probe_t
+{
+    std::vector<std::string> states;
+    std::promise<std::vector<std::string>> delivered;
+};
+
 class ws_shutdown_session_t final : public zlink::framework::packet_stream_session_t
 {
   public:
@@ -93,10 +99,12 @@ int ws_session_shutdown (bool force)
     }
     auto probe_received = std::make_shared<std::promise<void>> ();
     auto received = probe_received->get_future ();
+    auto shutdown_log = std::make_shared<shutdown_log_probe_t> ();
+    auto shutdown_log_delivered = shutdown_log->delivered.get_future ();
     app->logging ()
       .use_file (force ? "ws-shutdown-force.flow" : "ws-shutdown-drain.flow")
       .set_min_level (log_level_t::debug)
-      .use_callback_sink ([probe_received] (const log_record_t &record) {
+      .use_callback_sink ([probe_received, shutdown_log, force] (const log_record_t &record) {
           const auto has = [&record] (std::string_view key, std::string_view value) {
               return std::any_of (record.fields.begin (), record.fields.end (),
                                   [key, value] (const auto &field) {
@@ -106,6 +114,17 @@ int ws_session_shutdown (bool force)
           if (has ("event_id", "zlink.message_flow") && has ("phase", "received")
               && has ("packet", "Probe"))
               probe_received->set_value ();
+          if (!force || record.message != "zlink.runtime.host.termination_changed")
+              return;
+          for (const auto &field : record.fields) {
+              if (field.key != "state")
+                  continue;
+              shutdown_log->states.push_back (field.value);
+              if (field.value == "force_stopping") {
+                  std::this_thread::sleep_for (900ms);
+                  shutdown_log->delivered.set_value (shutdown_log->states);
+              }
+          }
       });
 
     auto running = std::async (std::launch::async, [&] { return app->run (0, nullptr); });
@@ -153,6 +172,10 @@ int ws_session_shutdown (bool force)
         probe->release.complete (result_t<void>::success ());
         return 2;
     }
+    if (force && shutdown_log_delivered.wait_for (0ms) == std::future_status::ready) {
+        std::cerr << "WS shutdown terminal arrived after the delayed sink completed\n";
+        return 4;
+    }
     const auto expected_outcome =
       force ? termination_outcome_t::force_stopped : termination_outcome_t::stopped;
     const auto expected_reason =
@@ -187,6 +210,12 @@ int ws_session_shutdown (bool force)
                   << " session_destroyed=" << probe->destroyed
                   << " source_completed=" << source_completed << '\n';
         return 3;
+    }
+    if (force
+        && shutdown_log_delivered.get ()
+             != std::vector<std::string>{"draining", "force_stopping"}) {
+        std::cerr << "WS shutdown sink did not receive draining then force_stopping\n";
+        return 5;
     }
     std::cout << (force ? "ForceStopped/DeadlineExceeded" : "Stopped/None")
               << " with callback and transport assertions satisfied\n";

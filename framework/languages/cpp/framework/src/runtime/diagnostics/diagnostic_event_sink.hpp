@@ -89,6 +89,10 @@ class diagnostic_event_sink_t
         fields.push_back (log_field_t{key, std::move (value)});
     }
 
+    static void log_snapshot (const logger_t<> &logger,
+                              const log_record_t &record,
+                              void (*failure) () noexcept);
+
     static bool log_if_configured (const std::optional<logger_t<>> &logger,
                                    log_level_t level,
                                    std::string_view message,

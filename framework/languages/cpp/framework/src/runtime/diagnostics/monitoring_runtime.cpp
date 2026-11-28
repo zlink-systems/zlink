@@ -1,12 +1,15 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "monitoring_runtime.hpp"
+#include "runtime/diagnostics/process_telemetry_delivery.hpp"
 
 #include <opentelemetry/metrics/provider.h>
 #include <opentelemetry/metrics/sync_instruments.h>
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace
@@ -417,8 +420,21 @@ void monitoring_runtime_t::publish_metric (metric_event_payload_t event) const
 
 void monitoring_runtime_t::publish_drain (drain_event_t event) const
 {
-    log (log_level_t::info, "zlink.runtime.host.termination_changed",
-         {{monitoring_field::state, drain_state_name (event.state)}});
+    if (!_state)
+        return;
+    try {
+        const auto &logger = _state->diagnostics_logger;
+        submit_process_telemetry_log (logger,
+                                      {log_level_t::info,
+                                       logger.category (),
+                                       "zlink.runtime.host.termination_changed",
+                                       {{monitoring_field::state, drain_state_name (event.state)}},
+                                       std::chrono::system_clock::now (),
+                                       std::this_thread::get_id ()});
+    }
+    catch (...) {
+        telemetry_failure_count ().fetch_add (1, std::memory_order_relaxed);
+    }
 }
 
 } // namespace zlink::framework::detail
