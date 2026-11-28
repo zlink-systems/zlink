@@ -105,20 +105,22 @@ public sealed partial class RelocationBehaviorConformanceTests
             var atCallback = await joinCallbackState.Task.WaitAsync(timeout);
             if (request is not null)
             {
-                Assert.Equal(
-                    ServiceWireCodec.RelocationPhase.Activated,
-                    Assert.IsType<ZLinkAuthorityRelocation>(atCallback).Phase
-                );
+                var publication = Assert.IsType<ZLinkAuthorityRelocation>(atCallback);
+                Assert.Equal(ServiceWireCodec.RelocationPhase.Activated, publication.Phase);
                 await handlerEntered.Task.WaitAsync(timeout);
-                Assert.False(request.IsCompleted);
-                Assert.True(target.Runtime.TryGetActorState(actorId, out var actor));
-                Assert.True(actor.Handoff.HasPendingCapturedRequests());
-                Assert.False(store.TargetCleaningStarted.Task.IsCompleted);
+                await store.TargetCleaningStarted.Task.WaitAsync(timeout);
                 Assert.Equal(atCallback, await ReadRelocationAsync());
+                Assert.False(request.IsCompleted);
+                store.ReleaseTargetCleaning.TrySetResult();
+                await WaitForSteadyActorAuthorityAsync(store, actorId).WaitAsync(timeout);
+                Assert.Null(await ReadRelocationAsync());
+                var row = Assert.Single(
+                    await authority.ReadRelocationRepliesAsync(publication.RelocationId, default)
+                );
+                Assert.Equal(ZLinkRelocationCompletionDelivery.Accepted, row.Entry.Delivery);
+                Assert.False(request.IsCompleted);
                 releaseHandler.TrySetResult();
                 Assert.Equal("saved", (await request.WaitAsync(timeout)).Marker);
-                await store.TargetCleaningStarted.Task.WaitAsync(timeout);
-                store.ReleaseTargetCleaning.TrySetResult();
             }
             else
             {

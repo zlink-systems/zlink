@@ -345,7 +345,6 @@ descriptor 변화만으로 즉시 닫지 않는다.
 |---|---|
 | Mode와 effective target version이 같은 concurrent `Relocate` | 최초 operation과 deadline을 공유한다. 뒤의 호출은 deadline을 바꾸지 않는다. |
 | Mode 또는 effective target version이 다른 concurrent `Relocate` | 기다리지 않고 `Blocked/OperationInProgress`다. |
-| 이전 relocation의 완료 결과 전달이 남은 object(`pendingDeliveries` > 0)를 옮기는 `Relocate` | 기다리지 않고 `Blocked/OperationInProgress`다. 사유 기록은 [Location runtime §9.3](01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다)을 따른다. |
 | `Blocked` 뒤 다시 `Relocate` | `Blocked`는 저장하지 않으므로 host 조건을 처음부터 다시 검사한다. |
 | `Relocated`에서 다시 `Relocate` | 최초 `Relocated/None`의 mode와 effective target version을 반환한다. |
 | Concurrent `Shutdown` | 같은 operation을 공유하고 terminal result를 저장한다. |
@@ -845,6 +844,7 @@ Source runtime에서 현재 owner까지 message를 보내는 경로를
 | STREAM | 새 binding에서 제외하고 기존 session은 unit barrier로 처리한다. | 새 binding에서 제외하고 infrastructure connection은 유지한다. | 새 session을 받지 않고 pending reply와 binding barrier만 처리한다. |
 | ClientServer server | 새 selection에서 제외하고 accepted handler와 reply route를 유지한다. | Service connection은 유지하지만 새 selection에서 제외한다. | Handler admission을 닫고 accepted request의 reply route만 유지한다. |
 | Classic fanout publisher | 새 automatic subscriber connection을 만들지 않고 accepted event를 처리한다. | Infrastructure는 유지하지만 새 publish admission을 받지 않는다. | Publish admission을 닫고 accepted event만 처리한다. |
+| 이 host의 public client가 내는 새 outbound request·send | 받는다. host 전체 admission을 닫지 않으며, 대상이 이 host에서 seal된 unit이면 그 unit의 규칙을 따른다. | 받는다. | Shutdown 결과로 끝낸다(§14). |
 
 이미 수락한 request는 reply, error, timeout 또는 shutdown 중 하나로 한 번만 끝난다.
 Application callback이 대기해도 infrastructure execution은 request completion, peer

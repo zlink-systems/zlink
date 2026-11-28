@@ -171,11 +171,14 @@ public sealed partial class EntrySpotActorDispatchTests
                     var journal = ZLinkSpotActivation.DecodeRelocationReplayRecord(job, "entry");
                     Assert.Equal("v", journal.Metadata.Values["k"]);
                     Assert.Equal("source-room", journal.SpotId);
-                    var delivery = activation.AdmitAcceptedReplayJob(
+                    var delivery = await activation.AdmitAcceptedRelocationJobAsync(
                         job,
                         "entry",
+                        seal,
                         (reply, _) =>
                         {
+                            if (journal.ReplyRouteId == 0)
+                                return ValueTask.CompletedTask;
                             Assert.NotNull(reply);
                             Assert.Equal(RoutingId.From("source"), journal.SourceNodeRid);
                             Assert.Equal(new MeshOperationId(1UL << 63, 37), journal.OperationId);
@@ -194,10 +197,10 @@ public sealed partial class EntrySpotActorDispatchTests
                             );
                             replies.Add(journal.ReplyRouteId);
                             return ValueTask.CompletedTask;
-                        }
+                        },
+                        ct
                     );
-                    if (delivery is not null)
-                        deliveries.Add(delivery);
+                    deliveries.Add(delivery);
                 }
                 Assert.Empty(spot.Deliveries);
                 Assert.True(

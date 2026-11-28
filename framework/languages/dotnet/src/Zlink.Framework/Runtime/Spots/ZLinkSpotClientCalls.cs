@@ -106,7 +106,9 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
     public async ValueTask Async()
     {
         using var operation = (
-            await runtime.AdmitOperationAsync(boundExecution: true).ConfigureAwait(false)
+            await runtime
+                .AdmitOperationAsync(boundExecution: true, publicOutbound: true)
+                .ConfigureAwait(false)
         ).Enter();
         _submission.Claim();
         var cancellationToken = runtime.ShutdownToken;
@@ -301,7 +303,9 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
                 _executionScope
             );
         using var operation = (
-            await runtime.AdmitOperationAsync(boundExecution: true).ConfigureAwait(false)
+            await runtime
+                .AdmitOperationAsync(boundExecution: true, publicOutbound: true)
+                .ConfigureAwait(false)
         ).Enter();
         if (_meshSelected && !_instanceIntent)
             throw new ZLinkFrameworkException(

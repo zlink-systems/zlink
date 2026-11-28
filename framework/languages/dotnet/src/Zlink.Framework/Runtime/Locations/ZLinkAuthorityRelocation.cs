@@ -19,9 +19,7 @@ internal sealed record ZLinkAuthorityRelocation(
     ZLinkAuthorityRelocation.CoordinatorFence Coordinator,
     string SourceInventorySha256,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
-        ulong ApplicationVersion,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        ZLinkRelocationCompletionProgress? Completion = null
+        ulong ApplicationVersion
 )
 {
     internal record Fence(
@@ -74,14 +72,6 @@ internal sealed record ZLinkAuthorityRelocation(
         )
             ? state.State
             : null;
-
-    internal ZLinkAuthorityRelocation WithAcceptedRequests(ulong? acceptedRequests) =>
-        acceptedRequests is { } count
-            ? this with
-            {
-                Completion = ZLinkRelocationCompletionProgress.Start(count),
-            }
-            : this;
 
     internal static bool MatchesCommittedTarget(
         ZLinkAuthoritySnapshot authority,
@@ -139,8 +129,7 @@ internal sealed record ZLinkAuthorityRelocation(
     internal static ZLinkAuthorityRelocation FromState(
         Guid id,
         ZLinkCanonicalRelocationAuthorityState state,
-        string inventorySha256,
-        ZLinkRelocationCompletionProgress? completion = null
+        string inventorySha256
     ) =>
         new(
             id,
@@ -168,8 +157,7 @@ internal sealed record ZLinkAuthorityRelocation(
                 state.CoordinatorExpectedAuthorityStoreVersion
             ),
             inventorySha256,
-            checked((ulong)state.ApplicationVersion),
-            completion
+            checked((ulong)state.ApplicationVersion)
         );
 
     internal ZLinkCanonicalRelocationAuthorityProjection Project(
@@ -248,6 +236,10 @@ internal static class ZLinkAuthorityAggregateCodec
             throw InvalidRecord();
         if (!hasRelocation)
             return null;
+        // Every relocation field is required below, so extra or duplicate
+        // fields violate the closed Location Store record shape.
+        if (value.ValueKind != JsonValueKind.Object || value.EnumerateObject().Count() != 7)
+            throw InvalidRecord();
         var id = Text(value, "relocationId");
         if (!Guid.TryParseExact(id, "D", out var relocationId) || relocationId.ToString("D") != id)
             throw InvalidRecord();
@@ -266,9 +258,12 @@ internal static class ZLinkAuthorityAggregateCodec
             || !value.TryGetProperty("coordinator", out var coordinatorValue)
         )
             throw InvalidRecord();
-        var source = ReadFence(sourceValue);
-        var coordinator = ReadFence(coordinatorValue);
-        var target = targetValue.ValueKind == JsonValueKind.Null ? null : ReadFence(targetValue);
+        var source = ReadFence(sourceValue, fieldCount: 4);
+        var coordinator = ReadFence(coordinatorValue, fieldCount: 5);
+        var target =
+            targetValue.ValueKind == JsonValueKind.Null
+                ? null
+                : ReadFence(targetValue, fieldCount: 5);
         if (
             (
                 phase
@@ -284,34 +279,6 @@ internal static class ZLinkAuthorityAggregateCodec
             )
         )
             throw InvalidRecord();
-        ZLinkRelocationCompletionProgress? completion = null;
-        if (value.TryGetProperty("completion", out var progress))
-        {
-            var accepted = Number(progress, "acceptedRequests");
-            var completed = Number(progress, "completedResults");
-            var pending = Number(progress, "pendingDeliveries");
-            if (
-                pending > completed
-                || completed > accepted
-                || !progress.TryGetProperty("reference", out var reference)
-                || !progress.TryGetProperty("sha256", out var sha)
-                || (
-                    completed == 0
-                        ? reference.ValueKind != JsonValueKind.Null
-                            || sha.ValueKind != JsonValueKind.Null
-                        : Text(progress, "reference").Length == 0
-                            || Hash(progress, "sha256").Length == 0
-                )
-            )
-                throw InvalidRecord();
-            completion = new(
-                accepted,
-                completed,
-                pending,
-                completed == 0 ? null : reference.GetString(),
-                completed == 0 ? null : sha.GetString()
-            );
-        }
         return new(
             relocationId,
             phase,
@@ -333,8 +300,7 @@ internal static class ZLinkAuthorityAggregateCodec
                 Text(coordinatorValue, "expectedStoreVersion")
             ),
             Hash(value, "sourceInventorySha256"),
-            Number(value, "applicationVersion"),
-            completion
+            Number(value, "applicationVersion")
         );
     }
 
@@ -362,8 +328,13 @@ internal static class ZLinkAuthorityAggregateCodec
         return fields.Count == 0 ? null : JsonSerializer.SerializeToElement(fields);
     }
 
-    private static ZLinkAuthorityRelocation.Fence ReadFence(JsonElement value)
+    private static ZLinkAuthorityRelocation.Fence ReadFence(JsonElement value, int fieldCount)
     {
+        if (
+            value.ValueKind != JsonValueKind.Object
+            || value.EnumerateObject().Count() != fieldCount
+        )
+            throw InvalidRecord();
         var rid = Text(value, "nodeRid");
         if (rid.Length % 2 != 0 || rid.Length > 510 || !IsLowerHex(rid))
             throw InvalidRecord();

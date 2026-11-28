@@ -172,6 +172,34 @@ internal interface IZLinkLocationRepository
         CancellationToken cancellationToken = default
     );
 
+    ValueTask<ZLinkAggregateCommitResult> CommitAggregateAsync(
+        ZLinkAggregateFence fence,
+        IReadOnlyList<ZLinkRelocationCompletionEntry> acceptedReplies,
+        CancellationToken cancellationToken
+    ) =>
+        acceptedReplies.Count == 0
+            ? CommitAggregateAsync(fence, cancellationToken)
+            : throw new NotSupportedException(
+                "This repository does not support relocation reply rows."
+            );
+
+    ValueTask<ZLinkRelocationReplyRow?> UpdateRelocationReplyAsync(
+        ZLinkRelocationReplyRow identity,
+        Func<ZLinkRelocationReplyRow, ZLinkRelocationReplyRow> update,
+        CancellationToken cancellationToken
+    ) => throw new NotSupportedException("This repository does not support relocation reply rows.");
+
+    ValueTask<IReadOnlyList<ZLinkRelocationReplyRow>> ReadRelocationRepliesAsync(
+        Guid relocationId,
+        CancellationToken cancellationToken
+    ) => throw new NotSupportedException("This repository does not support relocation reply rows.");
+
+    ValueTask RenewAcceptedRelocationRepliesAsync(
+        Guid relocationId,
+        ZLinkLocationOwnerToken writer,
+        CancellationToken cancellationToken
+    ) => ValueTask.CompletedTask;
+
     ValueTask<ZLinkAggregateCommitResult> CommitAggregateForRecoveryAsync(
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken = default

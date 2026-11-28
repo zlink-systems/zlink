@@ -111,8 +111,6 @@ internal sealed class ZLinkDeferredActorJoin(
     private readonly DateTimeOffset _absoluteDeadline =
         runtime.Registration.TimeProvider.GetUtcNow() + timeout;
     private readonly ZLinkActorJoinOperationId _operationId = CreateOperationId();
-    private readonly bool _pendingCapturedRequestAtRegistration =
-        actorState.OwnsCurrentDispatch && actorState.Handoff.HasPendingCapturedRequests();
 
     // The deferred Join runs after the submitting callback, so the causal flow of
     // that callback is captured here and re-entered in RunAsync.
@@ -226,9 +224,7 @@ internal sealed class ZLinkDeferredActorJoin(
                 ZLinkFlowOrigin.Application,
                 createIfAbsent: false
             );
-            using var dispatch = actorState.EnterDeferredJoinExecution(
-                _pendingCapturedRequestAtRegistration
-            );
+            using var dispatch = actorState.EnterDeferredJoinExecution();
             ZLinkActorJoinCompletion? completion = null;
             ZLinkActorJoinResult.Relayed? relayed = null;
             if (failure is null && RemainingTimeout() <= TimeSpan.Zero)

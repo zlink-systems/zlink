@@ -31,7 +31,12 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(sourceAuthority);
-        ZLinkRelocationCompletionStore.RequireCompletionSettled(source);
+        if (source.Relocation is not null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "Actor authority still has an active handoff publication.",
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
         var (high, low) = RelocationParts(relocationId);
         var state = new ZLinkCanonicalRelocationAuthorityState(
             high,
@@ -192,7 +197,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         Func<bool> isTargetLeaseValid,
         TimeSpan resubmitInterval,
         CancellationToken cancellationToken,
-        ulong? acceptedRequests = null
+        IReadOnlyList<ZLinkRelocationCompletionEntry>? acceptedReplies = null
     )
     {
         // A .NET source persists phases 1/2 while it captures its in-memory
@@ -238,16 +243,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     key,
                     state.CoordinatorExpectedAuthorityStoreVersion,
                     payload
-                ),
-            ZLinkRelocationCompletionProgress.Start(
-                acceptedRequests
-                    ?? (ulong)
-                        root
-                            .Participants.Single()
-                            .AcceptedJobs.Count(job =>
-                                job.CanonicalRequest is { ReplyRouteId: not 0 }
-                            )
-            )
+                )
         );
         var mutation = new ZLinkAuthorityMutation.Put(
             payload,
@@ -265,6 +261,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         )
         {
             Relocation = relocation,
+            AcceptedReplies = acceptedReplies ?? [],
         };
         while (true)
         {

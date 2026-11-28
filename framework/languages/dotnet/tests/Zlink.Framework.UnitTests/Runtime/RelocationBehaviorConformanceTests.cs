@@ -5,6 +5,7 @@ using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.AspNetCore;
@@ -150,20 +151,8 @@ public sealed partial class RelocationBehaviorConformanceTests
                     await capturedRequest;
                 await WaitUntilAsync(() => trace.JoinCompletions.Count == 2);
                 var replayed = trace.JoinCompletions.Last();
-                if (capturedRequest is null)
-                {
-                    Assert.IsType<ZLinkActorJoinCompletion.Accepted>(replayed.Completion);
-                    Assert.Equal("final", replayed.Node);
-                }
-                else
-                {
-                    Assert.Equal(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        Assert.IsType<ZLinkActorJoinCompletion.Failed>(replayed.Completion).Kind
-                    );
-                    Assert.Equal("target", replayed.Node);
-                    Assert.Single(trace.Events.Where(value => value == "targetAdmissionReplied"));
-                }
+                Assert.IsType<ZLinkActorJoinCompletion.Accepted>(replayed.Completion);
+                Assert.Equal("final", replayed.Node);
                 return;
             }
 
@@ -2041,6 +2030,12 @@ public sealed partial class RelocationBehaviorConformanceTests
     [Fact]
     public async Task ActorJoin_target_cutover_wait_is_a_warning_and_only_the_verified_cutover_commits()
     {
+        using var flowListener = Environment.GetEnvironmentVariable(
+            RelocationBehaviorHost.FlowPathEnvironmentVariable
+        )
+            is { } flowPath
+            ? new TestHostMessageFlowListener(flowPath)
+            : null;
         var trace = new RelocationBehaviorTrace();
         var targetTime = new ControllableTimeProvider();
         var cutover = new CanonicalRelocationTransportProbe(trace, holdTargetReady: true);
@@ -2170,6 +2165,9 @@ public sealed partial class RelocationBehaviorConformanceTests
             Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
             await trace.WaitAsync("sourceMembershipLeaveStarted");
 
+            // Publication releases after the Join callback and before the target stage ends.
+            await WaitUntilAsync(() => GetTargetAttemptState(target.Runtime).Count == 0);
+            await cutover.TargetCutoverCompleted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             await WaitForSteadyActorAuthorityAsync(locationStore, actorId);
             var authorityMutations = trace.TargetAuthorityMutationCount;
             var lifecycleAttempts = trace.TargetLifecycleAttemptCount;
@@ -2178,6 +2176,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             );
 
             await cutover.ReplayCutoverAsync(CancellationToken.None);
+            await cutover.TargetCutoverReplayCompleted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.Equal(authorityMutations, trace.TargetAuthorityMutationCount);
             Assert.Equal(lifecycleAttempts, trace.TargetLifecycleAttemptCount);
             Assert.Equal(
@@ -3001,13 +3000,14 @@ public sealed partial class RelocationBehaviorConformanceTests
                     await observedJoinPublication.Task.WaitAsync(TimeSpan.FromSeconds(5))
                 );
                 Assert.NotNull(committed.Snapshot.Relocation);
-                var relocation = ZLinkAuthorityAggregateCodec
-                    .Replace(null, committed.Snapshot.Relocation)!
-                    .Value.GetProperty("relocation");
-                var completion = relocation.GetProperty("completion");
-                Assert.Equal("1", completion.GetProperty("acceptedRequests").GetString());
-                Assert.Equal("0", completion.GetProperty("completedResults").GetString());
-                Assert.Equal("0", completion.GetProperty("pendingDeliveries").GetString());
+                var relocationId = committed.Snapshot.Relocation!.RelocationId;
+                var acceptedRow = Assert.Single(
+                    await authorityStore.ReadRelocationRepliesAsync(relocationId, default)
+                );
+                Assert.Equal(
+                    ZLinkRelocationCompletionDelivery.Accepted,
+                    acceptedRow.Entry.Delivery
+                );
                 Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
                 _ = await saved.WaitAsync(TimeSpan.FromSeconds(15));
                 _ = await temporary.WaitAsync(TimeSpan.FromSeconds(15));
@@ -3054,11 +3054,15 @@ public sealed partial class RelocationBehaviorConformanceTests
                 await authorityStore.ReadAuthorityAsync(actorKey)
             );
             Assert.Null(settled.Snapshot.Relocation);
-            var completed = await trace.CompletedRelocation.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(1UL, completed.CompletedResults);
-            Assert.Equal(0UL, completed.PendingDeliveries);
-            Assert.IsType<ZLinkRelocationReadResult.Missing>(
-                await relocationStore.GetRelocationAsync(completed.Reference!)
+            var completedRelocation =
+                (await observedJoinPublication.Task) as ZLinkAuthorityReadResult.Found;
+            var completedId = completedRelocation!.Snapshot.Relocation!.RelocationId;
+            await WaitUntilAsync(async () =>
+                Assert
+                    .Single(await authorityStore.ReadRelocationRepliesAsync(completedId, default))
+                    .Entry.Delivery
+                    is ZLinkRelocationCompletionDelivery.TerminalReceived
+                        or ZLinkRelocationCompletionDelivery.AlreadyTerminal
             );
             AssertObservedBehavior(fixture.RootElement, trace.Events);
             var retiredSource = source.Runtime.GetOrCreateActorState(actorId);
@@ -3074,6 +3078,142 @@ public sealed partial class RelocationBehaviorConformanceTests
             trace.ReleaseTargetLifecycle.TrySetResult();
             trace.ReleaseSourceLeave.TrySetResult();
         }
+    }
+
+    [Fact]
+    public async Task CapturedActorRequestCanDeferAnotherCrossNodeJoin()
+    {
+        var timeout = TimeSpan.FromSeconds(15);
+        var releaseCapture = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var trace = new RelocationBehaviorTrace
+        {
+            SourceActorCaptureGate = releaseCapture.Task,
+            CaptureNodes = ["source", "target"],
+            RestoreNodes = ["target", "destination"],
+        };
+        using var backlog = new SpotWideMemberSealCaptureTests.HandoffBacklogLoggerProvider();
+        trace.ReleaseJoinHandler.TrySetResult();
+        trace.ReleaseTargetLifecycle.TrySetResult();
+        trace.ReleaseSourceLeave.TrySetResult();
+        var locations = new RecordingLocationStore(new ZLinkInMemoryProviderLocationStore(), trace);
+        var relocations = new SynchronizedRelocationStore();
+        var actorId = $"round-trip-actor-{Guid.NewGuid():N}";
+        var targetSpotId = $"round-trip-target-{Guid.NewGuid():N}";
+        var returnSpotId = $"round-trip-return-{Guid.NewGuid():N}";
+        const string returnSpotType = "round-trip-return";
+
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            locations,
+            relocations,
+            registerTargetSpot: false,
+            configureServices: services =>
+                services.AddLogging(logging => logging.AddProvider(backlog))
+        );
+        var actors = source.Services.GetRequiredService<IZLinkActorManager>();
+        Assert.IsType<ZLinkActorCreateResult.Created>(
+            await actors
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                .InMesh(RelocationBehaviorHost.MeshName)
+                .Request(new BehaviorCreate(7))
+                .Timeout(timeout)
+                .Async()
+        );
+        var spots = source.Services.GetRequiredService<IZLinkSpotManager>();
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            locations,
+            relocations,
+            registerTargetSpot: true
+        );
+        var targetSpot = await spots
+            .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Request(ZLinkMessage.Empty)
+            .Timeout(timeout)
+            .Async();
+        Assert.Equal(target.LocalNodeRid, targetSpot.Spot.NodeRid);
+
+        await using var destination = await RelocationBehaviorHost.StartAsync(
+            "destination",
+            trace,
+            locations,
+            relocations,
+            registerTargetSpot: true,
+            spotType: returnSpotType
+        );
+        var returnSpot = await spots
+            .GetOrCreate(returnSpotId, returnSpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Request(ZLinkMessage.Empty)
+            .Timeout(timeout)
+            .Async();
+        Assert.Equal(destination.LocalNodeRid, returnSpot.Spot.NodeRid);
+
+        var authority = new ZLinkProviderLocationRepository(locations);
+        var actorKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        var firstPublication = new TaskCompletionSource<Guid>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        trace.OnPublicJoinCompleted = async _ =>
+        {
+            if (firstPublication.Task.IsCompleted)
+                return;
+            var found = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                await authority.ReadAuthorityAsync(actorKey)
+            );
+            firstPublication.SetResult(found.Snapshot.Relocation!.RelocationId);
+        };
+
+        trace.OnTargetWork = (actor, request) =>
+        {
+            Assert.Equal("saved", request.Marker);
+            actor
+                .Context.JoinSpot(returnSpotId, new BeginBehaviorJoin(returnSpotId))
+                .Timeout(timeout)
+                .Defer();
+        };
+        var client = source.Services.GetRequiredService<IZLinkActorClient>();
+        var move = client
+            .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
+            .Timeout(timeout)
+            .Async<BehaviorAck>()
+            .AsTask();
+        Task<BehaviorAck> captured;
+        try
+        {
+            await trace.WaitAsync("sourceStateCapturing");
+            captured = client
+                .RequestToActor(actorId, new BehaviorWork("saved"))
+                .Timeout(timeout)
+                .Async<BehaviorAck>()
+                .AsTask();
+            await backlog.WaitForBacklogAsync(actorId).WaitAsync(timeout);
+            Assert.False(captured.IsCompleted);
+        }
+        finally
+        {
+            releaseCapture.TrySetResult();
+        }
+
+        _ = await move.WaitAsync(timeout);
+        Assert.Equal("saved", (await captured.WaitAsync(timeout)).Marker);
+        await WaitUntilAsync(() => trace.JoinCompletions.Count >= 2);
+        var secondJoin = trace.JoinCompletions.ToArray()[1];
+        Assert.True(
+            secondJoin.Completion is ZLinkActorJoinCompletion.Accepted,
+            secondJoin.Completion.ToString()
+        );
+        Assert.Equal("destination", secondJoin.Item1);
+        var actor = await actors.FindAsync(actorId);
+        Assert.Equal(destination.LocalNodeRid, actor?.NodeRid);
+        var relocationId = await firstPublication.Task.WaitAsync(timeout);
+        Assert.Single(await authority.ReadRelocationRepliesAsync(relocationId, default));
+        Assert.Single(trace.DeliveredMarkers, marker => marker == "saved");
     }
 
     [Fact]
@@ -3399,6 +3539,7 @@ internal sealed class RelocationBehaviorTrace
     internal Func<CancellationToken, ValueTask>? BeforeTargetWorkReply { get; set; }
     internal Func<ValueTask>? OnTargetClosing { get; set; }
     internal Func<BehaviorActor, ValueTask>? OnPublicJoinCompleted { get; set; }
+    internal Action<BehaviorActor, BehaviorWork>? OnTargetWork { get; set; }
 
     // The source Actor state capture and the target Actor restore wait for
     // these tasks. The source unit is sealed and holds member ingress while
@@ -3412,11 +3553,6 @@ internal sealed class RelocationBehaviorTrace
     internal TaskCompletionSource ReleaseTargetLifecycle { get; } = Signal();
     internal TaskCompletionSource ReleaseSourceLeave { get; } = Signal();
     internal TaskCompletionSource ReleaseSealStageWork { get; } = Signal();
-    internal TaskCompletionSource<(
-        ulong CompletedResults,
-        ulong PendingDeliveries,
-        string Reference
-    )> CompletedRelocation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource TargetAuthorityObserved { get; } = Signal();
     private TaskCompletionSource TargetAuthorityMutationObserved { get; } = Signal();
 
@@ -3514,23 +3650,6 @@ internal sealed class RelocationBehaviorTrace
             return;
         lock (_gate)
         {
-            if (
-                snapshot.Relocation
-                    is { Phase: ServiceWireCodec.RelocationPhase.Completed } relocation
-                && ZLinkAuthorityAggregateCodec.Replace(null, relocation) is { } aggregate
-                && aggregate
-                    .GetProperty("relocation")
-                    .TryGetProperty("completion", out var completion)
-                && completion.TryGetProperty("reference", out var reference)
-                && reference.GetString() is { } value
-            )
-                CompletedRelocation.TrySetResult(
-                    (
-                        ulong.Parse(completion.GetProperty("completedResults").GetString()!),
-                        ulong.Parse(completion.GetProperty("pendingDeliveries").GetString()!),
-                        value
-                    )
-                );
             if (!_targetAuthorityVersions.Add(snapshot.StoreVersion))
                 return;
             Interlocked.Increment(ref TargetAuthorityMutationCount);
@@ -4344,6 +4463,7 @@ internal sealed class TargetBehaviorWorkHandler(RelocationBehaviorTrace trace, B
         CancellationToken cancellationToken
     )
     {
+        trace.OnTargetWork?.Invoke(actor, request);
         trace.RecordDelivery(request.Marker, node.Name);
         if (trace.BeforeTargetWorkReply is { } beforeReply)
             await beforeReply(cancellationToken);
@@ -4379,6 +4499,8 @@ internal sealed class CanonicalRelocationTransportProbe
     internal TaskCompletionSource CutoverSendStarted { get; } = Signal();
     internal TaskCompletionSource ReleaseCutoverSend { get; } = Signal();
     internal TaskCompletionSource CutoverSendSubmitted { get; } = Signal();
+    internal TaskCompletionSource TargetCutoverCompleted { get; } = Signal();
+    internal TaskCompletionSource TargetCutoverReplayCompleted { get; } = Signal();
     internal TaskCompletionSource<Exception?> TargetCutoverFailure { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource SourceLeaveSubmitted { get; } = Signal();
@@ -4870,6 +4992,8 @@ internal sealed class CanonicalRelocationTransportProbe
             {
                 await inner.CutoverAsync(cutover, authenticatedSourceNodeRid, cancellationToken);
                 probe.TargetCutoverFailure.TrySetResult(null);
+                if (!probe.TargetCutoverCompleted.TrySetResult())
+                    probe.TargetCutoverReplayCompleted.TrySetResult();
             }
             catch (Exception failure)
             {

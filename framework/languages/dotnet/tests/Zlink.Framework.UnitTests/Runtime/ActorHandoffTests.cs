@@ -719,6 +719,45 @@ public sealed class ActorHandoffTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DeferredJoinFromCapturedDispatchWaitsForPublicationWithoutWaitingForItsReply()
+    {
+        var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
+        Assert.True(handoff.Import(CommitRequest("handoff-1", []), out _));
+        _ = handoff.PrepareImportedReplay([]);
+        using var body = Message.From("captured-request");
+        using var frame = Frame(body, ActorRef("node-b", 1), "session-1");
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(frame));
+
+        var applicationReply = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var dispatch = handoff.TargetActivation;
+        var replay = handoff.AdmitDurablePrefix(
+            "handoff-1",
+            captured =>
+            {
+                using (ExecutionContext.SuppressFlow())
+                    return Task.Run(async () =>
+                    {
+                        await dispatch;
+                        handoff.ClaimDurableFrame(captured);
+                        await applicationReply.Task;
+                    });
+            }
+        );
+        handoff.OpenTransferredActorDispatch("handoff-1");
+        var joinWait = Assert.IsAssignableFrom<Task>(handoff.BeginDeferredJoinCapture());
+        Assert.False(joinWait.IsCompleted);
+        Assert.False(replay.IsCompleted);
+
+        handoff.Complete("handoff-1");
+        await joinWait.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(replay.IsCompleted);
+        applicationReply.SetResult();
+        await replay.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public void TargetReplayCompletion_ClosesCaptureAtTheEmptyBoundary()
     {
         var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);

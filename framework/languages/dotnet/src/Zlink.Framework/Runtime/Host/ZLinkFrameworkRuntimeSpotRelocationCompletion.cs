@@ -4,64 +4,77 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed partial class ZLinkFrameworkRuntime
 {
-    internal void ReserveAggregateCompletion(TargetStage stage, ZLinkLocationOwnerToken owner)
-    {
-        var budgets = new Dictionary<ZLinkAuthorityKey, ZLinkAggregateParticipantCompletion>();
-        foreach (var participant in stage.Envelope.Participants)
-        {
-            var jobs =
-                participant.AuthorityKey == stage.SpotParticipant.AuthorityKey
-                    ? participant.AcceptedJobs.Concat(stage.SnapshotHeldRecords())
-                    : participant.AcceptedJobs;
-            var requests = jobs.Where(static job =>
-                job.CanonicalRequest is { ReplyRouteId: not 0 }
-            );
-            var coordinator = new ZLinkServiceWireCodec.RelocationCoordinatorFence(
-                owner.OwnerId,
-                checked((ulong)owner.LeaseGeneration),
-                stage.Node.Node.RoutingId,
-                stage.TargetNodeLifecycleGeneration,
-                ZLinkCanonicalParticipantRecoveryCodec
-                    .Decode(stage.SourceRecoveries[participant.AuthorityKey].Span)
-                    .ExpectedStoreVersion
-            );
-            var budget = new ZLinkRelocationCompletionBudget(
-                stage.Envelope.AggregateId,
-                requests.Select(job =>
-                    AggregateCompletionEntry(stage, participant, job, coordinator, payload: null)
+    internal static IReadOnlyList<ZLinkRelocationCompletionEntry> AcceptedAggregateReplies(
+        TargetStage stage
+    ) =>
+        stage
+            .Envelope.Participants.SelectMany(participant =>
+                (
+                    participant.AuthorityKey == stage.SpotParticipant.AuthorityKey
+                        ? participant.AcceptedJobs.Concat(stage.SnapshotHeldRecords())
+                        : participant.AcceptedJobs
                 )
-            );
-            budgets.Add(
-                participant.AuthorityKey,
-                new ZLinkAggregateParticipantCompletion(budget, coordinator)
-            );
-        }
-        stage.Completion = budgets;
-    }
+                    .Where(static job => job.CanonicalRequest is { ReplyRouteId: not 0 })
+                    .Select(job =>
+                    {
+                        var request = job.CanonicalRequest!;
+                        return CreateAcceptedRelocationReply(
+                            participant.AuthorityKey,
+                            new(request.OperationHigh, request.OperationLow),
+                            request.ReplyRouteId,
+                            new(
+                                request.Source.OwnerId,
+                                request.Source.OwnerLeaseGeneration,
+                                RoutingId.FromHex(request.Source.NodeRid),
+                                request.Source.NodeGeneration
+                            )
+                        );
+                    })
+            )
+            .ToArray();
 
-    private static ZLinkRelocationCompletionEntry AggregateCompletionEntry(
+    private static ZLinkServiceWireCodec.ReplyRelayRecord AggregateCompletionRelay(
         TargetStage stage,
         ZLinkRelocationParticipantEnvelope participant,
         ZLinkRelocationQueuedJob job,
-        ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator,
-        IReadOnlyList<byte[]>? payload
+        ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator
     )
     {
         var request = job.CanonicalRequest!;
-        var source = request.Source;
-        return CreateRelocationCompletionEntry(
+        return new(
+            new(request.OperationHigh, request.OperationLow),
+            request.ReplyRouteId,
+            new(stage.Envelope.CanonicalRelocationHigh, stage.Envelope.CanonicalRelocationLow),
+            stage.TargetAttemptGeneration,
+            coordinator,
+            participant.CanonicalParticipantId,
+            job.AcceptedSequence,
+            0,
+            0
+        );
+    }
+
+    private void CaptureAggregateCompletion(
+        TargetStage stage,
+        ZLinkRelocationParticipantEnvelope participant,
+        ZLinkRelocationQueuedJob job,
+        IReadOnlyList<byte[]> payload
+    )
+    {
+        var authority = stage.GetPublishedAuthority(participant.AuthorityKey);
+        var writer = new ZLinkLocationOwnerToken(authority.OwnerId, authority.OwnerLeaseGeneration);
+        var coordinator = new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+            writer.OwnerId,
+            checked((ulong)writer.LeaseGeneration),
+            stage.Node.Node.RoutingId,
+            stage.TargetNodeLifecycleGeneration,
+            authority.StoreVersion
+        );
+        var relay = AggregateCompletionRelay(stage, participant, job, coordinator);
+        var source = job.CanonicalRequest!.Source;
+        var entry = CreateRelocationCompletionEntry(
             participant.AuthorityKey,
-            new ZLinkServiceWireCodec.ReplyRelayRecord(
-                new(request.OperationHigh, request.OperationLow),
-                request.ReplyRouteId,
-                new(stage.Envelope.CanonicalRelocationHigh, stage.Envelope.CanonicalRelocationLow),
-                stage.TargetAttemptGeneration,
-                coordinator,
-                participant.CanonicalParticipantId,
-                job.AcceptedSequence,
-                payload is null ? (uint)RequestResult.InternalError : 0,
-                payload is null ? ServiceWireConstants.FrameworkErrorCode.RequestFailed : 0
-            ),
+            relay,
             new(
                 source.OwnerId,
                 source.OwnerLeaseGeneration,
@@ -70,124 +83,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             ),
             payload
         );
+        ScheduleRelocationReply(new(stage.Envelope.AggregateId, writer, entry), relay);
     }
-
-    private static void CaptureAggregateCompletion(
-        TargetStage stage,
-        ZLinkRelocationParticipantEnvelope participant,
-        ZLinkRelocationQueuedJob job,
-        IReadOnlyList<byte[]> payload
-    )
-    {
-        var completion = stage.Completion[participant.AuthorityKey];
-        stage.RecordCompletion(
-            completion,
-            job.AcceptedSequence,
-            AggregateCompletionEntry(stage, participant, job, completion.Coordinator, payload)
-        );
-    }
-
-    internal async ValueTask RetainAggregateCompletionAsync(
-        TargetStage stage,
-        CancellationToken cancellationToken
-    )
-    {
-        if (stage.Completion.Count == 0)
-            return;
-        var store = CreateRelocationCompletionStore();
-        foreach (var participant in stage.Completion.Values)
-            if (participant.LastObserved?.Relocation is { } latest)
-                await store.RetainIfPendingAsync(latest, cancellationToken).ConfigureAwait(false);
-    }
-
-    internal async ValueTask<bool> CompleteAggregateRequestsAsync(
-        TargetStage stage,
-        CancellationToken cancellationToken
-    )
-    {
-        var ready = new List<(ZLinkAuthorityKey Key, ZLinkAuthoritySnapshot Authority)>(
-            stage.Completion.Count
-        );
-        foreach (var (key, completion) in stage.Completion)
-        {
-            var store = CreateRelocationCompletionStore(completion.Budget);
-            var expected = completion.LastObserved ?? stage.GetPublishedAuthority(key);
-            ZLinkAuthoritySnapshot current;
-            try
-            {
-                current = await store
-                    .ReadCurrentAsync(key, expected, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception error)
-                when (ZLinkLocationStoreFailure.IsUnavailable(error, cancellationToken))
-            {
-                await store
-                    .RetainIfPendingAsync(expected.Relocation!, cancellationToken)
-                    .ConfigureAwait(false);
-                throw;
-            }
-            completion.LastObserved = current;
-            var progress = ZLinkRelocationCompletionStore.RequireAcceptedRequests(
-                current.Relocation!,
-                completion.Budget.AcceptedRequests
-            );
-            if (progress.CompletedResults != progress.AcceptedRequests)
-            {
-                if ((ulong)completion.Results.Count != progress.AcceptedRequests)
-                    throw new ZLinkRelocationDataLostException(
-                        "Aggregate completion does not match the accepted replay."
-                    );
-                foreach (var entry in completion.Results.Values)
-                {
-                    (current, _) = await store
-                        .AppendAsync(key, current, entry, cancellationToken)
-                        .ConfigureAwait(false);
-                    completion.LastObserved = current;
-                }
-            }
-            completion.Results.Clear();
-
-            current = await store
-                .RedeliverPendingAsync(
-                    key,
-                    current,
-                    TryDeliverStoredRelocationReplyAsync,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            completion.LastObserved = current;
-            if (current.Relocation!.Completion is { IsReady: true })
-                ready.Add((key, current));
-        }
-        if (ready.Count != stage.Completion.Count)
-            return false;
-        if (Volatile.Read(ref stage.SessionRoutesConverged) == 0)
-            return false;
-        if (ready.Count == 0)
-            return true;
-        var completionStore = CreateRelocationCompletionStore();
-        foreach (var (key, authority) in ready)
-            await completionStore
-                .MarkCompletedAsync(key, authority, cancellationToken)
-                .ConfigureAwait(false);
-        foreach (var actor in stage.ActorStates)
-            if (
-                actor.RelocationCompletionCandidate is { } candidate
-                && candidate.RelocationId == stage.Envelope.AggregateId
-            )
-                actor.ClearRelocationCompletionCandidate(candidate);
-        return true;
-    }
-}
-
-internal sealed record ZLinkAggregateParticipantCompletion(
-    ZLinkRelocationCompletionBudget Budget,
-    ZLinkServiceWireCodec.RelocationCoordinatorFence Coordinator
-)
-{
-    internal SortedDictionary<ulong, ZLinkRelocationCompletionEntry> Results { get; } = new();
-
-    // The last verified pointer can only renew retention during an uncertain read.
-    internal ZLinkAuthoritySnapshot? LastObserved { get; set; }
 }

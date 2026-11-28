@@ -42,9 +42,12 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         if (ack.RequestSource != expectedSource)
             return ZLinkRelocationReplyAckState.NotAcknowledged;
-        return ack.Status == 2
-            ? ZLinkRelocationReplyAckState.AlreadyTerminal
-            : ZLinkRelocationReplyAckState.TerminalReceived;
+        return ack.Status switch
+        {
+            1 => ZLinkRelocationReplyAckState.TerminalReceived,
+            2 => ZLinkRelocationReplyAckState.AlreadyTerminal,
+            _ => ZLinkRelocationReplyAckState.NotAcknowledged,
+        };
     }
 
     internal async ValueTask<TargetStage> StageInboundSpotAggregateAsync(
@@ -458,6 +461,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                     normalizeAuthority: null
                 )
                 .ConfigureAwait(false);
+            var spotAuthority = stage.GetPublishedAuthority(stage.SpotParticipant.AuthorityKey);
+            RetainAcceptedRepliesUntilReplayEnds(
+                stage.Envelope.AggregateId,
+                new(spotAuthority.OwnerId, spotAuthority.OwnerLeaseGeneration),
+                stage.AdmissionDrainTask!
+            );
             Volatile.Write(ref stage.Published, 1);
         }
 
@@ -601,48 +610,57 @@ internal sealed partial class ZLinkFrameworkRuntime
         ((ZLinkBackendSpotWrapper)stage.Spot.Activation.NativeSpot).SetAuthorityOwnerGeneration(
             authorityOwnerGeneration
         );
-        stage.ActorReplayTerminals = AdmitInboundAggregateActorPrefixes(stage, cancellationToken);
+        AdmitInboundAggregateActors(stage);
         var replayJobs = spotParticipant
             .AcceptedJobs.Concat(stage.SnapshotHeldRecords())
             .OrderBy(static job => job.AcceptedSequence)
             .ToArray();
-        if (stage.AdmittedSpotReplayCount > replayJobs.Length)
-            throw new ZLinkRelocationDataLostException(
-                $"Target SPOT '{stage.Spot.Activation.SpotId}' replay cursor exceeds its accepted journal."
-            );
-        foreach (var job in replayJobs.Skip(stage.AdmittedSpotReplayCount))
+        var terminals = new List<Task> { stage.AdmissionDrainTask! };
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var delivery = stage.Spot.Activation.AdmitAcceptedReplayJob(
-                job,
-                stage.SourceMeshName,
-                (reply, ct) => CompleteAcceptedReplayAsync(stage, job, reply, ct)
-            );
-            if (delivery is not null)
-                stage.SpotCapturedRequestDeliveries.Add(delivery);
-            stage.AdmittedSpotReplayCount++;
+            foreach (var job in replayJobs.Skip(stage.AdmittedSpotJobCount))
+            {
+                var terminal = await stage
+                    .Spot.Activation.AdmitAcceptedRelocationJobAsync(
+                        job,
+                        stage.SourceMeshName,
+                        stage.TargetAdmissionSeal,
+                        (reply, token) => CompleteAcceptedReplayAsync(stage, job, reply, token),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                stage.AdmittedSpotJobCount++;
+                terminals.Add(terminal);
+            }
+        }
+        finally
+        {
+            stage.AdmissionDrainTask = Task.WhenAll(terminals);
         }
     }
 
-    private IReadOnlyList<Task> AdmitInboundAggregateActorPrefixes(
-        TargetStage stage,
-        CancellationToken cancellationToken
-    )
+    private void AdmitInboundAggregateActors(TargetStage stage)
     {
+        if (stage.AdmissionDrainTask is not null)
+            return;
+
         var handoffId = stage.Envelope.AggregateId.ToString("N");
-        var replayTerminals = new List<Task>(stage.ActorStates.Count);
-        foreach (var actorState in stage.ActorStates)
+        var terminals = new List<Task>();
+        foreach (
+            var actorState in stage.ActorStates.OrderBy(
+                static state => state.ActorId,
+                StringComparer.Ordinal
+            )
+        )
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorState.ActorId);
             var participant = stage.Envelope.Participants.Single(candidate =>
-                candidate.ObjectKind == ZLinkPlacementObjectKind.Actor
-                && candidate.AuthorityKey
-                    == ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorState.ActorId)
+                candidate.AuthorityKey == key
             );
             var actorRef =
                 actorState.NativeActorRef
                 ?? throw new ZLinkRelocationDataLostException(
-                    $"Actor '{actorState.ActorId}' target reference is missing."
+                    "Transferred Actor has no target reference."
                 );
             if (!actorState.Handoff.IsAuthorityCommitted(handoffId))
                 actorState.Handoff.MarkAuthorityCommitted(
@@ -651,32 +669,48 @@ internal sealed partial class ZLinkFrameworkRuntime
                     actorRef.Generation
                 );
             _ = actorState.Handoff.PrepareCanonicalMaintenanceReplay(handoffId);
-            var requests = participant
-                .AcceptedJobs.Where(static job => job.CanonicalRequest is { ReplyRouteId: not 0 })
-                .ToDictionary(static job => checked((long)job.AcceptedSequence));
-            replayTerminals.Add(
+
+            var jobs = participant
+                .AcceptedJobs.Where(job => job.CanonicalRequest is { ReplyRouteId: not 0 })
+                .ToDictionary(job =>
+                {
+                    var frame = ZLinkStandaloneActorRelocationRuntime
+                        .DecodeAcceptedRecords([job])
+                        .Single()
+                        .Frame;
+                    return (frame.RouteContext.OperationId, frame.RequestSource);
+                });
+            var activation = stage.Spot.Activation;
+            terminals.Add(
                 AdmitTransferredActorPrefix(
                     actorState,
                     handoffId,
                     stage.TargetMeshName,
                     frame =>
-                        stage.Spot.Activation.DispatchOwnedActorFrameAsync(
+                        activation.DispatchOwnedActorFrameAsync(
                             actorRef,
                             frame,
-                            requests.TryGetValue(frame.ArrivalIndex, out var job)
-                                ? (replayed, reply, ct) =>
-                                    CompleteAcceptedActorReplayAsync(
+                            jobs.TryGetValue(
+                                (frame.RouteContext.OperationId, frame.RequestSource),
+                                out var job
+                            )
+                                ? (replay, reply, _) =>
+                                {
+                                    if (reply is null)
+                                        throw new ZLinkRelocationDataLostException(
+                                            "Captured Actor request did not produce a terminal reply."
+                                        );
+                                    CaptureAggregateCompletion(
                                         stage,
                                         participant,
                                         job,
-                                        replayed,
-                                        reply,
-                                        ct
-                                    )
+                                        [reply.ToFrame(replay.Header)]
+                                    );
+                                    return ValueTask.CompletedTask;
+                                }
                                 : null,
                             ShutdownToken
                         ),
-                    frame => requests.ContainsKey(frame.ArrivalIndex),
                     acceptedThrough: checked(
                         (long)
                             participant
@@ -687,64 +721,24 @@ internal sealed partial class ZLinkFrameworkRuntime
                 )
             );
         }
-        return replayTerminals;
+        stage.AdmissionDrainTask = Task.WhenAll(terminals);
     }
 
-    internal async ValueTask OpenInboundSpotAggregateAdmissionAsync(
+    internal ValueTask OpenInboundSpotAggregateAdmissionAsync(
         TargetStage stage,
         Func<ValueTask> recordDispatchOpening
-    )
-    {
-        var handoffId = stage.Envelope.AggregateId.ToString("N");
-        await OpenTargetAdmissionOnceAsync(
-                stage,
-                () =>
-                    stage.Spot.Activation.OpenRelocationTargetAdmissionAsync(
-                        stage.TargetAdmissionSeal,
-                        static () => { },
-                        async () =>
-                        {
-                            // The FIFO prefix was reserved during publication.
-                            // Release it with the Spot only after the phase CAS.
-                            await recordDispatchOpening().ConfigureAwait(false);
-                            foreach (var actorState in stage.ActorStates)
-                                actorState.Handoff.Complete(handoffId);
-                        }
-                    )
-            )
-            .ConfigureAwait(false);
-        stage.AdmissionDrainTask ??= Task.WhenAll(
-            stage.SpotCapturedRequestDeliveries.Concat(
-                stage.ActorStates.Select(actor =>
-                    actor.Handoff.CapturedRequestDelivery(handoffId) ?? Task.CompletedTask
+    ) =>
+        OpenTargetAdmissionOnceAsync(
+            stage,
+            () =>
+                stage.Spot.Activation.OpenRelocationTargetAdmissionAsync(
+                    stage.TargetAdmissionSeal,
+                    static () => { },
+                    recordDispatchOpening
                 )
-            )
         );
-        stage.SpotCapturedRequestDeliveries.Clear();
-    }
 
-    private static ValueTask CompleteAcceptedActorReplayAsync(
-        TargetStage stage,
-        ZLinkRelocationParticipantEnvelope participant,
-        ZLinkRelocationQueuedJob job,
-        ZLinkSpotActorFrame frame,
-        ZLinkActorReply? reply,
-        CancellationToken cancellationToken
-    )
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (job.CanonicalRequest is { ReplyRouteId: not 0 })
-        {
-            if (reply is null)
-                throw new ZLinkRelocationDataLostException(
-                    "Actor accepted request replay produced no terminal reply."
-                );
-            CaptureAggregateCompletion(stage, participant, job, [reply.ToFrame(frame.Header)]);
-        }
-        return ValueTask.CompletedTask;
-    }
-
-    private static ValueTask CompleteAcceptedReplayAsync(
+    private ValueTask CompleteAcceptedReplayAsync(
         TargetStage stage,
         ZLinkRelocationQueuedJob job,
         byte[][]? capturedReply,

@@ -207,8 +207,6 @@ internal sealed class ZLinkActorRemoteJoiner(
         CancellationToken cancellationToken
     )
     {
-        if (actorState.RegisteredJoinWithPendingCapturedRequest)
-            throw CapturedRequestWaitCycle();
         var authorityStore =
             registration.Locations.ResolveStore()
             ?? throw new InvalidOperationException("Actor handoff requires a location store.");
@@ -717,7 +715,6 @@ internal sealed class ZLinkActorRemoteJoiner(
             var authorityRecheck = await ReadCaptureAuthorityAsync(
                     authorityStore,
                     ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.Context.ActorId),
-                    actorState,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -731,7 +728,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                     ZLinkFrameworkErrorKind.InvalidOperation,
                     $"Actor '{actor.Context.ActorId}' authority changed during relocation preflight."
                 );
-            ZLinkRelocationCompletionStore.RequireCompletionSettled(currentAuthority.Snapshot);
             sourceAuthoritySnapshot = currentAuthority.Snapshot;
             var hasBoundSession = actorState.TryGetBoundSession(out var boundSession);
             //  The seal branch is conditional, so its trace being absent means
@@ -1212,7 +1208,6 @@ internal sealed class ZLinkActorRemoteJoiner(
     private async ValueTask<ZLinkAuthorityReadResult> ReadCaptureAuthorityAsync(
         IZLinkLocationRepository store,
         ZLinkAuthorityKey key,
-        ZLinkActorRuntimeState actorState,
         CancellationToken cancellationToken
     )
     {
@@ -1224,20 +1219,12 @@ internal sealed class ZLinkActorRemoteJoiner(
             return read;
 
         var terminal =
-            runtime.StandaloneActorRelocationRuntime.FindTargetTerminal(
-                previous,
-                key,
-                out var hasCapturedRequests
-            )
+            runtime.StandaloneActorRelocationRuntime.FindTargetTerminal(previous, key)
             ?? services
                 .GetService<ZLinkSpotRetireTargetRuntime>()
-                ?.FindTargetTerminal(previous, key, out hasCapturedRequests);
+                ?.FindTargetTerminal(previous, key);
         if (terminal is not null)
-        {
-            if (actorState.OwnsCurrentDispatch && hasCapturedRequests && !terminal.IsCompleted)
-                throw CapturedRequestWaitCycle();
             await terminal.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
 
         cancellationToken.ThrowIfCancellationRequested();
         // Publication may have been cleared between the Store read and the attempt lookup.
@@ -1253,12 +1240,6 @@ internal sealed class ZLinkActorRemoteJoiner(
             );
         return read;
     }
-
-    private static ZLinkFrameworkException CapturedRequestWaitCycle() =>
-        new(
-            ZLinkFrameworkErrorKind.Unavailable,
-            "Actor Join cannot wait for captured request delivery in its own Actor turn."
-        );
 
     private ZLinkBackendCanonicalActorJoinRequest CreateCanonicalActorJoinRequest(
         ZLinkBackendActorRef actor,

@@ -1386,38 +1386,17 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public async Task ShutdownDrainWaitsForCapturedRequestDelivery()
+    public async Task ShutdownDrainObservesTheAdmittedTargetHandlers()
     {
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var target = new ZLinkSpotRetireTargetRuntime(
-            services,
-            null!,
-            new ZLinkFrameworkRegistration()
-        );
         var stage = CreateTargetStageForHeldJournal();
-        Volatile.Write(ref stage.AuthorityPublished, 1);
         var replay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         stage.AdmissionDrainTask = replay.Task;
-        var fence = new ZLinkAggregateFence(
-            stage.Envelope.AggregateId,
-            stage.Envelope.AggregateGeneration
-        );
-        Assert.True(target.TryTrackStage(fence, stage));
 
-        // Host relocation §14: accepted cutover must settle before Spot teardown.
-        var drain = target.DrainTargetAttemptsAsync(CancellationToken.None).AsTask();
-        try
-        {
-            Assert.False(drain.IsCompleted);
-            var failure = new IOException("Captured request delivery failed.");
-            replay.SetException(failure);
-            Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => drain));
-            Assert.Equal(1, target.ActiveStageCount);
-        }
-        finally
-        {
-            replay.TrySetResult();
-        }
+        var drain = stage.WaitForAdmittedWorkAsync(CancellationToken.None);
+        Assert.False(drain.IsCompleted);
+        var failure = new IOException("Published target replay failed.");
+        replay.SetException(failure);
+        Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => drain));
     }
 
     [Fact]
@@ -1864,8 +1843,9 @@ public sealed partial class RelocationRuntimeTests
 
         // Target publication re-enters admission idempotently: racing an
         // already-open admission never re-opens the seal.
+        var drain = Task.CompletedTask;
+        stage.AdmissionDrainTask = drain;
         await runtime.OpenInboundSpotAggregateAdmissionAsync(stage, UnexpectedOpening);
-        var drain = Assert.IsAssignableFrom<Task>(stage.AdmissionDrainTask);
         await runtime.OpenInboundSpotAggregateAdmissionAsync(stage, UnexpectedOpening);
 
         Assert.Same(drain, stage.AdmissionDrainTask);
@@ -3770,12 +3750,6 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public void RelocationReplyRouteRetentionCoversLateCompletionRecovery()
-    {
-        Assert.Equal(TimeSpan.FromHours(24), ZLinkRelocationReplyLifetime.TerminalRetention);
-    }
-
-    [Fact]
     public async Task AggregateRelocationPublishesWholeSpotParticipantsWithOneCommit()
     {
         var relocation = new RecordingRelocationStore();
@@ -4787,7 +4761,7 @@ public sealed partial class RelocationRuntimeTests
                 DateTimeOffset.UtcNow
             )
             {
-                Relocation = request.ApplyRelocation(current: null, participant),
+                Relocation = request.ApplyRelocation(current: null),
             };
         }
 

@@ -706,6 +706,27 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         );
     }
 
+    internal ZLinkAcceptedWorkAdmission TryImportAcceptedRelocation(
+        ZLinkSerialRelocationSeal seal,
+        ReadOnlyMemory<byte> payload,
+        Func<CancellationToken, ValueTask> callback,
+        Action relocationRelease,
+        out ZLinkSerialWorkItem item
+    )
+    {
+        RequireSharedGate();
+        return TryPostAcceptedCore(
+            payload.Length,
+            null,
+            payload,
+            callback,
+            relocationRelease,
+            previousOwnerMessageFollow: false,
+            out item,
+            capturedSeal: seal
+        );
+    }
+
     private ZLinkAcceptedWorkAdmission TryPostAcceptedCore(
         int payloadLength,
         Func<ReadOnlyMemory<byte>>? payloadFactory,
@@ -714,7 +735,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         Action relocationRelease,
         bool previousOwnerMessageFollow,
         out ZLinkSerialWorkItem item,
-        object? acceptedState = null
+        object? acceptedState = null,
+        ZLinkSerialRelocationSeal? capturedSeal = null
     )
     {
         ArgumentNullException.ThrowIfNull(callback);
@@ -742,12 +764,21 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 item = null!;
                 return ZLinkAcceptedWorkAdmission.Closed;
             }
-            if (_relocated || _relocation?.IngressFrozen == true)
+            if (
+                capturedSeal is not null
+                    ? !Matches(capturedSeal)
+                    : _relocated || _relocation?.IngressFrozen == true
+            )
             {
                 item = null!;
                 return ZLinkAcceptedWorkAdmission.RelocationMoving;
             }
-            TryCommitAcceptedWorkUnderLock(candidate, out item, out var scheduleDrain);
+            TryCommitAcceptedWorkUnderLock(
+                candidate,
+                out item,
+                out var scheduleDrain,
+                capturedSeal is not null
+            );
             drain = scheduleDrain ? ReserveDrainUnderLock() : null;
         }
 
@@ -1071,24 +1102,40 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 return false;
             var relocation = _relocation!;
             if (_sharedOwner is not null)
+            {
+                relocation.Captured.ImportPublished();
                 relocation.Held.ImportPublished();
+            }
             var direct = new ZLinkSerialWorkQueue();
             while (relocation.Captured.TryDequeue(out var item))
-                _applicationQueue.Enqueue(item);
+                RestoreInTargetOrder(item);
             while (relocation.Held.TryDequeue(out var item))
             {
                 if (item.PreviousOwnerMessageFollow)
-                    RestoreHeldItemUnderGate(item);
+                    RestoreInTargetOrder(item);
                 else
                     direct.Enqueue(item);
             }
             while (direct.TryDequeue(out var item))
-                RestoreHeldItemUnderGate(item);
+                RestoreInTargetOrder(item);
             EndRelocationUnderLock();
             drain = ReserveDrainUnderLock();
         }
         PublishDrain(drain);
         return true;
+
+        void RestoreInTargetOrder(ZLinkSerialWorkItem item)
+        {
+            // New ingress may have reserved its original sequence before the
+            // imported prefix arrived. Later relocations use the order now
+            // established by this target queue.
+            if (item.IsAccepted)
+            {
+                item.AcceptedSequence = _nextAcceptedSequence;
+                _nextAcceptedSequence = checked(_nextAcceptedSequence + 1);
+            }
+            RestoreHeldItemUnderGate(item);
+        }
     }
 
     private void AbortRelocationUnderLock()
@@ -1096,7 +1143,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         if (_relocation is null)
             return;
         if (_sharedOwner is not null)
+        {
+            _relocation.Captured.ImportPublished();
             _relocation.Held.ImportPublished();
+        }
         while (_relocation.Captured.TryDequeue(out var item))
             _applicationQueue.Enqueue(item);
         while (_relocation.Held.TryDequeue(out var item))
@@ -1141,6 +1191,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             if (_sharedOwner is not null)
                 _relocation!.Held.ImportPublished();
             held = _relocation!.Held.Select(static item => item.CreateAcceptedRecord()).ToArray();
+            _relocation.Captured.ImportPublished();
             released = _relocation.Captured.Concat(_relocation.Held).ToArray();
             _relocation.Captured.Clear();
             _relocation.Held.Clear();
@@ -1224,14 +1275,17 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private void TryCommitAcceptedWorkUnderLock(
         ZLinkSerialWorkItem candidate,
         out ZLinkSerialWorkItem item,
-        out bool scheduleDrain
+        out bool scheduleDrain,
+        bool importCaptured = false
     )
     {
         if (_nextAcceptedSequence == ulong.MaxValue)
             throw new InvalidOperationException("ZLink accepted-work sequence is exhausted.");
 
         var acceptedSequence = _nextAcceptedSequence;
-        var destination = _relocation?.Held ?? _applicationQueue;
+        var destination = importCaptured
+            ? _relocation!.Captured
+            : _relocation?.Held ?? _applicationQueue;
         CommitWorkItemUnderLock(destination, candidate, ZLinkSerialWorkLane.Application);
         _nextAcceptedSequence = acceptedSequence + 1;
 

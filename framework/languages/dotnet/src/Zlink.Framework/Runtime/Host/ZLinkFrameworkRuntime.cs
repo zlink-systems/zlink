@@ -1042,7 +1042,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     /// </summary>
     internal ValueTask<ZLinkRuntimeOperationAdmission> AdmitOperationAsync(
         bool countAsRequest = false,
-        bool boundExecution = false
+        bool boundExecution = false,
+        bool publicOutbound = false
     )
     {
         if (
@@ -1069,7 +1070,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 : ValueTask.FromResult(default(ZLinkRuntimeOperationAdmission));
         }
 
-        return AdmitUnnestedOperationAsync(countAsRequest, boundExecution);
+        return AdmitUnnestedOperationAsync(countAsRequest, boundExecution, publicOutbound);
     }
 
     private ValueTask<ZLinkRuntimeOperationAdmission> AdmitNestedRequestAsync()
@@ -1080,12 +1081,19 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         );
     }
 
-    private ZLinkRuntimeOperationAdmission? RefuseClosedApplicationAdmission() =>
-        _drainAdmission.IsSealed ? ZLinkRuntimeOperationAdmission.Refused : null;
+    //  Spec 05-host-relocation-flow §15: a Relocating or Relocated host keeps
+    //  accepting new outbound request and send from its public client; only the
+    //  shutdown seal closes host-wide admission for them. Other host work is
+    //  refused by any drain-gate seal (relocation fence or shutdown).
+    private ZLinkRuntimeOperationAdmission? RefuseClosedApplicationAdmission(bool publicOutbound) =>
+        (publicOutbound ? _drainAdmission.IsSealedForShutdown : _drainAdmission.IsSealed)
+            ? ZLinkRuntimeOperationAdmission.Refused
+            : null;
 
     private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitUnnestedOperationAsync(
         bool countAsRequest,
-        bool boundExecution
+        bool boundExecution,
+        bool publicOutbound
     )
     {
         var admitted = await _stateLane
@@ -1093,7 +1101,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             {
                 //  New host work: any drain-gate seal (relocation fence or
                 //  shutdown) refuses it.
-                if (RefuseClosedApplicationAdmission() is not null)
+                if (RefuseClosedApplicationAdmission(publicOutbound) is not null)
                     return null;
                 var executionStatus = boundExecution
                     ? _locationRuntime?.GetExecutionStatus(null)

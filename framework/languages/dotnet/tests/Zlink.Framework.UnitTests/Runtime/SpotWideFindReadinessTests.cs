@@ -184,13 +184,12 @@ public sealed partial class RelocationBehaviorConformanceTests
                 .Snapshot;
             Assert.Equal(target.LocalNodeRid, committed.Allocation.Descriptor.Rid);
             Assert.Equal(original.ObjectGeneration, committed.ObjectGeneration);
-            var progress = ZLinkAuthorityAggregateCodec
-                .Replace(null, committed.Relocation)!
-                .Value.GetProperty("relocation")
-                .GetProperty("completion");
-            Assert.Equal("0", progress.GetProperty("acceptedRequests").GetString());
-            Assert.Equal("0", progress.GetProperty("completedResults").GetString());
-            Assert.Equal("0", progress.GetProperty("pendingDeliveries").GetString());
+            Assert.Empty(
+                await authorityStore.ReadRelocationRepliesAsync(
+                    committed.Relocation!.RelocationId,
+                    default
+                )
+            );
             var spots = target.Services.GetRequiredService<IZLinkSpotManager>();
             var beforeDispatch = await spots.FindAsync(spotId);
 
@@ -206,7 +205,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             var opened = Assert.IsType<SpotRef>(await spots.FindAsync(spotId));
             Assert.Equal(original with { NodeRid = target.LocalNodeRid }, opened);
             Assert.Null(beforeDispatch);
-            var activated = Assert
+            var published = Assert
                 .IsType<ZLinkAuthorityReadResult.Found>(
                     await authorityStore.ReadAuthorityAsync(key)
                 )
@@ -214,17 +213,17 @@ public sealed partial class RelocationBehaviorConformanceTests
             Assert.Equal(
                 committed.Relocation! with
                 {
-                    Phase = ServiceWireCodec.RelocationPhase.Activated,
+                    Phase = ServiceWireCodec.RelocationPhase.Completed,
                 },
-                activated.Relocation
+                published.Relocation
             );
-            Assert.Equal(committed.AuthorityOwnerGeneration, activated.AuthorityOwnerGeneration);
+            Assert.Equal(committed.AuthorityOwnerGeneration, published.AuthorityOwnerGeneration);
 
             if (sourceObservation is not null && observer is not null)
             {
                 Assert.True(
                     ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
-                        activated.Payload.Span,
+                        published.Payload.Span,
                         out var raw
                     )
                 );
@@ -257,9 +256,9 @@ public sealed partial class RelocationBehaviorConformanceTests
                         spotId,
                         opened.ObjectGeneration,
                         target.LocalNodeRid,
-                        activated.Allocation.DescriptorLifecycleGeneration,
-                        activated.AuthorityOwnerGeneration,
-                        activated.StoreVersion
+                        published.Allocation.DescriptorLifecycleGeneration,
+                        published.AuthorityOwnerGeneration,
+                        published.StoreVersion
                     ),
                     submission.Fence
                 );
@@ -270,8 +269,8 @@ public sealed partial class RelocationBehaviorConformanceTests
                         await authorityStore.ReadAuthorityAsync(key)
                     )
                     .Snapshot;
-                Assert.Equal(activated.StoreVersion, afterClose.StoreVersion);
-                Assert.Equal(activated.Relocation, afterClose.Relocation);
+                Assert.Equal(published.StoreVersion, afterClose.StoreVersion);
+                Assert.Equal(published.Relocation, afterClose.Relocation);
                 Assert.Equal(opened.ObjectGeneration, afterClose.ObjectGeneration);
                 Assert.Equal(0, Volatile.Read(ref closingCalls));
 

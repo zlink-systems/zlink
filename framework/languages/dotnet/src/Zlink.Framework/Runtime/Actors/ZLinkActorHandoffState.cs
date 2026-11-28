@@ -46,8 +46,7 @@ internal sealed class ZLinkActorHandoffState(
 
     private sealed record DurablePrefix(
         Task Terminal,
-        Func<ZLinkActorHandoffFrame, Task>? Admit = null,
-        Task? CapturedRequests = null
+        Func<ZLinkActorHandoffFrame, Task>? Admit = null
     );
 
     // Only the handoff lane writes capture. Begin capture runs in the current
@@ -61,24 +60,23 @@ internal sealed class ZLinkActorHandoffState(
     internal Task AdmitDurablePrefix(
         string handoffId,
         Func<ZLinkActorHandoffFrame, Task> admit,
-        Func<ZLinkActorHandoffFrame, bool>? isCapturedRequest = null,
         long? acceptedThrough = null
     )
     {
         return AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                if (
-                    !string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
-                    || _targetPhase != ZLinkActorTargetHandoffPhase.Replaying
-                )
+                if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal))
                     throw new InvalidOperationException(
                         "Actor durable prefix has no active target."
                     );
                 if (_canonicalMaintenanceDrain is { } previous)
                     return previous.Terminal;
+                if (_targetPhase != ZLinkActorTargetHandoffPhase.Replaying)
+                    throw new InvalidOperationException(
+                        "Actor durable prefix has no replay phase."
+                    );
                 var terminals = new List<Task>(_frames.Count);
-                List<Task>? requests = null;
                 var ordered = acceptedThrough is { } through
                     ? _frames
                         .OrderBy(frame => RelocationQueueGroup(frame, through))
@@ -86,18 +84,11 @@ internal sealed class ZLinkActorHandoffState(
                     : (IEnumerable<ZLinkActorHandoffFrame>)_frames;
                 foreach (var frame in ordered)
                 {
-                    var record = admit(frame);
-                    terminals.Add(record);
-                    if (isCapturedRequest?.Invoke(frame) == true)
-                        (requests ??= []).Add(record);
+                    terminals.Add(admit(frame));
                 }
                 var terminal = Task.WhenAll(terminals);
                 ObserveTerminal(terminal);
-                var capturedRequests = requests is null
-                    ? Task.CompletedTask
-                    : Task.WhenAll(requests);
-                ObserveTerminal(capturedRequests);
-                _canonicalMaintenanceDrain = new DurablePrefix(terminal, admit, capturedRequests);
+                _canonicalMaintenanceDrain = new DurablePrefix(terminal, admit);
                 // Queue ownership is established, but public Join completion
                 // still owns admission. Complete releases the reserved prefix.
                 return terminal;
@@ -111,22 +102,6 @@ internal sealed class ZLinkActorHandoffState(
             return 0;
         return frame.RouteContext.MessageFollowHopCount != 0 ? 1 : 2;
     }
-
-    internal Task? CapturedRequestDelivery(string handoffId) =>
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-                string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
-                    ? _canonicalMaintenanceDrain?.CapturedRequests
-                    : null
-            )
-        );
-
-    internal bool HasPendingCapturedRequests() =>
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-                _canonicalMaintenanceDrain?.CapturedRequests is { IsCompletedSuccessfully: false }
-            )
-        );
 
     internal Task TargetActivation =>
         AwaitStateLane(
@@ -203,11 +178,9 @@ internal sealed class ZLinkActorHandoffState(
                         is ZLinkActorSourceHandoffPhase.Capturing
                             or ZLinkActorSourceHandoffPhase.AbortRestoring
                             or ZLinkActorSourceHandoffPhase.MessageFollowCommitted
+                    || IsTargetHandoffActiveLocked()
                     || _targetPhase
-                        is ZLinkActorTargetHandoffPhase.Importing
-                            or ZLinkActorTargetHandoffPhase.Replaying
-                            or ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
-                            or ZLinkActorTargetHandoffPhase.Failed
+                        is ZLinkActorTargetHandoffPhase.Failed
                             or ZLinkActorTargetHandoffPhase.Quarantined
                 )
                     throw new InvalidOperationException(
@@ -346,7 +319,9 @@ internal sealed class ZLinkActorHandoffState(
 
     private bool IsTargetHandoffActiveLocked() =>
         IsTargetAdmissionClosedLocked()
-        || _targetPhase == ZLinkActorTargetHandoffPhase.AdmissionOpenDraining;
+        || _targetPhase == ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
+        || _targetPhase == ZLinkActorTargetHandoffPhase.Completed
+            && _targetCompletion is { Task.IsCompleted: false };
 
     private bool IsTargetAdmissionClosedLocked() =>
         _targetPhase
@@ -1329,19 +1304,38 @@ internal sealed class ZLinkActorHandoffState(
         );
     }
 
+    internal void OpenTransferredActorDispatch(string handoffId)
+    {
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (
+                    !string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
+                    || !TryOpenTargetDispatchLocked()
+                )
+                    throw new InvalidOperationException(
+                        $"Actor '{actorId}' has no dispatch to open."
+                    );
+            })
+        );
+    }
+
     private bool TryCompleteTargetHandoffLocked(string handoffId)
+    {
+        if (!TryOpenTargetDispatchLocked())
+            return false;
+        ReleaseTargetCompletionLocked(handoffId);
+        return true;
+    }
+
+    private bool TryOpenTargetDispatchLocked()
     {
         if (_targetPhase == ZLinkActorTargetHandoffPhase.Completed)
         {
-            if (
-                _frames.Count == 0
-                && _canonicalMaintenanceDrain?.CapturedRequests
-                    is not { IsCompletedSuccessfully: false }
-            )
+            if (_frames.Count == 0)
                 _canonicalMaintenanceDrain = null;
             _canonicalMaintenanceReplayReservations.Clear();
             _targetReplayCompletion?.TrySetResult();
-            ReleaseTargetCompletionLocked(handoffId);
             return true;
         }
         if (
@@ -1360,7 +1354,6 @@ internal sealed class ZLinkActorHandoffState(
         _sourceTrailingImported = false;
         _canonicalMaintenanceReplayReservations.Clear();
         _targetReplayCompletion?.TrySetResult();
-        ReleaseTargetCompletionLocked(handoffId);
         return true;
     }
 
@@ -1658,11 +1651,14 @@ internal sealed class ZLinkActorHandoffState(
                         is not (
                             ZLinkActorTargetHandoffPhase.AuthorityCommitted
                             or ZLinkActorTargetHandoffPhase.Replaying
+                            or ZLinkActorTargetHandoffPhase.Completed
                         )
                 )
                     throw new InvalidOperationException(
                         $"Actor '{actorId}' has no committed canonical maintenance import."
                     );
+                if (_targetPhase == ZLinkActorTargetHandoffPhase.Completed)
+                    return [];
                 _targetPhase = ZLinkActorTargetHandoffPhase.Replaying;
                 return _frames.ToArray();
             })

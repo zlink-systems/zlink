@@ -49,7 +49,9 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
     )
     {
         using var operation = (
-            await runtime.AdmitOperationAsync(boundExecution: true).ConfigureAwait(false)
+            await runtime
+                .AdmitOperationAsync(boundExecution: true, publicOutbound: true)
+                .ConfigureAwait(false)
         ).Enter();
         // Spec 06-framework-api §7: a call is used only once admission accepts it.
         call?.ClaimAfterAdmission();
@@ -174,7 +176,11 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         {
             using var operation = (
                 await runtime
-                    .AdmitOperationAsync(countAsRequest: true, boundExecution: true)
+                    .AdmitOperationAsync(
+                        countAsRequest: true,
+                        boundExecution: true,
+                        publicOutbound: true
+                    )
                     .ConfigureAwait(false)
             ).Enter();
             pending.Token.ThrowIfCancellationRequested();

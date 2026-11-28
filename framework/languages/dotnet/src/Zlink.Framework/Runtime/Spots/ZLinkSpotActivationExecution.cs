@@ -2786,18 +2786,20 @@ internal abstract partial class ZLinkSpotActivation
         return ValueTask.CompletedTask;
     }
 
-    internal Task? AdmitAcceptedReplayJob(
+    internal async ValueTask<Task> AdmitAcceptedRelocationJobAsync(
         ZLinkRelocationQueuedJob job,
         string sourceMeshName,
-        Func<byte[][]?, CancellationToken, ValueTask> completeRequest
+        ZLinkSpotRelocationSeal admissionSeal,
+        Func<byte[][]?, CancellationToken, ValueTask> complete,
+        CancellationToken cancellationToken
     )
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var journal = DecodeRelocationReplayRecord(job, sourceMeshName);
         if (journal.ReplyRouteId != 0 && job.CanonicalRequest is null)
             throw new ZLinkRelocationDataLostException(
                 "A legacy relocation reply has no exact request-source fence for service-wire relay."
             );
-
         var parts = ZLinkRawRouterServicePort.CreateMessages(journal.Parts);
         byte[][]? capturedReply = null;
         Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
@@ -2822,9 +2824,9 @@ internal abstract partial class ZLinkSpotActivation
             ownerLeaseGeneration: journal.OwnerLeaseGeneration,
             messageFollowHopCount: journal.MessageFollowHopCount,
             sourceNodeGeneration: journal.SourceNodeGeneration,
+            requestSource: journal.RequestSource,
             instanceIntent: journal.InstanceIntent
         );
-        Task terminal;
         try
         {
             var payload = job.CanonicalRequest is null
@@ -2834,43 +2836,28 @@ internal abstract partial class ZLinkSpotActivation
                     journal.ReplyRouteId,
                     journal.RequestSource
                 );
-            var admission = _serial.QueueAccepted(
-                payload,
-                async (activation, ct) =>
-                {
-                    try
+            return await _serial
+                .ImportAcceptedRelocationAsync(
+                    admissionSeal.QueueSeal,
+                    payload,
+                    async (activation, token) =>
                     {
-                        await activation
-                            ._dispatcher.DispatchRouteAsync(received, ct)
-                            .ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        received.Dispose();
-                    }
-                },
-                received.Dispose,
-                previousOwnerMessageFollow: true,
-                out terminal
-            );
-            if (admission != ZLinkAcceptedWorkAdmission.Accepted)
-                throw new ZLinkFrameworkException(
-                    admission.ErrorKind(),
-                    "Spot replay queue admission failed."
-                );
+                        using (received)
+                        {
+                            await activation
+                                ._dispatcher.DispatchRouteAsync(received, token)
+                                .ConfigureAwait(false);
+                            await complete(capturedReply, token).ConfigureAwait(false);
+                        }
+                    },
+                    received.Dispose
+                )
+                .ConfigureAwait(false);
         }
         catch
         {
             received.Dispose();
             throw;
-        }
-
-        return journal.ReplyRouteId == 0 ? null : DeliverCapturedRequestAsync();
-
-        async Task DeliverCapturedRequestAsync()
-        {
-            await terminal.ConfigureAwait(false);
-            await completeRequest(capturedReply, _runtime.ShutdownToken).ConfigureAwait(false);
         }
     }
 

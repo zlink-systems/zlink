@@ -1,10 +1,5 @@
 namespace Zlink.Framework.Runtime.Spots;
 
-internal static class ZLinkRelocationReplyLifetime
-{
-    internal static readonly TimeSpan TerminalRetention = TimeSpan.FromHours(24);
-}
-
 internal sealed class ZLinkRelocationReplyTarget(
     Func<
         ZLinkServiceWireCodec.ReplyRelayRecord,

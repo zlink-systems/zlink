@@ -378,7 +378,6 @@ because the descriptor changed.
 |---|---|
 | Concurrent `Relocate` with the same mode and effective target version | Shares the deadline of the first operation. A later call doesn't change the deadline. |
 | Concurrent `Relocate` with a different mode or effective target version | `Blocked/OperationInProgress` without waiting. |
-| `Relocate` of an object whose previous relocation still has completion results to deliver (`pendingDeliveries` > 0) | `Blocked/OperationInProgress` without waiting. Recording the reason follows [Location runtime §9.3](01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed). |
 | `Relocate` again after `Blocked` | `Blocked` isn't stored, so host conditions are re-checked from the start. |
 | `Relocate` again in `Relocated` | Returns the first `Relocated/None`'s mode and effective target version. |
 | Concurrent `Shutdown` | Shares the same operation and stores the terminal result. |
@@ -940,6 +939,7 @@ The path from the source runtime to the current owner is called an
 | STREAM | Excluded from new binding; existing sessions are handled via unit barrier. | Excluded from new binding; infrastructure connection is kept. | Doesn't accept new sessions; only pending reply and binding barrier are processed. |
 | ClientServer server | Excluded from new selection; accepted handlers and reply routes are kept. | Service connection is kept but excluded from new selection. | Closes handler admission; only accepted requests' reply routes are kept. |
 | Classic fanout publisher | Doesn't create new automatic subscriber connections; processes accepted events. | Infrastructure is kept but new publish admission isn't accepted. | Closes publish admission; only accepted events are processed. |
+| New outbound request or send from this host's public client | Accepted. Host-wide admission isn't closed; if the target is a unit sealed on this host, that unit's rules apply. | Accepted. | Ends with the shutdown result (§14). |
 
 An already-accepted request only ends once, via reply, error, timeout, or shutdown. Even
 while an application callback waits, infrastructure execution keeps proceeding with

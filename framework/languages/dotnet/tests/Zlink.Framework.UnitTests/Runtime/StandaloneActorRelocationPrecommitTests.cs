@@ -201,11 +201,12 @@ public sealed partial class StandaloneActorRelocationPrecommitTests
             targetAuthority,
             CancellationToken.None
         );
-        var relocationRecord = ZLinkAuthorityAggregateCodec
-            .Replace(null, committed.Relocation)!
-            .Value.GetProperty("relocation");
-        Assert.True(relocationRecord.TryGetProperty("completion", out var completion));
-        Assert.Equal("0", completion.GetProperty("acceptedRequests").GetString());
+        Assert.False(
+            ZLinkAuthorityAggregateCodec
+                .Replace(null, committed.Relocation)!
+                .Value.GetProperty("relocation")
+                .TryGetProperty("completion", out _)
+        );
         var committedState = Projection(committed);
         Assert.Equal(4, committedState.Phase);
         Assert.Equal(prepare.TargetAttemptGeneration, committedState.TargetAttemptGeneration);
@@ -835,6 +836,28 @@ public sealed partial class StandaloneActorRelocationPrecommitTests
         Assert.Equal(source.Captured.StoreVersion, current.Snapshot.StoreVersion);
     }
 
+    private static async ValueTask<ZLinkAuthoritySnapshot> NormalizeCommittedAuthorityAsync(
+        IZLinkLocationRepository store,
+        ZLinkAuthoritySnapshot committed,
+        ZLinkActorAuthorityPayload authority
+    )
+    {
+        var result = await store.CompareExchangeAuthorityAsync(
+            ZLinkActorAuthorityPayloadCodec.AuthorityKey(authority.ActorId),
+            committed.StoreVersion,
+            new ZLinkAuthorityMutation.Put(
+                ZLinkActorAuthorityPayloadCodec.Encode(authority),
+                ZLinkAuthorityGenerationTransition.Preserve,
+                null,
+                null
+            )
+            {
+                ClearRelocation = true,
+            }
+        );
+        return Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(result).Snapshot;
+    }
+
     [Fact]
     public async Task Source_settlement_recognizes_target_commit_after_target_starts_another_relocation()
     {
@@ -848,8 +871,13 @@ public sealed partial class StandaloneActorRelocationPrecommitTests
             source.TargetAuthority,
             CancellationToken.None
         );
-        _ = await coordinator.BeginPreparingAsync(
+        var steady = await NormalizeCommittedAuthorityAsync(
+            store,
             committed,
+            source.TargetAuthority
+        );
+        _ = await coordinator.BeginPreparingAsync(
+            steady,
             source.TargetAuthority,
             source.TargetAuthority,
             Guid.NewGuid(),
@@ -915,21 +943,11 @@ public sealed partial class StandaloneActorRelocationPrecommitTests
                 source.TargetAuthority,
                 CancellationToken.None
             );
-            // Finish the first target's activation before it accepts the next move.
-            var steady = Assert
-                .IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
-                    await inner.CompareExchangeAuthorityAsync(
-                        source.Key,
-                        committed.StoreVersion,
-                        new ZLinkAuthorityMutation.Put(
-                            ZLinkActorAuthorityPayloadCodec.Encode(source.TargetAuthority),
-                            ZLinkAuthorityGenerationTransition.Preserve,
-                            null,
-                            null
-                        )
-                    )
-                )
-                .Snapshot;
+            var steady = await NormalizeCommittedAuthorityAsync(
+                inner,
+                committed,
+                source.TargetAuthority
+            );
             var thirdOwner = Assert
                 .IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
                     await inner.ClaimOwnerLeaseAsync("third-owner", TimeSpan.FromMinutes(1))
@@ -981,20 +999,7 @@ public sealed partial class StandaloneActorRelocationPrecommitTests
                 CancellationToken.None
             );
             if (normalizeSecond)
-                second = Assert
-                    .IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
-                        await inner.CompareExchangeAuthorityAsync(
-                            source.Key,
-                            second.StoreVersion,
-                            new ZLinkAuthorityMutation.Put(
-                                ZLinkActorAuthorityPayloadCodec.Encode(thirdAuthority),
-                                ZLinkAuthorityGenerationTransition.Preserve,
-                                null,
-                                null
-                            )
-                        )
-                    )
-                    .Snapshot;
+                second = await NormalizeCommittedAuthorityAsync(inner, second, thirdAuthority);
             Assert.Equal(source.Steady.ObjectGeneration, second.ObjectGeneration);
             Assert.True(second.AuthorityOwnerGeneration > committed.AuthorityOwnerGeneration);
             Assert.NotEqual(source.Target.OwnerId, second.OwnerId);

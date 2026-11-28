@@ -148,16 +148,45 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             var key = identity.Participants.Single().AuthorityKey;
             var authority = current.Authority;
             var relocation = authority.Relocation;
-            if (relocation is { Completion: not null })
+            if (relocation is { Phase: < ServiceWireCodec.RelocationPhase.Completed })
             {
-                var completion = new ZLinkRelocationCompletionStore(
-                    authorityStore,
-                    relocationStore
-                );
-                await completion.ReadAsync(relocation, cancellationToken).ConfigureAwait(false);
-                authority = await completion
-                    .MarkCompletedAsync(key, authority, cancellationToken)
-                    .ConfigureAwait(false);
+                try
+                {
+                    var completed = await authorityStore
+                        .CompareExchangeAuthorityAsync(
+                            key,
+                            authority.StoreVersion,
+                            new ZLinkAuthorityMutation.Put(
+                                authority.Payload,
+                                ZLinkAuthorityGenerationTransition.Preserve,
+                                null,
+                                null
+                            )
+                            {
+                                Relocation = relocation with
+                                {
+                                    Phase = ServiceWireCodec.RelocationPhase.Completed,
+                                },
+                            },
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    if (completed is ZLinkAuthorityCompareExchangeResult.Conflict)
+                        continue;
+                    if (
+                        completed is not ZLinkAuthorityCompareExchangeResult.Stored storedCompletion
+                    )
+                        throw new InvalidOperationException(
+                            "Authority Store rejected Actor relocation completion."
+                        );
+                    authority = storedCompletion.Snapshot;
+                    relocation = authority.Relocation;
+                }
+                catch (Exception error)
+                    when (ZLinkLocationStoreFailure.IsUnavailable(error, cancellationToken))
+                {
+                    continue;
+                }
             }
             // Direct transfer (spec 52 §3.1.7) carries the immutable root on
             // command 52 rather than through the Relocation Store.  Its
@@ -211,8 +240,6 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                         && observed.Snapshot.Payload.Span.SequenceEqual(payload.Span)
                     )
                     {
-                        await ReleaseUnreferencedRootAsync(relocation?.Completion?.Reference)
-                            .ConfigureAwait(false);
                         return observed.Snapshot;
                     }
                     if (
@@ -224,8 +251,6 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                 }
                 if (direct is ZLinkAuthorityCompareExchangeResult.Stored directStored)
                 {
-                    await ReleaseUnreferencedRootAsync(relocation?.Completion?.Reference)
-                        .ConfigureAwait(false);
                     return directStored.Snapshot;
                 }
                 if (direct is ZLinkAuthorityCompareExchangeResult.Conflict)
@@ -264,8 +289,6 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             if (exchanged is ZLinkAuthorityCompareExchangeResult.Stored stored)
             {
                 await ReleaseUnreferencedRootAsync(relocationReference).ConfigureAwait(false);
-                await ReleaseUnreferencedRootAsync(relocation?.Completion?.Reference)
-                    .ConfigureAwait(false);
                 return stored.Snapshot;
             }
             if (exchanged is not ZLinkAuthorityCompareExchangeResult.Conflict)

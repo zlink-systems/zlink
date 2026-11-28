@@ -1,5 +1,6 @@
-using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.LocationProvider;
+using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests.Runtime;
@@ -7,11 +8,13 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class HostRelocationSealStageTests
 {
     [Fact]
-    public async Task SpotWide_member_reply_waits_for_published_completion()
+    public async Task SpotWide_publication_finishes_while_the_result_CAS_response_is_held()
     {
         var capture = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var trace = new RelocationBehaviorTrace { SourceActorCaptureGate = capture.Task };
         CommitResponseGateStore? publication = null;
+        ZLinkProviderLocationRepository? repository = null;
+        Guid relocationId = Guid.Empty;
         var timeout = TimeSpan.FromSeconds(10);
 
         await RunBoundMemberRelocationAsync(
@@ -31,30 +34,21 @@ public sealed partial class HostRelocationSealStageTests
                         .AsTask();
                     await context.Backlog.WaitForBacklogAsync(context.ActorId).WaitAsync(timeout);
                     capture.TrySetResult();
-                    var committed = publication!.Committed.Task;
-                    Assert.Same(committed, await Task.WhenAny(committed, reply).WaitAsync(timeout));
-                    var published = await committed;
+
+                    _ = await publication!.Committed.Task.WaitAsync(timeout);
                     Assert.False(reply.IsCompleted);
-                    var progress = CompletionJson(published);
-                    Assert.Equal("1", progress.GetProperty("acceptedRequests").GetString());
-                    Assert.Equal("1", progress.GetProperty("completedResults").GetString());
-                    Assert.Equal("1", progress.GetProperty("pendingDeliveries").GetString());
-                    Assert.False(
-                        string.IsNullOrWhiteSpace(progress.GetProperty("reference").GetString())
+                    var row = Assert.Single(
+                        await repository!.ReadRelocationRepliesAsync(relocationId, default)
                     );
-                    var blocked = await context
-                        .Target.Services.GetRequiredService<IZLinkFrameworkRuntime>()
-                        .RelocateAsync(
-                            new ZLinkFrameworkRelocationOptions
-                            {
-                                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
-                                Deadline = timeout,
-                            }
-                        );
-                    Assert.Equal(ZLinkFrameworkRelocationOutcome.Blocked, blocked.Outcome);
+                    Assert.Equal(ZLinkRelocationCompletionDelivery.Pending, row.Entry.Delivery);
+
+                    // The row write is visible but its caller cannot relay the result yet.
+                    // The target should still unpublish and report steady authority.
+                    await WaitForSteadyAsync(repository, context.ActorId, timeout);
+                    Assert.False(reply.IsCompleted);
                     Assert.Equal(
-                        ZLinkFrameworkRelocationReason.OperationInProgress,
-                        blocked.Reason
+                        row.Entry.ObjectKey,
+                        ZLinkActorAuthorityPayloadCodec.AuthorityKey(context.ActorId).Value
                     );
                 }
                 finally
@@ -71,19 +65,52 @@ public sealed partial class HostRelocationSealStageTests
                 Assert.Equal(1, trace.DeliveredMarkers.Count(marker => marker == "saved"));
             },
             (inner, actorId, _) =>
-                publication = new CommitResponseGateStore(
+            {
+                repository = new ZLinkProviderLocationRepository(inner);
+                return publication = new CommitResponseGateStore(
                     inner,
                     actorId,
-                    snapshot =>
-                        CompletionJson(snapshot) is { ValueKind: JsonValueKind.Object } progress
-                        && progress.GetProperty("pendingDeliveries").GetString() == "1"
-                )
+                    _ => true,
+                    batch =>
+                    {
+                        var put = batch
+                            .Mutations.OfType<ZLinkStoreMutation.Put>()
+                            .SingleOrDefault(write =>
+                                write.Key.Value.StartsWith(
+                                    "$zlink/relocation-reply/",
+                                    StringComparison.Ordinal
+                                )
+                                && batch
+                                    .Conditions.OfType<ZLinkStoreCondition.Version>()
+                                    .Any(c => c.Key == write.Key)
+                            );
+                        if (put is null)
+                            return false;
+                        var row = ZLinkRelocationReplyRow.Decode(put.Key, put.Bytes);
+                        relocationId = row.RelocationId;
+                        return row.Entry.Delivery == ZLinkRelocationCompletionDelivery.Pending;
+                    }
+                );
+            }
         );
     }
 
-    private static JsonElement CompletionJson(ZLinkAuthoritySnapshot snapshot) =>
-        ZLinkAuthorityAggregateCodec.Replace(null, snapshot.Relocation) is { } aggregate
-        && aggregate.GetProperty("relocation").TryGetProperty("completion", out var completion)
-            ? completion
-            : default;
+    private static async Task WaitForSteadyAsync(
+        ZLinkProviderLocationRepository repository,
+        string actorId,
+        TimeSpan timeout
+    )
+    {
+        using var deadline = new CancellationTokenSource(timeout);
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        while (true)
+        {
+            if (
+                await repository.ReadAuthorityAsync(key, deadline.Token)
+                is ZLinkAuthorityReadResult.Found { Snapshot.Relocation: null }
+            )
+                return;
+            await Task.Delay(TimeSpan.FromMilliseconds(5), deadline.Token);
+        }
+    }
 }

@@ -188,7 +188,10 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         )
         {
             _relocationReplyRelayTarget = new ZLinkRelocationReplyTarget(
-                (relay, payload) => runtime.CompleteRelocationReply(this, relay, payload)
+                (relay, payload) =>
+                    IsAuthenticatedRelocationReplyCoordinator(relay.Coordinator)
+                        ? runtime.CompleteRelocationReply(this, relay, payload)
+                        : default
             );
             relayBackend.SetRelocationReplyRelayTarget(_relocationReplyRelayTarget);
         }
@@ -1366,6 +1369,26 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     target.NodeRid,
                     target.LifecycleGeneration
                 )
+            );
+    }
+
+    private bool IsAuthenticatedRelocationReplyCoordinator(
+        ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator
+    )
+    {
+        var observed =
+            coordinator.NodeRid == Node.RoutingId
+                ? LocalSessionOwner
+                : (Node as IZLinkBackendRequestSourceFenceObserver)?.ResolveRequestSourceFence(
+                    coordinator.NodeRid,
+                    coordinator.NodeGeneration
+                );
+        return observed
+            == new ZLinkServiceWireCodec.RequestSourceFence(
+                coordinator.OwnerId,
+                coordinator.LeaseGeneration,
+                coordinator.NodeRid,
+                coordinator.NodeGeneration
             );
     }
 

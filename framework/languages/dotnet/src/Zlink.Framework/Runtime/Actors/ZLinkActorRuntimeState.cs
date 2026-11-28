@@ -49,7 +49,6 @@ internal sealed class ZLinkActorRuntimeState(
     private ZLinkActorHandlerActivation? _handlerActivation;
     private bool _handlerActivationClosed;
     private Task? _terminalLifecycleCompletion;
-    private ZLinkAuthorityRelocation? _relocationCompletionCandidate;
     private int _contextInvalidated;
 
     internal ZLinkActorRuntimeState(
@@ -102,18 +101,6 @@ internal sealed class ZLinkActorRuntimeState(
     public ZLinkActorContext? Context { get; private set; }
 
     public IZLinkActor? Actor { get; private set; }
-
-    internal ZLinkAuthorityRelocation? RelocationCompletionCandidate =>
-        Volatile.Read(ref _relocationCompletionCandidate);
-
-    internal void TrackRelocationCompletion(ZLinkAuthorityRelocation? relocation)
-    {
-        if (relocation is { Target: not null, Completion.IsReady: false })
-            Volatile.Write(ref _relocationCompletionCandidate, relocation);
-    }
-
-    internal void ClearRelocationCompletionCandidate(ZLinkAuthorityRelocation candidate) =>
-        Interlocked.CompareExchange(ref _relocationCompletionCandidate, null, candidate);
 
     /// <summary>MeshNode that activated this Actor in the current process.</summary>
     internal string? MeshName => Activation?.MeshName ?? Context?.MeshName;
@@ -197,10 +184,6 @@ internal sealed class ZLinkActorRuntimeState(
 
     internal bool OwnsCurrentDispatch =>
         AmbientDispatch.Value is { IsActive: true } ownership
-        && ReferenceEquals(ownership.State, this);
-
-    internal bool RegisteredJoinWithPendingCapturedRequest =>
-        AmbientDispatch.Value is { IsActive: true, PendingCapturedRequestAtJoin: true } ownership
         && ReferenceEquals(ownership.State, this);
 
     private async Task<T> CompleteHandlerActivationCoreAsync<T>(
@@ -2062,16 +2045,15 @@ internal sealed class ZLinkActorRuntimeState(
         );
     }
 
-    public DispatchScope EnterDispatch(bool pendingCapturedRequestAtJoin = false)
+    public DispatchScope EnterDispatch()
     {
         var previousAmbient = AmbientDispatch.Value;
-        var ownership = new DispatchOwnership(this, pendingCapturedRequestAtJoin);
+        var ownership = new DispatchOwnership(this);
         AmbientDispatch.Value = ownership;
         return new DispatchScope(previousAmbient, ownership);
     }
 
-    public DispatchScope EnterDeferredJoinExecution(bool pendingCapturedRequestAtJoin = false) =>
-        EnterDispatch(pendingCapturedRequestAtJoin);
+    public DispatchScope EnterDeferredJoinExecution() => EnterDispatch();
 
     public DispatchScope EnterForwardedDispatchExecution() => EnterDispatch();
 
@@ -2142,15 +2124,11 @@ internal sealed class ZLinkActorRuntimeState(
         }
     }
 
-    internal sealed class DispatchOwnership(
-        ZLinkActorRuntimeState state,
-        bool pendingCapturedRequestAtJoin
-    )
+    internal sealed class DispatchOwnership(ZLinkActorRuntimeState state)
     {
         private int _active = 1;
 
         public ZLinkActorRuntimeState State { get; } = state;
-        public bool PendingCapturedRequestAtJoin { get; } = pendingCapturedRequestAtJoin;
 
         public bool IsActive => Volatile.Read(ref _active) != 0;
 

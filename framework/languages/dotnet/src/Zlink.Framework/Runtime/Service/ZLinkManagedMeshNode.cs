@@ -100,15 +100,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     // Start of the receive owner's current deadline management turn.
     private TimeSpan _deadlineVisitStartedAt;
-    private readonly Dictionary<
-        RelocationReplyTerminalKey,
-        RelocationReplyTerminal
-    > _relocationReplyTerminals = [];
-    private readonly Dictionary<
-        RelocationReplyTerminalKey,
-        PendingOperation
-    > _relocationReplyOperations = [];
-    private readonly Queue<RelocationReplyTerminalKey> _relocationReplyTerminalOrder = [];
     private readonly ConcurrentDictionary<ZLinkSpotId, ZLinkManagedSpot> _spots = new();
     private readonly ConcurrentDictionary<ZLinkActorId, ManagedActor> _actors = new();
     private readonly ConcurrentDictionary<
@@ -4122,7 +4113,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 )
                 .ToArray();
             while (_operationDeadlines.Head is { } current)
-                RemoveRelocationReplyOperationUnderLock(current, rememberTerminal: true);
+                UnlinkOperationDeadline(current);
             Volatile.Write(ref _nextDeadlineVisitTicks, long.MaxValue);
             return taken;
         });
@@ -6066,7 +6057,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         ZLinkFrameworkErrorKind.ShuttingDown,
                         "The mesh operation registry is closed."
                     );
-                RemoveExpiredRelocationReplyTerminalsUnderLock(_deadlineClock.Elapsed);
                 if (operationId.High != _lifecycleGeneration || operationId.Low == 0)
                     throw new ArgumentException(
                         "The operation id must be allocated by this MeshNode lifecycle.",
@@ -6087,22 +6077,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 bool wakeReceiveOwner;
                 try
                 {
-                    if (IsRelocatableRequest(kind))
-                    {
-                        var key = new RelocationReplyTerminalKey(
-                            operationId.Low,
-                            operation.OperationId
-                        );
-                        if (!_relocationReplyOperations.TryAdd(key, operation))
-                            throw new InvalidOperationException(
-                                "The relocation reply operation id was reused."
-                            );
-                    }
                     wakeReceiveOwner = IndexOperationDeadline(operation);
                 }
                 catch (Exception error)
                 {
-                    RemoveRelocationReplyOperationUnderLock(operation, rememberTerminal: false);
+                    UnlinkOperationDeadline(operation);
                     if (awaitCompletion)
                         FailNativeDeadline(operation, error);
                     else
@@ -6138,7 +6117,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     else
                     {
                         TryRemoveOperation(pair);
-                        RemoveRelocationReplyOperationUnderLock(operation, rememberTerminal: false);
+                        UnlinkOperationDeadline(operation);
                         throw;
                     }
                 }
@@ -6353,62 +6332,37 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         ArgumentNullException.ThrowIfNull(payload);
         var physicalSource = expectedSource ?? _localRequestSourceFence;
-        var key = new RelocationReplyTerminalKey(relay.ReplyRouteId, relay.OperationId);
-        PendingOperation? pending = null;
-        ZLinkServiceWireCodec.RequestSourceFence requestSource = default;
-        var alreadyTerminal = false;
-        var accepted =
-            _operations.TryGetValue(relay.ReplyRouteId, out pending)
-            && IsRelocatableRequest(pending.Kind)
-            && pending.OperationId == relay.OperationId
-            && pending.RequestSource != default
-            && pending.RequestSource == physicalSource
-            && _operations.TryRemove(
-                new KeyValuePair<ulong, PendingOperation>(relay.ReplyRouteId, pending)
-            );
-        if (accepted)
-            requestSource = pending!.RequestSource;
-        else
-        {
-            accepted = RunOperation(() =>
-            {
-                var now = _deadlineClock.Elapsed;
-                RemoveExpiredRelocationReplyTerminalsUnderLock(now);
-                if (_relocationReplyTerminals.TryGetValue(key, out var terminal))
-                {
-                    requestSource = terminal.RequestSource;
-                    alreadyTerminal = true;
-                    return true;
-                }
-                if (
-                    _relocationReplyOperations.TryGetValue(key, out var completed)
-                    && completed.RequestSource != default
-                    && completed.RequestSource == physicalSource
-                    && !_operations.ContainsKey(completed.OperationId.Low)
-                )
-                {
-                    requestSource = completed.RequestSource;
-                    alreadyTerminal = true;
-                    RemoveRelocationReplyOperationUnderLock(completed, rememberTerminal: true);
-                    return true;
-                }
-                return false;
-            });
-        }
-
-        if (!accepted)
+        var matchesLocalLifecycle = relay.OperationId.High == _lifecycleGeneration;
+        if (physicalSource == default || (expectedSource.HasValue && !matchesLocalLifecycle))
             return default;
 
-        if (alreadyTerminal)
+        PendingOperation? pending = null;
+        if (matchesLocalLifecycle)
+            _operations.TryGetValue(relay.OperationId.Low, out pending);
+        if (
+            pending is not null
+            && (
+                relay.ReplyRouteId != relay.OperationId.Low
+                || !IsRelocatableRequest(pending.Kind)
+                || pending.RequestSource != physicalSource
+            )
+        )
+            return default;
+        if (
+            pending is null
+            || !TryRemoveOperation(
+                new KeyValuePair<ulong, PendingOperation>(relay.ReplyRouteId, pending)
+            )
+        )
         {
             ZLinkMessageParts.DisposeAll(payload);
             return new ZLinkRelocationReplyCompletion(
                 ZLinkRelocationReplyCompletionState.AlreadyTerminal,
-                requestSource
+                physicalSource
             );
         }
 
-        pending!.Complete();
+        pending.Complete();
         if (
             !pending.DispatchCompletion(
                 new ManagedRequestCompletion(
@@ -6429,7 +6383,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         return new ZLinkRelocationReplyCompletion(
             ZLinkRelocationReplyCompletionState.TerminalReceived,
-            requestSource
+            physicalSource
         );
     }
 
@@ -6438,62 +6392,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             is MeshOperationKind.ActorRequest
                 or MeshOperationKind.SpotRequest
                 or MeshOperationKind.InstanceSpotRequest;
-
-    private void RemoveRelocationReplyOperationUnderLock(
-        PendingOperation operation,
-        bool rememberTerminal
-    )
-    {
-        UnlinkOperationDeadline(operation);
-        if (!IsRelocatableRequest(operation.Kind))
-            return;
-        var key = new RelocationReplyTerminalKey(operation.OperationId.Low, operation.OperationId);
-        if (
-            _relocationReplyOperations.TryGetValue(key, out var current)
-            && ReferenceEquals(current, operation)
-        )
-            _relocationReplyOperations.Remove(key);
-        else
-            return;
-        if (!rememberTerminal || operation.RequestSource == default)
-            return;
-        var now = _deadlineClock.Elapsed;
-        RemoveExpiredRelocationReplyTerminalsUnderLock(now);
-        RememberRelocationReplyTerminalUnderLock(
-            key,
-            new RelocationReplyTerminal(
-                now + ZLinkRelocationReplyLifetime.TerminalRetention,
-                operation.RequestSource
-            )
-        );
-    }
-
-    private void RemoveExpiredRelocationReplyTerminalsUnderLock(TimeSpan now)
-    {
-        while (_relocationReplyTerminalOrder.TryPeek(out var key))
-        {
-            if (!_relocationReplyTerminals.TryGetValue(key, out var terminal))
-            {
-                _relocationReplyTerminalOrder.Dequeue();
-                continue;
-            }
-            if (terminal.ExpiresAt > now)
-                break;
-            _relocationReplyTerminalOrder.Dequeue();
-            _relocationReplyTerminals.Remove(key);
-        }
-    }
-
-    private void RememberRelocationReplyTerminalUnderLock(
-        RelocationReplyTerminalKey key,
-        RelocationReplyTerminal terminal
-    )
-    {
-        if (_relocationReplyTerminals.TryAdd(key, terminal))
-            _relocationReplyTerminalOrder.Enqueue(key);
-        else
-            _relocationReplyTerminals[key] = terminal;
-    }
 
     private bool TryGetActor(ActorRef actorRef, out ManagedActor actor) =>
         _actors.TryGetValue(
@@ -13290,7 +13188,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             || !ReferenceEquals(current, active)
         )
         {
-            RemoveRelocationReplyOperationUnderLock(current, rememberTerminal: true);
+            UnlinkOperationDeadline(current);
             return false;
         }
         if (current.Deadline.Ticks > now)
@@ -13301,7 +13199,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
         )
             return false;
-        RemoveRelocationReplyOperationUnderLock(current, rememberTerminal: true);
+        UnlinkOperationDeadline(current);
         current.Complete();
         if (
             !current.DispatchCompletion(
@@ -14963,16 +14861,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RequestResult Result,
         IReadOnlyList<Message> Parts,
         int FailureErrno = 0
-    );
-
-    private readonly record struct RelocationReplyTerminalKey(
-        ulong ReplyRouteId,
-        MeshOperationId OperationId
-    );
-
-    private readonly record struct RelocationReplyTerminal(
-        TimeSpan ExpiresAt,
-        ZLinkServiceWireCodec.RequestSourceFence RequestSource
     );
 
     internal readonly record struct PendingReplyRelayKey(

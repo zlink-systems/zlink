@@ -269,7 +269,6 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
 
     private static void ValidateRequest(ZLinkStoreWriteRequest request)
     {
-        var encodedBytes = 0L;
         var conditionKeys = request
             .Conditions.SelectMany(ZLinkStoreBatchKeys.ForCondition)
             .ToArray();
@@ -289,7 +288,6 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
         foreach (var key in conditionKeys.Concat(mutationKeys))
         {
             ValidateKey(key);
-            encodedBytes += Encoding.UTF8.GetByteCount(key.Value);
         }
         foreach (var condition in request.Conditions.OfType<ZLinkStoreCondition.Version>())
         {
@@ -299,7 +297,6 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
                     $"Store versions must be non-empty UTF-8 values of at most {ZLinkLocationStoreLimits.MaximumVersionBytes} bytes.",
                     nameof(request)
                 );
-            encodedBytes += length;
         }
         foreach (var condition in request.Conditions.OfType<ZLinkStoreCondition.Value>())
         {
@@ -308,7 +305,6 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
                     "The Store value condition exceeds its value bound.",
                     nameof(request)
                 );
-            encodedBytes += condition.Expected.Length;
         }
         foreach (var put in request.Mutations.OfType<ZLinkStoreMutation.Put>())
         {
@@ -327,16 +323,11 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
                     nameof(request)
                 );
             }
-            encodedBytes += put.Bytes.Length;
         }
-        encodedBytes +=
-            16L
-            * request.Conditions.Count(static condition =>
-                condition is ZLinkStoreCondition.SumAtMost
-            );
-        encodedBytes +=
-            8L * request.Mutations.Count(static mutation => mutation is ZLinkStoreMutation.Add);
-        if (encodedBytes > ZLinkLocationStoreLimits.MaximumEncodedBatchBytes)
+        if (
+            ZLinkStoreBatchKeys.EncodedBytes(request, conditionKeys, mutationKeys)
+            > ZLinkLocationStoreLimits.MaximumEncodedBatchBytes
+        )
             throw new ArgumentException(
                 $"The encoded Store batch exceeds {ZLinkLocationStoreLimits.MaximumEncodedBatchBytes} bytes.",
                 nameof(request)
