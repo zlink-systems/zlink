@@ -13,12 +13,12 @@ var (
 	_ [int(C.ZLINK_SEND_FLAGS_DONTWAIT) - int(SendFlagsDontWait)]struct{}
 	_ [int(RecvFlagsDontWait) - int(C.ZLINK_RECV_FLAGS_DONTWAIT)]struct{}
 	_ [int(C.ZLINK_RECV_FLAGS_DONTWAIT) - int(RecvFlagsDontWait)]struct{}
-	_ [int(CompletionSend) - int(C.ZLINK_COMPLETION_SEND)]struct{}
-	_ [int(C.ZLINK_COMPLETION_SEND) - int(CompletionSend)]struct{}
-	_ [int(CompletionRequest) - int(C.ZLINK_COMPLETION_REQUEST)]struct{}
-	_ [int(C.ZLINK_COMPLETION_REQUEST) - int(CompletionRequest)]struct{}
-	_ [int(CompletionWritable) - int(C.ZLINK_COMPLETION_WRITABLE)]struct{}
-	_ [int(C.ZLINK_COMPLETION_WRITABLE) - int(CompletionWritable)]struct{}
+	_ [int(completionKindSend) - int(C.ZLINK_COMPLETION_SEND)]struct{}
+	_ [int(C.ZLINK_COMPLETION_SEND) - int(completionKindSend)]struct{}
+	_ [int(completionKindRequest) - int(C.ZLINK_COMPLETION_REQUEST)]struct{}
+	_ [int(C.ZLINK_COMPLETION_REQUEST) - int(completionKindRequest)]struct{}
+	_ [int(completionKindWritable) - int(C.ZLINK_COMPLETION_WRITABLE)]struct{}
+	_ [int(C.ZLINK_COMPLETION_WRITABLE) - int(completionKindWritable)]struct{}
 
 	_ [int(SubmitOK) - int(C.ZLINK_SUBMIT_OK)]struct{}
 	_ [int(C.ZLINK_SUBMIT_OK) - int(SubmitOK)]struct{}

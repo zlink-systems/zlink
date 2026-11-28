@@ -5,6 +5,10 @@ import {
   ZLinkFrameworkException,
   ZLinkUserSpotExecutionMode
 } from '../../contracts';
+import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
 import { ZLinkActorSerialExecutor } from '../actors';
 import type {
   ZLinkActorHandoffDispatch,
@@ -366,6 +370,11 @@ export class ZLinkSpotSerialExecutor {
   }
 
   private throwIfClosing(): void {
-    if (this.closing) throw new Error('The Spot serial executor is closed.');
+    if (this.closing) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        'The Spot serial executor is closed.'
+      );
+    }
   }
 }

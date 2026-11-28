@@ -325,13 +325,12 @@ export class ZLinkSerialExecutionQueue {
       );
     }
     if (this.closed !== false) {
-      const message = 'The serial execution queue is closed.';
-      throw this.closed === 'destroyed'
-        ? createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-            message
-          )
-        : new Error(message);
+      throw createInternalFrameworkException(
+        this.closed === 'destroyed'
+          ? ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+          : ZLinkFrameworkInternalErrorKind.RequestRejected,
+        'The serial execution queue is closed.'
+      );
     }
     const lane = options?.lane ?? 'application';
     const target = lane === 'application' ? this.application : this.lifecycle;

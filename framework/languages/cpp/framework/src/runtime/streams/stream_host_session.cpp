@@ -5,8 +5,10 @@
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/diagnostics/session_binding_diagnostics.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/streams/stream_host_ingress.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include <boost/asio/post.hpp>
+#include <algorithm>
 #include <exception>
 #include <tuple>
 
@@ -158,6 +160,12 @@ void stream_host_service_t::listener_t::register_active_stream (
 
 void stream_host_service_t::listener_t::unregister_active_stream (const stream_t &stream)
 {
+    if (const auto queue = _ingress.queue ()) {
+        if (const auto rid = stream.routing_id ()) {
+            if (const auto identity = queue->connection (_stream.name, *rid))
+                queue->ended (*identity);
+        }
+    }
     _active_streams_lane
       .run ([this, &stream] {
           for (auto it = _active_streams.begin (); it != _active_streams.end (); ++it) {
@@ -168,6 +176,53 @@ void stream_host_service_t::listener_t::unregister_active_stream (const stream_t
           }
       })
       .get ();
+}
+
+void stream_host_service_t::listener_t::push_admission (
+  std::shared_ptr<const std::vector<admission_queue::delivery_t>> deliveries)
+{
+    using namespace admission_queue;
+    const auto report_failure = [weak = weak_from_this ()] (const result_t<void> &result) {
+        if (!result) {
+            if (const auto owner = weak.lock ())
+                owner->report_admission_error (result.exception ());
+        }
+    };
+    auto posted = _active_streams_lane.run_task (
+      [self = shared_from_this (), deliveries = std::move (deliveries), report_failure] {
+          for (const auto &delivery : *deliveries) {
+              if (delivery.session.stream != self->_stream.name)
+                  continue;
+              const auto target =
+                std::ranges::find_if (self->_active_streams, [&] (const auto &entry) {
+                    const auto rid = entry.stream.routing_id ();
+                    return rid
+                           && std::ranges::equal (
+                             std::as_bytes (std::span (rid->data (), rid->size ())),
+                             delivery.session.rid);
+                });
+              if (target == self->_active_streams.end ()
+                  || self->_runtime.session_closed (target->stream).stop_requested ())
+                  continue;
+              const auto *name = std::holds_alternative<position_t> (delivery.value)
+                                   ? client_position_packet
+                                   : client_ticket_packet;
+              try {
+                  auto sent = self->_runtime.write_admission_packet (
+                    target->stream, name, client_payload (delivery.value));
+                  detail::observe_task_completion (sent, report_failure);
+              }
+              catch (const std::exception &) {
+                  self->report_admission_error (std::current_exception ());
+              }
+          }
+      });
+    detail::observe_task_completion (posted, report_failure);
+}
+
+void stream_host_service_t::listener_t::report_admission_error (std::exception_ptr error)
+{
+    report_control_failure ([&] { return error; });
 }
 
 std::size_t stream_host_service_t::listener_t::active_session_count ()

@@ -9,13 +9,16 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.binding.ZLinkJavaRawMeshNodeTestAccess;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLaneTestAccess;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistryTestAccess;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRequestProgress.InstanceReply;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
@@ -31,25 +34,41 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.LongAccumulator;
 import java.util.function.Supplier;
 
 class ZLinkInstanceRequestDeadlineDiagnosticsTest {
     private static final String FLAG = "ZLINK_DEBUG_FRAMEWORK_RELOCATION";
     private static final String MARKER = "[zlink.runtime.relocation] node_request_deadline";
     private static final String CALLER_MARKER = "deadline callerFutureCompletedNanos: ";
+    private static final int COMPLETION_WORKERS = 2;
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(2);
+    // Covers thread wake-up and clock-read jitter after the measured occupation ends; it is not
+    // a spec deadline (01-submit-and-completion.ko.md §10.1 allows the late visit itself).
+    private static final long SCHEDULING_SLACK_NANOS = TimeUnit.MILLISECONDS.toNanos(250);
+    private static final long HOLD_PAST_DEADLINE_NANOS = 2 * SCHEDULING_SLACK_NANOS;
+    private static final Duration POLL_INTERVAL = Duration.ofMillis(1);
     private static final String MESH = "deadline-mesh";
     private static final String TARGET = "deadline-owner";
-    private static final CompletableFuture<Void> ENTERED = new CompletableFuture<>();
+    private static final CompletableFuture<HandlerEntry> ENTERED = new CompletableFuture<>();
     private static final CompletableFuture<Echo> BLOCKED = new CompletableFuture<>();
 
     @TempDir Path outputDir;
 
     @Test
-    void reportsOnlyTheExpiredRequestWithDiagnosticsEnabled() throws Exception {
-        String output = run("1");
+    void boundsDeadlineWithIdleLaneAndOccupiedExecutionResources() throws Exception {
+        assertDeadlineReport(run("1"));
+        assertDeadlineReport(run("1", "owner-delay", "-ea"));
+        assertDeadlineReport(run("1", "completion-delay", "-ea"));
+    }
+
+    private static void assertDeadlineReport(String output) {
+        System.out.print(output);
         assertEquals(1, output.lines().filter(line -> line.startsWith(MARKER)).count(), output);
         assertTrue(output.contains("meshName: 'deadline-mesh'"), output);
         assertTrue(output.contains("targetRid: 'deadline-owner'"), output);
@@ -117,9 +136,17 @@ class ZLinkInstanceRequestDeadlineDiagnosticsTest {
                                 "-cp",
                                 System.getProperty("java.class.path"),
                                 getClass().getName(),
-                                mode)
+                                mode,
+                                output.toString())
                         .redirectErrorStream(true)
                         .redirectOutput(output.toFile());
+        if (mode.equals("completion-delay")) {
+            process.command()
+                    .add(
+                            1,
+                            "-Djava.util.concurrent.ForkJoinPool.common.parallelism="
+                                    + COMPLETION_WORKERS);
+        }
         process.environment().put(FLAG, flag);
         var child = process.start();
         try {
@@ -168,66 +195,217 @@ class ZLinkInstanceRequestDeadlineDiagnosticsTest {
                             .requestToSpot("room-1", new Echo(false))
                             .instanceSpot("room")
                             .inMesh(MESH)
-                            .timeout(Duration.ofSeconds(2))
+                            .timeout(REQUEST_TIMEOUT)
                             .submit(Echo.class)
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS));
+            var spots = ZLinkFrameworkRuntimeTestAccess.spots(runtime);
+            var registry =
+                    ZLinkJavaRawMeshNodeTestAccess.operationRegistry(
+                            spots.routeMeshNodesByName.get(MESH));
             try {
                 var pending =
                         runtime.route()
                                 .requestToSpot("room-1", new Echo(true))
                                 .instanceSpot("room")
                                 .inMesh(MESH)
-                                .timeout(Duration.ofSeconds(2))
+                                .timeout(REQUEST_TIMEOUT)
                                 .submit(Echo.class)
                                 .toCompletableFuture();
-                CompletableFuture<Long> callerCompletion =
-                        "1".equals(System.getenv(FLAG))
-                                ? pending.handle((reply, failure) -> System.nanoTime())
-                                : null;
-                ENTERED.get(5, TimeUnit.SECONDS);
-                long watchdogStarted = callerCompletion == null ? 0L : System.nanoTime();
-                var failure =
-                        assertThrows(
-                                ExecutionException.class,
-                                () -> {
-                                    try {
-                                        pending.get(5, TimeUnit.SECONDS);
-                                    } catch (TimeoutException timeout) {
-                                        if (callerCompletion != null) {
-                                            long watchdogExpired = System.nanoTime();
-                                            System.err.printf(
-                                                    "deadline watchdogStartedNanos: %d, watchdogExpiredNanos: %d%n",
-                                                    watchdogStarted, watchdogExpired);
-                                            // Observe late delivery while the handler stays
-                                            // blocked.
-                                            try {
-                                                printCallerCompletion(callerCompletion);
-                                            } catch (TimeoutException
-                                                    | ExecutionException observationFailure) {
-                                                timeout.addSuppressed(observationFailure);
-                                            } catch (InterruptedException interrupted) {
-                                                Thread.currentThread().interrupt();
-                                                timeout.addSuppressed(interrupted);
-                                            }
-                                        }
-                                        throw timeout;
-                                    }
-                                });
-                if (callerCompletion != null) printCallerCompletion(callerCompletion);
-                assertEquals(
-                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                        assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+                observeDeadline(args[0], Path.of(args[1]), registry, pending);
             } finally {
                 BLOCKED.complete(new Echo(true));
             }
         }
     }
 
-    private static void printCallerCompletion(CompletableFuture<Long> callerCompletion)
-            throws InterruptedException, ExecutionException, TimeoutException {
-        System.err.println(CALLER_MARKER + callerCompletion.get(5, TimeUnit.SECONDS));
+    private static void observeDeadline(
+            String mode,
+            Path output,
+            ZLinkServiceOperationRegistry registry,
+            CompletableFuture<Echo> pending)
+            throws Exception {
+        var lane = ZLinkServiceOperationRegistryTestAccess.ownerLane(registry);
+        var pool = ForkJoinPool.commonPool();
+        var callerCompletion = pending.handle((reply, failure) -> System.nanoTime());
+        boolean holdOwner = mode.equals("owner-delay");
+        boolean holdPool = mode.equals("completion-delay");
+        var blocker = new Blocker(holdPool ? COMPLETION_WORKERS : 1);
+        try {
+            ENTERED.get(5, TimeUnit.SECONDS);
+            var id = ZLinkServiceOperationRegistryTestAccess.onlyPendingId(registry);
+            var remaining = registry.remainingTimeout(id);
+            long deadlineUpper = System.nanoTime() + remaining.toNanos();
+            assertFalse(remaining.isZero(), "request expired before fixture setup");
+            if (holdOwner) {
+                assertTrue(
+                        lane.tryPost(
+                                () -> {
+                                    blocker.run();
+                                    return CompletableFuture.completedFuture(null);
+                                }));
+            } else if (holdPool) {
+                assertEquals(COMPLETION_WORKERS, pool.getParallelism());
+                for (int worker = 0; worker < COMPLETION_WORKERS; worker++) {
+                    pool.execute(blocker::run);
+                }
+            }
+
+            var occupation = Occupation.NONE;
+            if (holdOwner || holdPool) {
+                assertTrue(blocker.entered.await(5, TimeUnit.SECONDS), mode);
+                assertTrue(blocker.started.get() < deadlineUpper, "fixture missed the deadline");
+                long holdUntil = deadlineUpper + HOLD_PAST_DEADLINE_NANOS;
+                if (holdPool) awaitTerminal(registry, upperBound(deadlineUpper, Occupation.NONE));
+                for (long delay; (delay = holdUntil - System.nanoTime()) > 0; ) {
+                    TimeUnit.NANOSECONDS.sleep(delay);
+                }
+                assertEquals(holdOwner ? 1 : 0, registry.pendingCount(), mode);
+                assertFalse(pending.isDone(), mode);
+                occupation = blocker.stop();
+            }
+
+            var ownerWork = holdOwner ? occupation : Occupation.NONE;
+            var poolWork = holdPool ? occupation : Occupation.NONE;
+            long terminalObserved = awaitTerminal(registry, upperBound(deadlineUpper, ownerWork));
+            long caller =
+                    callerCompletion.get(
+                            Math.max(0, upperBound(terminalObserved, poolWork) - System.nanoTime()),
+                            TimeUnit.NANOSECONDS);
+            var failure =
+                    assertThrows(
+                            ExecutionException.class, () -> pending.get(0, TimeUnit.NANOSECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            if ("1".equals(System.getenv(FLAG))) {
+                String log = Files.readString(output);
+                long terminal = timestamp(log, "terminalNanos: ");
+                long dispatcher = timestamp(log, "dispatcherStartNanos: ");
+                // The wheel rounds up. The recorded tick gives the lower bound for expiry,
+                // and the registry's unrounded deadline gives the upper bound.
+                long scheduled = timestamp(log, "scheduledDeadlineNanos: ");
+                assertTrue(scheduled <= terminal, log);
+                assertBy("terminal claim", terminal, deadlineUpper, ownerWork);
+                assertBy("caller delivery", caller, terminal, poolWork);
+                if (holdOwner) assertTrue(ownerWork.end() <= terminal, log);
+                if (holdPool) {
+                    assertTrue(terminal <= poolWork.end() && poolWork.end() <= dispatcher, log);
+                }
+                System.err.printf(
+                        "deadline mode=%s deadlineUpperNanos=%d ownerWaitNanos=%d"
+                                + " poolWaitNanos=%d slackNanos=%d%n",
+                        mode,
+                        deadlineUpper,
+                        ownerWork.after(deadlineUpper),
+                        poolWork.after(terminal),
+                        SCHEDULING_SLACK_NANOS);
+                System.err.println(CALLER_MARKER + caller);
+            }
+        } catch (AssertionError | Exception failure) {
+            long observed = System.nanoTime();
+            String ownerWork = ZLinkStateLaneTestAccess.describeActiveTurn(lane);
+            var handler = ENTERED.getNow(null);
+            long fixtureStart = blocker.started.get();
+            long fixtureEnd = blocker.ended.get();
+            System.err.printf(
+                    "deadline failure mode=%s observedNanos=%d %s ownerQueuedTurns=%d"
+                            + " pendingRequests=%d handlerKind=application handlerStartedNanos=%s"
+                            + " handlerEnteredOnOwner=%s commonPoolActiveThreads=%d"
+                            + " commonPoolQueuedTasks=%d commonPoolQueuedSubmissions=%d"
+                            + " fixtureStartedNanos=%s fixtureEndedNanos=%s%n",
+                    mode,
+                    observed,
+                    ownerWork,
+                    ZLinkStateLaneTestAccess.queuedTurnCount(lane),
+                    registry.pendingCount(),
+                    handler == null ? "none" : Long.toString(handler.startedNanos()),
+                    handler == null ? "none" : Boolean.toString(handler.lane() == lane),
+                    pool.getActiveThreadCount(),
+                    pool.getQueuedTaskCount(),
+                    pool.getQueuedSubmissionCount(),
+                    fixtureStart == Long.MIN_VALUE ? "none" : Long.toString(fixtureStart),
+                    fixtureEnd == Long.MAX_VALUE ? "none" : Long.toString(fixtureEnd));
+            throw failure;
+        } finally {
+            blocker.release.countDown();
+        }
     }
+
+    private static long awaitTerminal(ZLinkServiceOperationRegistry registry, long bound)
+            throws InterruptedException {
+        while (registry.pendingCount() != 0) {
+            long left = bound - System.nanoTime();
+            assertTrue(left > 0, () -> "terminal claim exceeded boundNanos=" + bound);
+            TimeUnit.NANOSECONDS.sleep(Math.min(left, POLL_INTERVAL.toNanos()));
+        }
+        return System.nanoTime();
+    }
+
+    private static long upperBound(long start, Occupation occupation) {
+        return start + occupation.after(start) + SCHEDULING_SLACK_NANOS;
+    }
+
+    private static void assertBy(String phase, long actual, long start, Occupation occupation) {
+        long bound = upperBound(start, occupation);
+        assertTrue(
+                actual <= bound,
+                () ->
+                        phase
+                                + " at "
+                                + actual
+                                + " exceeded boundNanos="
+                                + bound
+                                + " startNanos="
+                                + start
+                                + " measuredWaitNanos="
+                                + occupation.after(start)
+                                + " slackNanos="
+                                + SCHEDULING_SLACK_NANOS);
+    }
+
+    private record Occupation(long start, long end) {
+        static final Occupation NONE = new Occupation(0, 0);
+
+        long after(long time) {
+            return Math.max(0, end - Math.max(time, start));
+        }
+    }
+
+    private static final class Blocker {
+        private final CountDownLatch entered;
+        private final CountDownLatch release = new CountDownLatch(1);
+        private final CountDownLatch exited;
+        private final LongAccumulator started = new LongAccumulator(Long::max, Long.MIN_VALUE);
+        private final LongAccumulator ended = new LongAccumulator(Long::min, Long.MAX_VALUE);
+
+        Blocker(int workers) {
+            entered = new CountDownLatch(workers);
+            exited = new CountDownLatch(workers);
+        }
+
+        void run() {
+            started.accumulate(System.nanoTime());
+            entered.countDown();
+            try {
+                assertTrue(release.await(10, TimeUnit.SECONDS), "test did not release fixture");
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(failure);
+            } finally {
+                ended.accumulate(System.nanoTime());
+                exited.countDown();
+            }
+        }
+
+        Occupation stop() throws InterruptedException {
+            release.countDown();
+            assertTrue(exited.await(5, TimeUnit.SECONDS), "fixture did not exit");
+            return new Occupation(started.get(), ended.get());
+        }
+    }
+
+    private record HandlerEntry(long startedNanos, ZLinkStateLane lane) {}
 
     private static void measureAllocations() {
         var lane = new ZLinkStateLane();
@@ -343,7 +521,7 @@ class ZLinkInstanceRequestDeadlineDiagnosticsTest {
     public static final class Handler implements ZLinkSpotRequestHandler<Room, Echo, Echo> {
         public CompletionStage<Echo> handle(Room room, Echo echo) {
             if (!echo.blocked()) return CompletableFuture.completedFuture(echo);
-            ENTERED.complete(null);
+            ENTERED.complete(new HandlerEntry(System.nanoTime(), ZLinkStateLane.current()));
             return BLOCKED;
         }
     }

@@ -76,7 +76,7 @@ fn poller_busy_close_keeps_registration_and_allows_retry() {
         return;
     }
     let context = Context::new().unwrap();
-    let socket = context.pair_socket().unwrap();
+    let socket = context.create_pair_socket().unwrap();
     let mut poller = Poller::new().unwrap();
     poller.add_socket(&socket, POLLIN, 1).unwrap();
     let busy = poller.close().unwrap_err();
@@ -102,7 +102,7 @@ fn socket_close_busy_reaches_the_caller_and_keeps_the_socket() {
         return;
     }
     let context = Context::new().unwrap();
-    let mut socket = context.pair_socket().unwrap();
+    let mut socket = context.create_pair_socket().unwrap();
     let busy = socket.close().unwrap_err();
     assert_eq!(busy.code(), CloseResult::Busy);
     assert_eq!(busy.internal_errno(), libc::EBUSY);
@@ -119,7 +119,7 @@ fn dropped_socket_is_not_closed_again_after_busy() {
         return;
     }
     let context = Context::new().unwrap();
-    drop(context.pair_socket().unwrap());
+    drop(context.create_pair_socket().unwrap());
     // A background retry would add Core close calls to the trace.
     std::thread::sleep(std::time::Duration::from_millis(200));
     // The injected busy close left the Core socket open, so ctx_term would

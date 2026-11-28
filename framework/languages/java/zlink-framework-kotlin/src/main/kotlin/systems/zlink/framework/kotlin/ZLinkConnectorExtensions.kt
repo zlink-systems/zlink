@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.future.await
 import systems.zlink.framework.kotlin.stream.ZLinkKotlinRequestCall as ZLinkKotlinStreamRequestCall
 import systems.zlink.stream.connector.ZLinkStreamActor
+import systems.zlink.stream.connector.ZLinkStreamAdmissionPositionHandler
+import systems.zlink.stream.connector.ZLinkStreamAdmissionQueuedHandler
 import systems.zlink.stream.connector.ZLinkStreamAdmissionWaitingHandler
 import systems.zlink.stream.connector.ZLinkStreamAssert
 import systems.zlink.stream.connector.ZLinkStreamCloseReason
@@ -133,6 +135,12 @@ class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamCo
 
     fun onAdmissionWaiting(handler: ZLinkStreamAdmissionWaitingHandler): AutoCloseable =
         inner.onAdmissionWaiting(handler)
+
+    fun onAdmissionQueued(handler: ZLinkStreamAdmissionQueuedHandler): AutoCloseable =
+        inner.onAdmissionQueued(handler)
+
+    fun onAdmissionPosition(handler: ZLinkStreamAdmissionPositionHandler): AutoCloseable =
+        inner.onAdmissionPosition(handler)
 
     fun onDisconnected(handler: ZLinkStreamDisconnectedHandler): AutoCloseable =
         inner.onDisconnected(handler)

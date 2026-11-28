@@ -337,6 +337,9 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                 "PACED_DIAG,pattern=STREAM,target_sender_rate=80\n",
                 "BENCH_DIAG,DEALER_DEALER,64,active_sender_rate,100\n",
                 "REFERENCE,current,PUBSUB,tcp,256,latency_ref_p50,1.250000\n",
+                "PUBSUB_CATCHUP_PROGRESS,64,1.0,7,993,1000,1000\n",
+                "PUBSUB_CATCHUP_DIAG,64,1.5,6,window_start_in_flight,7\n",
+                "PUBSUB_LATENCY_DIAG,64,latency_p50_ms,1.250000\n",
                 "RESULT,current,STREAM,tcp,64,throughput,100\n",
                 "unrelated diagnostic\n",
             ):
@@ -345,6 +348,9 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             "PACED_DIAG,pattern=STREAM,target_sender_rate=80\n"
             "BENCH_DIAG,DEALER_DEALER,64,active_sender_rate,100\n"
             "REFERENCE,current,PUBSUB,tcp,256,latency_ref_p50,1.250000\n"
+            "PUBSUB_CATCHUP_PROGRESS,64,1.0,7,993,1000,1000\n"
+            "PUBSUB_CATCHUP_DIAG,64,1.5,6,window_start_in_flight,7\n"
+            "PUBSUB_LATENCY_DIAG,64,latency_p50_ms,1.250000\n"
         ))
 
     def test_paced_diagnostics_from_client_stdout_and_stderr_are_visible(self):

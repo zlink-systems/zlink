@@ -355,7 +355,6 @@ export class ZLinkLocalNativeActorJoin {
             },
             local: { phase: 'admission', transferId: relocationId } as const
           };
-    let admissionOperationId: ZLinkActorJoinOperationId | undefined;
     const admission = await this.waitForJoinCompletion(
       () => {
         const remainingTimeoutMs = remainingActorRequestTimeout(
@@ -366,44 +365,41 @@ export class ZLinkLocalNativeActorJoin {
           canonicalAdmission === undefined
             ? legacyRemoteActorJoinPayload(actor, state, actorRef, target, request, relocationId)
             : undefined;
-        const operationId =
-          canonicalAdmission === undefined
-            ? entrySpot
-              ? node.joinActorEntrySpot(
-                  actorRef,
-                  toBackendRoutingId(target.targetNodeRid),
-                  legacyAdmission!,
-                  remainingTimeoutMs
-                )
-              : node.joinActorSpot(
-                  actorRef,
-                  toBackendRoutingId(target.targetNodeRid),
-                  toBackendRoutingId(target.spotId),
-                  target.targetSpotGeneration!,
-                  legacyAdmission!,
-                  remainingTimeoutMs
-                )
-            : entrySpot
-              ? node.joinActorEntrySpotCanonical!(
-                  actorRef,
-                  toBackendRoutingId(target.targetNodeRid),
-                  canonicalAdmission.request,
-                  canonicalAdmission.actorFence,
-                  canonicalAdmission.local,
-                  remainingTimeoutMs
-                )
-              : node.joinActorSpotCanonical!(
-                  actorRef,
-                  toBackendRoutingId(target.targetNodeRid),
-                  toBackendRoutingId(target.spotId),
-                  target.targetSpotGeneration!,
-                  canonicalAdmission.request,
-                  canonicalAdmission.actorFence,
-                  canonicalAdmission.local,
-                  remainingTimeoutMs
-                );
-        admissionOperationId = operationId;
-        return operationId;
+        return canonicalAdmission === undefined
+          ? entrySpot
+            ? node.joinActorEntrySpot(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                legacyAdmission!,
+                remainingTimeoutMs
+              )
+            : node.joinActorSpot(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                toBackendRoutingId(target.spotId),
+                target.targetSpotGeneration!,
+                legacyAdmission!,
+                remainingTimeoutMs
+              )
+          : entrySpot
+            ? node.joinActorEntrySpotCanonical!(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                canonicalAdmission.request,
+                canonicalAdmission.actorFence,
+                canonicalAdmission.local,
+                remainingTimeoutMs
+              )
+            : node.joinActorSpotCanonical!(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                toBackendRoutingId(target.spotId),
+                target.targetSpotGeneration!,
+                canonicalAdmission.request,
+                canonicalAdmission.actorFence,
+                canonicalAdmission.local,
+                remainingTimeoutMs
+              );
       },
       completions,
       timeoutMs,
@@ -491,12 +487,6 @@ export class ZLinkLocalNativeActorJoin {
           : {
               canonicalRecovery: {
                 handoffId: control.canonicalHandoffId,
-                admissionOperationId: {
-                  // Command 28 authenticates its operation as
-                  // (source node generation, Core request sequence).
-                  high: actorAuthorityFence!.nodeGeneration,
-                  low: admissionOperationId!.low
-                },
                 requestContentType: canonicalAdmission.request.contentType,
                 request: Buffer.from(canonicalAdmission.request.payload),
                 ...(completionOperationId === undefined || control.replyContentType === undefined

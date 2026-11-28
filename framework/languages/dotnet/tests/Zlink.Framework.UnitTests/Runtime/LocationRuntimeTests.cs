@@ -1064,6 +1064,10 @@ public sealed partial class LocationRuntimeTests
         time.Advance(
             options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin - TimeSpan.FromSeconds(1)
         );
+        var closed = Assert.Throws<InvalidOperationException>(() =>
+            _ = runtime.AdmissionOwnerToken
+        );
+        Assert.Equal("The owner lease admission deadline has expired.", closed.Message);
         observed.Fail = false;
         Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
         Assert.Equal(original.OwnerId, runtime.OwnerToken.OwnerId);
@@ -4031,7 +4035,10 @@ public sealed partial class LocationRuntimeTests
 
         await runtime.StartAsync(RoutingId.From("node-1"));
         Assert.False(runtime.IsOwnerAdmissionOpen);
-        Assert.Throws<InvalidOperationException>(() => _ = runtime.AdmissionOwnerToken);
+        var closed = Assert.Throws<InvalidOperationException>(() =>
+            _ = runtime.AdmissionOwnerToken
+        );
+        Assert.Equal("The owner lease admission is not open yet.", closed.Message);
         Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
             await store.ReadOwnerLeaseAsync(runtime.OwnerId)
         );

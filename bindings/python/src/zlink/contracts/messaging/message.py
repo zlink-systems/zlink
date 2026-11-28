@@ -11,7 +11,9 @@ class Message(Protocol):
     """A message payload.
 
     Supports the context-manager protocol; closing the message (or leaving its
-    ``with`` block) releases the payload. Sending a message consumes it.
+    ``with`` block) releases the payload. Immediate Core admission consumes
+    the message. Synchronous rejection preserves it. A consumed message
+    reports empty data and size zero, as a closed message does.
     """
 
     @classmethod

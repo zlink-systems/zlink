@@ -17,7 +17,7 @@ internal static class RequestReplySupport
         try
         {
             for (; built < parts.Count; built++)
-                cloned[built] = parts[built].Copy();
+                cloned[built] = parts[built].CopyForSubmit();
             return cloned;
         }
         catch
@@ -101,7 +101,7 @@ internal static class RequestReplySupport
                 // Core consumes the whole native record on every returned result.
                 // Preserve the managed originals until admission succeeds.
                 for (; built < parts.Count; built++)
-                    parts[built].CopyTo(ref nativeParts[built]);
+                    parts[built].CopyToForSubmit(ref nativeParts[built]);
                 rc = T.Submit(ref submitter, call.Handle, nativeParts[..built]);
                 errno = NativeMethods.GetLastPInvokeError();
                 built = 0;

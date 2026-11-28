@@ -27,6 +27,7 @@
 #include "runtime/configuration/request_defaults.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/spots/instance_spot_application.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
@@ -442,7 +443,6 @@ struct spot_execution_snapshot_t
 {
     std::vector<std::shared_ptr<spot_context_state_t>> contexts;
     std::vector<task_t<void>> creations;
-    std::vector<task_t<void>> join_deliveries;
 };
 
 spot_execution_snapshot_t snapshot_spot_execution_owned (spot_node_builder_state_t &node)
@@ -463,9 +463,6 @@ spot_execution_snapshot_t snapshot_spot_execution_owned (spot_node_builder_state
         if (creation.completion)
             result.creations.push_back (creation.completion->task ());
     }
-    result.join_deliveries.reserve (node.pending_join_delivery_work.size ());
-    for (const auto &delivery : node.pending_join_delivery_work)
-        result.join_deliveries.push_back (delivery->task ());
     return result;
 }
 } // namespace
@@ -484,7 +481,8 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
         };
         std::vector<context_t> contexts;
         std::vector<task_t<void>> creations;
-        std::vector<task_t<void>> join_deliveries;
+        std::vector<std::shared_ptr<spot_node_builder_state_t::join_delivery_work_t>>
+          join_deliveries;
         std::shared_ptr<runtime::offload_executor_t> deadline_executor;
         std::shared_ptr<runtime::offload_executor_t> worker_executor;
         std::stop_source cancellation;
@@ -494,7 +492,8 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
         node.stopping.store (true, std::memory_order_release);
         auto execution = snapshot_spot_execution_owned (node);
         result.creations = std::move (execution.creations);
-        result.join_deliveries = std::move (execution.join_deliveries);
+        result.join_deliveries.assign (node.pending_join_delivery_work.begin (),
+                                       node.pending_join_delivery_work.end ());
         result.contexts.reserve (execution.contexts.size ());
         for (const auto &state : execution.contexts) {
             result.contexts.push_back (drain_plan_t::context_t{
@@ -523,7 +522,8 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
           .has_value ();
     };
     const bool deliveries_settled =
-      std::ranges::all_of (plan.join_deliveries, [&] (const auto &terminal) {
+      std::ranges::all_of (plan.join_deliveries, [&] (const auto &delivery) {
+          const auto terminal = delivery->terminal.task ();
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
           if (!terminal.await_ready () && node.join_delivery_drain_wait_probe)
               node.join_delivery_drain_wait_probe ();
@@ -547,20 +547,28 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
             if (context.serial_queue)
                 context.serial_queue->cancel_pending ();
         }
-        // Host relocation §14 waits for cancellation to settle without a time limit;
-        // report what is still pending past the deadline so a stuck drain names its cause.
-        const auto pending =
-          std::ranges::count_if (plan.join_deliveries, [] (const task_t<void> &terminal) {
-              return !terminal.await_ready ();
-          });
-        if (pending != 0)
-            node.runtime_failures ()->report (std::make_exception_ptr (
-              std::runtime_error ("Spot drain passed its deadline with " + std::to_string (pending)
-                                  + " Actor Join deliveries still settling")));
+        if (node.monitoring
+            && node.monitoring->diagnostics_logger.is_enabled (log_level_t::error)) {
+            std::size_t pending_count = 0;
+            std::string pending;
+            for (const auto &delivery : plan.join_deliveries) {
+                if (delivery->terminal.task ().await_ready ())
+                    continue;
+                if (pending_count++ != 0)
+                    pending += ", ";
+                pending += "operation_id=" + std::to_string (delivery->operation.first) + ":"
+                           + std::to_string (delivery->operation.second)
+                           + " waiting=" + delivery->waiting.load (std::memory_order_relaxed);
+            }
+            if (pending_count != 0)
+                monitoring_runtime_t (node.monitoring)
+                  .publish_unfinished_join_deliveries (pending_count, std::move (pending));
+        }
     }
-    // Join ready can still publish controls until its claim or cancellation settles.
+    // The host owns the shutdown deadline outcome. Join ready can still publish
+    // controls until its claim or cancellation settles.
     for (const auto &delivery : plan.join_deliveries)
-        (void) detail::task_result_access_t::read (delivery);
+        (void) detail::task_result_access_t::read (delivery->terminal.task ());
     for (const auto &context : plan.contexts) {
         for (const auto &queue : context.retained_queues)
             if (queue)
@@ -1226,17 +1234,26 @@ void spot_context_state_t::run_local_close_steps (
             auto creating = [&] {
                 const auto command =
                   std::static_pointer_cast<const instance_spot_retained_message_t> (original);
+                // The retained activation carries the v1 multipart envelope; the
+                // initial message is its body and the flow fields live in its header.
+                auto decoded = runtime::messaging::decode_instance_spot_application (
+                  command->original_activation->application_payload,
+                  command->original_activation->activation.request
+                    ? runtime::messaging::message_kind_t::request
+                    : runtime::messaging::message_kind_t::command,
+                  message_flow_tracer_t (owner->dispatch).flow_tracing ());
+                auto &decoded_header = decoded.value ().header;
                 auto flow = runtime::flow_context_t::enter (
-                  command->original_activation->application_payload.flow_id,
-                  command->original_activation->application_payload.flow_origin,
-                  message_flow_tracer_t (owner->dispatch).mode (), flow_origin_t::inbound,
-                  std::nullopt);
+                  decoded_header.flow_id
+                    ? std::make_optional (std::string (*decoded_header.flow_id))
+                    : std::nullopt,
+                  decoded_header.flow_origin, message_flow_tracer_t (owner->dispatch).mode (),
+                  flow_origin_t::inbound, std::nullopt);
                 return node.create_spot_context (
                   command->original_activation->activation.target.stable_type, self->spot_id,
-                  zlink::message_t::from (
-                    command->original_activation->application_payload.payload_bytes ()),
-                  next.object_generation, next.allocation.target.mesh_name, {},
-                  next.authority_owner_generation, self->serial_queue, nullptr, operation);
+                  std::move (decoded.value ().body), next.object_generation,
+                  next.allocation.target.mesh_name, {}, next.authority_owner_generation,
+                  self->serial_queue, nullptr, operation);
             }();
             try {
                 const auto created = co_await creating;
@@ -2991,8 +3008,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                                      ? current->activation_scope->provider ()
                                      : *empty_services;
                   auto replay = spot_handler_registry_t (current).invoke_erased (
-                    {}, spot_handler_kind_t::packet,
-                    original->original_activation->application_payload.packet_name (), {},
+                    {}, spot_handler_kind_t::packet, state->handlers[handler_index].packet_name, {},
                     std::type_index (typeid (void)), current->spot_instance.get (), nullptr,
                     provider, *current->channel_runtime->serializers, carrier->first,
                     carrier->second, false);

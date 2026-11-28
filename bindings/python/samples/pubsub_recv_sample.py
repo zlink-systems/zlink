@@ -29,7 +29,7 @@ def main():
                         raise AssertionError(f"unexpected pubsub topic: {received.topic!r}")
                     if received.to_bytes_list() != [b"101.25"]:
                         raise AssertionError("unexpected pubsub payload")
-                print('[pubsub/recv] publish: "prices/101.25" → subscribe: "prices/101.25"')
+                print('[pubsub/recv] publish: "prices/101.25" -> subscribe: "prices/101.25"')
 # --8<-- [end:doc]
 
 

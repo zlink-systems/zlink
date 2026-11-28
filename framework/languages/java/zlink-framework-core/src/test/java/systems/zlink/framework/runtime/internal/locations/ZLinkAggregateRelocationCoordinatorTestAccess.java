@@ -28,15 +28,24 @@ public final class ZLinkAggregateRelocationCoordinatorTestAccess {
     public static void interceptCommit(
             ZLinkAggregateRelocationCoordinator coordinator,
             BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> interceptor) {
-        InvocationHandler handler = Proxy.getInvocationHandler(coordinator.authorityStore);
-        ((InterceptingHandler) handler).interceptor =
-                Objects.requireNonNull(interceptor, "interceptor");
+        handler(coordinator).commit = Objects.requireNonNull(interceptor, "interceptor");
+    }
+
+    public static void interceptRead(
+            ZLinkAggregateRelocationCoordinator coordinator,
+            BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> interceptor) {
+        handler(coordinator).read = Objects.requireNonNull(interceptor, "interceptor");
+    }
+
+    private static InterceptingHandler handler(ZLinkAggregateRelocationCoordinator coordinator) {
+        return (InterceptingHandler) Proxy.getInvocationHandler(coordinator.authorityStore);
     }
 
     private static final class InterceptingHandler implements InvocationHandler {
         private final ZLinkLocationRepository delegate;
-        private volatile BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>>
-                interceptor;
+        private volatile BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> commit;
+
+        private volatile BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> read;
 
         private InterceptingHandler(ZLinkLocationRepository delegate) {
             this.delegate = Objects.requireNonNull(delegate, "delegate");
@@ -44,9 +53,13 @@ public final class ZLinkAggregateRelocationCoordinatorTestAccess {
 
         @Override
         public Object invoke(Object proxy, Method method, Object[] arguments) throws Throwable {
-            var current = interceptor;
+            var current = commit;
             if (current != null && method.getName().equals("commitAggregate")) {
                 return current.apply(delegate, arguments);
+            }
+            var readInterceptor = read;
+            if (readInterceptor != null && method.getName().equals("read")) {
+                return readInterceptor.apply(delegate, arguments);
             }
             try {
                 return method.invoke(delegate, arguments);

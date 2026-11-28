@@ -38,7 +38,6 @@ public final class NativeMessage {
     private static final MethodHandle MH_MSGV_CLOSE = NativeSymbols.downcallAny(
             new String[] {"zlink_multipart_close", "zlink_msgv_close"},
             FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
-    private static final MethodHandle MH_FREE = NativeSymbols.freeDowncall();
 
     private NativeMessage() {}
 
@@ -112,17 +111,6 @@ public final class NativeMessage {
             throw ex;
         } catch (Throwable t) {
             throw new RuntimeException("zlink_msg_refcnt failed", t);
-        }
-    }
-
-    public static void messageVectorClose(MemorySegment parts, long count) {
-        try {
-            MH_MSGV_CLOSE.invokeExact(parts, count);
-            if (parts != null && parts.address() != 0) {
-                MH_FREE.invokeExact(parts);
-            }
-        } catch (Throwable t) {
-            throw new RuntimeException("zlink_multipart_close failed", t);
         }
     }
 

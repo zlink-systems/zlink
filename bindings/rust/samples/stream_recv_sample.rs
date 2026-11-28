@@ -12,7 +12,7 @@ fn main() {
     // --8<-- [start:doc]
     let ctx = Context::new().expect("context creation failed");
 
-    let stream = ctx.stream_socket().expect("stream socket failed");
+    let stream = ctx.create_stream_socket().expect("stream socket failed");
     stream
         .stream_options()
         .set_recv_mode(zlink::StreamRecvMode::Raw)
@@ -48,7 +48,7 @@ fn main() {
         .expect("tcp read failed");
     assert_eq!(&response, b"hello-stream");
     println!(
-        "[stream/recv] send: \"hello-stream\" → recv: \"{}\"",
+        "[stream/recv] send: \"hello-stream\" -> recv: \"{}\"",
         received.parts()[0].as_str().unwrap()
     );
     // --8<-- [end:doc]

@@ -102,6 +102,7 @@
         <Compile Include="Runtime/SpotActorDispatchErrorReasonTests.cs"/>
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
+        <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostEventSink.cs" Link="Support/TestHostEventSink.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
         <Compile Include="Configuration/FanoutPublisherConfigurationTests.cs"/>
         <Compile Include="Configuration/StartupDependencyMetadataTests.cs"/>
@@ -322,6 +323,15 @@
         <Compile Include="Runtime/StreamPermitLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.ReaderLiveness.cs"/>
+        <Compile Include="Runtime/AdmissionQueueTicketTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueWireTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueFixtureTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueSpotTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueMeshTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueConnectorMeshTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueStreamCodecTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueNodeTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueConfigurationTests.cs"/>
         <Compile Include="Runtime/StreamAuthenticationAdmissionTests.cs"/>
         <Compile Include="Runtime/StreamDisconnectProgressTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>

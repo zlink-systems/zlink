@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Numerics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
@@ -492,7 +493,9 @@ internal abstract partial class ZLinkSpotActivation
                 "A Spot cannot close itself from its lifecycle callback."
             );
         if (_serial.IsPreparing)
-            return _runtime.CloseCurrentSpotAsync(this, cancellationToken);
+            return ZLinkCompletionDispatcher.DeliverLifecycle(
+                _runtime.CloseCurrentSpotAsync(this, cancellationToken)
+            );
         if (
             ZLinkApplicationExecutionContext.Current is null
             || ZLinkSerialTurn.Current is not { } turn
@@ -500,16 +503,14 @@ internal abstract partial class ZLinkSpotActivation
             throw new InvalidOperationException(
                 "Spot context Close requires a handler or timer turn."
             );
-        return turn.YieldFrameworkCallAsync(
-            ct => _runtime.CloseCurrentSpotAsync(this, ct),
-            cancellationToken
+        return ZLinkCompletionDispatcher.DeliverLifecycle(
+            _runtime.CloseCurrentSpotAsync(this, cancellationToken, turn)
         );
     }
 
     internal Task<T>? PostLifecycleOperation<T>(
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation,
-        Action? terminalRelease = null
-    ) => _serial.PostLifecycleOperation(operation, terminalRelease);
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation
+    ) => _serial.PostLifecycleOperation(operation);
 
     internal void AttachNativeDispatch()
     {

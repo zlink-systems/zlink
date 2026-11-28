@@ -15,12 +15,14 @@ import systems.zlink.CompletionPollerDriver;
 import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SocketType;
+import systems.zlink.contracts.sockets.SubmitResult;
 
 final class CompletionOwnershipContractTest {
     @Test
@@ -53,8 +55,9 @@ final class CompletionOwnershipContractTest {
             receiver.bind(endpoint);
             sender.connect(endpoint);
             closed.close();
-            assertThrows(IllegalStateException.class, () ->
-                sender.submitSend(null, List.of(first, closed)));
+            assertEquals(SubmitResult.INVALID_HANDLE,
+                assertThrows(ZlinkSubmitException.class, () ->
+                    sender.submitSend(null, List.of(first, closed))).getResult());
             assertEquals("first", first.toUtf8String());
             sender.submitSend(null, List.of(first)).admitted()
                 .toCompletableFuture().get(

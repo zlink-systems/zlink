@@ -45,29 +45,24 @@ A point-in-time snapshot of a monitored socket's state and auto-high-water-mark 
 returned by `MonitorSocket.status()`. A concrete class (not a `Protocol`) with a large
 keyword-only `__init__`.
 
-**Options.** Constructor takes every field as a keyword-only argument; several accept `None`
-defaults for forward-compatibility. Notable naming duplication: `auto_hwm_applied_sndhwm_bytes`
-and `auto_hwm_applied_sndhwm` are separate constructor parameters, but the `__init__` falls back to
-the `_bytes` value when the short-named one is omitted (same pattern for `_rcvhwm`,
-`_deferred_sndhwm`, `_deferred_rcvhwm`) — a caller reading the instance sees both attribute names
-holding the same value.
+**Options.** The constructor takes keyword-only arguments. Diagnostic fields may default to `None`.
 
 | Group | Attributes |
 |---|---|
 | ABI identity | `abi_version`, `struct_size` |
-| Source/state | `source_kind`, `state_flags`/`detail_flags` (bitmasks), `is_ready()` (computed method) |
-| Pending counts | `snd_pending_msgs`, `rcv_pending_msgs` |
-| Auto-HWM config | `auto_hwm_enabled`, `auto_hwm_profile`/`auto_hwm_role`/`auto_hwm_policy_class`, `auto_hwm_unit_budget_bytes`/`auto_hwm_socket_message_slots`, `auto_hwm_size_cap` |
-| Connection bucket | `auto_hwm_connection_bucket_enabled`, `auto_hwm_connection_bucket_count`/`_index`/`_hwm_4k`, `auto_hwm_connection_bucket_hysteresis_retained` |
-| Auto-HWM plan (bytes) | `auto_hwm_effective_message_bytes`, `auto_hwm_planned_sndhwm_bytes`/`_rcvhwm_bytes`, `auto_hwm_applied_sndhwm_bytes`/`_rcvhwm_bytes` (and the aliased `auto_hwm_applied_sndhwm`/`_rcvhwm`), `auto_hwm_effective_sndbuf`/`_rcvbuf` |
+| Source/state | `source_kind` (`MonitorSourceKind` or an integer for an unknown value), `state_flags` (`MonitorStateFlag`), `detail_flags` (`MonitorStatusDetail`), `is_ready()` |
+| Pending counts | `snd_pending_msgs`, `rcv_pending_msgs`, `snd_pending_bytes`, `rcv_pending_bytes` |
+| Auto-HWM config | `auto_hwm_enabled`, `auto_hwm_profile`/`auto_hwm_role`/`auto_hwm_policy_class` |
+| Auto-HWM plan (bytes) | `auto_hwm_planned_sndhwm_bytes`/`_rcvhwm_bytes`, `auto_hwm_applied_sndhwm_bytes`/`_rcvhwm_bytes`, `auto_hwm_effective_sndbuf`/`_rcvbuf` |
 | Auto-HWM recalc | `auto_hwm_last_recalc_ms`, `auto_hwm_last_recalc_reason`, `auto_hwm_send_blocked_ratio_ppm` |
-| Auto-HWM deferred shrink | `auto_hwm_deferred_sndhwm_bytes`/`_rcvhwm_bytes` (and aliases), valid only when `auto_hwm_deferred_sndhwm_valid`/`_rcvhwm_valid` is true |
+| Auto-HWM deferred shrink | `auto_hwm_deferred_sndhwm_bytes`/`_rcvhwm_bytes`, valid only when `auto_hwm_deferred_sndhwm_valid`/`_rcvhwm_valid` is true |
 | In-flight/charging | `snd_bytes_in_flight`, `rcv_bytes_in_flight`, `minimum_core_message_charge_bytes`, `oversize_message_admission_count`, `oversize_message_admission_max_bytes` |
+| Receive flow | `flow_paused_connections`, `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`, `flow_pause_duration_ms` |
 
 **Completion result.** N/A — plain instance attributes, plus the computed `is_ready()` method.
 
 **When to use.** Read `is_ready()` instead of decoding `state_flags` directly. Use the
-connection-bucket and auto-HWM-plan attributes when diagnosing why a socket's effective send/
+planned and applied auto-HWM values when diagnosing why a socket's effective send/
 receive HWM differs from its configured `CommonSocketOptions` value (Sockets category).
 
 ---
@@ -86,6 +81,9 @@ instance attribute of the same name.
 | `value` | an event-specific value such as an error code or reconnect interval |
 | `routing_id` | the peer routing id, present when the event provides one |
 | `local_addr` / `remote_addr` | the local/remote address associated with the event |
+| `connection_id` | transport connection identifier for diagnostics and correlation |
+| `transport_lane` | `TransportLane.APPLICATION` or `TransportLane.COMPLETION`. Unknown values are returned as integers. |
+| `flags` | `MonitorEventFlag` bits describing event-specific state |
 
 **Completion result.** N/A — an immutable-in-practice value delivered by the monitor (nothing
 prevents mutation, but nothing in the contract calls for it).
@@ -123,9 +121,10 @@ ready = poller.wait(events, timeout_ms=1000)
 **Completion result.** Registration/removal members are synchronous. `wait` blocks up to
 `timeout_ms`, filling `events` in place and returning the ready count. Supports both sync and async
 context-manager protocols.
-When a socket was registered for `PollEventFlag.POLLCOMPLETION`, its owner must keep calling
-`wait()` so the binding can drain and settle native completions. Run a blocking terminal in a
-separate execution context when both roles are needed.
+Register a socket for `PollEventFlag.POLLCOMPLETION` before submitting an asynchronous request
+or a send that may wait for admission. The caller drives `wait()` while admission or a reply is
+pending. The binding processes native completions during those calls. Run a blocking terminal
+in a separate execution context when using it alongside the completion poller.
 
 **When to use.** Use one poller across a service's lifetime. Reuse one `PollEvents` buffer across
 `wait` calls rather than creating one per wait.
@@ -208,8 +207,8 @@ multiplex it alongside sockets on one wait. Timer delivery has no registration c
 
 | Enum | Used by | Values |
 |---|---|---|
-| `MonitorEventMask` (`IntFlag`) | `MonitorEvent.event` | `CONNECTED`, `CONNECT_DELAYED`, `CONNECT_RETRIED`, `LISTENING`, `BIND_FAILED`, `ACCEPTED`, `ACCEPT_FAILED`, `CLOSED`, `CLOSE_FAILED`, `DISCONNECTED`, `MONITOR_STOPPED`, `HANDSHAKE_FAILED_NO_DETAIL`, `CONNECTION_READY`, `HANDSHAKE_FAILED_PROTOCOL`, `HANDSHAKE_FAILED_AUTH`, `PEER_WEIGHT_CHANGED`, `ALL` |
-| `PollEventFlag` (`IntFlag`) | `Poller.add_socket`/`modify_socket`/`add_fd`/`modify_fd`, `PollEvents.has_event(...)` | `POLLIN`, `POLLOUT`, `POLLERR`, `POLLPRI`, `POLLITEMS_DFLT`(16, **not a readiness flag** — a legacy default-capacity constant, distinct in kind from the others), `POLLCOMPLETION` (reserved for binding runtime workers; application code generally uses `POLLIN`/`POLLOUT` per its own doc comment) |
+| `MonitorEventMask` (`IntFlag`) | `MonitorEvent.event` | `CONNECTED`, `CONNECT_DELAYED`, `CONNECT_RETRIED`, `LISTENING`, `BIND_FAILED`, `ACCEPTED`, `ACCEPT_FAILED`, `CLOSED`, `CLOSE_FAILED`, `DISCONNECTED`, `MONITOR_STOPPED`, `HANDSHAKE_FAILED_NO_DETAIL`, `CONNECTION_READY`, `HANDSHAKE_FAILED_PROTOCOL`, `HANDSHAKE_FAILED_AUTH`, `PEER_WEIGHT_CHANGED`, `SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`, `ALL` |
+| `PollEventFlag` (`IntFlag`) | `Poller.add_socket`/`modify_socket`/`add_fd`/`modify_fd`, `PollEvents.has_event(...)` | `POLLIN`, `POLLOUT`, `POLLERR`, `POLLPRI`, `POLLITEMS_DFLT` (legacy default capacity of 16), `POLLCOMPLETION` (socket registration for processing completions in the caller's `Poller.wait()` calls), `POLLROUTE` (ROUTER selected route changed), `POLLCONNECT` (outbound connection attempt changed) |
 | `PollSourceKind` (`IntEnum`) | `PollEvent.source_kind` | `SOCKET`, `FD`, `TIMER` |
 
 **When to use.** Because `MonitorEventMask`/`PollEventFlag` are Python `IntFlag`, combine values

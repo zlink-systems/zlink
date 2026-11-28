@@ -6,36 +6,24 @@ from contextlib import ExitStack
 import zlink
 
 from perf_multi_common import (
-    active_message_latency_ns,
     apply_multi_socket_options,
     benchmark_run_id,
     configure_multi_tls_client,
-    LatencySampler,
-    MultiSendTurnCoordinator,
-    new_payload,
     parse_client_args,
     perf_client_context,
     resolve_multi_monitor_hwm_bytes,
     print_result_lines,
     print_multi_auto_hwm_detail,
-    recv_nonblocking,
-    received_metric_payload,
     resolve_multi_connect_ready_timeout_ms,
-    resolve_multi_send_drain_timeout_ms,
-    result_metrics,
-    stamp_payload,
-    submit_routed,
     wait_monitor_event,
 )
+
+from perf_multi_sendsend import run_echo
 
 
 async def main(argv=None):
     args = parse_client_args(argv or sys.argv[1:], pattern="router_router")
     run_id = benchmark_run_id()
-    payloads = [new_payload(args.msg_size) for _ in range(args.clients)]
-    received = 0
-    latency_sampler = LatencySampler()
-    seq = 0
 
     with perf_client_context() as ctx:
         sockets = [zlink.create_router_socket(ctx) for _ in range(args.clients)]
@@ -64,107 +52,8 @@ async def main(argv=None):
                 stack.close()
                 ctx.recalculate_auto_hwm()
 
-                active_deadline = time.perf_counter() + args.duration
-                recv_storage = [zlink.create_received() for _ in sockets]
-                with zlink.create_poller() as poller:
-                    poll_events = zlink.create_poll_events(max(1, len(sockets)))
-                    for index, sock in enumerate(sockets):
-                        poller.add_socket(
-                            sock,
-                            zlink.PollEventFlag.POLLIN
-                            | zlink.PollEventFlag.POLLCOMPLETION,
-                            index,
-                        )
-
-                    def drain_replies(ready_count):
-                        nonlocal received
-                        for offset in range(ready_count):
-                            index = poll_events.slot(offset)
-                            if index < 0 or index >= len(sockets):
-                                continue
-                            current_sock = sockets[index]
-                            ev = poll_events.revents(offset)
-                            if not (ev & int(zlink.PollEventFlag.POLLIN)):
-                                continue
-                            while True:
-                                msg = recv_nonblocking(
-                                    current_sock,
-                                    storage=recv_storage[index],
-                                )
-                                if msg is None:
-                                    break
-                                with msg:
-                                    active = False
-                                    latency = None
-                                    data = received_metric_payload(
-                                        msg, expected_size=args.msg_size
-                                    )
-                                    if data:
-                                        active, latency = active_message_latency_ns(
-                                            data, expected_msg_size=args.msg_size,
-                                            run_id=run_id,
-                                            active_deadline_ns=int(active_deadline * 1_000_000_000),
-                                        )
-                                    # C: every matched header counts; latency
-                                    # excludes clock-skew, halved for round trip.
-                                    if active:
-                                        received += 1
-                                        if latency is not None:
-                                            latency_sampler.add(latency / 2.0)
-
-                    # PERF_MULTI_TEST_POLICY.md:137-148 - each socket keeps one
-                    # un-settled public async send terminal and submits the next
-                    # as soon as its admission completes. Echo receipt never
-                    # gates a send, and no socket waits on another socket's
-                    # admission. Same stop/resume boundary as the C reference
-                    # retained message + POLLOUT resume
-                    # (bindings/c/perf/multi/src/perf_multi_dealer_dealer_client.cpp:424-450).
-                    def submit(index):
-                        nonlocal seq
-                        seq += 1
-                        return submit_routed(
-                            sockets[index],
-                            stamp_payload(
-                                payloads[index], phase=1, run_id=run_id, seq=seq
-                            ),
-                            routing_id=b"SERVER",
-                        )
-
-                    # PERF_MULTI_TEST_POLICY.md § 12.3
-                    # PERF_MULTI_SEND_DRAIN_TIMEOUT_MS bounds the post-deadline
-                    # admission drain; it starts no new send and adds nothing to
-                    # the RESULT aggregate.
-                    # C echo client (perf_multi_client_helpers.hpp): the
-                    # teardown window is max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS,
-                    # 3 s per active second) because small messages can fill
-                    # every per-client Core queue.
-                    coordinator = MultiSendTurnCoordinator(
-                        poller, poll_events, len(sockets)
-                    )
-                    await coordinator.run(
-                        active_deadline,
-                        submit,
-                        dispatch=drain_replies,
-                        drain_timeout_ms=max(
-                            resolve_multi_send_drain_timeout_ms(),
-                            max(1, int(args.duration)) * 3000,
-                        ),
-                    )
-                if received == 0:
-                    raise RuntimeError(
-                        "multi router-router benchmark did not receive any active reply"
-                    )
-                if latency_sampler.count == 0:
-                    raise RuntimeError(
-                        "multi router-router benchmark received active replies without latency samples"
-                    )
-                metrics = result_metrics(
-                    count=received,
-                    msg_size=args.msg_size,
-                    elapsed_s=args.duration,
-                    latency_sampler=latency_sampler,
-                    bandwidth_multiplier=2.0,
-                )
+                active_deadline = time.monotonic() + args.duration
+                metrics = await run_echo(args, "ROUTER_ROUTER_SENDSEND", sockets, run_id, active_deadline, routing_id=b"SERVER")
                 if sockets:
                     print_multi_auto_hwm_detail(
                         sockets[0], "endpoint", args.transport, args.msg_size, "router"

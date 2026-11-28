@@ -16,8 +16,8 @@ fn main() {
     };
 
     let ctx = common::perf_context();
-    let replier = ctx.router_socket().expect("replier");
-    let requester = ctx.dealer_socket().expect("requester");
+    let replier = ctx.create_router_socket().expect("replier");
+    let requester = ctx.create_dealer_socket().expect("requester");
     requester
         .set_routing_id(&RoutingId::from(b"DEALER-REQ"))
         .expect("set requester routing id");

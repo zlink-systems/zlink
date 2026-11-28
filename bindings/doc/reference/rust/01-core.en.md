@@ -101,12 +101,12 @@ immediately.
 
 ---
 
-## `Context::pair_socket()` / `dealer_socket()` / `router_socket()` / `pub_socket()` / `sub_socket()` / `xpub_socket()` / `xsub_socket()` / `stream_socket()`
+## `Context::create_pair_socket()` / `create_dealer_socket()` / `create_router_socket()` / `create_pub_socket()` / `create_sub_socket()` / `create_xpub_socket()` / `create_xsub_socket()` / `create_stream_socket()`
 
 Creates a socket of the given type from a context, owned by the caller.
 
 ```rust
-let dealer = ctx.dealer_socket()?;
+let dealer = ctx.create_dealer_socket()?;
 ```
 
 **Options.** None of the eight factory methods takes parameters.
