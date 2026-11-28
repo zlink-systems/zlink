@@ -167,6 +167,12 @@ export class ZLinkActorRuntimeOptionsFactory {
           return manager.notifyActorLeftAfterTransfer(spotId, actor, signal);
         },
         postCommitErrorReporter: this.options.reportPostCommitError,
+        onAcceptedJoinCompletionFailure: (actor, error) => {
+          const manager = this.options.spotManager();
+          if (manager === undefined)
+            throw new Error('Actor Spot membership runtime is not started.');
+          manager.onAcceptedJoinCompletionFailure(actor, error);
+        },
         sourceTransfer: this.options.actorTransferRuntime,
         actorJoinRelocation: this.options.actorJoinRelocation,
         entrySpotIdProvider: (meshName) => {

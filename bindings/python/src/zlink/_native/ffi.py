@@ -2,8 +2,28 @@
 
 import ctypes
 import os
+from enum import IntEnum
 
 from ._native_loader import load_native_library
+
+
+class ContextOption(IntEnum):
+    """Raw native context option codes used by the runtime."""
+    IO_THREADS = 1
+    MAX_SOCKETS = 2
+    SOCKET_LIMIT = 3
+    THREAD_PRIORITY = 22
+    THREAD_SCHED_POLICY = 4
+    MSG_T_SIZE = 6
+    THREAD_AFFINITY_CPU_ADD = 7
+    THREAD_AFFINITY_CPU_REMOVE = 8
+    THREAD_NAME_PREFIX = 9
+    CTX_OPT_BLOCKY = 10
+    AUTO_HWM_ENABLE = 12
+    AUTO_HWM_RECALC_DEBOUNCE_MS = 14
+    AUTO_HWM_PROFILE = 17
+    AUTO_HWM_MEMORY_LIMIT_BYTES = 19
+    AUTO_HWM_CORE_BUDGET_BYTES = 21
 
 
 class ZlinkMsg(ctypes.Union):
@@ -41,6 +61,27 @@ class ZlinkCompletion(ctypes.Structure):
         ("request_result", ctypes.c_int),
         ("reply_parts", ctypes.POINTER(ZlinkMsg)),
         ("reply_part_count", ctypes.c_size_t),
+    ]
+
+
+class ZlinkConnectionFailure(ctypes.Structure):
+    _fields_ = [
+        ("kind", ctypes.c_uint32),
+        ("stage", ctypes.c_uint32),
+        ("normalized_errno", ctypes.c_int32),
+        ("disconnect_reason", ctypes.c_uint32),
+    ]
+
+
+class ZlinkConnectionAttempt(ctypes.Structure):
+    _fields_ = [
+        ("endpoint_offset", ctypes.c_size_t),
+        ("endpoint_length", ctypes.c_size_t),
+        ("intent_id", ctypes.c_uint64),
+        ("revision", ctypes.c_uint64),
+        ("last_failure_id", ctypes.c_uint64),
+        ("state", ctypes.c_uint32),
+        ("last_failure", ZlinkConnectionFailure),
     ]
 
 
@@ -267,6 +308,19 @@ class _Lib:
             ("zlink_unbind", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_disconnect", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_disconnect_rid", [ctypes.c_void_p, p_rid], ctypes.c_int),
+            (
+                "zlink_socket_connection_attempts_snapshot",
+                [
+                    ctypes.c_void_p,
+                    ctypes.POINTER(ZlinkConnectionAttempt),
+                    ctypes.c_size_t,
+                    p_size,
+                    ctypes.c_char_p,
+                    ctypes.c_size_t,
+                    p_size,
+                ],
+                ctypes.c_int,
+            ),
             ("zlink_send", [ctypes.c_void_p, p_msg, ctypes.c_size_t, ctypes.c_int, ctypes.c_void_p, p_completion_id], ctypes.c_int),
             ("zlink_send_rid", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_size_t, ctypes.c_int, ctypes.c_void_p, p_completion_id], ctypes.c_int),
             ("zlink_request", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_size_t, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, p_completion_id], ctypes.c_int),

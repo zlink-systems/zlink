@@ -1,17 +1,41 @@
 # SPDX-License-Identifier: MPL-2.0
 
+import warnings
+from typing import cast
+
 from .codes import BindResult, CloseResult, ConfigResult, ConnectResult
 from ..sockets.codes import HandlerResult, RecvResult, RequestResult, SubmitResult
+
+
+_ERRNO_UNSET = cast(int, object())
 
 
 class ZlinkError(RuntimeError):
     """Base class for all errors raised by the zlink bindings."""
 
-    def __init__(self, code: int, native_errno: int = 0):
+    _errno_warning_stacklevel = 2
+
+    def __init__(
+        self,
+        code: int,
+        internal_errno: int = _ERRNO_UNSET,
+        *,
+        native_errno: int = _ERRNO_UNSET,
+    ):
+        if native_errno is not _ERRNO_UNSET:
+            if internal_errno is not _ERRNO_UNSET:
+                raise TypeError("internal_errno and native_errno cannot both be specified")
+            warnings.warn(
+                "The native_errno keyword is deprecated. Use internal_errno instead.",
+                DeprecationWarning,
+                stacklevel=self._errno_warning_stacklevel,
+            )
+            internal_errno = native_errno
         self._code = int(code)
-        self._native_errno = int(native_errno)
+        self._internal_errno = 0 if internal_errno is _ERRNO_UNSET else int(internal_errno)
         super().__init__(
-            f"{self.__class__.__name__}(code={self._code}, native_errno={self._native_errno})"
+            f"{self.__class__.__name__}(code={self._code}, "
+            f"internal_errno={self._internal_errno})"
         )
 
     @property
@@ -20,9 +44,19 @@ class ZlinkError(RuntimeError):
         return self._code
 
     @property
-    def native_errno(self):
+    def internal_errno(self) -> int:
         """The native errno that produced this failure, or 0 when none."""
-        return self._native_errno
+        return self._internal_errno
+
+    @property
+    def native_errno(self) -> int:
+        """Deprecated alias for :attr:`internal_errno`."""
+        warnings.warn(
+            "native_errno is deprecated. Use internal_errno instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.internal_errno
 
 
 class _TypedZlinkError(ZlinkError):
@@ -30,11 +64,20 @@ class _TypedZlinkError(ZlinkError):
     :attr:`result`."""
 
     _result_type = None
+    # Skip the forwarding constructor when reporting a deprecated keyword.
+    _errno_warning_stacklevel = 3
 
-    def __init__(self, result, native_errno: int = 0):
+    def __init__(
+        self,
+        result,
+        internal_errno: int = _ERRNO_UNSET,
+        *,
+        native_errno: int = _ERRNO_UNSET,
+    ):
         if self._result_type is None:
             raise TypeError("typed zlink error missing result type")
-        raw_result = int(result)
+        super().__init__(result, internal_errno, native_errno=native_errno)
+        raw_result = self._code
         try:
             self._result = self._result_type(raw_result)
         except ValueError:
@@ -42,7 +85,6 @@ class _TypedZlinkError(ZlinkError):
             # Preserve the native value instead of turning it into success or
             # silently classifying it as an unrelated known result.
             self._result = raw_result
-        super().__init__(raw_result, native_errno)
 
     @property
     def result(self):

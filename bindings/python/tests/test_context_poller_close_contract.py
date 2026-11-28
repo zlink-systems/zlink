@@ -56,7 +56,7 @@ def test_poller_busy_destroy_reports_typed_error_and_keeps_handle():
         with pytest.raises(zlink.CloseError) as raised:
             poller.close()
         assert raised.value.result == zlink.CloseResult.BUSY
-        assert raised.value.native_errno == errno.EBUSY
+        assert raised.value.internal_errno == errno.EBUSY
         assert poller._handle == handle
         assert poller.size() == 0
         poller.close()

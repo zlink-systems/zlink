@@ -116,7 +116,9 @@ except zlink.SubmitError as exc:
 ```
 
 `SubmitError`, `RequestError`, `RecvError`, `BindError`, `ConnectError`, `ConfigError`와 `CloseError`는
-`ZlinkError` 계열이며 `result`, `code`, `native_errno`를 제공한다.
+`ZlinkError` 계열이며 `result`, `code`, `internal_errno`를 제공한다.
+
+`native_errno`는 `internal_errno`와 같은 값을 반환하는 폐기 예정 별칭이다. 다음 호환성이 깨지는 릴리스에서 삭제한다.
 
 ## 스레딩 유의사항
 

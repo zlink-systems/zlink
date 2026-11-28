@@ -40,29 +40,6 @@ func withCStringPair(left string, right string, fn func(*C.char, *C.char) error)
 	return fn(leftC, rightC)
 }
 
-func subscriptionAt(handle unsafe.Pointer, index int) (string, bool, error) {
-	if index < 0 {
-		return "", false, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
-	}
-	var size C.size_t
-	var isPattern C.int
-	rc52, errno52 := C.zlink_subscription_at(handle, C.size_t(index), nil, &size, &isPattern)
-	err := configErrorFromCall(rc52, errno52)
-	if err == nil {
-		return "", isPattern != 0, nil
-	}
-	zerr, ok := err.(*ConfigError)
-	if !ok || (zerr.Result != ConfigInvalidArgument && zerr.Result != ConfigBufferTooSmall) || size == 0 {
-		return "", false, err
-	}
-	buf := make([]byte, int(size))
-	rc53, errno53 := C.zlink_subscription_at(handle, C.size_t(index), (*C.char)(unsafe.Pointer(&buf[0])), &size, &isPattern)
-	if err := configErrorFromCall(rc53, errno53); err != nil {
-		return "", false, err
-	}
-	return string(buf[:int(size)]), isPattern != 0, nil
-}
-
 func setTLSServer(handle unsafe.Pointer, certPath string, keyPath string, requireClientCert bool) error {
 	return withCStringPair(certPath, keyPath, func(certC *C.char, keyC *C.char) error {
 		var required C.int

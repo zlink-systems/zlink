@@ -291,7 +291,6 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
                      .value ()
                      .status,
                    fw::location_write_status_t::stored);
-        request.key.global_id = "after-ended-creating";
         request.target.node_lifecycle_generation = 2;
         const auto next = original.reserve (request).result ();
         ASSERT_TRUE (next);
@@ -346,18 +345,22 @@ class user_spot_capacity_race_store_t final : public fw::location_store_t
             co_await release.task ();
             co_return observed;
         }
-        if (watched && armed.load () && key.value == descriptor_key)
-            target_read.store (true);
-        if (watched && key.value == capacity_key && armed.load () && target_read.exchange (false)
-            && armed.exchange (false)) {
-            paused.set_value ();
-            co_await release.task ();
-        }
         co_return co_await inner.read (std::move (key));
     }
     fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
     {
-        return inner.write (std::move (request));
+        const auto &flow = fw::runtime::flow_context_t::current ();
+        if (!pause_after_missing && armed.load () && flow && flow->flow_id == loser_flow
+            && std::any_of (request.conditions.begin (), request.conditions.end (),
+                            [] (const auto &condition) {
+                                return std::holds_alternative<fw::store_sum_at_most_condition_t> (
+                                  condition);
+                            })
+            && armed.exchange (false)) {
+            paused.set_value ();
+            co_await release.task ();
+        }
+        co_return co_await inner.write (std::move (request));
     }
     fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
     {
@@ -367,10 +370,7 @@ class user_spot_capacity_race_store_t final : public fw::location_store_t
     std::string loser_flow;
     std::string authority_key;
     bool pause_after_missing = false;
-    std::string descriptor_key;
-    std::string capacity_key;
     std::atomic_bool armed{false};
-    std::atomic_bool target_read{false};
     std::promise<void> paused;
     fw::task_completion_source_t<void> release;
 };
@@ -391,15 +391,9 @@ void same_id_capacity_race (bool pause_after_missing)
                           .result ();
     ASSERT_TRUE (listed);
     ASSERT_EQ (listed.value ().size (), 1u);
-    const auto &descriptor = listed.value ().front ();
     store->loser_flow = fw::runtime::flow_id_t::create ();
     store->pause_after_missing = pause_after_missing;
     store->authority_key = std::string ("authority") + '\0' + "spot" + '\0' + "capacity-race-room";
-    // URI-safe ASCII fixture keys locate the barrier; usage is never rewritten.
-    store->descriptor_key =
-      std::string ("mesh-node") + '\0' + descriptor.mesh_name + '\0' + descriptor.rid.to_hex ();
-    store->capacity_key =
-      "zlink:v11:capacity:" + descriptor.mesh_name + ":" + descriptor.rid.to_string ();
     auto blocked = store->paused.get_future ();
     const std::shared_ptr<void> release_on_exit (
       nullptr, [&] (void *) { store->release.complete (fw::result_t<void>::success ()); });

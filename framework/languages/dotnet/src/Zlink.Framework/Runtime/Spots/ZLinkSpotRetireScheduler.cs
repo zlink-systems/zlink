@@ -30,6 +30,7 @@ internal interface IZLinkSpotRetireTarget
     ValueTask StageAsync(
         ZLinkSpotRetireReservation reservation,
         ZLinkPreparedSpotRetireStaging relocation,
+        Func<ValueTask<IReadOnlyList<ZLinkRelocationQueuedJob>>> freezeBoundary,
         DateTimeOffset deadline,
         CancellationToken cancellationToken
     );
@@ -199,16 +200,6 @@ internal sealed class ZLinkSpotRetireScheduler(
         foreach (var unit in units)
         {
             var inventory = CreateInventory(unit.Activation, unit.Instance);
-            if (
-                await authorityStore
-                    .ReadAuthorityAsync(
-                        ZLinkAuthorityKeyCodec.EncodeSpot(inventory.SpotId),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false)
-                is ZLinkAuthorityReadResult.Found { Snapshot.Relocation: not null }
-            )
-                return ZLinkFrameworkRelocationReason.OperationInProgress;
             if (
                 inventory.RequiredCapabilities.Any(static capability =>
                     capability.Policy == ZLinkObjectMaintenancePolicyKind.Disabled
@@ -531,29 +522,6 @@ internal sealed class ZLinkSpotRetireScheduler(
                         cancellationToken
                     )
                     .ConfigureAwait(false);
-                var freezeResult = await activation
-                    .FreezeRelocationIngressAsync(seal)
-                    .ConfigureAwait(false);
-                heldAtCutoff = freezeResult.Held;
-                if (!freezeResult.Succeeded)
-                    throw new InvalidOperationException(
-                        "SPOT could not freeze its bounded ingress hold at the commit boundary."
-                    );
-                ZLinkSpotRetireTargetRuntime.ValidateHeldRecords(
-                    heldAtCutoff
-                        .Select(static record => new ZLinkSpotRetireHeldRecord(
-                            record.AcceptedSequence,
-                            record.Payload.ToArray()
-                        ))
-                        .ToArray()
-                );
-                participants = await AppendHeldIngressAsync(
-                        activation.MeshName,
-                        participants,
-                        heldAtCutoff,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
                 var sourceDescriptor = await ReadSourceDescriptorAsync(
                         activation.MeshName,
                         inventory.SourceNodeRid,
@@ -592,7 +560,13 @@ internal sealed class ZLinkSpotRetireScheduler(
                 );
                 stageStarted = true;
                 await target
-                    .StageAsync(reservation, staging, deadline, cancellationToken)
+                    .StageAsync(
+                        reservation,
+                        staging,
+                        FreezeBoundaryAsync,
+                        deadline,
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"relocation_stage_end spot={activation.SpotId} aggregate={aggregateId:N}"
@@ -797,6 +771,19 @@ internal sealed class ZLinkSpotRetireScheduler(
                         sourceTerminalized: sourceCompleted
                     );
                 }
+            }
+
+            async ValueTask<IReadOnlyList<ZLinkRelocationQueuedJob>> FreezeBoundaryAsync()
+            {
+                var result = await activation
+                    .FreezeRelocationIngressAsync(seal!)
+                    .ConfigureAwait(false);
+                if (!result.Succeeded)
+                    throw new InvalidOperationException(
+                        "SPOT could not freeze its ingress hold at the commit boundary."
+                    );
+                heldAtCutoff = result.Held;
+                return ResolveFrozenAcceptedJobs(heldAtCutoff);
             }
 
             // Command 44 abort for every member Session seal this unit installed.
@@ -1175,15 +1162,9 @@ internal sealed class ZLinkSpotRetireScheduler(
         );
         var spotKey = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(activation.SpotId);
         var spotTask = ReadOwnedAsync(spotKey, cancellationToken).AsTask();
-        var capturedJobsTask = ResolveAcceptedJobsAsync(
-                activation.MeshName,
-                seal.QueueSeal.QueueSeal.Captured,
-                cancellationToken
-            )
-            .AsTask();
+        var capturedJobs = ResolveFrozenAcceptedJobs(seal.QueueSeal.QueueSeal.Captured);
         var actorAuthoritiesTask = ReadActorAuthoritiesAsync(actorIds, cancellationToken).AsTask();
         var spot = await spotTask.ConfigureAwait(false);
-        var capturedJobs = await capturedJobsTask.ConfigureAwait(false);
         var actorAuthorities = await actorAuthoritiesTask.ConfigureAwait(false);
         var spotKind = activation.PlacementKind;
         var spotStableType =
@@ -1357,56 +1338,6 @@ internal sealed class ZLinkSpotRetireScheduler(
                 .ConfigureAwait(false);
         }
         return authorities;
-    }
-
-    private async ValueTask<ZLinkAggregateRelocationParticipant[]> AppendHeldIngressAsync(
-        string meshName,
-        IReadOnlyList<ZLinkAggregateRelocationParticipant> participants,
-        IReadOnlyList<ZLinkAcceptedWorkRecord> held,
-        CancellationToken cancellationToken
-    )
-    {
-        if (held.Count == 0)
-            return participants.ToArray();
-        var spot = participants.Single(static participant =>
-            participant.Envelope.ObjectKind
-                is ZLinkPlacementObjectKind.UserSpot
-                    or ZLinkPlacementObjectKind.InstanceSpot
-        );
-        var heldJobs = await ResolveAcceptedJobsAsync(meshName, held, cancellationToken)
-            .ConfigureAwait(false);
-        var accepted = spot
-            .Envelope.AcceptedJobs.Concat(heldJobs)
-            .OrderBy(static record => record.AcceptedSequence)
-            .ToArray();
-        for (var index = 1; index < accepted.Length; index++)
-            if (accepted[index - 1].AcceptedSequence >= accepted[index].AcceptedSequence)
-                throw new ZLinkRelocationDataLostException(
-                    "SPOT relocation accepted journal contains duplicate or out-of-order sequence values."
-                );
-        return participants
-            .Select(participant =>
-                participant == spot
-                    ? participant with
-                    {
-                        Envelope = participant.Envelope with { AcceptedJobs = accepted },
-                    }
-                    : participant
-            )
-            .ToArray();
-    }
-
-    private ValueTask<IReadOnlyList<ZLinkRelocationQueuedJob>> ResolveAcceptedJobsAsync(
-        string meshName,
-        IReadOnlyList<ZLinkAcceptedWorkRecord> records,
-        CancellationToken cancellationToken
-    )
-    {
-        _ = meshName;
-        cancellationToken.ThrowIfCancellationRequested();
-        if (records.Count == 0)
-            return ValueTask.FromResult<IReadOnlyList<ZLinkRelocationQueuedJob>>([]);
-        return ValueTask.FromResult(ResolveFrozenAcceptedJobs(records));
     }
 
     internal static IReadOnlyList<ZLinkRelocationQueuedJob> ResolveFrozenAcceptedJobs(

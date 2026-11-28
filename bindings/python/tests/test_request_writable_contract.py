@@ -298,7 +298,7 @@ def test_close_clears_request_wait_token_with_typed_failure(round_index):
                 with pytest.raises(zlink.SubmitError) as raised:
                     await task
                 assert raised.value.result == zlink.SubmitResult.TERMINATED
-                assert raised.value.native_errno == getattr(
+                assert raised.value.internal_errno == getattr(
                     errno, "ESHUTDOWN", errno.ECANCELED
                 )
                 assert not owner._entries

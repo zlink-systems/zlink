@@ -144,8 +144,8 @@ if (xpub.receive_subscription_event (evt) == 0) { /* ... */ }
 **완료 결과.** 둘 다 dispose나 async 동작이 없는 순수 데이터 struct다.
 
 **선택 기준.** XPUB socket의 subscription-event receive 경로(Sockets category)에서
-구독자 변동을 관찰할 때 사용한다. socket의 `subscription_at(index)` 값 반환 overload의
-반환 타입으로 `subscription_filter_t`를 사용한다.
+구독자 변동을 관찰할 때 사용한다. SUB와 XSUB의 `subscription_at(index)`는 항목을 찾으면
+`std::optional<subscription_filter_t>`에 filter와 pattern 여부를 담아 반환한다.
 
 ---
 

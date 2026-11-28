@@ -2203,7 +2203,7 @@ internal abstract partial class ZLinkSpotActivation
             frame.AuthorityOwnerGeneration,
             frame.OwnerLeaseGeneration,
             frame.MessageFollowHopCount,
-            frame.TargetOwnerId.Length == 0 ? null : frame.TargetOwnerId,
+            frame.ReadyInstanceRoute?.Authority.OwnerId.Value,
             out _,
             out _
         );
@@ -2795,6 +2795,10 @@ internal abstract partial class ZLinkSpotActivation
     {
         cancellationToken.ThrowIfCancellationRequested();
         var journal = DecodeRelocationReplayRecord(job, sourceMeshName);
+        if (journal.ReplyRouteId != 0 && job.CanonicalRequest is null)
+            throw new ZLinkRelocationDataLostException(
+                "A legacy relocation reply has no exact request-source fence for service-wire relay."
+            );
         var parts = ZLinkRawRouterServicePort.CreateMessages(journal.Parts);
         byte[][]? capturedReply = null;
         Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
@@ -2856,13 +2860,64 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
-    private static ZLinkSpotAcceptedJournalRecord DecodeRelocationReplayRecord(
+    internal static ZLinkSpotAcceptedJournalRecord DecodeRelocationReplayRecord(
         ZLinkRelocationQueuedJob job,
         string channelName
     )
     {
         if (job.CanonicalRequest is not { } request)
             return ZLinkSpotAcceptedJournal.Decode(job.Payload.Span);
+        return new ZLinkSpotAcceptedJournalRecord(
+            RoutingId.FromHex(request.Source.NodeRid),
+            request.Source.NodeGeneration,
+            new ZLinkServiceWireCodec.RequestSourceFence(
+                request.Source.OwnerId,
+                request.Source.OwnerLeaseGeneration,
+                RoutingId.FromHex(request.Source.NodeRid),
+                request.Source.NodeGeneration
+            ),
+            request.SourceSpotId,
+            request.ReplyRouteId != 0 ? request.ReplyRouteId : null,
+            request.ReplyRouteId,
+            new MeshOperationId(request.OperationHigh, request.OperationLow),
+            request.TargetNodeGeneration,
+            request.TargetAuthorityOwnerGeneration,
+            request.TargetOwnerLeaseGeneration,
+            0,
+            request.Metadata,
+            MaterializeCanonicalReplayParts(request, channelName),
+            request.InstanceIntent
+        );
+    }
+
+    private static IReadOnlyList<ReadOnlyMemory<byte>> MaterializeCanonicalReplayParts(
+        ZLinkCanonicalAcceptedRequest request,
+        string channelName
+    )
+    {
+        var application = request.ApplicationPayload;
+        if (application.PacketName == ServiceWireConstants.FrameworkMultipartPacketName)
+        {
+            if (
+                !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                    new ZLinkApplicationPayloadEnvelope(
+                        application.PacketName,
+                        application.ContentType,
+                        application.Payload
+                    ),
+                    out var parts
+                )
+            )
+                throw new InvalidDataException("The accepted Spot multipart payload is invalid.");
+            try
+            {
+                return parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray();
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+            }
+        }
         var kind = request.ReplyRouteId == 0 ? ZLinkMessageKind.Command : ZLinkMessageKind.Request;
         using var header = ZLinkEnvelopeCodec.EncodeHeader(
             new ZLinkEnvelopeHeader(
@@ -2882,26 +2937,7 @@ internal abstract partial class ZLinkSpotActivation
                 request.SourceSpotId
             )
         );
-        return new ZLinkSpotAcceptedJournalRecord(
-            RoutingId.FromHex(request.Source.NodeRid),
-            request.Source.NodeGeneration,
-            new ZLinkServiceWireCodec.RequestSourceFence(
-                request.Source.OwnerId,
-                request.Source.OwnerLeaseGeneration,
-                RoutingId.FromHex(request.Source.NodeRid),
-                request.Source.NodeGeneration
-            ),
-            request.SourceSpotId,
-            null,
-            request.ReplyRouteId,
-            new MeshOperationId(request.OperationHigh, request.OperationLow),
-            request.TargetNodeGeneration,
-            request.TargetAuthorityOwnerGeneration,
-            request.TargetOwnerLeaseGeneration,
-            0,
-            request.Metadata,
-            [header.ToArray(), request.ApplicationPayload.Payload.ToArray()]
-        );
+        return [header.ToArray(), application.Payload];
     }
 
     private async ValueTask<bool> DispatchTimerAsync(

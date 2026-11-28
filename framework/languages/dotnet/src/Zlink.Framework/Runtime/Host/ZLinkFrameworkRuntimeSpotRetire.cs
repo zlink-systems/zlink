@@ -710,7 +710,14 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 }
                                 : null,
                             ShutdownToken
-                        )
+                        ),
+                    acceptedThrough: checked(
+                        (long)
+                            participant
+                                .AcceptedJobs.Select(static job => job.AcceptedSequence)
+                                .DefaultIfEmpty()
+                                .Max()
+                    )
                 )
             );
         }

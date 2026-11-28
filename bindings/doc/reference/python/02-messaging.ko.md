@@ -160,20 +160,17 @@ if xpub.receive_subscription_event_into(evt):
     ...
 ```
 
-**Options.** 이 `Protocol`은 docstring 설명("its routing id, topic,
-and whether it subscribed") 외엔 자신의 member를 선언하지 않는다 —
-실제 runtime 구현은 `routing_id`/`topic`/`subscribed` 형태의 속성을
-노출하지만, 이 contract 파일 자체는 위 `Message`/`Received`/
-`TopicMessage`처럼 표면을 명시적으로 나열하지 않고 아무것도 typed
-member로 선언하지 않는다.
+| Member | 의미 |
+| --- | --- |
+| `routing_id: Optional[RoutingId]` | 구독자 routing id다. 값이 없으면 `None`이다. `RoutingId`는 `bytes`와 같은지 비교할 수 있고 `bytes(evt.routing_id)`는 원래 바이트를 돌려준다 |
+| `topic: str` | 구독하거나 해제한 topic |
+| `subscribed: bool` | 구독이면 `True`, 해제면 `False` |
 
-**Completion result.** 해당 없음 — 여기서 계약상 명시된 member가
-없다.
+**Completion result.** `DONT_WAIT`를 지정했고 받을 이벤트가 없으면 `receive_subscription_event_into`가 `False`를 반환한다.
 
 **선택 기준.** XPUB socket의 subscription-event receive 경로(Sockets
-category)에서 구독자 변동을 관찰할 때 사용한다. 이 Protocol이 속성 이름을
-나열하지 않으므로 정확한 속성 이름은 runtime 구현이나 스펙을 직접
-참고한다.
+category)에서 구독자 변동을 관찰할 때 사용한다. 수신 loop에서는
+`create_subscription_event()`로 만든 인스턴스 하나를 재사용한다.
 
 ---
 

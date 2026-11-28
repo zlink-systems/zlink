@@ -57,7 +57,11 @@ internal sealed class ZLinkActorHandoffState(
     // projection of that lane-owned fact, not a second execution permission.
     internal bool DurablePrefixCanRun => !_deferredJoinCapture;
 
-    internal Task AdmitDurablePrefix(string handoffId, Func<ZLinkActorHandoffFrame, Task> admit)
+    internal Task AdmitDurablePrefix(
+        string handoffId,
+        Func<ZLinkActorHandoffFrame, Task> admit,
+        long? acceptedThrough = null
+    )
     {
         return AwaitStateLane(
             _lane.RunAsync(() =>
@@ -73,8 +77,15 @@ internal sealed class ZLinkActorHandoffState(
                         "Actor durable prefix has no replay phase."
                     );
                 var terminals = new List<Task>(_frames.Count);
-                foreach (var frame in _frames)
+                var ordered = acceptedThrough is { } through
+                    ? _frames
+                        .OrderBy(frame => RelocationQueueGroup(frame, through))
+                        .ThenBy(static frame => frame.ArrivalIndex)
+                    : (IEnumerable<ZLinkActorHandoffFrame>)_frames;
+                foreach (var frame in ordered)
+                {
                     terminals.Add(admit(frame));
+                }
                 var terminal = Task.WhenAll(terminals);
                 ObserveTerminal(terminal);
                 _canonicalMaintenanceDrain = new DurablePrefix(terminal, admit);
@@ -83,6 +94,13 @@ internal sealed class ZLinkActorHandoffState(
                 return terminal;
             })
         );
+    }
+
+    private static int RelocationQueueGroup(ZLinkActorHandoffFrame frame, long acceptedThrough)
+    {
+        if (frame.ArrivalIndex <= acceptedThrough)
+            return 0;
+        return frame.RouteContext.MessageFollowHopCount != 0 ? 1 : 2;
     }
 
     internal Task TargetActivation =>
@@ -1819,7 +1837,7 @@ internal sealed class ZLinkActorHandoffState(
                     // the authority cutover. They must reserve execution before
                     // direct ingress that observed the new owner, even when the
                     // network delivers the direct frame first.
-                    .OrderBy(static frame => frame.RouteContext.MessageFollowHopCount == 0 ? 1 : 0)
+                    .OrderBy(frame => RelocationQueueGroup(frame, queuedThroughArrivalIndex))
                     .ThenBy(static frame => frame.ArrivalIndex)
                     .ToArray();
                 // ACK removes the frame before DispatchReplayAsync necessarily
@@ -1918,25 +1936,6 @@ internal sealed class ZLinkActorHandoffState(
                     completedReservations.Select(static reservation => reservation.Task)
                 );
                 return claimed.Reservations;
-            })
-        );
-    }
-
-    internal void RegisterCanonicalMaintenanceDrain(string handoffId, Task drain)
-    {
-        ArgumentNullException.ThrowIfNull(drain);
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (
-                    !string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
-                    || _targetPhase != ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
-                    || _canonicalMaintenanceDrain is not null
-                )
-                    throw new InvalidOperationException(
-                        $"Actor '{actorId}' cannot register the canonical drain."
-                    );
-                _canonicalMaintenanceDrain = new DurablePrefix(drain);
             })
         );
     }

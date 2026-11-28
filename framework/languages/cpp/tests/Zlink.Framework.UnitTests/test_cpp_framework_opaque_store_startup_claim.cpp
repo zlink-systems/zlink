@@ -29,6 +29,7 @@
 #include <future>
 #include <functional>
 #include <limits>
+#include <regex>
 #include <span>
 #include <string>
 #include <tuple>
@@ -789,8 +790,16 @@ TEST (CppFrameworkOpaqueLocationStore, AutomaticRidClaimDoesNotWaitForMissingOrE
 
 TEST (CppFrameworkOpaqueLocationStore, AutomaticRidHostServesWithoutReclaimWait)
 {
-    for (const bool use_provider : {false, true}) {
+    constexpr auto mesh_name = "automatic-startup";
+    constexpr auto automatic_prefix = "automatic";
+    const std::regex uuid_v4 (
+      R"([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})");
+    std::array<std::string, 2> generated_default_ids;
+    for (const auto &[use_provider, use_explicit_prefix] :
+         {std::pair{false, true}, std::pair{true, true}, std::pair{false, false},
+          std::pair{true, false}}) {
         SCOPED_TRACE (use_provider ? "provider" : "in-memory");
+        SCOPED_TRACE (use_explicit_prefix ? "explicit prefix" : "mesh name prefix");
         auto store = std::make_shared<reclaim_count_store_t> ();
         std::shared_ptr<location_repository_t> repository =
           use_provider
@@ -802,10 +811,11 @@ TEST (CppFrameworkOpaqueLocationStore, AutomaticRidHostServesWithoutReclaimWait)
         auto &options = app.add_zlink_framework ();
         options.add_location_store (store);
         options.add_relocation_store (std::make_shared<in_memory_relocation_store_t> ());
-        auto mesh = options.add_route_mesh ("automatic-startup");
+        auto mesh = options.add_route_mesh (mesh_name);
         mesh.channel_name ("automatic-channel").server ();
         mesh.set_object_role (object_role_t::none).listen ("inproc://automatic-startup");
-        mesh.set_automatic_routing_id_prefix ("automatic");
+        if (use_explicit_prefix)
+            mesh.set_automatic_routing_id_prefix (automatic_prefix);
         app.advanced ().services ().add_factory<location_repository_t> (
           [repository] (service_provider_t &) { return repository; },
           service_lifetime_t::singleton);
@@ -824,10 +834,19 @@ TEST (CppFrameworkOpaqueLocationStore, AutomaticRidHostServesWithoutReclaimWait)
         EXPECT_EQ (app.runtime_state (), framework_runtime_state_t::serving);
         EXPECT_EQ (store->mesh_claims.load (), 1u);
         EXPECT_EQ (location_reclaim_test_access_t::observations (*repository), 0u);
+        const auto descriptors = repository->list_mesh_nodes (mesh_name).result ().value ();
+        ASSERT_EQ (descriptors.items.size (), 1u);
+        const auto rid = descriptors.items.front ().rid.to_string ();
+        const auto prefix = std::string (use_explicit_prefix ? automatic_prefix : mesh_name) + "-";
+        ASSERT_TRUE (rid.starts_with (prefix)) << rid;
+        EXPECT_TRUE (std::regex_match (rid.substr (prefix.size ()), uuid_v4)) << rid;
+        if (!use_explicit_prefix)
+            generated_default_ids[use_provider] = rid;
         app.request_stop ();
         running.join ();
         EXPECT_EQ (exit_code, 0);
     }
+    EXPECT_NE (generated_default_ids[0], generated_default_ids[1]);
 }
 
 TEST (CppFrameworkOpaqueLocationStore, PreparingHostStopsBeforeFixedRidClaim)

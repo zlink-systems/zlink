@@ -33,10 +33,7 @@ fn sync_blocking_terminal_admits_a_send() {
         .submit_sync()
         .unwrap();
 
-    receiver
-        .common_options()
-        .set_receive_timeout(2000)
-        .unwrap();
+    receiver.common_options().set_receive_timeout(2000).unwrap();
     let mut received = zlink::Received::empty();
     assert!(
         receiver
@@ -136,10 +133,7 @@ fn blocking_publish_failure_surfaces_error() {
         .common_options()
         .set_send_high_water_mark(1)
         .unwrap();
-    pub_sock
-        .common_options()
-        .set_send_timeout(100)
-        .unwrap();
+    pub_sock.common_options().set_send_timeout(100).unwrap();
 
     // Fill the HWM
     for _ in 0..10 {

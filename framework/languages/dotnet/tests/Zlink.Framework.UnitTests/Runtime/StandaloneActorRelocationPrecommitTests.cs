@@ -8,7 +8,7 @@ using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class StandaloneActorRelocationPrecommitTests
+public sealed partial class StandaloneActorRelocationPrecommitTests
 {
     private static readonly TimeSpan ReadBarrierTimeout = TimeSpan.FromSeconds(5);
 

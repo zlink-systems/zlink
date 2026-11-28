@@ -198,13 +198,15 @@ class aggregate_commit_contention_store_t final : public location_store_t
     enum class phase_t
     {
         marker,
+        prepare_capacity,
         terminal,
         lease_loss,
         counter_race
     };
     task_t<store_read_result_t> read (store_key_t key) override
     {
-        if (on_counter_read && key.value == "zlink:v11:authority-owner-counter"
+        if (on_counter_read
+            && key.value.starts_with (std::string ("zlink:v12:authority-owner-counter") + '\0')
             && ++counter_reads == 2) {
             // The injected peer step runs on the lane that resumes the
             // repository, so it is awaited rather than blocking that lane.
@@ -221,13 +223,19 @@ class aggregate_commit_contention_store_t final : public location_store_t
     {
         bool counter = false;
         bool capacity = false;
+        bool preparing = false;
         for (const auto &mutation : request.mutations) {
             const auto &key = std::visit (
               [] (const auto &value) -> const store_key_t & { return value.key; }, mutation);
-            counter |= key.value == "zlink:v11:authority-owner-counter";
-            capacity |= key.value.starts_with ("zlink:v11:capacity:");
+            counter |= key.value.starts_with ("zlink:v12:authority-owner-counter");
+            capacity |= key.value.starts_with (capacity_domain);
+            if (const auto *put = std::get_if<store_put_t> (&mutation);
+                put && key.value.starts_with ("zlink:v11:aggregate:"))
+                preparing |= nlohmann::json::parse (put->bytes).at ("state") == "prepared";
         }
-        const bool matching = phase == phase_t::marker ? counter : capacity;
+        const bool matching = phase == phase_t::marker             ? counter
+                              : phase == phase_t::prepare_capacity ? capacity && preparing
+                                                                   : capacity;
         if (remaining != 0 && matching) {
             --remaining;
             ++rejected;
@@ -421,8 +429,8 @@ TEST (CppFrameworkOpaqueLocationStore, AggregateReadKeepsSourceVersionUntilCommi
 TEST (CppFrameworkOpaqueLocationStore, AggregateCommitRechecksFenceAfterTransientConflicts)
 {
     using phase_t = aggregate_commit_contention_store_t::phase_t;
-    for (const auto phase :
-         {phase_t::marker, phase_t::terminal, phase_t::lease_loss, phase_t::counter_race}) {
+    for (const auto phase : {phase_t::marker, phase_t::prepare_capacity, phase_t::terminal,
+                             phase_t::lease_loss, phase_t::counter_race}) {
         SCOPED_TRACE (static_cast<int> (phase));
         aggregate_commit_contention_store_t provider;
         provider_location_repository_t repository (provider);
@@ -500,7 +508,7 @@ TEST (CppFrameworkOpaqueLocationStore, AggregateCommitRechecksFenceAfterTransien
                                                {}});
         }
         provider.phase = phase;
-        if (phase == phase_t::marker)
+        if (phase == phase_t::marker || phase == phase_t::prepare_capacity)
             provider.remaining = 65;
         if (phase == phase_t::counter_race) {
             provider.on_counter_read = [&] () -> task_t<void> {

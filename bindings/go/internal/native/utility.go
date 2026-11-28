@@ -29,7 +29,7 @@ type SocketTarget interface {
 
 func Has(capability string) (bool, error) {
 	if strings.IndexByte(capability, 0) >= 0 {
-		return false, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return false, newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	cstr := C.CString(capability)
 	defer C.free(unsafe.Pointer(cstr))
@@ -58,7 +58,7 @@ func Proxy(frontend SocketTarget, backend SocketTarget, capture SocketTarget) er
 
 func socketHandle(socket SocketTarget) (unsafe.Pointer, error) {
 	if socket == nil {
-		return nil, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return nil, newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	return socket.raw(), nil
 }
@@ -179,13 +179,13 @@ func (s *threadState) getErr() error {
 
 func NewThread(target func()) (*Thread, error) {
 	if target == nil {
-		return nil, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return nil, newConfigError(ConfigInvalidArgument, int(C.EINVAL))
 	}
 	state := cgo.NewHandle(&threadState{target: target})
 	handle, cerr := C.zlink_thread_start_go(C.uintptr_t(state))
 	if handle == nil {
 		state.Delete()
-		return nil, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: cgoErrno(cerr)}
+		return nil, newConfigError(ConfigInvalidHandle, cgoErrno(cerr))
 	}
 	return &Thread{handle: handle, state: state}, nil
 }

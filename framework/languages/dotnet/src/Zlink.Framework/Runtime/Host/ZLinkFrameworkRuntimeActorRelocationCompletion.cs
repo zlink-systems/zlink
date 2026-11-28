@@ -70,7 +70,11 @@ internal sealed partial class ZLinkFrameworkRuntime
                         complete,
                         cancellationToken
                     );
-            }
+            },
+            acceptedThrough: acceptedFrames
+                .Select(static frame => frame.ArrivalIndex)
+                .DefaultIfEmpty()
+                .Max()
         );
         if (requests.Count != 0)
             RetainAcceptedRepliesUntilReplayEnds(identity.AggregateId, writer, prefix);

@@ -29,8 +29,8 @@ public sealed partial class RelocationBehaviorConformanceTests
         var trace = new RelocationBehaviorTrace
         {
             SourceActorCaptureGate = releaseCapture.Task,
-            ExpectedCaptureNodes = ["source", "target"],
-            ExpectedRestoreNodes = ["target", "destination"],
+            CaptureNodes = ["source", "target"],
+            RestoreNodes = ["target", "destination"],
         };
         trace.ReleaseJoinHandler.SetResult();
         trace.ReleaseTargetLifecycle.SetResult();

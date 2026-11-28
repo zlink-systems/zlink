@@ -10,6 +10,7 @@
 #include "runtime/execution/task_result.hpp"
 #include "runtime/host/app_test_access.hpp"
 #include "runtime/host/hosted_service_lifecycle.hpp"
+#include "runtime/http/http_startup_test_probe.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 #include "runtime/utils/poll_interval_wait.hpp"
 #include <algorithm>
@@ -421,10 +422,14 @@ try {
         _state->teardown_complete = true;
     }
     _state->termination_teardown_changed.notify_all ();
-    if (_state->termination_operation.worker.joinable ())
+    if (_state->termination_operation.worker.joinable ()) {
         _state->termination_operation.worker.join ();
-    else
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        runtime::probe_http_startup (runtime::http_startup_event_t::shutdown_worker_joined);
+#endif
+    } else {
         _state->complete_termination ({termination_outcome_t::stopped, termination_reason_t::none});
+    }
     if (startup_failure)
         std::rethrow_exception (startup_failure);
     if (startup_publication.await_ready ())

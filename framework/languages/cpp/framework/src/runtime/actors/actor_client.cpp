@@ -4,6 +4,7 @@
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/dispatch/owned_task.hpp"
+#include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/actors/actor_manager_access.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
@@ -397,13 +398,15 @@ class actor_client_impl_t final : public actor_client_t,
                          std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                          std::shared_ptr<actor_location_observer_t> actor_locations,
                          location_options_t options,
-                         std::function<void ()> admit_call) :
+                         std::function<void ()> admit_call,
+                         dispatch_options_t dispatch) :
         _store (&store),
         _serializers (detail::serializer_registry_access_t::retain (serializers)),
         _mesh_nodes (std::move (mesh_nodes)),
         _actor_locations (std::move (actor_locations)),
         _location_options (std::move (options)),
-        _admit_call (std::move (admit_call))
+        _admit_call (std::move (admit_call)),
+        _dispatch (std::move (dispatch))
     {
         _message_follow_subscriptions.reserve (_mesh_nodes.size ());
         try {
@@ -747,7 +750,7 @@ class actor_client_impl_t final : public actor_client_t,
         header.content_type = _serializers.content_type (message._type);
         header.correlation_id = _request_id_prefix + std::to_string (_request_id_seq.fetch_add (1));
         co_return co_await route->relay_application_actor (
-          actor.native_ref, header, detail::message_to_raw (message, _serializers), timeout,
+          actor.native_ref, header, encode_payload (message, header, actor), timeout,
           zlink::routing_id_t::from (std::uint32_t{0}), runtime::protocol::actor_route_fence_t{}, 0,
           runtime::protocol::wire_operation_id_t{}, 0, true);
     }
@@ -835,8 +838,8 @@ class actor_client_impl_t final : public actor_client_t,
               header.content_type = _serializers.content_type (request._type);
               header.correlation_id = std::move (request_id);
               header.metadata = std::move (metadata);
-              auto parts = detail::encode_actor_packet (
-                header, detail::message_to_raw (request, _serializers));
+              auto parts =
+                detail::encode_actor_packet (header, encode_payload (request, header, actor));
               auto physical = prepare_request_receiver (actor, receiver);
               runtime->prepare_actor_request_reply (operation, physical);
               auto work = std::make_shared<std::function<task_t<void> ()>> (
@@ -853,6 +856,41 @@ class actor_client_impl_t final : public actor_client_t,
           });
     }
 
+    zlink::message_t encode_payload (const message_t &message,
+                                     const runtime::messaging::envelope_header_t &header,
+                                     const resolved_actor_t &actor) const
+    {
+        try {
+            return detail::message_to_raw (message, _serializers);
+        }
+        catch (...) {
+            const auto failure = std::current_exception ();
+            detail::dispatch_error_reporter_t (_dispatch).report_lazy ([&] {
+                const auto flow = runtime::flow_context_t::enter_current_or_create (
+                  flow_origin_t::application, detail::message_flow_tracer_t (_dispatch).mode ());
+                message_dispatch_error_event_t event{
+                  .surface = dispatch_error_surface_t::spot_actor,
+                  .message_kind = header.kind == runtime::messaging::message_kind_t::request
+                                    ? dispatch_message_kind_t::actor_request
+                                    : dispatch_message_kind_t::actor_send,
+                  .reason = dispatch_error_reason_t::encode_error,
+                  .action = dispatch_error_action_t::fail_caller,
+                  .packet_name = header.message_name,
+                  .actor_id = std::string (actor.framework_ref.actor_id ().value ()),
+                  .exception = failure,
+                  .mesh_name = actor.mesh_name};
+                if (!header.correlation_id.empty ())
+                    event.correlation_id = header.correlation_id;
+                if (const auto &current = runtime::flow_context_t::current ()) {
+                    event.flow_id = current->flow_id;
+                    event.flow_origin = current->origin;
+                }
+                return event;
+            });
+            throw;
+        }
+    }
+
     task_t<result_t<void>>
     relay_actor_command (std::shared_ptr<detail::mesh_node_runtime_t> runtime,
                          resolved_actor_t actor,
@@ -867,8 +905,7 @@ class actor_client_impl_t final : public actor_client_t,
                                  detail::actor_message_channel_name, packet_name, timeout);
         header.content_type = _serializers.content_type (message._type);
         header.metadata = metadata;
-        auto parts =
-          detail::encode_actor_packet (header, detail::message_to_raw (message, _serializers));
+        auto parts = detail::encode_actor_packet (header, encode_payload (message, header, actor));
         try {
             auto copied = parts.items ();
             const auto submit = co_await runtime->send_to_actor (
@@ -997,6 +1034,7 @@ class actor_client_impl_t final : public actor_client_t,
     std::map<std::string, cached_actor_t> _route_cache;
     std::chrono::milliseconds _default_timeout{std::chrono::seconds (30)};
     std::function<void ()> _admit_call;
+    dispatch_options_t _dispatch;
     const std::string _request_id_prefix =
       std::to_string (reinterpret_cast<std::uintptr_t> (this)) + "-";
     std::atomic<std::uint64_t> _request_id_seq{1};
@@ -1064,11 +1102,12 @@ make_actor_client (live_location_reader_t &store,
                    std::shared_ptr<actor_location_observer_t> actor_locations,
                    location_options_t options,
 
-                   std::function<void ()> admit_call)
+                   std::function<void ()> admit_call,
+                   dispatch_options_t dispatch)
 {
     return std::make_shared<actor_client_impl_t> (store, serializers, std::move (mesh_nodes),
                                                   std::move (actor_locations), std::move (options),
-                                                  std::move (admit_call));
+                                                  std::move (admit_call), std::move (dispatch));
 }
 
 task_t<void> send_to_actor_ref (actor_client_t &client,

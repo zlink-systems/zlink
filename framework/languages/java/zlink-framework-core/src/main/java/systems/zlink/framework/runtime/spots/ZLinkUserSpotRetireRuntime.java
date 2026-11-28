@@ -394,6 +394,11 @@ public final class ZLinkUserSpotRetireRuntime {
         stateMachines.forEach(machine -> machine.onSourceQuiescenceChanged(listener));
     }
 
+    /** Host stop deadline: units still unsettled then end with Unavailable, no Store retry. */
+    public void onStopDeadline(java.time.Instant deadline) {
+        stateMachines.forEach(machine -> machine.stopAt(deadline));
+    }
+
     public CompletionStage<Void> sealAcceptedTargetRelocations() {
         return CompletableFuture.allOf(
                 stateMachines.stream()

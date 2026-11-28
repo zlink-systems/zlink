@@ -23,51 +23,44 @@ internal sealed class ZLinkActorDrainCoordinator(
         if (states.Length == 0)
             return null;
 
-        try
+        foreach (
+            var actorType in states
+                .Select(static state => state.ActorType)
+                .Where(static actorType => !string.IsNullOrWhiteSpace(actorType))
+                .Distinct(StringComparer.Ordinal)
+        )
         {
+            var sourceNode = registration.SpotNodes.Values.Single(node =>
+                node.ActorFactories.ContainsKey(actorType!)
+            );
+            if (
+                sourceNode.ActorRelocations[actorType!].PolicyKind
+                == ZLinkObjectRelocationRegistration.DisabledPolicy
+            )
+                return ZLinkFrameworkRelocationReason.RelocationDisabled;
+            var targets = await ResolveTargetCandidatesAsync(
+                    actorType!,
+                    selection,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
             foreach (
-                var actorType in states
-                    .Select(static state => state.ActorType)
-                    .Where(static actorType => !string.IsNullOrWhiteSpace(actorType))
-                    .Distinct(StringComparer.Ordinal)
+                var state in states.Where(state =>
+                    string.Equals(state.ActorType, actorType, StringComparison.Ordinal)
+                )
             )
             {
-                var sourceNode = registration.SpotNodes.Values.Single(node =>
-                    node.ActorFactories.ContainsKey(actorType!)
-                );
+                if (state.Actor is null || state.NativeActorRef is not { } actorRef)
+                    continue;
+                var capacity = new ZLinkCapacityVector(1, 0, null);
                 if (
-                    sourceNode.ActorRelocations[actorType!].PolicyKind
-                    == ZLinkObjectRelocationRegistration.DisabledPolicy
-                )
-                    return ZLinkFrameworkRelocationReason.RelocationDisabled;
-                var targets = await ResolveTargetCandidatesAsync(
-                        actorType!,
-                        selection,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                foreach (
-                    var state in states.Where(state =>
-                        string.Equals(state.ActorType, actorType, StringComparison.Ordinal)
+                    !targets.Any(target =>
+                        target.Target.NodeRid != actorRef.NodeRid
+                        && plan.TryReserve(target.Descriptor, capacity)
                     )
                 )
-                {
-                    if (state.Actor is null || state.NativeActorRef is not { } actorRef)
-                        continue;
-                    var capacity = new ZLinkCapacityVector(1, 0, null);
-                    if (
-                        !targets.Any(target =>
-                            target.Target.NodeRid != actorRef.NodeRid
-                            && plan.TryReserve(target.Descriptor, capacity)
-                        )
-                    )
-                        return ZLinkFrameworkRelocationReason.TargetUnavailable;
-                }
+                    return ZLinkFrameworkRelocationReason.TargetUnavailable;
             }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
         }
         return null;
     }

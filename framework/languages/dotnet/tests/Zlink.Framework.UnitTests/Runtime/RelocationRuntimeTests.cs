@@ -156,6 +156,7 @@ public sealed partial class RelocationRuntimeTests
                 ExpiresAt = TimeSpan.Zero,
             };
             Volatile.Write(ref stage.Published, 1);
+            stage.Terminal.SetResult();
             Volatile.Write(ref stage.SessionRoutesConverged, 1);
             return target.TryTrackStage(
                 new ZLinkAggregateFence(envelope.AggregateId, envelope.AggregateGeneration),
@@ -1585,6 +1586,7 @@ public sealed partial class RelocationRuntimeTests
         );
 
         Assert.True(authorityNormalized);
+        Assert.False(stage.Terminal.Task.IsCompleted);
         Assert.Empty(deleted);
 
         await ZLinkSpotRetireTargetRuntime.ReleaseFinalRootAfterNormalizationAsync(
@@ -1593,6 +1595,7 @@ public sealed partial class RelocationRuntimeTests
             commitNormalization: null,
             reference =>
             {
+                Assert.True(stage.Terminal.Task.IsCompletedSuccessfully);
                 deleted.Add(reference);
                 return ValueTask.CompletedTask;
             }
@@ -1774,9 +1777,20 @@ public sealed partial class RelocationRuntimeTests
         );
         Assert.Equal(1, target.ActiveStageCount);
 
-        // Once the session routes converged, expiry reconciliation completes
-        // the published stage as a Completed tombstone.
+        // Route convergence can finish while the stage still owns publication.
         Volatile.Write(ref stage.SessionRoutesConverged, 1);
+        Assert.False(
+            await target.PublishInboundAsync(
+                unknownFence,
+                stage.SourceNodeRid,
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(1, target.ActiveStageCount);
+        Assert.Equal(0, target.TerminalTombstoneCount);
+
+        // Once publication and the session routes are complete, expiry removes the stage.
+        stage.Terminal.SetResult();
         Assert.False(
             await target.PublishInboundAsync(
                 unknownFence,

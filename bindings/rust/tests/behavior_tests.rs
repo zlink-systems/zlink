@@ -444,7 +444,7 @@ fn stream_packet_receive_propagates_message_init_failure() {
 
     let error = result.expect_err("message initialization failure must be returned");
     assert_eq!(error.code(), zlink::RecvResult::InternalError);
-    assert_eq!(error.native_errno(), libc::ENOMEM);
+    assert_eq!(error.internal_errno(), libc::ENOMEM);
     assert!(packet.is_empty());
 }
 

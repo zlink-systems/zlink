@@ -198,6 +198,23 @@ public sealed partial class RelocationRuntimeTests
             );
             Assert.True(target.TryTrackStage(fence, stage));
 
+            Assert.True(
+                ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(committed, out var previous)
+            );
+            Assert.Same(
+                stage.Terminal.Task,
+                target.FindTargetTerminal(previous.State, actor.AuthorityKey)
+            );
+            Assert.Null(
+                target.FindTargetTerminal(
+                    previous.State with
+                    {
+                        TargetAttemptGeneration = stage.TargetAttemptGeneration + 1,
+                    },
+                    actor.AuthorityKey
+                )
+            );
+
             if (publication == StagedAuthorityPublication.Complete)
             {
                 // The live cutover owns its verified root while source completion is absent.

@@ -12,6 +12,7 @@
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/streams/stream_startup_test_probe.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 #include "runtime/streams/session_liveness.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
@@ -65,6 +66,21 @@ namespace
 using zlink::framework::tests::endpoint_port;
 using zlink::framework::tests::listener_endpoint;
 using zlink::framework::tests::loopback_tcp_any_port;
+
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+using runtime::stream_startup_event_t;
+
+struct stream_startup_probe_scope_t
+{
+    explicit stream_startup_probe_scope_t (
+      std::function<void (stream_startup_event_t, std::weak_ptr<void>)> observe)
+    {
+        runtime::stream_startup_test_probe = std::move (observe);
+    }
+
+    ~stream_startup_probe_scope_t () { runtime::stream_startup_test_probe = {}; }
+};
+#endif
 
 /* Core error-frame close regression support: a session that only counts its
  * lifecycle; the rejected packet never reaches on_packet. */
@@ -180,7 +196,144 @@ bool contains_error_frame (const zlink::framework::detail::stream_runtime_t &run
     }
     return false;
 }
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+int shutdown_before_stream_bind_failure ()
+{
+    using namespace std::chrono_literals;
+    namespace asio = boost::asio;
+    using asio::ip::tcp;
+
+    asio::io_context io;
+    tcp::acceptor occupied (io, {asio::ip::address_v4::loopback (), 0});
+    auto app = app_t::create ();
+    auto control = std::make_shared<core_error_close_control_t> ();
+    app.advanced ().services ().add_factory<core_error_close_session_t> (
+      [control] (service_provider_t &) {
+          return std::make_unique<core_error_close_session_t> (control);
+      },
+      service_lifetime_t::scoped);
+    auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    options.add_stream_node ("startup-rollback")
+      .bind ("tcp://127.0.0.1:" + std::to_string (occupied.local_endpoint ().port ()))
+      .register_session<core_error_close_session_t> ();
+
+    std::promise<void> published;
+    std::promise<void> bind_release;
+    std::promise<std::weak_ptr<void>> acquired;
+    std::promise<void> drain_release;
+    std::promise<void> rolled_back;
+    auto bind_allowed = bind_release.get_future ();
+    auto drain_allowed = drain_release.get_future ();
+    const stream_startup_probe_scope_t probe (
+      [&] (stream_startup_event_t event, std::weak_ptr<void> listener) {
+          switch (event) {
+              case stream_startup_event_t::before_bind:
+                  published.set_value ();
+                  bind_allowed.wait ();
+                  break;
+              case stream_startup_event_t::before_drain_listener:
+                  acquired.set_value (listener);
+                  drain_allowed.wait ();
+                  // Let the drain error path return before dereferencing expired storage.
+                  if (listener.expired ())
+                      throw std::logic_error ("Startup rollback destroyed the worker's listener");
+                  break;
+              case stream_startup_event_t::rollback_complete:
+                  rolled_back.set_value ();
+                  break;
+              case stream_startup_event_t::accept_started:
+                  break;
+          }
+      });
+
+    auto running = std::async (std::launch::async, [&] { return app.run (0, nullptr); });
+    if (published.get_future ().wait_for (3s) != std::future_status::ready) {
+        bind_release.set_value ();
+        drain_release.set_value ();
+        (void) running.get ();
+        std::cerr << "Stream startup did not reach the bind barrier\n";
+        return 1;
+    }
+    auto shutdown = app.shutdown (5s);
+    auto held_listener = acquired.get_future ();
+    const bool worker_reached = held_listener.wait_for (3s) == std::future_status::ready;
+    bind_release.set_value ();
+    const bool rollback_completed =
+      rolled_back.get_future ().wait_for (3s) == std::future_status::ready;
+    const auto listener = worker_reached ? held_listener.get () : std::weak_ptr<void>{};
+    const bool listener_survived = !listener.expired ();
+    const bool shutdown_pending = !shutdown.await_ready ();
+    const bool run_pending = running.wait_for (0s) != std::future_status::ready;
+    drain_release.set_value ();
+    const auto exit = running.get ();
+    const bool shutdown_completed =
+      shutdown.await_ready ()
+      && shutdown.result ().value ().outcome == termination_outcome_t::stopped;
+
+    if (!worker_reached || !rollback_completed || !listener_survived || !shutdown_pending
+        || !run_pending || exit != 1 || !shutdown_completed || !listener.expired ()) {
+        std::cerr << "Stream startup rollback lifetime failed: worker_reached=" << worker_reached
+                  << " rollback_completed=" << rollback_completed
+                  << " listener_survived_rollback=" << listener_survived
+                  << " shutdown_pending_at_rollback=" << shutdown_pending
+                  << " run_pending_at_rollback=" << run_pending << " exit=" << exit
+                  << " shutdown_completed=" << shutdown_completed
+                  << " listener_released=" << listener.expired () << '\n';
+        return 1;
+    }
+    std::cout
+      << "The Stream listener survived startup rollback and was released before run returned\n";
+    return 0;
+}
+
+int stream_seal_before_start_prevents_accept ()
+{
+    auto builder = test::runtime_failure_builder ();
+    builder.stream ("startup-sealed").bind (loopback_tcp_any_port).register_session ("session");
+    auto stream_runtime = detail::stream_runtime_t::from (builder);
+    service_collection_t services;
+    auto provider = services.build_provider ();
+    core_error_close_session_t session (std::make_shared<core_error_close_control_t> ());
+    auto statuses = std::make_shared<runtime::listener_status_registry_t> ();
+    runtime::stream_host_service_t host (
+      std::make_shared<runtime::runtime_failure_collector_t> (), stream_runtime,
+      stream_runtime.snapshots (),
+      {{"session",
+        [&session] (service_provider_t &) -> packet_stream_session_t & { return session; }}},
+      std::chrono::seconds (30), nullptr, {}, statuses);
+    bool accept_started = false;
+    const stream_startup_probe_scope_t probe (
+      [&] (stream_startup_event_t event, std::weak_ptr<void>) {
+          if (event == stream_startup_event_t::accept_started)
+              accept_started = true;
+      });
+
+    static_cast<runtime::hosted_service_lifecycle_t &> (host).seal_application_dispatch ();
+    const auto started = host.start (provider).result ().has_value ();
+    const bool status_published =
+      statuses->find (listener_kind_t::stream, "startup-sealed").has_value ();
+    host.stop ();
+    if (!started || accept_started || status_published) {
+        std::cerr << "Stream startup after seal failed: started=" << started
+                  << " accept_started=" << accept_started
+                  << " status_published=" << status_published << '\n';
+        return 1;
+    }
+    std::cout << "Stream bind succeeded after seal without starting accept\n";
+    return 0;
+}
+#endif
 } // namespace
+
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+int stream_startup_shutdown_cases ()
+{
+    const auto rollback = shutdown_before_stream_bind_failure ();
+    const auto sealed = stream_seal_before_start_prevents_accept ();
+    return rollback | sealed;
+}
+#endif
 
 int stream_core_shutdown_cases (metric_test::provider_t &metric_provider)
 {

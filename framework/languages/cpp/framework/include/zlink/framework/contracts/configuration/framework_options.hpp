@@ -997,8 +997,8 @@ class fanout_channel_builder_t
                   if (routing_id) {
                       publisher.set_routing_id (*routing_id);
                   } else if (automatic_routing_id_prefix) {
-                      publisher.set_routing_id (zlink::routing_id_t::from (
-                        *automatic_routing_id_prefix + "-" + detail::new_uuid_v4 ()));
+                      publisher.set_routing_id (
+                        detail::new_automatic_routing_id (*automatic_routing_id_prefix));
                   }
                   const auto endpoint =
                     publisher_port
