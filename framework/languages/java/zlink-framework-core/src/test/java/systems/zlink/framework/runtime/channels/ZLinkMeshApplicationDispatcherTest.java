@@ -289,15 +289,18 @@ final class ZLinkMeshApplicationDispatcherTest {
         var ingress =
                 Thread.ofPlatform().daemon().name("mesh-ingress-inline-test").unstarted(receive);
         try {
-            ingress.start();
-            assertTrue(
-                    receiveReturned.get(), "Mesh receive must return while the handler is blocked");
-            assertNull(receiveFailure.get());
-            startHandler.countDown();
+            try {
+                ingress.start();
+                assertTrue(
+                        receiveReturned.get(),
+                        "Mesh receive must return while the handler is blocked");
+                assertNull(receiveFailure.get());
+            } finally {
+                startHandler.countDown();
+            }
             targetStarted.await();
             assertNotEquals(ingress.getName(), targetThread.get());
         } finally {
-            startHandler.countDown();
             targetRelease.countDown();
         }
     }
