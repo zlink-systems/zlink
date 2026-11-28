@@ -6,6 +6,7 @@ using static PerfRunner;
 CheckRotation();
 CheckReplyTurn();
 CheckCatchUp();
+ZeroRateCheck.Run();
 CheckSchedule();
 
 const int Size = 64;
@@ -149,19 +150,19 @@ static void CheckCatchUp()
 {
     const ulong start = 1_000_000_000;
     var tracker = new PerfMultiPubSubClient.CatchUpTracker(2);
-    Require(!tracker.Observe(start, [90, 100], 100), "initial observation caught up");
-    Require(!tracker.Observe(start + 500_000_000, [150, 140], 150),
+    Require(!tracker.Observe(start, [90, 100], 100, 20.0), "initial observation caught up");
+    Require(!tracker.Observe(start + 500_000_000, [150, 140], 150, 20.0),
         "a change in the slowest subscriber concealed its deficit");
-    Require(tracker.Observe(start + 1_000_000_000, [199, 190], 200),
+    Require(tracker.Observe(start + 1_000_000_000, [199, 190], 200, 20.0),
         "one message of observation quantization blocked catch-up");
 
     tracker = new PerfMultiPubSubClient.CatchUpTracker(2);
-    Require(!tracker.Observe(start, [90, 100], 100), "initial observation caught up");
-    Require(!tracker.Observe(start + 200_000_000, [100, 140], 120),
+    Require(!tracker.Observe(start, [90, 100], 100, 20.0), "initial observation caught up");
+    Require(!tracker.Observe(start + 200_000_000, [100, 140], 120, 20.0),
         "in-flight growth caught up");
-    Require(!tracker.Observe(start + 500_000_000, [140, 160], 150),
+    Require(!tracker.Observe(start + 500_000_000, [140, 160], 150, 20.0),
         "window was not restarted after in-flight growth");
-    Require(tracker.Observe(start + 700_000_000, [150, 190], 170)
+    Require(tracker.Observe(start + 700_000_000, [150, 190], 170, 20.0)
         && tracker.WindowStartInFlight == 20, "stable nonzero in-flight did not catch up");
     Console.WriteLine("PASS 5 lagging subscriber, in-flight restart, and one-message tolerance");
 }

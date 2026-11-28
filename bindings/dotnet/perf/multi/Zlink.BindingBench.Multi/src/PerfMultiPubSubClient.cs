@@ -235,7 +235,7 @@ internal static class PerfMultiPubSubClient
                     {
                         double elapsed = (tickNs - pacedEpochNs) / 1_000_000_000.0;
                         long scheduled = (long)(targetRate * elapsed);
-                        bool caughtUp = catchUp.Observe(tickNs, pacedReceived, scheduled);
+                        bool caughtUp = catchUp.Observe(tickNs, pacedReceived, scheduled, targetRate);
                         if (tickNs >= nextProgressNs)
                         {
                             inflightFloor = Math.Min(inflightFloor, catchUp.InFlight);
@@ -320,8 +320,11 @@ internal static class PerfMultiPubSubClient
         internal long WindowStartInFlight { get; private set; }
         internal bool CaughtUp { get; private set; }
 
-        internal bool Observe(ulong nowNs, ReadOnlySpan<long> received, long scheduled)
+        internal bool Observe(ulong nowNs, ReadOnlySpan<long> received, long scheduled,
+            double targetRate)
         {
+            if (targetRate <= 0.0)
+                return false;
             if (CaughtUp)
                 return true;
 
