@@ -7,6 +7,12 @@ export const ADMISSION_TICKET = '$zlink.admission.ticket';
 export const ADMISSION_QUEUE_REQUIRED = '$zlink.admission.queueRequired';
 export const ADMISSION_RETRY_AFTER = '$zlink.admission.retryAfterMs';
 
+// Matches the Framework server's admissionTicketEncodedSize.
+const admissionTicketEncodedSize = 66;
+const admissionTicketPattern = new RegExp(
+  `^[A-Za-z0-9_-]{${admissionTicketEncodedSize - 1}}[AQgw]$`
+);
+
 export interface AdmissionPosition {
   readonly position: number;
   readonly estimatedWaitMs: number;
@@ -46,8 +52,7 @@ export function decodeAdmissionQueue(
           value.position === undefined &&
           value.estimatedWaitMs === undefined &&
           typeof value.ticket === 'string' &&
-          value.ticket.length === 66 &&
-          /^[A-Za-z0-9_-]{65}[AQgw]$/.test(value.ticket) &&
+          admissionTicketPattern.test(value.ticket) &&
           integer(value.expiresInMs, 1)
         ) {
           return { ticket: value.ticket, expiresInMs: value.expiresInMs };

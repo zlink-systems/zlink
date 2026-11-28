@@ -113,6 +113,10 @@ test('invalid queue configuration raises a startup configuration error without d
 
 const fixture = require('../../../../runtime/conformance/login-admission-queue-v1.json');
 
+test('login admission fixture has 7 startup scenarios', () => {
+  assert.equal(fixture.startupScenarios.length, 7);
+});
+
 for (const { name, given, expect } of fixture.startupScenarios) {
   test(`login admission queue startup fixture: ${name}`, () => {
     const {

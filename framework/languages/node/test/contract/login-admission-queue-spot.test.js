@@ -54,6 +54,10 @@ function configureQueueSpot(codec, globalLimit, isOwnerLive) {
   };
 }
 
+test('login admission fixture has 22 Spot scenarios', () => {
+  assert.equal(fixture.queueScenarios.length, 22);
+});
+
 for (const { name, given, steps } of fixture.queueScenarios) {
   test(`login admission Spot fixture: ${name}`, async () => {
     const codec = new AdmissionTickets(Buffer.alloc(32, 1).toString('base64url'));

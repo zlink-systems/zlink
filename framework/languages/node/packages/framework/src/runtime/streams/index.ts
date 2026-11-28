@@ -109,6 +109,7 @@ import {
   type ZLinkStreamSessionRuntimeOptions as ZLinkStreamSessionRuntimeCoreOptions
 } from './stream-session-runtime';
 const DEFAULT_STREAM_SERVICE_SHUTDOWN_TIMEOUT_MS = 1000;
+const reportPeriodMs = 1_000;
 export { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 export { ZLinkActorSessionBindingRegistry } from './actor-session-binding-registry';
 export { zlinkStreamLz4CompressionCodec } from './stream-frame-factory';
@@ -448,7 +449,7 @@ export class ZLinkStreamRuntimeManager {
           .catch((error) => {
             if (!this.admissionQueueStop.signal.aborted) runtime!.error(error);
           });
-      }, 1_000);
+      }, reportPeriodMs);
       this.admissionReportTimer.unref();
     }
   }

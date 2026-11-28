@@ -66,6 +66,10 @@ function decode(payload, packetName, read) {
   );
 }
 
+test('admission queue wire fixture has 8 valid messages', () => {
+  assert.equal(golden.messages.length, 8);
+});
+
 for (const {
   name,
   packetName,
@@ -142,6 +146,10 @@ for (const wrongName of [
     });
   });
 }
+
+test('admission queue wire fixture has 9 invalid messages', () => {
+  assert.equal(golden.invalid.length, 9);
+});
 
 for (const { name, packetName, payload, responsePayload, expect } of golden.invalid) {
   test(`admission queue wire: ${name}`, () => {

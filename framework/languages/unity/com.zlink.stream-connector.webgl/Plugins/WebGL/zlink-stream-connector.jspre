@@ -1974,6 +1974,10 @@ var ZlinkStreamConnectorBundle = (() => {
   var ADMISSION_TICKET = "$zlink.admission.ticket";
   var ADMISSION_QUEUE_REQUIRED = "$zlink.admission.queueRequired";
   var ADMISSION_RETRY_AFTER = "$zlink.admission.retryAfterMs";
+  var admissionTicketEncodedSize = 66;
+  var admissionTicketPattern = new RegExp(
+    `^[A-Za-z0-9_-]{${admissionTicketEncodedSize - 1}}[AQgw]$`
+  );
   function integer(value, minimum, maximum = Number.MAX_SAFE_INTEGER) {
     return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum;
   }
@@ -1982,7 +1986,7 @@ var ZlinkStreamConnectorBundle = (() => {
       if (codec === 1 /* Json */) {
         const value = JSON.parse(utf8Decode2(payload()));
         if (value !== null && typeof value === "object") {
-          if (name !== ADMISSION_POSITION && value.position === void 0 && value.estimatedWaitMs === void 0 && typeof value.ticket === "string" && value.ticket.length === 66 && /^[A-Za-z0-9_-]{65}[AQgw]$/.test(value.ticket) && integer(value.expiresInMs, 1)) {
+          if (name !== ADMISSION_POSITION && value.position === void 0 && value.estimatedWaitMs === void 0 && typeof value.ticket === "string" && admissionTicketPattern.test(value.ticket) && integer(value.expiresInMs, 1)) {
             return { ticket: value.ticket, expiresInMs: value.expiresInMs };
           }
           if (name !== ADMISSION_TICKET && value.ticket === void 0 && value.expiresInMs === void 0 && integer(value.position, 1) && integer(value.estimatedWaitMs, 0, 2147483647)) {

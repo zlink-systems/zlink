@@ -3,6 +3,10 @@ const test = require('node:test');
 
 const fixture = require('../../../../runtime/conformance/login-admission-queue-v1.json');
 
+test('login admission fixture has 12 ticket vectors', () => {
+  assert.equal(fixture.ticketVectors.length, 12);
+});
+
 for (const { name, given, ticket, expect } of fixture.ticketVectors) {
   test(`login admission ticket fixture: ${name}`, () => {
     const {

@@ -32,6 +32,7 @@ import { AdmissionTickets } from './admission-tickets';
 const ticketLifetimeMs = 30_000;
 const reportValidityMs = 3_000;
 const positionPushIntervalMs = 5_000;
+const maintenancePeriodMs = 1_000;
 
 interface Waiter {
   readonly connection: AdmissionConnection;
@@ -378,7 +379,13 @@ export function admissionQueueInstanceFactory(
     }
 
     async onInitialize(signal?: AbortSignal): Promise<void> {
-      await this.context.addTimer('admission-queue', 1_000, QueueMaintenance, undefined, signal);
+      await this.context.addTimer(
+        'admission-queue',
+        maintenancePeriodMs,
+        QueueMaintenance,
+        undefined,
+        signal
+      );
     }
   };
 }

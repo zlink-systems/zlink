@@ -3,6 +3,7 @@ import {
   ZLinkFrameworkException
 } from '../../contracts/Errors/ZLinkFrameworkException';
 import { ZLinkPacket } from '../../contracts/Handlers/Attributes';
+import { admissionTicketEncodedSize } from './admission-tickets';
 
 export const enqueuePacketName = '$zlink.admission.enqueue';
 export const positionPacketName = '$zlink.admission.position';
@@ -251,7 +252,7 @@ function readDelivery(value: unknown): AdmissionDelivery {
       ? { estimatedWaitMs: int32(delivery.estimatedWaitMs, 'estimatedWaitMs') }
       : {}),
     ...(kind === 'ticket' || delivery.ticket !== undefined
-      ? { ticket: base64url(delivery.ticket, 'ticket', 66) }
+      ? { ticket: base64url(delivery.ticket, 'ticket', admissionTicketEncodedSize) }
       : {}),
     ...(kind === 'ticket' || delivery.expiresInMs !== undefined
       ? { expiresInMs: int32(delivery.expiresInMs, 'expiresInMs') }

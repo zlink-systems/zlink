@@ -64,6 +64,10 @@ function useClock(t) {
   };
 }
 
+test('login admission fixture has 11 connector scenarios', () => {
+  assert.equal(fixture.connectorScenarios.length, 11);
+});
+
 for (const { name, given, steps } of fixture.connectorScenarios) {
   test(`login admission queue connector fixture: ${name}`, async (t) => {
     const advance = useClock(t);

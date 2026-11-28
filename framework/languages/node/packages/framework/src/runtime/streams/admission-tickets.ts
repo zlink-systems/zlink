@@ -12,6 +12,7 @@ import type { AdmissionConnection } from './admission-queue-messages';
 const version = 1;
 const bodyLength = 17;
 const ticketLength = bodyLength + 32;
+export const admissionTicketEncodedSize = Math.ceil((ticketLength * 4) / 3);
 const clockSkewMs = 2_000;
 const domain = Buffer.from('zlink-admission-ticket-v1\0', 'ascii');
 
@@ -49,7 +50,8 @@ export class AdmissionTickets {
     epoch: bigint | undefined,
     nowUnixMs: number
   ): boolean {
-    if (ticket?.length !== 66 || epoch === undefined || epoch === 0n) return false;
+    if (ticket?.length !== admissionTicketEncodedSize || epoch === undefined || epoch === 0n)
+      return false;
     const bytes = Buffer.from(ticket, 'base64url');
     if (
       bytes.length !== ticketLength ||

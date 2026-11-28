@@ -12,6 +12,10 @@ const identity = {
 };
 const owner = { ownerId: 'owner', leaseGeneration: '3' };
 
+test('login admission fixture has 10 node scenarios', () => {
+  assert.equal(fixture.nodeScenarios.length, 10);
+});
+
 for (const { name, given, steps } of fixture.nodeScenarios) {
   test(`login admission node fixture: ${name}`, async () => {
     const {
