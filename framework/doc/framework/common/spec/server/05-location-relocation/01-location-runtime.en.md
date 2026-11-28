@@ -1749,7 +1749,7 @@ and `level` are decimal integers without leading zeros.
 | A participant's membership change | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
 
 **Relocation key values.** When a relocation (`aggregate.relocation` of §9.1) writes the records of
-this section, `aggregateId` is its `relocationId` and `aggregateGeneration` is `1`. The source writes
+this section, `aggregateId` is its `relocationId` and `aggregateGeneration` is `1`. A move of a single Actor with no aggregate record doesn't write the inventory (the `sourceInventorySha256` paragraph above). For any other relocation, the source writes
 this inventory once at seal, before it chooses a target, and keeps using the same inventory when the
 target attempt (`target.attemptGeneration`) changes.
 
@@ -1840,7 +1840,10 @@ JCS bytes, the same content gives the same check value whichever language wrote 
   `digestSha256` of the participant inventory root fixed at the seal. Because an entry's
   `expectedStoreVersion` is the value read at preparation, this value doesn't change after
   `preparing`. A move of a single Actor with no aggregate record uses the root `digestSha256` of an
-  inventory whose only entry is that Actor.
+  inventory whose only entry is that Actor. That move doesn't store inventory root, page, or participant
+  records, because a one-entry inventory can be rebuilt from the authority record alone (the exception noted in "Relocation key values" below). The target builds the one-entry inventory from
+  the authority record it read, computes its root `digestSha256`, and compares it with
+  `sourceInventorySha256`; it doesn't read an inventory record from the Store.
 
 The inventory root, pages, and participant change records aren't modified once written. Records
 of the same `(aggregateId, aggregateGeneration)` aren't rewritten with different content; different
