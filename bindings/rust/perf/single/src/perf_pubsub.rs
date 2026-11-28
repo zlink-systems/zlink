@@ -14,8 +14,8 @@ fn main() {
     };
 
     let ctx = common::perf_context();
-    let pub_sock = ctx.pub_socket().expect("pub");
-    let sub_sock = ctx.sub_socket().expect("sub");
+    let pub_sock = ctx.create_pub_socket().expect("pub");
+    let sub_sock = ctx.create_sub_socket().expect("sub");
     // Match C perf: the harness always sets NODROP explicitly. The socket
     // default is lossy fanout, which would drop samples and the stop token.
     pub_sock

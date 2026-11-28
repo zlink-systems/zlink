@@ -40,7 +40,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
                     received.Parts,
                     dispatchErrors.Flow.CaptureEnabled
                 );
-                ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
+                ZLinkEnvelopeCodec.ValidateDispatchPacketHeader(header);
             }
             catch (ZLinkEnvelopeProtocolException protocolError)
             {
@@ -243,21 +243,6 @@ internal sealed class ZLinkSpotRouteDispatcher(
             exception
         );
         return SubmitReplyAsync(received, replyParts, cancellationToken);
-    }
-
-    private void ReplyError(
-        ZLinkBackendRouteReceived received,
-        ZLinkEnvelopeHeader header,
-        Exception exception
-    )
-    {
-        var replyParts = ZLinkSpotReplyEnvelope.EncodeErrorParts(
-            channelName,
-            header.MessageName,
-            header.CorrelationId,
-            exception
-        );
-        ZLinkSpotReplySubmitter.SubmitAndDispose(received, replyParts);
     }
 
     private void HandleProtocolError(

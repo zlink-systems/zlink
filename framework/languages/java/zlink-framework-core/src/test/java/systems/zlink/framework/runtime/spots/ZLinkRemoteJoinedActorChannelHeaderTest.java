@@ -88,14 +88,14 @@ final class ZLinkRemoteJoinedActorChannelHeaderTest {
                         });
         try (var target = ZLinkFrameworkRuntimeTestAccess.start(options(locations, null));
                 var source =
-                        ZLinkFrameworkRuntimeTestAccess.start(
+                        ZLinkFrameworkRuntimeTestAccess.startHost(
                                 options(
                                         locations,
                                         target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH)
                                                 .endpoint()),
                                 sourceBackend)) {
-            await(ZLinkFrameworkRuntimeTestAccess.startupCompletion(target));
-            await(ZLinkFrameworkRuntimeTestAccess.startupCompletion(source));
+            assertTrue(target.isReady());
+            assertTrue(source.isReady());
             await(target.spotManager().getOrCreate(SPOT_ID, "table").submit());
             await(target.actorManager().create(ACTOR_ID, "player").submit());
             var targetActors = ZLinkFrameworkRuntimeTestAccess.actors(target);

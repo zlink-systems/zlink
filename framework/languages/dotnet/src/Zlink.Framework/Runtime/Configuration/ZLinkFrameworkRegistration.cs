@@ -49,6 +49,8 @@ internal sealed class ZLinkFrameworkRegistration
     public Dictionary<string, ZLinkChannelRegistration> Channels { get; } =
         new(StringComparer.Ordinal);
 
+    internal ZLinkAdmissionQueueConfiguration? AdmissionQueue { get; set; }
+
     public Dictionary<string, ZLinkStreamNodeRegistration> StreamNodes { get; } =
         new(StringComparer.Ordinal);
 
@@ -327,10 +329,23 @@ internal sealed record ZLinkAuthenticationAdmissionOptions(
         );
 }
 
+internal sealed record ZLinkAdmissionQueueOptions(
+    bool Enabled = false,
+    string? Key = null,
+    string? PreviousKey = null,
+    int? GlobalLimit = null,
+    string? MeshName = null
+)
+{
+    public override string ToString() => nameof(ZLinkAdmissionQueueOptions);
+}
+
 internal sealed class ZLinkStreamNodeRegistration
 {
     public ZLinkAuthenticationAdmissionOptions AuthenticationAdmission { get; set; } =
         ZLinkAuthenticationAdmissionOptions.Default;
+
+    public ZLinkAdmissionQueueOptions AdmissionQueue { get; set; } = new();
 
     public TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(1);
     public TimeSpan HeartbeatTimeout { get; set; } = TimeSpan.FromSeconds(5);

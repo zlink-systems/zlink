@@ -138,6 +138,10 @@ public final class ZLinkLocationStoreOutageTest {
                     false,
                     f.runtime.isOwnerAdmissionOpen(),
                     "normal expiration has not permitted a new claim");
+            var closed =
+                    assertThrows(
+                            ZLinkFrameworkException.class, f.runtime::ensureOwnerAdmissionOpen);
+            assertEquals("The owner lease admission deadline has expired.", closed.getMessage());
             // No mesh or application turn exists. A later success cannot clear the latch.
             f.store.response =
                     CompletableFuture.completedFuture(

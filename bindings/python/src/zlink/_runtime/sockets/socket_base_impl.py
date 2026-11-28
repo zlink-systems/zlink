@@ -15,7 +15,7 @@ from ..options.option_mapping import (
     create_pub_socket_options,
     create_router_socket_options,
 )
-from ..._native.ffi import ZlinkMsg, ZlinkRoutingId, lib
+from ..._native.ffi import ZlinkMsg, ZlinkRouterRoute, ZlinkRoutingId, lib
 from ..handles.native_support import (
     _copy_routing_id,
     _decode_topic_text,
@@ -31,14 +31,18 @@ from ...contracts.errors.errors import (
     RecvError,
     SubmitError,
 )
-from ...contracts.errors.codes import ConfigResult, ConnectResult
+from ...contracts.errors.codes import ConfigResult, ConnectResult, ErrorCode
 from ...contracts.sockets.routed_socket_contracts import RouterRoute
 from ..messaging.message_materializer import (
     Message,
     ReceivedMessage,
     SubscriptionEvent,
 )
-from ..messaging.request_reply import _clone_payload, _timeout_to_ms
+from ..messaging.native_parts import (
+    _consume_submitted_messages,
+    _materialize_native_parts,
+)
+from ..messaging.request_reply import _timeout_to_ms
 from ..messaging.routed_async import CompletionOwner
 from .socket_base import (
     _BindSocket,
@@ -54,7 +58,6 @@ from .socket_base import (
     _StreamOptionSocket,
     _SubscriberOptionSocket,
     _SubscriberSocket,
-    _close_native_parts,
     _grow_topic_receive_buffer,
     _native_extension,
     _new_topic_receive_buffer,
@@ -68,11 +71,6 @@ _NO_PAYLOAD = object()
 
 _native_publisher_send_op_func = (
     getattr(_native_extension, "publisher_send_op", None)
-    if _native_extension is not None
-    else None
-)
-_native_router_routes_snapshot_func = (
-    getattr(_native_extension, "router_routes_snapshot", None)
     if _native_extension is not None
     else None
 )
@@ -229,17 +227,22 @@ class _PublisherSendOp(_PublishOpBase):
             if not bridged:
                 raise SubmitError(SubmitResult.BACKPRESSURED, errno.EAGAIN)
             return None
-        native_parts = _clone_payload(payload)
-        part_count = len(native_parts)
-        rc = lib().zlink_publish(
-            self._socket._handle,
-            topic_bytes,
-            native_parts,
-            part_count,
-            int(self._flags),
-        )
+        native_parts = _materialize_native_parts(payload)
+        if _native_extension is not None:
+            rc, internal_errno, _ = _native_extension.submit_storage(
+                self._socket._handle, None, native_parts, int(self._flags),
+                0, None, 0, topic_bytes,
+            )
+        else:
+            rc, internal_errno = _submit_parts(
+                native_parts,
+                lambda parts, count: lib().zlink_publish(
+                    self._socket._handle, topic_bytes, parts, count, int(self._flags)
+                ),
+            )
+        _consume_submitted_messages(payload, rc)
         if rc != 0:
-            _raise_result_error(SubmitError, SubmitResult, rc, lib().zlink_errno())
+            _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
         return None
 
 
@@ -464,29 +467,29 @@ class RouterSocket(
         return _ReplyOp(lambda parts: self._reply_payload(routing_id, token, parts))
 
     def _reply_payload(self, routing_id, token, payload):
-        native_parts = _clone_payload(payload)
+        handle = self._handle
+        if handle is None:
+            raise SubmitError(SubmitResult.TERMINATED, ErrorCode.ETERM)
         if _native_extension is not None:
-            try:
-                target = _validated_routing_id_bytes(routing_id)
-            except BaseException:
-                _close_native_parts(native_parts)
-                raise
+            target = _validated_routing_id_bytes(routing_id)
+            native_parts = _materialize_native_parts(payload)
             rc, internal_errno, _ = _native_extension.submit_storage(
-                self._handle, target, native_parts, 0, 0, None,
+                handle, target, native_parts, 0, 0, None,
                 _reply_token_value(token),
             )
         else:
             native_rid = _copy_routing_id(routing_id)
             rc, internal_errno = _submit_parts(
-                native_parts,
+                _materialize_native_parts(payload),
                 lambda parts_ptr, part_count: lib().zlink_reply(
-                    self._handle,
+                    handle,
                     ctypes.byref(native_rid),
                     ctypes.c_uint64(_reply_token_value(token)),
                     parts_ptr,
                     part_count,
                 ),
             )
+        _consume_submitted_messages(payload, rc)
         if rc != int(SubmitResult.OK):
             _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
 
@@ -514,16 +517,21 @@ class RouterSocket(
 
         :returns: A list of :class:`RouterRoute`.
         """
-        if _native_router_routes_snapshot_func is None:
-            raise NotImplementedError(
-                "routes_snapshot requires the zlink native extension"
-            )
-        rc, err, rows = _native_router_routes_snapshot_func(int(self._handle))
-        if int(rc) != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, err)
+        native = lib()
+        handle = self._handle
+        count = ctypes.c_size_t()
+        capacity = 16
+        while True:
+            rows = (ZlinkRouterRoute * capacity)()
+            rc = native.zlink_router_routes_snapshot(handle, rows, capacity, ctypes.byref(count))
+            if rc != ConfigResult.BUFFER_TOO_SMALL or count.value <= capacity:
+                break
+            capacity = count.value
+        if rc != ConfigResult.OK:
+            _raise_result_error(ConfigError, ConfigResult, rc, native.zlink_errno())
         return [
-            RouterRoute(RoutingId.from_(routing), int(generation))
-            for routing, generation in rows
+            RouterRoute(_routing_id_bytes(row.rid), row.route_generation)
+            for row in rows[:count.value]
         ]
 
     def recv_into(self, received, *, flags=0):
@@ -578,12 +586,14 @@ class RouterSocket(
             if int(flags) & 1 and ex.result == RecvResult.NO_DATA:
                 return False
             raise
+        route_generation = lib().zlink_router_recv_route_generation(self._handle)
         routing_id = _routing_id_bytes(source_rid.contents) if source_rid else None
         self._replace_router_received(
             received,
             _ReceivedPartsOwner(native_parts, part_count.value),
             routing_id,
             int(token_value.value),
+            route_generation,
         )
         return True
 

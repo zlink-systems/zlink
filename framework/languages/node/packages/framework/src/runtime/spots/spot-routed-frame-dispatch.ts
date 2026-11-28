@@ -24,8 +24,6 @@ import { ZLinkSpotRoutedBoundSessionDispatch } from './spot-routed-bound-session
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkApplicationWorkClaim } from '../admission';
-import type { ZLinkRoutedActorTransferProvider } from './spot-remote-codec';
-import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from '../actors/actor-handoff';
 
 interface ZLinkRoutedFrameAdmissionTarget {
   onActorJoin?(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult>;
@@ -37,12 +35,6 @@ interface ZLinkSpotRoutedFrameDispatchOptions {
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
   readonly getTarget: () => ZLinkRoutedFrameAdmissionTarget & ZLinkSpot;
   readonly defaultAccept: boolean;
-  readonly routedActorTransferProvider?: ZLinkRoutedActorTransferProvider;
-  readonly commitTransferredActor?: (
-    actor: ZLinkActor,
-    backlog: readonly ZLinkActorHandoffPacket[],
-    sealedSession: ZLinkRemoteBoundSessionTarget | undefined
-  ) => Promise<readonly ZLinkActorHandoffResult[]>;
   readonly actorPacketHandler?: (delivery: ZLinkActorPacketDelivery) => Promise<unknown>;
   readonly routedBoundSessionReceiver?: (
     actorId: string,
@@ -121,8 +113,6 @@ export class ZLinkSpotRoutedFrameDispatch {
       serial: options.serial,
       getTarget: options.getTarget,
       defaultAccept: options.defaultAccept,
-      routedActorTransferProvider: options.routedActorTransferProvider,
-      commitTransferredActor: options.commitTransferredActor,
       messageSerializers: options.messageSerializers,
       flowEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     });

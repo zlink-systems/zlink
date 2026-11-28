@@ -79,6 +79,7 @@ export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-Awarnings"
 PATTERN="ALL"
 CONTROL_PLANE_PATTERNS=()
 DURATION="${PERF_MULTI_DURATION_SECONDS:-5}"
+unset LATENCY_DURATION
 PART_COUNT="${PERF_PART_COUNT:-2}"
 MSG_SIZES="${PERF_MSG_SIZES:-64,256,1024,4096,65536,131072}"
 if [[ "$(uname -s)" == Linux* || "$(uname -s)" == Darwin* ]]; then
@@ -157,6 +158,7 @@ Options:
                         ROUTER_ROUTER_SENDSEND, ROUTER_ROUTER_REQREP, PUBSUB,
                         STREAM.
   --duration N
+  --latency-duration N  Latency seconds (positive integer; default: --duration).
   --part-count N          Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST
   --transports LIST
@@ -211,6 +213,15 @@ while [[ $# -gt 0 ]]; do
             ;;
         --pattern)     PATTERN="$2";     shift 2 ;;
         --duration)    DURATION="$2";    shift 2 ;;
+        --latency-duration)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --latency-duration requires a value." >&2
+                exit 1
+            fi
+            LATENCY_DURATION="$2"
+            shift 2
+            ;;
+        --latency-duration=*) LATENCY_DURATION="${1#*=}"; shift ;;
         --part-count) PART_COUNT="$2"; shift 2 ;;
         --msg-sizes)   MSG_SIZES="$2"; EXPLICIT_MSG_SIZES=1; shift 2 ;;
         --transports)  TRANSPORTS="$2";  shift 2 ;;
@@ -256,6 +267,12 @@ while [[ $# -gt 0 ]]; do
         *)             echo "unknown option: $1" >&2; exit 1 ;;
     esac
 done
+
+LATENCY_DURATION="${LATENCY_DURATION-${PERF_MULTI_LATENCY_DURATION_SECONDS:-${DURATION}}}"
+if ! is_uint "${LATENCY_DURATION}" || [[ ! "${LATENCY_DURATION}" =~ [1-9] ]]; then
+    echo "Error: --latency-duration must be a positive integer." >&2
+    exit 1
+fi
 
 if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
     echo "--part-count must be 1 or 2" >&2
@@ -584,6 +601,7 @@ fi
 BIN_DIR="${TARGET_DIR}/release"
 
 export PERF_MULTI_DURATION_SECONDS="${DURATION}"
+export PERF_MULTI_LATENCY_DURATION_SECONDS="${LATENCY_DURATION}"
 export PERF_MULTI_DEFAULT_CLIENTS="${EFFECTIVE_DEFAULT_CLIENTS}"
 export PERF_MULTI_DEFAULT_STREAM_CLIENTS="${EFFECTIVE_DEFAULT_STREAM_CLIENTS}"
 prepare_core_runtime
@@ -728,6 +746,44 @@ wait_for_file_prefix() {
     return 1
 }
 
+forward_one_way_phases() {
+    local pattern="$1" size="$2" deadline="$3"
+    local receiver_file="${SRV_OUT}" receiver_fd="${SERVER_CONTROL_FD}"
+    local sender_file="${CLIENT_OUT}" sender_fd="${CLIENT_CONTROL_FD}"
+    local line count done=0 catchup=0
+    if [[ "${pattern}" == PUBSUB ]]; then
+        receiver_file="${CLIENT_OUT}"
+        receiver_fd="${CLIENT_CONTROL_FD}"
+        sender_file="${SRV_OUT}"
+        sender_fd="${SERVER_CONTROL_FD}"
+        line="$(wait_for_file_prefix "${sender_file}" "PHASE_DONE,${size},1" "$((deadline - SECONDS))")" || return 1
+        write_control "${receiver_fd}" '%s\n' "${line}"
+    fi
+    line="$(wait_for_file_prefix "${receiver_file}" "PHASE_DRAINED,${size}," "$((deadline - SECONDS))")" || return 1
+    count="${line##*,}"
+    [[ "${count}" =~ ^[1-9][0-9]*$ ]] || return 1
+    write_control "${sender_fd}" 'PHASE_PACED,%s,%s\n' "${size}" "${count}"
+    if [[ "${pattern}" == PUBSUB ]]; then
+        while (( SECONDS < deadline && !done )); do
+            if (( !catchup )) && grep -Fxq "PHASE_CATCHUP,${size}" "${receiver_file}"; then
+                write_control "${sender_fd}" 'PHASE_CATCHUP,%s\n' "${size}"
+                catchup=1
+            fi
+            if grep -Fxq "PHASE_DONE,${size},3" "${sender_file}"; then
+                write_control "${receiver_fd}" 'PHASE_DONE,%s,3\n' "${size}"
+                done=1
+            else
+                sleep 0.01
+            fi
+        done
+        (( done )) || return 1
+    fi
+    line="$(wait_for_file_prefix "${receiver_file}" "PHASE_COMPLETE,${size}," "$((deadline - SECONDS))")" || return 1
+    count="${line##*,}"
+    [[ "${count}" =~ ^[0-9]+$ ]] || return 1
+    write_control "${sender_fd}" '%s\n' "${line}"
+}
+
 read_first_case_signal() {
     local file_path="$1"
     awk '/^(READY,|UNSUPPORTED,)/ { print; exit }' "${file_path}" 2>/dev/null || true
@@ -764,8 +820,9 @@ resolve_client_timeout_seconds() {
         return
     fi
 
+    local paced=$((2 * 10#${LATENCY_DURATION}))
     if [[ "${pattern}" == "STREAM" ]]; then
-        timeout_seconds=$(( duration * 3 + 20 ))
+        timeout_seconds=$(( duration * 3 + paced + 20 ))
         if (( timeout_seconds < 45 )); then
             timeout_seconds=45
         fi
@@ -775,7 +832,7 @@ resolve_client_timeout_seconds() {
 
     if { [[ "${pattern}" == "PUBSUB" ]] && (( size >= 65536 )); } \
         || { [[ "${transport}" == "tls" || "${transport}" == "wss" ]] && (( size >= 131072 )); }; then
-        timeout_seconds=$(( duration * 6 + 30 ))
+        timeout_seconds=$(( duration * 6 + paced + 30 ))
         if (( timeout_seconds < 90 )); then
             timeout_seconds=90
         fi
@@ -783,7 +840,7 @@ resolve_client_timeout_seconds() {
         return
     fi
 
-    timeout_seconds=$(( duration * 3 + 20 ))
+    timeout_seconds=$(( duration * 3 + paced + 20 ))
     if (( timeout_seconds < 45 )); then
         timeout_seconds=45
     fi
@@ -976,13 +1033,10 @@ for run in $(seq 1 "${RUNS}"); do
                     fi
 
                     ONE_WAY_DEADLINE=$((SECONDS + CLIENT_TIMEOUT_SECONDS))
-                    if [[ "${case_status}" == "success" && "${pat}" == "PUBSUB" ]]; then
-                        PHASE_DONE_LINE="PHASE_DONE,${size},1"
-                        if [[ "$(wait_for_file_prefix "${SRV_OUT}" "${PHASE_DONE_LINE}" "${CLIENT_TIMEOUT_SECONDS}")" == "${PHASE_DONE_LINE}" ]]; then
-                            write_control "${CLIENT_CONTROL_FD}" '%s\n' "${PHASE_DONE_LINE}"
-                        else
+                    if [[ "${case_status}" == "success" ]]; then
+                        if ! forward_one_way_phases "${pat}" "${size}" "${ONE_WAY_DEADLINE}"; then
                             case_status="fail"
-                            case_reason="publisher_phase_done_timeout"
+                            case_reason="phase_timeout"
                         fi
                     fi
 
@@ -1001,7 +1055,7 @@ for run in $(seq 1 "${RUNS}"); do
                         wait "${CLIENT_PID}" 2>/dev/null || true
                     fi
 
-                    if [[ "${case_status}" == "success" && "${pat}" == "DEALER_DEALER" ]]; then
+                    if [[ "${case_status}" == "success" ]]; then
                         if ! wait_for_pid "${SERVER_PID}" "$((ONE_WAY_DEADLINE - SECONDS))"; then
                             case_status="fail"
                             case_reason="receiver_exit_timeout"
@@ -1178,6 +1232,7 @@ for run in $(seq 1 "${RUNS}"); do
                     fi
                 fi
                 case_reason="${case_reason//,/;}"
+                printf '%s\n' "${OUTPUT}" | awk '/^(BENCH_DIAG|PUBSUB_CATCHUP_PROGRESS|PUBSUB_CATCHUP_DIAG|PUBSUB_LATENCY_DIAG|REFERENCE),/'
                 printf '%s\n' "${OUTPUT}" | awk '/^AUTO_HWM_DETAIL,/ { print }' >> "${TMP_AUTO_HWM}"
                 while IFS= read -r line; do
                     [[ "${line}" == RESULT,* ]] || continue

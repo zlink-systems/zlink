@@ -799,7 +799,7 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
   const spot_id_t &spot_id,
   std::string packet_name,
   std::string content_type,
-  std::vector<std::uint8_t> payload,
+  zlink::message_t payload,
   std::map<std::string, std::string> metadata,
   bool request,
   std::string correlation_id,
@@ -902,8 +902,7 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
                                                   trace_spot_id, {}, trace_correlation_id);
               },
               spot_handler_kind_t::packet, packet_name, {}, std::type_index (typeid (void)),
-              state->spot_instance.get (), nullptr, services, serializers,
-              zlink::message_t::from (payload),
+              state->spot_instance.get (), nullptr, services, serializers, std::move (payload),
               spot_inbound_message_t{.content_type = std::move (content_type),
                                      .values = std::move (metadata),
                                      .mesh_name = state->mesh_name,

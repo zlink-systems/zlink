@@ -124,12 +124,27 @@ add_cpp_multi_client_bench(cpp_comp_src_router_router_reqrep_client
 add_cpp_multi_client_bench(cpp_comp_src_pubsub_client
   "${PERF_ROOT_DIR}/multi/src/perf_pubsub_client.cpp")
 if(ZLINK_CPP_REGISTER_CTEST AND UNIX AND NOT WIN32)
+  add_executable(perf_cpp_paced_admission
+    "${PERF_ROOT_DIR}/multi/tests/perf_paced_admission.cpp")
+  configure_perf_target(perf_cpp_paced_admission "multi")
+  add_test(NAME perf_cpp_paced_admission COMMAND perf_cpp_paced_admission)
+  set_tests_properties(perf_cpp_paced_admission PROPERTIES LABELS "perf-regression" TIMEOUT 10)
+
+  foreach(regression IN ITEMS catch_up_tracker paced_wait dealer_dealer_receive)
+    set(target_name "perf_cpp_${regression}")
+    add_executable(${target_name} "${PERF_ROOT_DIR}/multi/tests/perf_${regression}.cpp")
+    configure_perf_target(${target_name} "multi")
+    target_compile_options(${target_name} PRIVATE -UNDEBUG)
+    add_test(NAME ${target_name} COMMAND ${target_name})
+    set_tests_properties(${target_name} PROPERTIES LABELS "perf-regression" TIMEOUT 10)
+  endforeach()
+
   add_test(NAME perf_cpp_multi_dealer_dealer_runtime_smoke
     COMMAND /bin/bash -lc
       "PERF_FAIL_FAST=1 PERF_TIMEOUT_SECONDS=20 ${PERF_ROOT_DIR}/run_binding_multi.sh --reuse-build --pattern DEALER_DEALER --transports tcp --msg-sizes 64 --duration 1 --runs 1 --clients 2 --connect-concurrency 2 --results-tag ctest_cpp_multi_dealer_dealer_runtime_smoke"
   )
   set_tests_properties(perf_cpp_multi_dealer_dealer_runtime_smoke PROPERTIES
-    LABELS "perf-regression"
+    LABELS "perf-regression;perf-measurement"
     TIMEOUT 90
     WORKING_DIRECTORY "${ZLINK_REPO_ROOT_DIR}"
   )

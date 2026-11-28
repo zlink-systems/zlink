@@ -15,10 +15,7 @@ import type {
 } from '../actors';
 import type { ZLinkActorHandoffDispatch } from '../actors/actor-handoff';
 import type { ZLinkActorResponseOptions } from './spot-actor-packet-dispatch';
-import type {
-  ZLinkRemoteActorJoinActor,
-  ZLinkRoutedActorTransferProvider
-} from './spot-remote-codec';
+import type { ZLinkRemoteActorJoinActor } from './spot-remote-codec';
 import type { ZLinkBackendSpotNode } from '../backend/contracts';
 import type { ZLinkActorIngressMembership } from './spot-actor-ingress-admission';
 
@@ -58,17 +55,6 @@ export interface ZLinkSpotActorTransferRuntime {
     actorCreateRequest?: Message,
     signal?: AbortSignal
   ): Promise<ZLinkRemoteActorJoinActor>;
-  materializeRoutedActor: ZLinkRoutedActorTransferProvider;
-  commitRoutedActorAuthority(
-    actor: ZLinkActor,
-    sourceActorRef: ActorRef,
-    transferId: string,
-    spotId: RoutingId,
-    spotGeneration: bigint,
-    membershipEpoch: bigint,
-    deadlineAtMs: number,
-    signal?: AbortSignal
-  ): Promise<import('../locations/internal-location-contracts').ZLinkAuthoritySnapshot>;
   claimRoutedActorLocation(
     actor: ZLinkActor,
     spotId: RoutingId,
@@ -85,8 +71,6 @@ export interface ZLinkSpotActorTransferRuntime {
   openRoutedActorSession(actor: ZLinkActor): Promise<void>;
   bindRoutedActorRef(actor: ZLinkActor, actorRef: ActorRef): void;
   commitRoutedActor(actor: ZLinkActor, spotId: RoutingId, spot: ZLinkSpot): void;
-  clearRoutedActor(actor: ZLinkActor): void;
-  rollbackRoutedActor(actor: ZLinkActor, signal?: AbortSignal): Promise<void>;
   actorEntryNodeRid(actor: ZLinkActor): RoutingId | undefined;
 }
 

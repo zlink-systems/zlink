@@ -96,12 +96,12 @@ contains only the shared part container behavior.
 | | `__len__` | part count, via `len(envelope)` |
 | | `to_bytes_list()` | list of `bytes` copies, one per part |
 | | `is_single_part()` | whether the envelope has exactly one part |
-| | `first_part()` | the first part, without transferring ownership; raises `RecvError` when empty |
+| | `first_part()` | Returns the first part without transferring ownership. An empty result raises `RecvError` with `RecvResult.INVALID_STATE` and `internal_errno == errno.EINVAL`. |
 | | `single_part_or_throw()` | the single part; raises `RecvError` unless exactly one part |
 | | `close()` | closes every owned part |
 | `Received extends ReceivedMultipart` | `send()` | starts the shared `SendOp` builder (Sockets category), addressed to this envelope's captured source route; raises `SubmitError` if the envelope carries no send context |
 | | `routing_id` / `reply_token` | source route and optional socket-owned, one-shot `ReplyToken` capability |
-| | `reply()` | starts the shared `ReplyOp` builder; raises `SubmitError` unless the envelope is replyable |
+| | `reply()` | Starts the shared `ReplyOp` builder. Raises `SubmitError` if the reply context is absent. Submitting after the source socket closes raises `SubmitError` with `SubmitResult.TERMINATED`. |
 
 **Completion result.** All members are synchronous. Both support sync/async context-manager
 protocols.

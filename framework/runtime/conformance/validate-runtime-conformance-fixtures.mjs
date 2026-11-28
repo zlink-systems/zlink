@@ -4227,6 +4227,14 @@ for (const [name, corrupt] of [
 async function validateActorDestroy(fixture) {
   assert.equal(fixture.fixture, 'zlink.framework.actor-destroy');
   assert.equal(fixture.version, 1);
+  assert.equal(fixture.crossLanguageExpectedFailureReason, 'Node v11 generation 카운터 혼합(#4522)');
+  assert.deepEqual(Object.keys(fixture.crossLanguageCells).sort(), [
+    'dotnet:java', 'dotnet:node', 'java:dotnet',
+    'java:node', 'node:dotnet', 'node:java'
+  ]);
+  for (const [cell, status] of Object.entries(fixture.crossLanguageCells)) {
+    assert.ok(['enabled', 'expected-failure-before-4522'].includes(status), `${cell}: ${status}`);
+  }
   assert.deepEqual(fixture.scenarios.map(({ name }) => name), [
     'remote-destroy-hides-closing-and-get-or-create-reincarnates',
     'owner-duplicate-destroy-joins-terminal',
@@ -4293,6 +4301,8 @@ const actorDestroy = await readFixture('./actor-destroy-v1.json');
 await validateActorDestroy(actorDestroy);
 console.log('Actor destroy contract: valid scenarios accepted');
 for (const [name, corrupt] of [
+  ['cell status', (f) => { f.crossLanguageCells['java:node'] = 'skipped'; }],
+  ['missing cell', (f) => { delete f.crossLanguageCells['node:java']; }],
   ['scenario name', (f) => { f.scenarios[0].name = 'invalid'; }],
   ['missing testNames key', (f) => { delete f.scenarios[4].testNames.cpp; }],
   ['contract source text', (f) => { f.contractSources.getOrCreate.startsWith = 'missing contract text'; }]

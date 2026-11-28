@@ -1,4 +1,5 @@
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
+import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
 import type {
   ActorRef,
   RoutingId,
@@ -29,7 +30,6 @@ import {
   ZLinkUserSpotExecutionMode
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 import { createAbortError, isAbortError, throwIfAborted } from '../abort';
 import { ZLinkConfigurationException } from '../configuration';
 import {
@@ -87,7 +87,6 @@ import { ZLinkSpotActivation } from './spot-activation-state';
 import type { ZLinkSpotLocationClaim } from './spot-location-claim';
 import type {
   ZLinkSpotActorHandoffRuntime,
-  ZLinkSpotActorTransferRuntime,
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
 import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
@@ -134,7 +133,6 @@ export interface ZLinkSpotActivationLifecycleOptions {
   readonly nativeSpotNodeProvider?: (meshName: string) => ZLinkBackendSpotNode | undefined;
   readonly actorResolver?: (actorId: string) => ZLinkActor | undefined;
   readonly actorIngressMembership?: ZLinkActorIngressMembership;
-  readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
   readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
@@ -920,30 +918,12 @@ export class ZLinkSpotActivationLifecycle {
     );
   }
 
-  async dispatchActorPacket(
-    origin: ApplicationJobOrigin,
+  dispatchActorDelivery(
     activation: ZLinkSpotActivation,
-    actorId: string,
-    parts: readonly Message[],
-    returnResponse = false,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef,
-    requestTerminal?: (response: unknown) => Promise<void> | void,
-    messageFollowOrigin?: ZLinkMessageFollowOrigin,
+    delivery: ZLinkActorPacketDelivery,
     preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
   ): Promise<unknown> {
-    return await this.actorAdmission.dispatchActorPacket(
-      origin,
-      activation,
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef,
-      requestTerminal,
-      messageFollowOrigin,
-      preparation
-    );
+    return this.actorAdmission.dispatchActorDelivery(activation, delivery, preparation);
   }
 
   /** @internal Dispatches a held Actor record after its handoff owner releases it. */

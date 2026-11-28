@@ -1362,73 +1362,6 @@ static PyObject *py_router_recv_owner (PyObject *self, PyObject *args)
                           generation_obj);
 }
 
-static PyObject *py_router_routes_snapshot (PyObject *self, PyObject *args)
-{
-    unsigned long long handle_value = 0;
-    (void) self;
-    if (!PyArg_ParseTuple (args, "K", &handle_value))
-        return NULL;
-    void *handle = (void *) (uintptr_t) handle_value;
-
-    size_t capacity = 16;
-    zlink_router_route_t *routes =
-      (zlink_router_route_t *) PyMem_Malloc (capacity * sizeof (zlink_router_route_t));
-    if (!routes) {
-        PyErr_NoMemory ();
-        return NULL;
-    }
-    zlink_config_result_t rc;
-    size_t count = 0;
-    for (;;) {
-        rc = zlink_router_routes_snapshot (handle, routes, capacity, &count);
-        if (rc != ZLINK_CONFIG_BUFFER_TOO_SMALL || count <= capacity)
-            break;
-        /* Core keeps POLLROUTE readiness on this result; retry with the
-         * count it reported (the set can grow again before the retry). */
-        zlink_router_route_t *grown = (zlink_router_route_t *) PyMem_Realloc (
-          routes, count * sizeof (zlink_router_route_t));
-        if (!grown) {
-            PyMem_Free (routes);
-            PyErr_NoMemory ();
-            return NULL;
-        }
-        routes = grown;
-        capacity = count;
-    }
-
-    const int err = rc == ZLINK_CONFIG_OK ? 0 : zlink_errno ();
-    if (rc != ZLINK_CONFIG_OK) {
-        PyMem_Free (routes);
-        Py_INCREF (Py_None);
-        return Py_BuildValue ("iiN", (int) rc, err, Py_None);
-    }
-
-    PyObject *rows = PyList_New ((Py_ssize_t) count);
-    if (!rows) {
-        PyMem_Free (routes);
-        return NULL;
-    }
-    for (size_t index = 0; index < count; ++index) {
-        PyObject *rid = PyBytes_FromStringAndSize (
-          (const char *) routes[index].rid.data, (Py_ssize_t) routes[index].rid.size);
-        PyObject *generation =
-          rid ? PyLong_FromUnsignedLongLong (routes[index].route_generation) : NULL;
-        PyObject *row = generation ? PyTuple_Pack (2, rid, generation) : NULL;
-        Py_XDECREF (rid);
-        Py_XDECREF (generation);
-        if (!row) {
-            PyMem_Free (routes);
-            Py_DECREF (rows);
-            return NULL;
-        }
-        PyList_SET_ITEM (rows, (Py_ssize_t) index, row);
-    }
-    PyMem_Free (routes);
-    return Py_BuildValue ("iiN", (int) rc, err, rows);
-}
-
-/* The Python receiver owns topic growth for native and ctypes paths. Call it
- * only after the native short-topic receive reports insufficient capacity. */
 static PyObject *call_topic_receive_helper (unsigned long long handle_value,
                                             int flags)
 {
@@ -1614,7 +1547,6 @@ static PyObject *py_msg_bytes (PyObject *self, PyObject *arg)
 static PyMethodDef zlink_native_methods[] = {
   {"message_data", py_message_data, METH_VARARGS, "Build the writable ctypes-backed Message view."},
   {"msg_close", py_msg_close, METH_O, "Close one native message."},
-  {"start_request", py_start_request, METH_VARARGS, "Materialize, submit and register one managed request."},
   {"start_send", py_start_send, METH_VARARGS, "Materialize, submit and register one managed send."},
   {"completion_messages", py_completion_messages, METH_VARARGS, "Clone completion payload into independent Messages."},
   {"install_owner_methods", py_install_owner_methods, METH_O, "Install the native completion drain loop."},
@@ -1643,8 +1575,6 @@ static PyMethodDef zlink_native_methods[] = {
    "Receive multipart payload parts as a native owner."},
   {"router_recv_owner", py_router_recv_owner, METH_VARARGS,
    "Receive routed multipart payload parts as a native owner."},
-  {"router_routes_snapshot", py_router_routes_snapshot, METH_VARARGS,
-   "Read the ROUTER selected-route snapshot."},
   {"subscribe_owner", py_subscribe_owner, METH_VARARGS,
    "Receive topic multipart payload parts through the shared receiver."},
   {NULL, NULL, 0, NULL},

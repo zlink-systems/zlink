@@ -537,8 +537,8 @@ void test_pair_multipart_invalid_part_returns_lvalues ()
         socket.send ().message (first).message (invalid).message (third).submit ();
     }
     catch (const zlink::submit_error_t &error) {
-        rejected = error.result () == zlink::submit_result_t::invalid_argument
-          && error.internal_errno () == EINVAL;
+        rejected = error.result () == zlink::submit_result_t::invalid_handle
+          && error.internal_errno () == EFAULT;
     }
 
     // Multipart staging owns the record until Core accepts every part. An
