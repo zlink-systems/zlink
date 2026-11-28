@@ -2768,7 +2768,7 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
     actor_join_completion_callback_t callback;
     std::shared_ptr<spot_context_state_t> callback_context;
     std::shared_ptr<void> actor;
-    std::shared_ptr<task_completion_source_t<void>> work_terminal;
+    std::shared_ptr<spot_node_builder_state_t::join_delivery_work_t> work;
     std::stop_token callback_cancellation;
     std::optional<result_t<void>> immediate;
     _state->lane
@@ -2799,9 +2799,10 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
                       if (context != _state->spot_contexts_by_id.end ())
                           callback_context = context->second._state;
                   }
-                  work_terminal = detail::make_task_completion_source<void> ();
+                  work =
+                    std::make_shared<spot_node_builder_state_t::join_delivery_work_t> (operation);
                   callback_cancellation = _state->worker_cancellation.get_token ();
-                  _state->pending_join_delivery_work.insert (work_terminal);
+                  _state->pending_join_delivery_work.insert (work);
                   _state->delivering_join_completions.insert (operation);
               }
           }
@@ -2814,24 +2815,29 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
 
     const auto settle_state =
       [] (std::shared_ptr<spot_node_builder_state_t> node, actor_ref_t actor,
-          std::pair<std::uint64_t, std::uint64_t> operation, bool accepted, result_t<void> result,
-          std::function<void (result_t<void>)> completed) -> task_t<void> {
+          std::shared_ptr<spot_node_builder_state_t::join_delivery_work_t> work, bool accepted,
+          result_t<void> result, std::function<void (result_t<void>)> completed) -> task_t<void> {
         const auto failures = node->runtime_failures ();
         std::shared_ptr<service::mesh_node_t> native;
         std::optional<runtime::stateful::object_ref_t> owner;
         try {
-            auto settlement = node->lane.run_task ([node, operation, result] {
+            work->waiting.store ("spot_lane_settlement", std::memory_order_relaxed);
+            auto settlement = node->lane.run_task ([node, operation = work->operation, result] {
                 node->delivering_join_completions.erase (operation);
                 if (result)
                     node->delivered_join_completions.insert (operation);
                 return node->native_node.lock ();
             });
             native = co_await settlement;
-            if (!result && accepted)
+            if (!result && accepted) {
+                work->waiting.store ("failed_completion_cleanup", std::memory_order_relaxed);
                 co_await node->actor_transfer_coordinator->mark_local_completion_failed (
                   actor_key (actor));
-            if (native && result)
+            }
+            if (native && result) {
+                work->waiting.store ("local_actor_owner", std::memory_order_relaxed);
                 owner = co_await native->resolve_actor_async (actor);
+            }
         }
         catch (...) {
             result = detail::current_exception_result<void> ();
@@ -2841,10 +2847,12 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
         if (owner)
             failures->capture (
               [&] { notification.emplace (native->notify_stateful_owner (*owner)); });
+        work->waiting.store ("caller_completion", std::memory_order_relaxed);
         failures->capture ([&] { completed (std::move (result)); });
         completed = {};
         if (notification) {
             try {
+                work->waiting.store ("owner_notification", std::memory_order_relaxed);
                 (void) co_await *notification;
             }
             catch (...) {
@@ -2852,7 +2860,7 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
             }
         }
     };
-    auto settle = [node = _state, actor_ref, operation, settle_state, work_terminal,
+    auto settle = [node = _state, actor_ref, settle_state, work,
                    accepted = std::holds_alternative<actor_join_accepted_t> (*completion_owner),
                    completed = std::move (completed)] (result_t<void> result) mutable {
         auto settled = [&] {
@@ -2862,23 +2870,23 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
             context.wait_owner = {};
             detail::serial_turn_scope_t turn (nullptr);
             const auto ambient = detail::enter_ambient_context (context, false);
-            return settle_state (node, actor_ref, operation, accepted, std::move (result),
+            return settle_state (node, actor_ref, work, accepted, std::move (result),
                                  std::move (completed));
         }();
-        detail::observe_task_terminal (
-          settled, [node, work_terminal] (const result_t<void> &result) {
-              if (!result)
-                  node->runtime_failures ()->report (result.exception ());
-              auto retired = node->lane.run_task (
-                [node, work_terminal] { node->pending_join_delivery_work.erase (work_terminal); });
-              detail::observe_task_terminal (retired,
-                                             [work_terminal] (const result_t<void> &terminal) {
-                                                 work_terminal->complete (terminal);
-                                             });
-          });
+        detail::observe_task_terminal (settled, [node, work] (const result_t<void> &result) {
+            if (!result)
+                node->runtime_failures ()->report (result.exception ());
+            work->waiting.store ("spot_lane_retirement", std::memory_order_relaxed);
+            auto retired =
+              node->lane.run_task ([node, work] { node->pending_join_delivery_work.erase (work); });
+            detail::observe_task_terminal (retired, [work] (const result_t<void> &terminal) {
+                work->terminal.complete (terminal);
+            });
+        });
     };
-    auto settle_after_delivery = [settle_result = std::move (settle_result),
+    auto settle_after_delivery = [work, settle_result = std::move (settle_result),
                                   settle = std::move (settle)] (result_t<void> result) mutable {
+        work->waiting.store ("delivery_fence", std::memory_order_relaxed);
         settle_result (std::move (result), std::move (settle));
     };
 

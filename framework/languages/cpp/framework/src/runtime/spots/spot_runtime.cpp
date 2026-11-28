@@ -443,7 +443,6 @@ struct spot_execution_snapshot_t
 {
     std::vector<std::shared_ptr<spot_context_state_t>> contexts;
     std::vector<task_t<void>> creations;
-    std::vector<task_t<void>> join_deliveries;
 };
 
 spot_execution_snapshot_t snapshot_spot_execution_owned (spot_node_builder_state_t &node)
@@ -464,9 +463,6 @@ spot_execution_snapshot_t snapshot_spot_execution_owned (spot_node_builder_state
         if (creation.completion)
             result.creations.push_back (creation.completion->task ());
     }
-    result.join_deliveries.reserve (node.pending_join_delivery_work.size ());
-    for (const auto &delivery : node.pending_join_delivery_work)
-        result.join_deliveries.push_back (delivery->task ());
     return result;
 }
 } // namespace
@@ -485,7 +481,8 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
         };
         std::vector<context_t> contexts;
         std::vector<task_t<void>> creations;
-        std::vector<task_t<void>> join_deliveries;
+        std::vector<std::shared_ptr<spot_node_builder_state_t::join_delivery_work_t>>
+          join_deliveries;
         std::shared_ptr<runtime::offload_executor_t> deadline_executor;
         std::shared_ptr<runtime::offload_executor_t> worker_executor;
         std::stop_source cancellation;
@@ -495,7 +492,8 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
         node.stopping.store (true, std::memory_order_release);
         auto execution = snapshot_spot_execution_owned (node);
         result.creations = std::move (execution.creations);
-        result.join_deliveries = std::move (execution.join_deliveries);
+        result.join_deliveries.assign (node.pending_join_delivery_work.begin (),
+                                       node.pending_join_delivery_work.end ());
         result.contexts.reserve (execution.contexts.size ());
         for (const auto &state : execution.contexts) {
             result.contexts.push_back (drain_plan_t::context_t{
@@ -524,7 +522,8 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
           .has_value ();
     };
     const bool deliveries_settled =
-      std::ranges::all_of (plan.join_deliveries, [&] (const auto &terminal) {
+      std::ranges::all_of (plan.join_deliveries, [&] (const auto &delivery) {
+          const auto terminal = delivery->terminal.task ();
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
           if (!terminal.await_ready () && node.join_delivery_drain_wait_probe)
               node.join_delivery_drain_wait_probe ();
@@ -548,11 +547,28 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
             if (context.serial_queue)
                 context.serial_queue->cancel_pending ();
         }
+        if (node.monitoring
+            && node.monitoring->diagnostics_logger.is_enabled (log_level_t::error)) {
+            std::size_t pending_count = 0;
+            std::string pending;
+            for (const auto &delivery : plan.join_deliveries) {
+                if (delivery->terminal.task ().await_ready ())
+                    continue;
+                if (pending_count++ != 0)
+                    pending += ", ";
+                pending += "operation_id=" + std::to_string (delivery->operation.first) + ":"
+                           + std::to_string (delivery->operation.second)
+                           + " waiting=" + delivery->waiting.load (std::memory_order_relaxed);
+            }
+            if (pending_count != 0)
+                monitoring_runtime_t (node.monitoring)
+                  .publish_unfinished_join_deliveries (pending_count, std::move (pending));
+        }
     }
     // The host owns the shutdown deadline outcome. Join ready can still publish
     // controls until its claim or cancellation settles.
     for (const auto &delivery : plan.join_deliveries)
-        (void) detail::task_result_access_t::read (delivery);
+        (void) detail::task_result_access_t::read (delivery->terminal.task ());
     for (const auto &context : plan.contexts) {
         for (const auto &queue : context.retained_queues)
             if (queue)

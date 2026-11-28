@@ -574,9 +574,17 @@ void settlement_after_target_destroy (bool drain)
                                                : fw::termination_outcome_t::stopped);
     EXPECT_EQ (stopped.value ().reason, drain ? fw::termination_reason_t::deadline_exceeded
                                               : fw::termination_reason_t::none);
+    const fw::log_record_t *drain_log = nullptr;
     if (drain) {
         source.thread.join ();
+        EXPECT_EQ (source.exit_code, 0);
         EXPECT_EQ (source.app.runtime_state (), fw::framework_runtime_state_t::stopped);
+        for (const auto &record : source.app.logging ().captured_records ()) {
+            if (record.message == "zlink.runtime.spot.join_drain_unfinished") {
+                EXPECT_EQ (drain_log, nullptr);
+                drain_log = &record;
+            }
+        }
     }
     std::lock_guard lock (evidence.mutex);
     EXPECT_EQ (std::ranges::count (evidence.completion_owners, second_rid), 2);
@@ -591,6 +599,14 @@ void settlement_after_target_destroy (bool drain)
         const auto *failed = std::get_if<fw::actor_join_failed_t> (&evidence.completions[index]);
         ASSERT_NE (failed, nullptr);
         EXPECT_EQ (failed->error_kind, fw::framework_error_kind_t::unavailable);
+        if (drain_log) {
+            ASSERT_EQ (drain_log->fields.size (), 2u);
+            EXPECT_EQ (drain_log->fields[0].value, "1");
+            const auto expected_delivery =
+              "operation_id=" + std::to_string (failed->operation_id_high) + ":"
+              + std::to_string (failed->operation_id_low) + " waiting=";
+            EXPECT_TRUE (drain_log->fields[1].value.starts_with (expected_delivery));
+        }
     }
     EXPECT_EQ (evidence.completions.size (), drain ? 3u : 2u);
 }
