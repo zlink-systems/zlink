@@ -1,9 +1,10 @@
 package systems.zlink.framework.runtime.messaging;
 
-import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 
 import org.junit.jupiter.api.Test;
 

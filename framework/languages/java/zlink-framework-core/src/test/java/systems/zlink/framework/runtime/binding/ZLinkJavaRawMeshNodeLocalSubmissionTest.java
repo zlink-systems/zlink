@@ -1,7 +1,8 @@
 package systems.zlink.framework.runtime.binding;
 
-import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 import static org.junit.jupiter.api.Assertions.*;
+
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;

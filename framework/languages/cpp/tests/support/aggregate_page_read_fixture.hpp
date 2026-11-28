@@ -38,18 +38,24 @@ class paused_aggregate_commit_store_t final : public location_store_t
                  return put && put->key.value.starts_with ("zlink:v11:aggregate:")
                         && nlohmann::json::parse (put->bytes).at ("state") == "aborted";
              });
-        const bool committing = std::ranges::any_of (request.mutations, [] (const auto &mutation) {
+        const auto commit = std::ranges::find_if (request.mutations, [] (const auto &mutation) {
             const auto *put = std::get_if<store_put_t> (&mutation);
             if (!put || !put->key.value.starts_with ("zlink:v11:aggregate:"))
                 return false;
             const auto record = nlohmann::json::parse (put->bytes);
             return record.at ("state") == "committed";
         });
+        const bool committing = commit != request.mutations.end ();
         if (committing) {
-            commit_waiting.complete (result_t<bool>::success (true));
+            const auto key = std::get<store_put_t> (*commit).key;
+            commit_waiting.complete (result_t<std::optional<store_key_t>>::success (key));
             co_await release.task ();
         }
         auto written = co_await inner.write (std::move (request));
+        if (committing) {
+            commit_applied.complete (
+              result_t<bool>::success (std::holds_alternative<store_write_applied_t> (written)));
+        }
         if (aborting && std::holds_alternative<store_write_applied_t> (written)) {
             abort_reply_lost = true;
             co_return result_t<store_write_result_t>::failure (
@@ -58,18 +64,20 @@ class paused_aggregate_commit_store_t final : public location_store_t
         co_return written;
     }
     location_store_t &inner;
-    task_completion_source_t<bool> commit_waiting;
+    task_completion_source_t<std::optional<store_key_t>> commit_waiting;
     task_completion_source_t<void> release;
+    task_completion_source_t<bool> commit_applied;
     bool interrupt_abort_reply = false;
     bool abort_reply_lost = false;
 };
 
 inline task_t<aggregate_commit_result_t>
 observe_aggregate_commit (task_t<aggregate_commit_result_t> commit,
-                          task_completion_source_t<bool> &commit_waiting)
+                          task_completion_source_t<std::optional<store_key_t>> &commit_waiting)
 {
-    scope_exit_t signal_terminal (
-      [&] { commit_waiting.complete (result_t<bool>::success (false)); });
+    scope_exit_t signal_terminal ([&] {
+        commit_waiting.complete (result_t<std::optional<store_key_t>>::success (std::nullopt));
+    });
     co_return co_await commit;
 }
 
