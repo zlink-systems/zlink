@@ -218,6 +218,12 @@ final class ZLinkStreamLifecycleRaceTest {
                         .submit()
                         .toCompletableFuture()
                         .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                var disconnected = new CompletableFuture<ZLinkStreamDisconnected>();
+                connector.onDisconnected(
+                        event -> {
+                            disconnected.complete(event);
+                            return CompletableFuture.completedFuture(null);
+                        });
                 var serverClosing = racers.submit(transport::deliverServerDrain);
                 ending.awaitEntered(WAIT_SECONDS);
                 assertFalse(connector.isConnected());
@@ -235,6 +241,11 @@ final class ZLinkStreamLifecycleRaceTest {
 
                 ending.release();
                 serverClosing.get(WAIT_SECONDS, TimeUnit.SECONDS);
+                // The racing server close still reports its disconnect once, after the
+                // local close completed (the JDI probe waited for this callback).
+                assertEquals(
+                        ZLinkStreamCloseReason.SERVER_DRAIN,
+                        disconnected.get(WAIT_SECONDS, TimeUnit.SECONDS).closeReason());
 
                 assertEquals(ZLinkStreamConnectionState.CLOSED, connector.state());
                 assertEquals(
