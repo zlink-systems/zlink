@@ -247,8 +247,7 @@ export class ZLinkMessageFlowTracer {
         // Spec 26 §4: terminal elapsed time is a Detailed-level addition; the
         // other languages strip it below that level.
         effectiveMode === 'detailed' ? flow.durationSeconds : undefined
-      ),
-      flow.retainAfterRetirement
+      )
     );
   }
 

@@ -1,4 +1,5 @@
 import { Worker } from 'node:worker_threads';
+import type { ZLinkTelemetryRecord } from './message-flow-record';
 
 // The process owner counts records until the worker takes them, including batches
 // already posted to its port. Only the worker decrements in-transit records.
@@ -23,20 +24,15 @@ export const TELEMETRY_STATE_BYTES =
   ) * BigUint64Array.BYTES_PER_ELEMENT;
 
 export interface ZLinkTelemetryLease {
-  readonly retired: Int32Array;
-}
-
-export interface ZLinkTelemetryDelivery<T = unknown> {
-  readonly lease?: SharedArrayBuffer;
-  readonly record: T;
+  retired: boolean;
 }
 
 export function openTelemetryLease(): ZLinkTelemetryLease {
-  return { retired: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)) };
+  return { retired: false };
 }
 
 export function renewTelemetryLease(lease: ZLinkTelemetryLease | undefined): ZLinkTelemetryLease {
-  return lease === undefined || Atomics.load(lease.retired, 0) !== 0 ? openTelemetryLease() : lease;
+  return lease === undefined || lease.retired ? openTelemetryLease() : lease;
 }
 
 let processOwner: ZLinkMessageFlowDelivery | undefined;
@@ -55,8 +51,7 @@ export function telemetryProviderFailureCount(): number {
 }
 
 export function retireTelemetryLease(lease: ZLinkTelemetryLease): void {
-  Atomics.store(lease.retired, 0, 1);
-  processOwner?.retire(lease);
+  lease.retired = true;
 }
 
 export class ZLinkMessageFlowDelivery {
@@ -73,7 +68,7 @@ export class ZLinkMessageFlowDelivery {
   private readonly worker?: Worker;
   private failure?: Error;
   private rejectReady!: (error: Error) => void;
-  private pending: ZLinkTelemetryDelivery[] = [];
+  private pending: ZLinkTelemetryRecord[] = [];
   private executing = false;
   private workerReady = false;
   private scheduled?: NodeJS.Immediate;
@@ -133,22 +128,17 @@ export class ZLinkMessageFlowDelivery {
   }
 
   accepts(lease: ZLinkTelemetryLease): boolean {
-    return this.enabled() && Atomics.load(lease.retired, 0) === 0;
+    return this.enabled() && !lease.retired;
   }
 
-  submit(lease: ZLinkTelemetryLease, record: unknown, retainAfterRetirement = false): void {
+  submit(lease: ZLinkTelemetryLease, record: ZLinkTelemetryRecord): void {
     if (!this.accepts(lease)) return;
     if (Atomics.load(this.state, TelemetryState.Pending) === MESSAGE_FLOW_PENDING_LIMIT) {
       Atomics.add(this.counters, TelemetryCounter.Overflow, 1n);
       return;
     }
     Atomics.add(this.state, TelemetryState.Pending, 1);
-    // Stop-deadline diagnostics keep their place in the bounded queue after admission.
-    this.pending.push(
-      retainAfterRetirement
-        ? { record }
-        : { lease: lease.retired.buffer as SharedArrayBuffer, record }
-    );
+    this.pending.push(record);
     if (this.workerReady && !this.executing && this.scheduled === undefined) {
       this.scheduled = setImmediate(() => {
         this.scheduled = undefined;
@@ -156,12 +146,6 @@ export class ZLinkMessageFlowDelivery {
       });
       this.scheduled.unref();
     }
-  }
-
-  retire(lease: ZLinkTelemetryLease): void {
-    const retained = this.pending.filter((item) => item.lease !== lease.retired.buffer);
-    Atomics.sub(this.state, TelemetryState.Pending, this.pending.length - retained.length);
-    this.pending = retained;
   }
 
   private flush(): void {
