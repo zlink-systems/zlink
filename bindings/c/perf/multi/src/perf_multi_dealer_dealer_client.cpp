@@ -375,7 +375,8 @@ inline bool drain_dd_retained_sends (dd_send_state_t *state, int timeout_ms)
                 return false;
         }
         if (dd_has_retained_send (*state)
-            && !service_dd_events (state, dd_wait_ms (deadline, 50), NULL, false))
+            && !service_dd_events (
+              state, dd_wait_ms (deadline, perf_multi_measurement::max_wait_ms), NULL, false))
             return false;
     }
     if (dd_has_retained_send (*state)) {
@@ -458,11 +459,7 @@ inline bool run_send_window (dd_send_state_t *state,
                 if (schedule && now_ns >= active_deadline_ns)
                     break;
                 if (schedule && !schedule->due (now_ns)) {
-                    const uint64_t next_ns = std::min (active_deadline_ns, schedule->next_ns ());
-                    if (next_ns <= now_ns)
-                        break;
-                    const int wait_ms =
-                      static_cast<int> (std::min<uint64_t> (50, (next_ns - now_ns) / 1000000ULL));
+                    const int wait_ms = schedule->wait_ms (now_ns, active_deadline_ns);
                     if (wait_ms > 0 && perf_socket_poll (NULL, 0, wait_ms) < 0
                         && zlink_errno () != EINTR)
                         return false;
@@ -495,7 +492,7 @@ inline bool run_send_window (dd_send_state_t *state,
         }
         rr = (start + 1) % state->slots.size ();
 
-        int timeout_ms = submitted ? 0 : dd_wait_ms (deadline, 50);
+        int timeout_ms = submitted ? 0 : dd_wait_ms (deadline, perf_multi_measurement::max_wait_ms);
         if (schedule) {
             timeout_ms = schedule->wait_ms (perf_multi_metric::now_ns (), active_deadline_ns);
         }

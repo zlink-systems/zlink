@@ -1220,7 +1220,8 @@ inline bool run_echo_window_round_robin (
             if (fatal_error)
                 break;
         }
-        const int wait_ms = std::min (50, remaining_poll_timeout_ms (drain_deadline));
+        const int wait_ms = std::min (perf_multi_measurement::max_wait_ms,
+                                      remaining_poll_timeout_ms (drain_deadline));
         if (wait_ms <= 0)
             break;
         const int poll_rc = zlink_poller_wait (
