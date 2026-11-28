@@ -142,7 +142,7 @@ async function stopHost(telemetryLease) {
     assert.equal(Number(Atomics.load(owner.counters, Counter.Overflow)), 0);
     const closedHost = makeTracer();
     await stopHost(closedHost.telemetryLease);
-    assert.equal(Atomics.load(closedHost.telemetryLease.retired, 0), 1);
+    assert.equal(closedHost.telemetryLease.retired, true);
     fs.writeFileSync(process.env.ZLINK_TEST_TELEMETRY_GATE, 'release');
   }
   await owner.ready;
@@ -196,12 +196,12 @@ async function stopHost(telemetryLease) {
     owner.worker.postMessage = (...args) => { batches++; return post(...args); };
     const other = makeTracer();
     submit(tracer, 'blocked');
-    submit(other.tracer, 'retired-in-transit');
+    submit(other.tracer, 'admitted-in-transit');
     submit(tracer, 'survivor');
     const kind = mode === 'blocked-trace' ? 'span' : 'log';
     await until(() => rows().some(row => row.kind === kind));
     assert.equal(Atomics.load(owner.state, State.Pending), 2);
-    for (let index = 0; index < 8190; index++) submit(other.tracer, 'retired-pending');
+    for (let index = 0; index < 8190; index++) submit(other.tracer, 'admitted-pending');
     assert.equal(Atomics.load(owner.state, State.Pending), 8192);
     // Seed the counter at the former signed-32-bit boundary, then take the real
     // admission-overflow path once. No billions-of-records stress is needed.
@@ -215,10 +215,16 @@ async function stopHost(telemetryLease) {
     await stopHost(other.telemetryLease);
     assert.ok(performance.now() - started < 100, 'retirement does not join blocked provider');
     submit(other.tracer, 'after-retirement');
-    assert.equal(Atomics.load(owner.state, State.Pending), 2);
+    assert.equal(Atomics.load(owner.state, State.Pending), 8192);
     fs.writeFileSync(process.env.ZLINK_TEST_TELEMETRY_GATE, 'release');
     await until(() => !owner.executing);
-    assert.deepEqual(rows().filter(row => row.kind === kind).map(row => row.value.attributes.packet_name), ['blocked', 'survivor']);
+    const delivered = rows().filter(row => row.kind === kind).map(row => row.value.attributes.packet_name);
+    assert.deepEqual(delivered, [
+      'blocked',
+      'admitted-in-transit',
+      'survivor',
+      ...Array(8190).fill('admitted-pending')
+    ]);
     const overflow = rows().filter(row => row.kind === 'metric');
     assert.equal(overflow.length, 1);
     assert.equal(overflow[0].thread, 'worker');

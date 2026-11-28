@@ -350,6 +350,16 @@ test(
         }
       }
     ]);
+    await telemetry.observed();
+    const joinErrors = telemetry.records.filter(
+      (record) => record.eventId === 'zlink.dispatch_error' && record.packetName === 'JoinSpot'
+    );
+    assert.equal(joinErrors.length, 1, 'expected one public JoinSpot stop-deadline diagnostic');
+    assert.equal(joinErrors[0].actorId, actorId);
+    assert.equal(
+      joinErrors[0].errorMessage,
+      'Relocation authority was unsettled at the host stop deadline.'
+    );
     const { resourceMetrics, errors } = await metricReader.collect();
     assert.deepEqual(errors, []);
     const relocationTerminals = resourceMetrics.scopeMetrics
@@ -386,7 +396,7 @@ test(
       'Spot drain must not be pending at the stop deadline'
     );
     t.diagnostic(
-      'source callbacks=1 (Failed/Unavailable), post-deadline Store calls=0, backlog=1, Spot drain pending=0'
+      'source callbacks=1 (Failed/Unavailable), public JoinSpot deadline diagnostics=1, post-deadline Store calls=0, backlog=1, Spot drain pending=0'
     );
     t.diagnostic('source relocation terminals=1 (shutdown)');
   }

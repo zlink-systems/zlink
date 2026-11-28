@@ -1754,13 +1754,16 @@ export class ZLinkFrameworkRuntimeHost
 
   private teardownRuntime(): Promise<void> {
     return this.teardown.run(async () => {
-      retireTelemetryLease(this.telemetryLease);
       this.requests.close(
         new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ShuttingDown, 'Host stopped.')
       );
-      await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
-        this.runLifecycle(() => this.stopCore())
-      );
+      try {
+        await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
+          this.runLifecycle(() => this.stopCore())
+        );
+      } finally {
+        retireTelemetryLease(this.telemetryLease);
+      }
     });
   }
 

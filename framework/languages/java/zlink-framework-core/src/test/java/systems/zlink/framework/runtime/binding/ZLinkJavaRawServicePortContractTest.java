@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.binding;
 
-import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -11,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
@@ -1200,7 +1201,6 @@ final class ZLinkJavaRawServicePortContractTest {
             throw new AssertionError("concurrent raw multipart send failed", failure);
         }
     }
-
 
     private static void awaitInbound(
             ZLinkJavaRawServicePort port, RouterSocket router, int expected, long deadline)
