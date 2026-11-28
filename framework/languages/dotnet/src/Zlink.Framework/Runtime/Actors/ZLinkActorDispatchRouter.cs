@@ -43,6 +43,7 @@ internal sealed class ZLinkActorDispatchRouter(
         }
 
         ensureActorContext(actor, state);
+        // The Actor FIFO needs the payload after the session relay returns.
         var retained = payload.Copy();
         try
         {
@@ -66,10 +67,18 @@ internal sealed class ZLinkActorDispatchRouter(
                         if (shouldPrune)
                             runtime.RunDetached("prune-session-actor", _ => PruneAsync(state));
                     },
-                    () =>
+                    failure =>
                     {
-                        retained.Dispose();
-                        releaseIngress();
+                        try
+                        {
+                            retained.Dispose();
+                            releaseIngress();
+                        }
+                        finally
+                        {
+                            if (failure is not null)
+                                ReportFailure(failure);
+                        }
                     },
                     cancellationToken
                 )
@@ -79,6 +88,22 @@ internal sealed class ZLinkActorDispatchRouter(
         {
             retained.Dispose();
             throw;
+        }
+
+        void ReportFailure(Exception exception)
+        {
+            if (!_dispatchErrors.Enabled)
+                return;
+
+            using var flow = EnterFlow(header);
+            new ZLinkDispatchFlowScope(
+                ZLinkDispatchErrorSurface.SpotActor,
+                _dispatchErrors.Flow.CaptureEnabled,
+                ZLinkDispatchMessageKind.ActorSend,
+                header.Name,
+                correlationId: header.CorrelationId,
+                actorId: actorId
+            ).DispatchFailure(_dispatchErrors, ZLinkDispatchErrorAction.Drop, exception);
         }
     }
 

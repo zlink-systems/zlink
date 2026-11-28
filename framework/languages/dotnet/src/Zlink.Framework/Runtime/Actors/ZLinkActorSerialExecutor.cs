@@ -111,7 +111,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
 
     internal ValueTask AdmitDispatchAsync(
         Func<CancellationToken, ValueTask> operation,
-        Action release,
+        Action<Exception?> release,
         CancellationToken cancellationToken
     )
     {
@@ -125,11 +125,11 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
                 item =>
                 {
                     _acceptedTurns++;
-                    item.AddTerminalRelease(() =>
+                    item.AddTerminalRelease(failure =>
                     {
                         try
                         {
-                            release();
+                            release(failure);
                         }
                         finally
                         {

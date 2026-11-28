@@ -17628,12 +17628,11 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         private readonly ActivityListener _listener;
         private readonly ConcurrentQueue<ObservedMessageFlow> _events = new();
-        private readonly TaskCompletionSource<ObservedMessageFlow> _observed = new(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        private readonly Action<ObservedMessageFlow>? _onObserved;
 
-        public CapturingMessageFlowObserver()
+        public CapturingMessageFlowObserver(Action<ObservedMessageFlow>? onObserved = null)
         {
+            _onObserved = onObserved;
             _listener = new ActivityListener
             {
                 ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
@@ -17710,7 +17709,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 Tag("mesh_name")
             );
             _events.Enqueue(flow);
-            _observed.TrySetResult(flow);
+            _onObserved?.Invoke(flow);
         }
 
         private static string? Normalize(string? value) =>

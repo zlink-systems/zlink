@@ -1907,7 +1907,7 @@ internal sealed class ZLinkActorRuntimeState(
 
     internal ValueTask AdmitDispatchAsync(
         Func<CancellationToken, ValueTask> operation,
-        Action release,
+        Action<Exception?> release,
         CancellationToken cancellationToken
     )
     {

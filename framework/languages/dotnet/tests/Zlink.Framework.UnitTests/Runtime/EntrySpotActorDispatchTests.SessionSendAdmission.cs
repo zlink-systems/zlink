@@ -105,15 +105,25 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    [Fact]
-    public async Task SessionSendAdmission_HandlerExceptionRecordsDispatchErrorAfterAcceptance()
+    [Theory]
+    [InlineData(null)]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide)]
+    public async Task SessionSendAdmission_HandlerExceptionRecordsDispatchErrorAfterAcceptance(
+        ZLinkUserSpotExecutionMode? userSpotMode
+    )
     {
         var probe = new DispatchProbe
         {
             SecondSendFailure = new InvalidOperationException("session-send-handler-failed"),
         };
         using var observer = new CapturingMessageFlowObserver();
-        var (runtime, bound, state) = await CreateSessionSendFixtureAsync(probe, observer);
+        var (runtime, bound, state) = await CreateSessionSendFixtureAsync(
+            probe,
+            observer,
+            userSpotMode
+        );
+        var failures = new AuditRuntimeFailureReporter();
+        runtime.ErrorSink.UnhandledCallbackException += failures.ReportHandlerException;
         try
         {
             await RelaySessionSend(bound, "second");
@@ -124,17 +134,67 @@ public sealed partial class EntrySpotActorDispatchTests
                 flow =>
                     flow.ActorId == bound.ActorId
                     && flow.PacketName == "second"
-                    && flow.Reason == "handler_exception"
+                    && flow.Outcome == "failed"
             );
+            Assert.Equal("actor", failure.Surface);
             Assert.Equal("send", failure.MessageKind);
             Assert.Equal("drop", failure.Action);
+            Assert.Equal("handler_exception", failure.Reason);
             Assert.Equal(probe.SecondSendFailure.Message, failure.ErrorMessage);
             Assert.Equal("actor-a:second:start", Assert.Single(probe.Events));
+            Assert.Empty(failures.Failures);
         }
         finally
         {
             await runtime.StopAsync(CancellationToken.None);
         }
+    }
+
+    [Fact]
+    public async Task SessionSendAdmission_JoinSealAfterAcceptanceRecordsDispatchError()
+    {
+        var probe = new DispatchProbe();
+        var reported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var observer = new CapturingMessageFlowObserver(flow =>
+        {
+            if (IsSecondSendFailure(flow))
+                reported.TrySetResult();
+        });
+        var (runtime, bound, state) = await CreateSessionSendFixtureAsync(
+            probe,
+            observer,
+            ZLinkUserSpotExecutionMode.PerActor
+        );
+        var failures = new AuditRuntimeFailureReporter();
+        runtime.ErrorSink.UnhandledCallbackException += failures.ReportHandlerException;
+        try
+        {
+            await RelaySessionSend(bound, "first").WaitAsync(TimeSpan.FromSeconds(5));
+            await probe.ActorAFirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await RelaySessionSend(bound, "second").WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(probe.ActorASecondStarted.Task.IsCompleted);
+
+            state.SealFailedJoinCompletion(new InvalidOperationException("join-completion-failed"));
+            probe.ReleaseActorAFirst.SetResult();
+            await Task.WhenAny(reported.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+
+            var failure = Assert.Single(observer.Events.Where(IsSecondSendFailure));
+            Assert.Equal("actor", failure.Surface);
+            Assert.Equal("send", failure.MessageKind);
+            Assert.Equal("drop", failure.Action);
+            Assert.Equal("handler_exception", failure.Reason);
+            Assert.Contains("sealed after Join completion failed", failure.ErrorMessage);
+            Assert.False(probe.ActorASecondStarted.Task.IsCompleted);
+            Assert.Empty(failures.Failures);
+        }
+        finally
+        {
+            probe.ReleaseActorAFirst.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+
+        static bool IsSecondSendFailure(ObservedMessageFlow flow) =>
+            flow.ActorId == "actor-a" && flow.PacketName == "second" && flow.Outcome == "failed";
     }
 
     [Fact]
