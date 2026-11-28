@@ -79,6 +79,7 @@ export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-Awarnings"
 PATTERN="ALL"
 CONTROL_PLANE_PATTERNS=()
 DURATION="${PERF_MULTI_DURATION_SECONDS:-5}"
+unset LATENCY_DURATION
 PART_COUNT="${PERF_PART_COUNT:-2}"
 MSG_SIZES="${PERF_MSG_SIZES:-64,256,1024,4096,65536,131072}"
 if [[ "$(uname -s)" == Linux* || "$(uname -s)" == Darwin* ]]; then
@@ -157,6 +158,7 @@ Options:
                         ROUTER_ROUTER_SENDSEND, ROUTER_ROUTER_REQREP, PUBSUB,
                         STREAM.
   --duration N
+  --latency-duration N  Latency seconds (positive integer; default: --duration).
   --part-count N          Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST
   --transports LIST
@@ -211,6 +213,15 @@ while [[ $# -gt 0 ]]; do
             ;;
         --pattern)     PATTERN="$2";     shift 2 ;;
         --duration)    DURATION="$2";    shift 2 ;;
+        --latency-duration)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --latency-duration requires a value." >&2
+                exit 1
+            fi
+            LATENCY_DURATION="$2"
+            shift 2
+            ;;
+        --latency-duration=*) LATENCY_DURATION="${1#*=}"; shift ;;
         --part-count) PART_COUNT="$2"; shift 2 ;;
         --msg-sizes)   MSG_SIZES="$2"; EXPLICIT_MSG_SIZES=1; shift 2 ;;
         --transports)  TRANSPORTS="$2";  shift 2 ;;
@@ -256,6 +267,12 @@ while [[ $# -gt 0 ]]; do
         *)             echo "unknown option: $1" >&2; exit 1 ;;
     esac
 done
+
+LATENCY_DURATION="${LATENCY_DURATION-${PERF_MULTI_LATENCY_DURATION_SECONDS:-${DURATION}}}"
+if ! is_uint "${LATENCY_DURATION}" || [[ ! "${LATENCY_DURATION}" =~ [1-9] ]]; then
+    echo "Error: --latency-duration must be a positive integer." >&2
+    exit 1
+fi
 
 if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
     echo "--part-count must be 1 or 2" >&2
@@ -584,6 +601,7 @@ fi
 BIN_DIR="${TARGET_DIR}/release"
 
 export PERF_MULTI_DURATION_SECONDS="${DURATION}"
+export PERF_MULTI_LATENCY_DURATION_SECONDS="${LATENCY_DURATION}"
 export PERF_MULTI_DEFAULT_CLIENTS="${EFFECTIVE_DEFAULT_CLIENTS}"
 export PERF_MULTI_DEFAULT_STREAM_CLIENTS="${EFFECTIVE_DEFAULT_STREAM_CLIENTS}"
 prepare_core_runtime
@@ -802,9 +820,7 @@ resolve_client_timeout_seconds() {
         return
     fi
 
-    local latency_duration="${PERF_MULTI_LATENCY_DURATION_SECONDS:-${duration}}"
-    [[ "${latency_duration}" =~ ^[1-9][0-9]*$ ]] || latency_duration="${duration}"
-    local paced=$((2 * latency_duration))
+    local paced=$((2 * 10#${LATENCY_DURATION}))
     if [[ "${pattern}" == "STREAM" ]]; then
         timeout_seconds=$(( duration * 3 + paced + 20 ))
         if (( timeout_seconds < 45 )); then

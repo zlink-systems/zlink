@@ -874,6 +874,11 @@ Other claim results `Conflict` and `GenerationExhausted` are startup errors. If 
 cancels startup, startup ends as cancelled; this rule does not turn it into a success.
 A claim that already started is confirmed by re-reading the same key as in §10; a
 confirmed lease is released normally and no heartbeat starts.
+This confirmation and release are not bounded by the startup renew timeout. The host Stop
+deadline is the only bound: within it, the runtime waits for the started claim request's result,
+re-reads as in §10 when no result arrives, and releases the lease once it is confirmed as its own.
+If the Stop deadline ends first, the runtime makes no further Store calls, leaves the lease to TTL
+expiry and emits one diagnostic record (`location.startup_claim_cleanup_abandoned`).
 
 ### 5.1 Retention and Rejoining After a Short Outage
 
@@ -2322,6 +2327,9 @@ store record golden fixture. Each item maps to one test.
   [MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid).
 - Cancelling startup ends it as cancelled; an already committed claim is released and
   no heartbeat starts.
+- A claim that commits after the startup renew timeout, following cancellation, is still read
+  and released within the Stop deadline. After the Stop deadline, no Store call is made, the lease
+  is left to TTL and one diagnostic record is emitted.
 
 **Descriptor And Location Lookup**
 

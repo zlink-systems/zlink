@@ -69,7 +69,7 @@ public final class PerfUtil {
         int recvBuffer,
         int sendTimeoutMs,
         int recvTimeoutMs,
-        int monitorHwm,
+        long monitorHwm,
         int connectReadyTimeoutMs,
         int connectConcurrency
     ) {

@@ -12,6 +12,7 @@ import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -23,7 +24,7 @@ import systems.zlink.framework.spots.*;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
-import java.net.ServerSocket;
+import java.net.URI;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -124,12 +125,7 @@ final class ZLinkActorSpotJoinRelocationPolicyTest {
             String rid,
             ZLinkInMemoryLocationStore locations,
             InMemoryRelocationStore relocations,
-            boolean mixedFactories)
-            throws Exception {
-        final int port;
-        try (var socket = new ServerSocket(0)) {
-            port = socket.getLocalPort();
-        }
+            boolean mixedFactories) {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
@@ -138,7 +134,7 @@ final class ZLinkActorSpotJoinRelocationPolicyTest {
         var mesh =
                 options.addRouteMesh("game")
                         .setRoutingId(RoutingId.from(rid))
-                        .listen("tcp://127.0.0.1:" + port)
+                        .listen("tcp://127.0.0.1:0")
                         .setPlacementWeight(rid.equals("source") ? 100 : 1);
         mesh.channelName("game").server();
         var objects = mesh.objects().server();
@@ -158,6 +154,8 @@ final class ZLinkActorSpotJoinRelocationPolicyTest {
 
     private static void ready(ZLinkFrameworkRuntime host) throws Exception {
         await(ZLinkFrameworkRuntimeTestAccess.startupCompletion(host));
+        String endpoint = host.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game").endpoint();
+        assertTrue(URI.create(endpoint).getPort() > 0, endpoint);
         assertTrue(await(ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(host)));
     }
 

@@ -12,6 +12,13 @@ The single and multi suites have separate runners and use the same public
 pattern names. Run the multi suite with `run_benchmarks_multi.sh` and the
 single suite with `run_benchmarks.sh`.
 
+The multi runner accepts `--latency-duration N` or
+`PERF_MULTI_LATENCY_DURATION_SECONDS` to set the latency window in positive
+whole seconds. It defaults to the effective `--duration`. Set the monitor queue
+high-water mark in bytes with `--monitor-hwm-bytes BYTES` or
+`PERF_MULTI_MONITOR_HWM_BYTES` (default 4,096,000 bytes). Command-line values
+override the environment.
+
 Supported multi patterns:
 
 - `DEALER_DEALER`
