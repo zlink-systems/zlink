@@ -134,6 +134,7 @@
         <Compile Include="Runtime/CanonicalActorJoinIngressReplyTests.cs"/>
         <Compile Include="Runtime/CanonicalActorJoinWireAdmissionNegativeTests.cs"/>
         <Compile Include="Runtime/RemoteJoinerCanonicalReplyTests.cs"/>
+        <Compile Include="Runtime/RemoteActorJoinStopDeadlineTests.cs"/>
         <Compile Include="Runtime/SameNodeActorJoinTests.cs"/>
         <Compile Include="Runtime/ActorSpotJoinRelocationPolicyTests.cs"/>
         <Compile Include="Runtime/SourceMembershipLeaveCompletionTests.cs"/>
