@@ -3,8 +3,10 @@ name: Bindings PR Check
 on:
   # No paths filter: every PR gets the four named checks, so they can be required.
   # The changes job selects which checks run; the others succeed in one line.
+  # No `labeled`: a queue label added later must not create a skipped run of
+  # these required checks. For a trial run, add `ci-trial`, then push or reopen.
   pull_request:
-    types: [opened, reopened, synchronize, labeled]
+    types: [opened, reopened, synchronize]
   merge_group:
     types: [checks_requested]
   push:
@@ -14,6 +16,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: bindings-pr-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   changes:
     name: Select binding checks
@@ -22,8 +28,7 @@ jobs:
       !startsWith(github.head_ref, 'mergify/merge-queue/') &&
       (vars.ZLINK_BINDINGS_PR_CHECK_ENABLED == 'true' ||
         (github.event_name == 'pull_request' &&
-          contains(github.event.pull_request.labels.*.name, 'ci-trial'))) &&
-      (github.event.action != 'labeled' || github.event.label.name == 'ci-trial')
+          contains(github.event.pull_request.labels.*.name, 'ci-trial')))
     runs-on: ubuntu-24.04
     outputs:
       rust: ${{ steps.select.outputs.rust }}
