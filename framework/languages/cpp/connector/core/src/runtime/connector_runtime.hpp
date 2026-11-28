@@ -20,6 +20,7 @@
 #include <set>
 #include <string>
 #include <typeindex>
+#include <variant>
 #include <vector>
 
 namespace zlink::stream_connector::detail
@@ -51,6 +52,22 @@ struct request_timing_t
                                              std::function<void ()> operation) = 0;
 };
 
+using request_alarm_t =
+  std::variant<std::monostate, std::shared_ptr<boost::asio::steady_timer>, std::function<void ()>>;
+struct queued_admission_t
+{
+};
+using admission_wait_t =
+  std::variant<std::monostate, request_clock_t::time_point, queued_admission_t>;
+
+struct connection_admission_queue_t
+{
+    std::uint64_t registration_seq = 0;
+    std::uint64_t initiator = 0;
+    request_clock_t::time_point silence_at;
+    request_alarm_t silence_alarm;
+};
+
 enum class read_state_t
 {
     idle,
@@ -65,6 +82,7 @@ struct pending_write_t
     std::uint64_t write_id = 0;
     bool ready = true;
     std::uint64_t retry_request_id = 0;
+    std::uint64_t admission_enqueue_seq = 0;
 };
 
 struct pending_request_t
@@ -84,9 +102,8 @@ struct pending_request_t
     request_clock_t::time_point deadline;
     std::chrono::milliseconds max_admission_wait{0};
     std::optional<request_clock_t::time_point> first_rejection;
-    std::optional<request_clock_t::time_point> retry_at;
-    std::shared_ptr<boost::asio::steady_timer> timeout_timer;
-    std::optional<std::function<void ()>> cancel_test_timer;
+    admission_wait_t admission_wait;
+    request_alarm_t timeout_alarm;
 };
 
 /* Lock order for connector_state_t (see the mutex members below).
@@ -189,6 +206,7 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     std::map<std::uint64_t, pending_request_t> pending_requests;
     std::map<std::uint64_t, std::uint64_t> request_attempts;
     std::unique_ptr<request_timing_t> request_timing;
+    std::optional<connection_admission_queue_t> admission_queue;
     std::map<std::uint64_t, pending_wait_t> pending_waits;
     /* Bumped on every insertion into and removal from pending_waits. A matcher
      * that evaluates user predicates outside transport_mutex re-reads this
@@ -224,6 +242,9 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
       reply_received_handlers;
     std::vector<handler_entry_t<std::function<void (const admission_waiting_context_t &)>>>
       admission_waiting_handlers;
+    std::vector<handler_entry_t<std::function<void ()>>> admission_queued_handlers;
+    std::vector<handler_entry_t<std::function<void (std::int32_t, std::chrono::milliseconds)>>>
+      admission_position_handlers;
     std::vector<handler_entry_t<std::function<void (std::optional<close_reason_t>)>>>
       disconnected_handlers;
     std::vector<std::pair<std::uint16_t, std::shared_ptr<actor_t>>> actors_by_slot;
@@ -520,13 +541,14 @@ std::vector<pending_wait_t> take_pending_waits_locked (connector_state_t &state)
 struct connection_operations_t
 {
     std::vector<std::function<void (result_t<void>)>> writes;
-    std::vector<std::uint64_t> requests;
+    std::vector<std::pair<std::uint64_t, error_code_t>> requests;
     std::vector<pending_wait_t> waits;
 };
 /* Caller holds transport_mutex. */
-connection_operations_t take_connection_operations_locked (connector_state_t &state);
-/* Fails every taken operation as Disconnected with `message`, delivered like
- * any other completion. Called with no connector lock held. */
+connection_operations_t take_connection_operations_locked (connector_state_t &state,
+                                                           bool malformed_admission_push = false);
+/* Delivers terminal results for the operations taken from the connection.
+ * Called with no connector lock held. */
 void fail_connection_operations (const std::shared_ptr<connector_state_t> &state,
                                  connection_operations_t operations,
                                  const std::string &message);
@@ -541,6 +563,7 @@ void fail_connection_operations (const std::shared_ptr<connector_state_t> &state
  * with no connector lock held. */
 bool connection_ended (const std::shared_ptr<connector_state_t> &state,
                        const error_t &error,
-                       const std::shared_ptr<stream_connection_t> &observed_connection);
+                       const std::shared_ptr<stream_connection_t> &observed_connection,
+                       bool malformed_admission_push = false);
 
 } // namespace zlink::stream_connector::detail

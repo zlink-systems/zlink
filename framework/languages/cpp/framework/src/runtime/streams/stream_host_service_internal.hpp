@@ -9,12 +9,14 @@
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/streams/session_liveness.hpp"
+#include "runtime/streams/admission_queue_messages.hpp"
 #include "runtime/streams/stream_host_service.hpp"
 #include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Messaging/stream_packet.hpp>
 #include <zlink/Contracts/Sockets/stream_socket.hpp>
 #include <opentelemetry/metrics/meter.h>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/post.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/beast/websocket/stream_fwd.hpp>
 #ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL
@@ -222,6 +224,18 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
       std::function<void (stream_close_reason_t, std::string)> request_terminate);
 
     void unregister_active_stream (const stream_t &stream);
+
+    template <typename Work> void schedule_admission (Work work)
+    {
+        asio::post (_liveness_io, [self = shared_from_this (), work = std::move (work)] () mutable {
+            work (std::move (self));
+        });
+    }
+
+    void
+    push_admission (std::shared_ptr<const std::vector<admission_queue::delivery_t>> deliveries);
+
+    void report_admission_error (std::exception_ptr error);
 
     std::size_t active_session_count ();
 

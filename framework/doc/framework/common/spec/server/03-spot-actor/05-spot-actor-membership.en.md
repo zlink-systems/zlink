@@ -63,6 +63,10 @@ For both same-node and cross-node joins, a transaction adding membership to a Us
 target Spot authority's SpotId, `ObjectGeneration`, and `StoreVersion`, and the validity of the
 owner lease recorded in that authority, as commit conditions. Application join approval or a
 locally active Spot doesn't replace those conditions.
+When a relocation aggregate commit moves that Spot authority in the same commit, "the owner lease
+recorded in that authority" is the target owner lease this commit records. For a Spot that isn't moved
+with it, it's the lease recorded now. This lease condition belongs to adding membership; it isn't a
+target liveness check on the commit itself ([Location runtime §9.1](../05-location-relocation/01-location-runtime.en.md#91-when-restore-data-becomes-the-official-data)).
 
 The Object Client or Server role requires a Location Store. Without a Store,
 it's rejected at startup, and a hidden local Store or a runtime-local object
@@ -593,7 +597,7 @@ the following order after the handler ends normally.
    queue, but doesn't run application work yet.
 5. Source ingress hold and pre-boundary relay follow the order in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Target uses the temporary queue registered during Join approval.
 6. After cutover verification, the target's owner, membership, capacity, and generation CAS follows [common relocation §4.4–§4.5](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). This CAS includes the Join membership change.
-7. Queue merge and regular-route transition after CAS follow [common relocation §4.6](../05-location-relocation/04-relocation-flow.en.md#46-target-opens-the-queue-progressively-starting-with-existing-work). Target calls the target Spot's `OnJoinedActor`, sends the source Spot `OnLeaveActor` one-way, finishes the Actor's Join completion callback, then opens dispatch. The target normalizes the authority's relocation record to steady after the completion conditions of [Location runtime §9.3](../05-location-relocation/01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed) hold. With no accepted request, it normalizes before the Join completion callback. With accepted requests, it normalizes after opening dispatch and delivering every completion result for them (`pendingDeliveries` is 0). The Join completion callback and the dispatch opening don't wait for normalization.
+7. Queue merge and regular-route transition after CAS follow [common relocation §4.6](../05-location-relocation/04-relocation-flow.en.md#46-target-opens-the-queue-progressively-starting-with-existing-work). Target calls the target Spot's `OnJoinedActor`, sends the source Spot `OnLeaveActor` one-way, finishes the Actor's Join completion callback, then opens dispatch. The target normalizes the authority's relocation record to steady after the completion conditions of [Location runtime §9.3](../05-location-relocation/01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed) hold. With no accepted request, it normalizes before the Join completion callback. With accepted requests, it normalizes after opening dispatch and delivering every completion result for them (`pendingDeliveries` is 0). With accepted requests, the Join completion callback and the dispatch opening don't wait for that normalization.
 8. For a bound Actor, after CAS and queue opening the target runtime submits a
    command 44 `sessionRelocationRoute` commit to the Session owner one-way.
    [Session–Actor binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation)

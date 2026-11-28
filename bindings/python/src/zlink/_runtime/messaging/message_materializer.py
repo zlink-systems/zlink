@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 
+import errno
 import ctypes
 from typing import Optional
 
@@ -177,7 +178,7 @@ class _BaseReceived:
 
     def first_part(self):
         if not self.parts:
-            raise RecvError(RecvResult.NO_DATA, 0)
+            raise RecvError(RecvResult.INVALID_STATE, errno.EINVAL)
         return self.parts[0]
 
     def single_part_or_throw(self):

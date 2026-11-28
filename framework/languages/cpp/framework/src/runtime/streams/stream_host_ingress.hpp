@@ -4,6 +4,7 @@
 #include "runtime/diagnostics/metric_provider.hpp"
 #include "runtime/dispatch/application_job_queue_capacity.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/streams/admission_queue_node.hpp"
 #include <zlink/detail/stream_packet_name.hpp>
 
 namespace zlink::framework::runtime
@@ -91,20 +92,79 @@ class stream_host_ingress_t
 
     void reset_metrics () noexcept { _rejection_count.store (0, std::memory_order_relaxed); }
 
-    template <typename Reject>
+    void bind_queue (std::shared_ptr<admission_queue::queue_node_t> queue)
+    {
+        _queue = std::move (queue);
+    }
+
+    std::shared_ptr<admission_queue::queue_node_t> queue () const { return _queue; }
+
+    template <typename Complete, typename Reject, typename Schedule>
     result_t<void> publish (const detail::stream_runtime_t &runtime,
                             packet_stream_session_t &session,
                             stream_t &stream,
+                            std::string_view stream_name,
                             const detail::stream_header_t &header,
                             const zlink::message_t &payload,
                             application_job_queue_t::permit_t permit,
-                            detail::stream_runtime_t::async_dispatch_completion_t completion,
+                            Complete completion,
                             detail::stream_runtime_t::async_dispatch_cancel_t cancelled,
-                            const Reject &reject)
+                            const Reject &reject,
+                            const Schedule &schedule)
     {
+        using namespace admission_queue;
+        const bool request = header.kind () == detail::stream_message_kind_t::request;
+        const bool authentication =
+          request && _packet_name && header.packet_name () == *_packet_name;
+        const bool enqueue = request && header.packet_name () == client_enqueue_packet;
+        if ((enqueue && !_queue)
+            || (header.kind () == detail::stream_message_kind_t::send
+                && is_client_delivery_packet (header.packet_name ()))) {
+            return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                            "Invalid STREAM admission queue packet");
+        }
+        std::optional<connection_t> connection;
+        std::uint64_t epoch = 0;
+        if (_queue && (authentication || enqueue)) {
+            if (const auto rid = stream.routing_id ())
+                connection = _queue->connection (stream_name, *rid);
+            if (enqueue) {
+                permit.release_without_handler ();
+                if (!connection) {
+                    reject (queue_unavailable (), detail::stream_metadata_t{});
+                    return result_t<void>::success ();
+                }
+                schedule (
+                  [queue = _queue, runtime, stream, header, payload,
+                   connection = std::move (*connection), completion = std::move (completion),
+                   cancelled = std::move (cancelled)] (std::shared_ptr<void> listener) mutable {
+                      if (cancelled () || runtime.session_closed (stream).stop_requested ())
+                          return;
+                      auto pending = submit_enqueue (queue, runtime, stream, header, payload,
+                                                     std::move (connection));
+                      detail::observe_task_completion (
+                        pending,
+                        [listener = std::move (listener),
+                         completion = std::move (completion)] (const result_t<void> &result) {
+                            (void) listener;
+                            completion (result);
+                        });
+                  });
+                return result_t<void>::success ();
+            }
+            if (connection)
+                epoch =
+                  _queue->verify (*connection, header.metadata (client_ticket_key).value_or (""));
+            if (!epoch) {
+                _rejection_count.fetch_add (1, std::memory_order_relaxed);
+                permit.release_without_handler ();
+                reject (queue_unavailable (), queue_required ());
+                return result_t<void>::success ();
+            }
+        }
+
         std::shared_ptr<void> lease;
-        if (_packet_name && header.kind () == detail::stream_message_kind_t::request
-            && header.packet_name () == *_packet_name) {
+        if (authentication) {
             lease = try_enter ();
             if (!lease) {
                 _rejection_count.fetch_add (1, std::memory_order_relaxed);
@@ -119,6 +179,113 @@ class stream_host_ingress_t
             }
         }
 
+        if (connection && _queue->requires_permit ()) {
+            schedule ([queue = _queue, runtime, session = &session, stream, header, payload, epoch,
+                       connection = std::move (*connection), completion = std::move (completion),
+                       cancelled = std::move (cancelled), permit = std::move (permit),
+                       lease = std::move (lease)] (std::shared_ptr<void> listener) mutable {
+                const auto closed = runtime.session_closed (stream);
+                if (closed.stop_requested () || cancelled ())
+                    return;
+                auto pending = queue->admit (connection, epoch);
+                auto queued =
+                  std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
+                auto settle = [queue, runtime, session, stream, header, payload,
+                               listener = std::move (listener), completion = std::move (completion),
+                               cancelled = std::move (cancelled), queued = std::move (queued),
+                               closed, connection = std::move (connection),
+                               lease = std::move (lease)] (
+                                const result_t<std::shared_ptr<void>> &admission) mutable {
+                    if (closed.stop_requested () || cancelled ())
+                        return;
+                    if (!admission || !admission.value ()) {
+                        queued->release_without_handler ();
+                        lease.reset ();
+                        if (admission)
+                            completion (queue_unavailable (), queue_required ());
+                        else
+                            completion (queue_unavailable ());
+                        return;
+                    }
+                    auto handled = [listener, completion] (const result_t<void> &result) {
+                        (void) listener;
+                        completion (result);
+                    };
+                    auto submitted =
+                      dispatch (runtime, *session, stream, header, payload, std::move (*queued),
+                                std::move (handled), std::move (cancelled), std::move (lease),
+                                admission.value (), [queue, connection = std::move (connection)] {
+                                    queue->used (connection);
+                                });
+                    if (!submitted)
+                        completion (submitted);
+                };
+                detail::observe_task_completion (pending, std::move (settle));
+            });
+            return result_t<void>::success ();
+        }
+
+        detail::stream_runtime_t::async_dispatch_started_t used;
+        if (connection) {
+            used = [queue = _queue, connection = std::move (*connection)] {
+                queue->used (connection);
+            };
+        }
+        return dispatch (runtime, session, stream, header, payload, std::move (permit),
+                         std::move (completion), std::move (cancelled), std::move (lease), {},
+                         std::move (used));
+    }
+
+  private:
+    static constexpr auto max_option_value = std::numeric_limits<std::int32_t>::max ();
+
+    static result_t<void> queue_unavailable ()
+    {
+        return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                        "Authentication admission queue is unavailable");
+    }
+
+    static detail::stream_metadata_t queue_required ()
+    {
+        detail::stream_metadata_t metadata;
+        metadata.with (admission_queue::client_queue_required_key, "1");
+        return metadata;
+    }
+
+    static task_t<void> submit_enqueue (std::shared_ptr<admission_queue::queue_node_t> queue,
+                                        detail::stream_runtime_t runtime,
+                                        stream_t stream,
+                                        detail::stream_header_t header,
+                                        zlink::message_t payload,
+                                        admission_queue::connection_t connection)
+    {
+        using namespace admission_queue;
+        const auto bytes = payload.bytes ();
+        const auto decoded = json_t::parse (bytes.begin (), bytes.end (), nullptr, false);
+        if (header.codec () != stream_codec_t::json || !decoded.is_object () || !decoded.empty ())
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "Invalid admission enqueue payload");
+        const auto result = co_await queue->enqueue (std::move (connection));
+        if (runtime.session_closed (stream).stop_requested ())
+            co_return;
+        co_await runtime.write_admission_packet (std::move (stream), nullptr,
+                                                 client_payload (result), &header);
+        co_return;
+    }
+
+    static result_t<void>
+    dispatch (const detail::stream_runtime_t &runtime,
+              packet_stream_session_t &session,
+              stream_t &stream,
+              const detail::stream_header_t &header,
+              const zlink::message_t &payload,
+              application_job_queue_t::permit_t permit,
+              detail::stream_runtime_t::async_dispatch_completion_t completion,
+              detail::stream_runtime_t::async_dispatch_cancel_t cancelled,
+              std::shared_ptr<void> lease,
+              std::shared_ptr<void> global_permit,
+              detail::stream_runtime_t::async_dispatch_started_t used)
+    {
         detail::stream_runtime_t::async_dispatch_started_t started;
         if (header.kind () == detail::stream_message_kind_t::send
             || header.kind () == detail::stream_message_kind_t::request) {
@@ -132,13 +299,10 @@ class stream_host_ingress_t
             permit.release_without_handler ();
         }
         runtime.set_session_codec (stream, header.codec ());
-        return runtime.dispatch_packet_async (session, stream, header, payload,
-                                              std::move (completion), std::move (started),
-                                              std::move (cancelled), std::move (lease));
+        return runtime.dispatch_packet_async (
+          session, stream, header, payload, std::move (completion), std::move (started),
+          std::move (cancelled), std::move (lease), std::move (global_permit), std::move (used));
     }
-
-  private:
-    static constexpr auto max_option_value = std::numeric_limits<std::int32_t>::max ();
 
     std::shared_ptr<void> try_enter () const
     {
@@ -172,6 +336,7 @@ class stream_host_ingress_t
         observer->Observe (ingress->_rejection_count.load (std::memory_order_relaxed));
     }
 
+    std::shared_ptr<admission_queue::queue_node_t> _queue;
     std::optional<std::string> _packet_name;
     std::uint32_t _limit;
     std::chrono::milliseconds _retry_delay{500};

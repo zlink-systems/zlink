@@ -184,6 +184,13 @@ class connector_t
     subscription_t
     on_admission_waiting (std::function<void (const admission_waiting_context_t &)> handler);
 
+    /// Registers a callback for entry into the connection's admission queue.
+    subscription_t on_admission_queued (std::function<void ()> handler);
+
+    /// Registers a callback for each position and estimated wait received while queued.
+    subscription_t
+    on_admission_position (std::function<void (std::int32_t, std::chrono::milliseconds)> handler);
+
     /// Registers a disconnected callback (stream-connector §6.2, §7).
     ///
     /// The handler receives the close reason. The same value stays readable

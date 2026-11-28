@@ -88,6 +88,12 @@ export interface ZLinkActorPacketDelivery {
   readonly requestTerminal?: ZLinkActorRequestTerminal;
   readonly messageFollowOrigin?: ZLinkMessageFollowOrigin;
   readonly sourceSessionRid?: RoutingId;
+  /**
+   * Set only for a local Session SEND relay: the Entry FIFO calls it at admission, which
+   * completes the caller (Submit and completion §4). Its presence also marks the delivery
+   * as one whose accepted-handler failure is reported as a dispatch error only (§15).
+   */
+  readonly onLocalSendAdmitted?: () => void;
 }
 
 export type { ZLinkRouteToActorJoinPrewarm } from './spot-actor-ingress-admission';
@@ -303,7 +309,8 @@ export class ZLinkSpotActorPacketDispatch {
               parts[1].data().byteLength,
               zlinkMetadataByteLength(header.metadata)
             ),
-            receivedAt
+            receivedAt,
+            delivery.onLocalSendAdmitted
           )
         };
       }
@@ -381,7 +388,8 @@ export class ZLinkSpotActorPacketDispatch {
     requestDeadlineUnixMs: number | undefined,
     serial: ZLinkSpotSerialTurnExecutor | undefined,
     workOptions: ZLinkSerialWorkOptions,
-    receivedAt: Date
+    receivedAt: Date,
+    onLocalSendAdmitted?: () => void
   ): Promise<unknown> {
     const spot = typeof this.options.spot === 'function' ? this.options.spot() : this.options.spot;
     const dispatcher = new ZLinkSpotActorDispatcher({
@@ -540,6 +548,10 @@ export class ZLinkSpotActorPacketDispatch {
         correlationId: header.correlationId ?? header.requestSeq?.toString(),
         error
       });
+      // A local Session SEND has its own admission completion. This drop is
+      // already reported by dispatch, so the relay terminal need only release the frame.
+      if (messageKind === ZLinkDispatchMessageKind.ActorSend && onLocalSendAdmitted !== undefined)
+        return undefined;
       if (
         messageKind === ZLinkDispatchMessageKind.ActorRequest &&
         header.requestSeq !== undefined &&
