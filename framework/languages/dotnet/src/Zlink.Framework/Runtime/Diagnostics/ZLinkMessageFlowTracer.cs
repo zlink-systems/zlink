@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
@@ -145,7 +146,7 @@ internal sealed class ZLinkMessageFlowTracer
         if (!logSampled)
             return;
 
-        ZLinkMessageFlowDelivery.Shared.Submit(_submission.Current, _logger, flow, null);
+        SubmitFlow(flow, null);
     }
 
     public void TraceDispatchError(ZLinkDispatchFailure error)
@@ -193,7 +194,50 @@ internal sealed class ZLinkMessageFlowTracer
         {
             Details = ZLinkTraceFormat.DispatchErrorDetails(error.Exception),
         };
-        ZLinkMessageFlowDelivery.Shared.Submit(_submission.Current, _logger, null, snapshot);
+        SubmitFlow(null, snapshot);
+    }
+
+    private void SubmitFlow(ZLinkMessageFlowEvent? flow, ZLinkDispatchErrorSnapshot? error)
+    {
+        var delivery = ZLinkMessageFlowDelivery.Shared;
+        var source = ZLinkTelemetry.ActivitySource;
+        delivery.Submit(
+            new ZLinkMessageFlowRecord(
+                _submission.Current,
+                _logger,
+                source.HasListeners() ? source : null,
+                Activity.Current?.Context ?? default,
+                flow,
+                error
+            )
+        );
+    }
+
+    internal void PrepareDiagnostics()
+    {
+        if (_logger is not NullLogger)
+            _ = ZLinkMessageFlowDelivery.Shared;
+    }
+
+    internal void LogDiagnostic(
+        LogLevel level,
+        Exception? failure,
+        string message,
+        params object?[] arguments
+    )
+    {
+        if (_logger is NullLogger)
+            return;
+        ZLinkMessageFlowDelivery.Shared.Submit(
+            new ZLinkDiagnosticLogRecord(
+                _submission.Current,
+                _logger,
+                level,
+                failure,
+                message,
+                arguments
+            )
+        );
     }
 
     internal bool ShouldLog(ZLinkMessageFlowOutcome outcome) => ShouldLog(outcome, null);

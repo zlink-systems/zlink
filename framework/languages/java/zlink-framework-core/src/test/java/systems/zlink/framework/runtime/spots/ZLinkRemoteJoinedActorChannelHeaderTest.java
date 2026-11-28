@@ -55,13 +55,16 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -78,13 +81,14 @@ final class ZLinkRemoteJoinedActorChannelHeaderTest {
             throws Exception {
         var locations = new ZLinkInMemoryLocationStore();
         var wire = new CompletableFuture<List<byte[]>>();
+        var calls = new ConcurrentLinkedQueue<String>();
         var sourceMesh = new AtomicReference<ZLinkInternalMeshNode>();
         var sourceBackend =
                 ZLinkFrameworkRuntimeTestAccess.withMeshNodeDecorator(
                         new ZLinkJavaBackendAdapterFactory(),
                         mesh -> {
                             sourceMesh.set(mesh);
-                            return observe(mesh, wire);
+                            return observe(mesh, wire, calls);
                         });
         try (var target = ZLinkFrameworkRuntimeTestAccess.start(options(locations, null));
                 var source =
@@ -113,6 +117,7 @@ final class ZLinkRemoteJoinedActorChannelHeaderTest {
                 assertTrue(System.nanoTime() < deadline, "remote mesh peer did not become ready");
                 Thread.sleep(10);
             }
+            var peerReadyAt = Instant.now();
             // The low-level Actor route takes the Spot fence from the sender's transport cache.
             mesh.spotNode()
                     .entrySpot()
@@ -132,7 +137,28 @@ final class ZLinkRemoteJoinedActorChannelHeaderTest {
                                         SPOT_ID,
                                         streamHeader,
                                         payload);
-                List<byte[]> parts = await(wire);
+                var submission = new AtomicReference<>("pending");
+                result.whenComplete(
+                        (reply, failure) -> {
+                            if (failure == null) {
+                                submission.set("completed successfully");
+                            } else {
+                                submission.set("failed: " + failure);
+                                wire.completeExceptionally(failure);
+                            }
+                        });
+                List<byte[]> parts;
+                try {
+                    parts = await(wire);
+                } catch (TimeoutException failure) {
+                    throw new TimeoutException(
+                            "wire timed out; peerReadyAt="
+                                    + peerReadyAt
+                                    + "; submission="
+                                    + submission.get()
+                                    + "; proxy calls="
+                                    + calls);
+                }
                 assertEquals(2, parts.size());
                 ChannelHeader outer = ChannelHeader.parseFrom(parts.getFirst());
                 assertEquals(PACKET_NAME, outer.getMessageName());
@@ -212,14 +238,16 @@ final class ZLinkRemoteJoinedActorChannelHeaderTest {
     }
 
     private static ZLinkInternalMeshNode observe(
-            ZLinkInternalMeshNode mesh, CompletableFuture<List<byte[]>> wire) {
+            ZLinkInternalMeshNode mesh,
+            CompletableFuture<List<byte[]>> wire,
+            ConcurrentLinkedQueue<String> calls) {
         var node = mesh.spotNode();
         var observedNode =
                 proxy(
                         ZLinkInternalSpotNode.class,
                         (method, args) -> {
                             if (method.getName().equals("entrySpot")) {
-                                return observeEntry(node.entrySpot(), wire);
+                                return observeEntry(node.entrySpot(), wire, calls);
                             }
                             return invoke(method, node, args);
                         });
@@ -232,7 +260,9 @@ final class ZLinkRemoteJoinedActorChannelHeaderTest {
     }
 
     private static ZLinkBackendSpot observeEntry(
-            ZLinkBackendSpot entry, CompletableFuture<List<byte[]>> wire) {
+            ZLinkBackendSpot entry,
+            CompletableFuture<List<byte[]>> wire,
+            ConcurrentLinkedQueue<String> calls) {
         return proxy(
                 ZLinkBackendSpot.class,
                 (method, args) -> {
@@ -242,6 +272,9 @@ final class ZLinkRemoteJoinedActorChannelHeaderTest {
                                 case "requestToSpot" -> 5;
                                 default -> -1;
                             };
+                    if (partsIndex >= 0) {
+                        calls.add(method.getName() + " spotId=" + args[1]);
+                    }
                     if (partsIndex >= 0 && SPOT_ID.equals(args[1])) {
                         var parts = (List<?>) args[partsIndex];
                         wire.complete(

@@ -9,7 +9,9 @@ run_one=/root/perf-runs/run-one.sh
 core=/root/.cache/zlink/core/1.26.0/linux-x64
 runtime=$core/lib/libzlink.so.1.26.0
 runner_path=/root/toolchains/venv/bin:/root/toolchains/cargo/bin:/root/toolchains/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-table=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/table.py
+# run-one re-enters this same script (the measured commit's copy) for the locked runner.
+self=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
+table=$(dirname "$self")/table.py
 patterns=(DEALER_DEALER DEALER_ROUTER_SENDSEND ROUTER_ROUTER_SENDSEND
           DEALER_ROUTER_REQREP ROUTER_ROUTER_REQREP PUBSUB)
 c_names=(dealer_dealer dealer_router_sendsend router_router_sendsend
@@ -27,7 +29,7 @@ preflight() {
     read -r load _ < /proc/loadavg
     mem=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
     printf 'preflight load_1m=%s MemAvailable_KiB=%s\n' "$load" "$mem"
-    awk -v load="$load" -v mem="$mem" 'BEGIN {exit !(load != "" && load < 12 && mem >= 10485760)}'
+    awk -v l="$load" -v m="$mem" 'BEGIN {exit !(l != "" && l < 12 && m >= 10485760)}'
 }
 
 # run-one invokes this entry after obtaining its lock and verifying CPU frequency.
@@ -212,6 +214,9 @@ run_group() {
         Python) env_options=("${python_env[@]}") ;;
     esac
     options+=(--latency-duration 5 --monitor-hwm-bytes 4096000)
+    # C forwards --io-threads to run_comparison.py, which rejects it; C already
+    # defaults to 4 server and 4 client I/O threads (C baseline run.log).
+    if [[ $label != C ]]; then options+=(--io-threads 4); fi
 
     [[ ! -e "$out" && ! -L "$out" ]] || fail "Result directory already exists: $out"
     if (( execute )); then
@@ -222,9 +227,9 @@ run_group() {
         command_line mkdir "$out"
     fi
     measure=("${common_env[@]}" "${env_options[@]}" "$run_one" "$name" \
-        "$job/run-all.sh" --execute --locked-runner "$stage/${runners[lang]}" \
+        "$self" --execute --locked-runner "$stage/${runners[lang]}" \
         --reuse-build --pattern "$pattern" --transports tcp --msg-sizes "$run_sizes" \
-        --runs 1 --duration 5 --clients 100 --part-count 2 --io-threads 4 \
+        --runs 1 --duration 5 --clients 100 --part-count 2 \
         --connect-concurrency 128 --connect-ready-timeout-ms 10000 --server-ready-timeout-ms 10000 \
         --server-shutdown-timeout-ms 5000 --server-bind-port 0 --auto-hwm-profile balanced \
         --transport-transition-ms 3000 --pattern-transition-ms 3000 --sndtimeo 200 --rcvtimeo 200 \

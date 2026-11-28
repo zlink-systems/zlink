@@ -37,6 +37,8 @@ jobs:
       dotnet: ${{ steps.select.outputs.dotnet }}
       cpp: ${{ steps.select.outputs.cpp }}
       c: ${{ steps.select.outputs.c }}
+      java: ${{ steps.select.outputs.java }}
+      node: ${{ steps.select.outputs.node }}
       docs: ${{ steps.select.outputs.docs }}
     steps:
       - uses: actions/checkout@v5
@@ -63,27 +65,31 @@ jobs:
           changed="$RUNNER_TEMP/bindings-changed-files"
           git diff --no-renames --name-only -z "$range" -- > "$changed"
 
-          rust=false go=false python=false dotnet=false cpp=false c=false docs=false
+          rust=false go=false python=false dotnet=false cpp=false c=false java=false node=false docs=false
           while IFS= read -r -d '' path; do
             case "$path" in
               # Test binding compatibility with the released Core from fetch-release.sh.
               # Core CI tests changes to Core itself.
-              core/include/*) rust=true go=true python=true dotnet=true cpp=true c=true ;;
+              core/include/*)
+                rust=true go=true python=true dotnet=true cpp=true c=true java=true node=true
+                ;;
               bindings/rust/*) rust=true ;;
               bindings/go/*) go=true ;;
               bindings/python/*) python=true ;;
               bindings/dotnet/*) dotnet=true ;;
               bindings/cpp/*) cpp=true ;;
               bindings/c/*) c=true ;;
+              bindings/java/*) java=true ;;
+              bindings/node/*) node=true ;;
               bindings/doc/*) docs=true ;;
               # A change to this workflow runs every check, enabled or in trial.
               .github/workflows/bindings-pr-check.yml)
-                rust=true go=true python=true dotnet=true cpp=true c=true docs=true
+                rust=true go=true python=true dotnet=true cpp=true c=true java=true node=true docs=true
                 ;;
             esac
           done < "$changed"
-          printf 'rust=%s\ngo=%s\npython=%s\ndotnet=%s\ncpp=%s\nc=%s\ndocs=%s\n' \
-            "$rust" "$go" "$python" "$dotnet" "$cpp" "$c" "$docs" >> "$GITHUB_OUTPUT"
+          printf 'rust=%s\ngo=%s\npython=%s\ndotnet=%s\ncpp=%s\nc=%s\njava=%s\nnode=%s\ndocs=%s\n' \
+            "$rust" "$go" "$python" "$dotnet" "$cpp" "$c" "$java" "$node" "$docs" >> "$GITHUB_OUTPUT"
 
   check:
     # A Mergify batch also gets a draft PR whose pull_request run skips these
@@ -117,6 +123,10 @@ jobs:
           - scope: c
             name: C
             cmake: true
+          - scope: java
+            name: Java
+          - scope: node
+            name: Node
           - scope: docs
             name: document links
     env:
@@ -130,6 +140,9 @@ jobs:
       - uses: actions/checkout@v5
         if: needs.changes.outputs[matrix.scope] == 'true'
         with:
+          # The Java private-access check compares against origin/main. Quote 0:
+          # a bare 0 is falsy in expressions, so `&& 0 || 1` always gave 1.
+          fetch-depth: ${{ matrix.scope == 'java' && '0' || '1' }}
           persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
@@ -143,10 +156,21 @@ jobs:
 
       - uses: actions/setup-python@v6
         if: >-
-          (matrix.scope == 'python' || matrix.scope == 'docs') &&
+          (matrix.scope == 'python' || matrix.scope == 'java' || matrix.scope == 'docs') &&
           needs.changes.outputs[matrix.scope] == 'true'
         with:
           python-version: '3.12'
+
+      - uses: actions/setup-java@v5
+        if: matrix.scope == 'java' && needs.changes.outputs.java == 'true'
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: actions/setup-node@v5
+        if: matrix.scope == 'node' && needs.changes.outputs.node == 'true'
+        with:
+          node-version: '22'
 
       - uses: actions/setup-dotnet@v5
         if: matrix.scope == 'dotnet' && needs.changes.outputs.dotnet == 'true'
@@ -235,6 +259,21 @@ jobs:
         env:
           ZLINK_BUILD_JOBS: '4'
         run: nice -n 10 bash bindings/c/tests/run_tests.sh
+
+      - name: Check Java test private access
+        if: matrix.scope == 'java' && needs.changes.outputs.java == 'true'
+        run: python scripts/ci/check-java-test-private-access.py --base-ref origin/main
+
+      - name: Test Java binding, perf runner options, and samples
+        if: matrix.scope == 'java' && needs.changes.outputs.java == 'true'
+        run: nice -n 10 bash bindings/java/tests/run_tests.sh
+
+      - name: Build and test Node binding, perf runner options, and samples
+        if: matrix.scope == 'node' && needs.changes.outputs.node == 'true'
+        working-directory: bindings/node
+        run: |
+          npm ci
+          nice -n 10 npm test
 
       - name: Check document links and anchors
         if: matrix.scope == 'docs' && needs.changes.outputs.docs == 'true'

@@ -366,11 +366,11 @@ test(
             mesh_name: mesh,
             object_kind: 'actor',
             policy: 'recreate',
-            outcome: 'failed'
+            outcome: 'shutdown'
           }
         }
       ],
-      'source Actor relocation must record exactly one failed terminal'
+      'source Actor relocation must record exactly one shutdown terminal'
     );
     assert.deepEqual(postDeadlineStoreCalls, []);
     const backlog = handoff.snapshot(actorId);
@@ -388,6 +388,6 @@ test(
     t.diagnostic(
       'source callbacks=1 (Failed/Unavailable), post-deadline Store calls=0, backlog=1, Spot drain pending=0'
     );
-    t.diagnostic('source relocation terminals=1 (failed)');
+    t.diagnostic('source relocation terminals=1 (shutdown)');
   }
 );

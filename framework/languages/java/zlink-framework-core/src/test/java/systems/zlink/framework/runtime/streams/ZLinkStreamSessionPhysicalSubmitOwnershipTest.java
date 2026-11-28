@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.streams;
 
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -283,7 +284,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
     }
 
     private static void assertReleased(Message message) {
-        assertThrows(IllegalStateException.class, message::refCount);
+        assertConsumed(message);
     }
 
     private static ZLinkStreamSessionContextState context(ZLinkBackendStreamSocket stream) {
