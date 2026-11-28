@@ -183,7 +183,6 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
 {
     zlink_completion_id_t completion_id = 0;
     bool admitted = false;
-    int submit_errno = 0;
     std::exception_ptr failure;
     {
         std::lock_guard<std::mutex> lock (_mutex);
@@ -195,7 +194,6 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
     }
     try {
         admitted = submit_raw_send_state (*_send_operation, _context, &completion_id, false);
-        submit_errno = zlink_errno ();
     }
     catch (...) {
         failure = std::current_exception ();
@@ -205,7 +203,7 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
         _send_submitting = false;
         if (_settled) {
             _send_operation->message.reset ();
-            if (!failure && !admitted && completion_id != 0) {
+            if (!failure && !admitted) {
                 // Core still owns this wait token. Keep its context reserved
                 // until the token is received and ignored.
                 _completion_id = completion_id;
@@ -217,14 +215,6 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
         }
     }
 
-    if (!failure && admitted != (completion_id == 0)) {
-        failure =
-          std::make_exception_ptr (submit_error_t (submit_result_t::internal_error, EPROTO));
-    } else if (!failure && !admitted && submit_errno != EAGAIN) {
-        failure =
-          std::make_exception_ptr (submit_error_t (submit_result_t::internal_error, EPROTO));
-    }
-
     if (failure) {
         fail_send (failure);
         return true;
@@ -232,11 +222,8 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
 
     if (!admitted) {
         std::lock_guard<std::mutex> lock (_mutex);
-        if (_settled) {
-            if (completion_id == 0)
-                return true;
+        if (_settled)
             _send_operation->message.reset ();
-        }
         _completion_id = completion_id;
         _published = true;
         _changed.notify_all ();
