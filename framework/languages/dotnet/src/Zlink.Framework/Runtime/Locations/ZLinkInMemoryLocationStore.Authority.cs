@@ -166,7 +166,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     {
                         StoreVersion = Next(ref _authorityRevision).ToString(),
                         Payload = restore.Payload.ToArray(),
-                        Relocation = restore.ClearRelocation ? null : current.Relocation,
+                        Relocation = restore.ApplyRelocation(current),
                         StoreNow = now,
                     };
                     _authorities[key.Value] = restored;

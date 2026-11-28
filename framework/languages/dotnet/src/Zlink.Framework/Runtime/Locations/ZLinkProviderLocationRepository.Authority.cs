@@ -286,9 +286,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 meta = current.Meta with
                 {
                     Payload = restore.Payload.ToArray(),
-                    Aggregate = restore.ClearRelocation
-                        ? ZLinkAuthorityAggregateCodec.Replace(current.Meta.Aggregate, null)
-                        : current.Meta.Aggregate,
+                    Aggregate = ApplyAuthorityRelocation(current, restore),
                 };
             }
             else if (mutation is ZLinkAuthorityMutation.Delete)
@@ -467,13 +465,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 meta = current.Meta with
                 {
                     Payload = put.Payload.ToArray(),
-                    Aggregate =
-                        put.Relocation is not null || put.ClearRelocation
-                            ? ZLinkAuthorityAggregateCodec.Replace(
-                                current.Meta.Aggregate,
-                                put.ApplyRelocation(current.Snapshot)
-                            )
-                            : current.Meta.Aggregate,
+                    Aggregate = ApplyAuthorityRelocation(current, put),
                     ObjectGeneration = nextObjectGeneration,
                     AuthorityOwnerGeneration = nextAuthorityOwnerGeneration,
                     OwnerId = targetOwner.OwnerId,
@@ -4931,6 +4923,17 @@ internal sealed partial class ZLinkProviderLocationRepository
                 ? new ZLinkAuthorityReadResult.Missing(DateTimeOffset.UtcNow)
                 : new ZLinkAuthorityReadResult.Found(current.Snapshot)
         );
+
+    private static JsonElement? ApplyAuthorityRelocation(
+        StoredAuthority current,
+        ZLinkAuthorityMutation mutation
+    ) =>
+        mutation.Relocation is not null || mutation.ClearRelocation
+            ? ZLinkAuthorityAggregateCodec.Replace(
+                current.Meta.Aggregate,
+                mutation.ApplyRelocation(current.Snapshot)
+            )
+            : current.Meta.Aggregate;
 
     private static ZLinkAuthorityCompareExchangeResult.Conflict AggregatePreserveConflict(
         StoredAuthority? current

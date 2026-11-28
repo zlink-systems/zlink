@@ -935,10 +935,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                 .BeginPreparingAsync(
                     currentAuthority.Snapshot,
                     sourceAuthority,
-                    ZLinkStandaloneActorRelocationRuntime.PlanTargetAuthority(
-                        sourceAuthority,
-                        destination
-                    ),
                     relocationId,
                     registration.ApplicationVersion,
                     cancellationToken

@@ -801,11 +801,12 @@ internal static class ZLinkRelocationEnvelopeCodec
             throw new InvalidDataException(
                 $"The relocation inventory digest must contain {System.Security.Cryptography.SHA256.HashSizeInBytes} bytes."
             );
+        var fence = ZLinkAggregateInventory.RelocationFence(
+            RelocationGuid(generated.Relocation.High.Value, generated.Relocation.Low.Value)
+        );
         var result = new ZLinkRelocationEnvelope(
-            RelocationGuid(generated.Relocation.High.Value, generated.Relocation.Low.Value),
-            generated.ApplicationVersion.Value == 0
-                ? 1UL
-                : checked((ulong)generated.ApplicationVersion.Value),
+            fence.AggregateId,
+            fence.AggregateGeneration,
             digest,
             participants
         )
