@@ -39,6 +39,10 @@ class ZlinkRoutingId(ctypes.Structure):
     _fields_ = [("size", ctypes.c_uint8), ("data", ctypes.c_uint8 * 255)]
 
 
+class ZlinkRouterRoute(ctypes.Structure):
+    _fields_ = [("rid", ZlinkRoutingId), ("route_generation", ctypes.c_uint64)]
+
+
 # Completion constants and layout mirror ``core/include/zlink/socket/api.h``.
 ZLINK_SEND_ADMITTED = 0
 ZLINK_SEND_NOT_FOUND = 801
@@ -326,6 +330,12 @@ class _Lib:
             ("zlink_request", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_size_t, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, p_completion_id], ctypes.c_int),
             ("zlink_reply", [ctypes.c_void_p, p_rid, ctypes.c_uint64, p_msg, ctypes.c_size_t], ctypes.c_int),
             ("zlink_router_recv", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_uint64), p_msg, ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
+            ("zlink_router_recv_route_generation", [ctypes.c_void_p], ctypes.c_uint64),
+            (
+                "zlink_router_routes_snapshot",
+                [ctypes.c_void_p, ctypes.POINTER(ZlinkRouterRoute), ctypes.c_size_t, p_size],
+                ctypes.c_int,
+            ),
             ("zlink_recv", [ctypes.c_void_p, p_rid_ptr, p_msg, ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
             ("zlink_stream_recv_packet", [ctypes.c_void_p, p_rid_ptr, p_msg, p_msg, ctypes.c_int], ctypes.c_int),
             ("zlink_completion_recv", [ctypes.c_void_p, ctypes.POINTER(ZlinkCompletion), ctypes.c_int], ctypes.c_int),

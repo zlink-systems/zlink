@@ -232,6 +232,11 @@ def parse_args(argv):
         "--duration",
         default=os.environ.get("PERF_MULTI_DURATION_SECONDS", "5"),
     )
+    parser.add_argument(
+        "--latency-duration",
+        metavar="N",
+        help="latency seconds (positive integer; default: --duration)",
+    )
     parser.add_argument("--msg-sizes", default="")
     parser.add_argument("--transports", default="")
     parser.add_argument("--runs", default="1")
@@ -261,7 +266,7 @@ def parse_args(argv):
     parser.add_argument("--pattern-transition-ms", default="")
     parser.add_argument("--server-ready-timeout-ms", default="")
     parser.add_argument("--connect-ready-timeout-ms", default="")
-    parser.add_argument("--monitor-hwm", default="")
+    parser.add_argument("--monitor-hwm-bytes", dest="monitor_hwm", default="")
     parser.add_argument("--server-shutdown-timeout-ms", default="")
     parser.add_argument("--server-bind-port", default="")
     parser.add_argument(
@@ -272,7 +277,15 @@ def parse_args(argv):
             "(default: balanced)"
         ),
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.latency_duration is None:
+        args.latency_duration = (
+            os.environ.get("PERF_MULTI_LATENCY_DURATION_SECONDS") or args.duration
+        )
+    latency = args.latency_duration
+    if not latency.isascii() or not latency.isdecimal() or not latency.lstrip("0"):
+        parser.error("--latency-duration must be a positive integer")
+    return args
 
 
 def _parse_csv(value):
@@ -952,6 +965,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
         if timeout_override > 0
         else resolve_multi_timeout_seconds(
             args.duration,
+            args.latency_duration,
             pattern,
             transport,
             msg_size,
@@ -1292,6 +1306,7 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
             patterns, transports, requested_msg_sizes
         ),
         "duration_seconds": args.duration,
+        "latency_duration_seconds": args.latency_duration,
         "clients": clients,
         "default_clients": os.environ.get("PERF_MULTI_DEFAULT_CLIENTS")
         or os.environ.get("PERF_DEFAULT_CLIENTS", "100"),
@@ -1316,7 +1331,7 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
         or env.get("PERF_MULTI_CONNECT_READY_TIMEOUT_MS")
         or env.get("PERF_CONNECT_READY_TIMEOUT_MS")
         or "10000",
-        "monitor_hwm_bytes": env["PERF_MULTI_MONITOR_HWM"],
+        "monitor_hwm_bytes": env["PERF_MULTI_MONITOR_HWM_BYTES"],
         "server_ready_timeout_ms": args.server_ready_timeout_ms
         or env.get("PERF_MULTI_SERVER_READY_TIMEOUT_MS")
         or env.get("PERF_SERVER_READY_TIMEOUT_MS")
@@ -1392,6 +1407,7 @@ def main(argv=None):
     env = dict(os.environ)
     env["PYTHONPATH"] = str(DEFAULT_PYTHONPATH.resolve())
     env["PERF_MULTI_DURATION_SECONDS"] = str(args.duration)
+    env["PERF_MULTI_LATENCY_DURATION_SECONDS"] = args.latency_duration
     if args.io_threads:
         env["PERF_MULTI_SERVER_IO_THREADS"] = args.io_threads
         env["PERF_MULTI_CLIENT_IO_THREADS"] = args.io_threads
@@ -1432,12 +1448,12 @@ def main(argv=None):
         try:
             monitor_hwm = int(args.monitor_hwm)
         except ValueError as exc:
-            raise SystemExit("--monitor-hwm must be a nonnegative integer") from exc
+            raise SystemExit("--monitor-hwm-bytes must be a nonnegative integer") from exc
         if monitor_hwm < 0:
-            raise SystemExit("--monitor-hwm must be a nonnegative integer")
+            raise SystemExit("--monitor-hwm-bytes must be a nonnegative integer")
     else:
         monitor_hwm = resolve_multi_monitor_hwm_bytes()
-    env["PERF_MULTI_MONITOR_HWM"] = str(monitor_hwm)
+    env["PERF_MULTI_MONITOR_HWM_BYTES"] = str(monitor_hwm)
     if args.server_shutdown_timeout_ms:
         env["PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS"] = args.server_shutdown_timeout_ms
     if args.server_bind_port:
