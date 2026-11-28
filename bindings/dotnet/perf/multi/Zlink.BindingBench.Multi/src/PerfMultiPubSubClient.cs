@@ -6,6 +6,8 @@ using static PerfRunner;
 
 internal static class PerfMultiPubSubClient
 {
+    private const ulong DrainQuietNs = 50_000_000;
+
     internal static int Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
@@ -50,7 +52,6 @@ internal static class PerfMultiPubSubClient
             DisposeAllQuietly(monitors);
             monitors.Clear();
 
-            for (int i = 0; i < clients.Count; i++)
             RecalculateAutoHwm(ctx);
             if (clients.Count > 0)
                 PrintAutoHwmSnapshot(clients[0], "endpoint",
@@ -141,7 +142,7 @@ internal static class PerfMultiPubSubClient
             for (int phaseIndex = 0; phaseIndex < 2; phaseIndex++)
             {
                 bool paced = phaseIndex == 1;
-                var stopped = new bool[activeClients.Count];
+                var stopped = new HashSet<int>(activeClients.Count);
                 long startTicks = Stopwatch.GetTimestamp();
                 long deadlineTicks = startTicks
                     + (long)(paced ? 2 * latencyDurationSeconds
@@ -150,20 +151,37 @@ internal static class PerfMultiPubSubClient
                     + 10 * Stopwatch.Frequency;
                 long lastPayloadTicks = startTicks;
                 string donePhase = paced ? "PHASE_DONE,3" : "PHASE_DONE,1";
-                bool done = false;
+                bool drained = false;
                 while (!controlState.StopRequested
                        && Stopwatch.GetTimestamp() < drainDeadlineTicks)
                 {
-                    bool receivedAny = false;
-                    for (int i = 0; i < activeClients.Count; i++)
+                    long nowTicks = Stopwatch.GetTimestamp();
+                    if (controlState.TryGetPhase(donePhase, out ulong doneNs)
+                        && (stopped.Count == activeClients.Count
+                            || (nowTicks >= deadlineTicks
+                                && EpochNsFromTimestamp(nowTicks)
+                                    >= Math.Max(doneNs, EpochNsFromTimestamp(lastPayloadTicks))
+                                        + DrainQuietNs)))
                     {
+                        drained = true;
+                        break;
+                    }
+                    int ready = PollSocketEvents(pollManager, activeClients,
+                        receiveMasks, 10);
+                    for (int offset = 0; offset < ready; offset++)
+                    {
+                        int i = ReadySocketIndexAt(pollManager, offset);
                         TopicMessage subscribed = messages[i];
                         for (int turn = 0; turn < MaxBurstPerSender && TrySubscribe(
                                  (ISubSocket)activeClients[i], subscribed,
                                  RecvFlags.DontWait); turn++)
                         {
-                            receivedAny = true;
                             lastPayloadTicks = Stopwatch.GetTimestamp();
+                            if (lastPayloadTicks >= drainDeadlineTicks)
+                                break;
+                            if (!paced && lastPayloadTicks >= deadlineTicks
+                                && subscribed.FirstPart().Size != PerfMetricHeaderSize)
+                                continue;
                             if (!PerfSocketIo.TryMeasurementPayload(
                                     subscribed.Parts, out Message payloadPart))
                                 continue;
@@ -178,13 +196,12 @@ internal static class PerfMultiPubSubClient
                                 && header.Phase == (uint)(paced
                                     ? PerfPhase.Latency : PerfPhase.Active))
                             {
-                                stopped[i] = true;
+                                stopped.Add(i);
                                 continue;
                             }
                             if (body.Length != Math.Max(msgSize,
                                     PerfMetricHeaderSize))
                                 continue;
-                            ulong nowNs = EpochNs();
                             if (!paced && header.Phase == (uint)PerfPhase.Active
                                 && lastPayloadTicks < deadlineTicks)
                             {
@@ -197,6 +214,7 @@ internal static class PerfMultiPubSubClient
                             pacedReceived[i]++;
                             if (pacedEpochNs == 0 && header.SentTsNs > 0)
                                 pacedEpochNs = header.SentTsNs;
+                            ulong nowNs = EpochNsFromTimestamp(lastPayloadTicks);
                             AddLatencySample(referenceSamples,
                                 ref referenceSeen, ref referenceSum,
                                 latencySampleCap, ref referenceRng, header, nowNs);
@@ -230,21 +248,11 @@ internal static class PerfMultiPubSubClient
                             WriteStdoutLine(FormattableString.Invariant($"PUBSUB_CATCHUP_DIAG,{msgSize},{elapsed:G12},{catchUp.InFlight},window_start_in_flight,{catchUp.WindowStartInFlight}"));
                         }
                     }
-                    done = controlState.TryGetPhase(donePhase, out _);
-                    bool allStopped = true;
-                    for (int i = 0; i < stopped.Length; i++)
-                        allStopped &= stopped[i];
-                    long nowTicks = Stopwatch.GetTimestamp();
-                    if (done && (allStopped || (nowTicks >= deadlineTicks
-                        && nowTicks - lastPayloadTicks
-                            >= Stopwatch.Frequency / 20)))
-                        break;
-                    if (!receivedAny)
-                        _ = PollSocketEvents(pollManager, activeClients,
-                            receiveMasks, 10);
                 }
-                if (!done)
+                if (!drained)
                 {
+                    if (!controlState.StopRequested)
+                        Console.Error.WriteLine($"multi_client_error:pubsub_drain_timeout:{donePhase},stopped,{stopped.Count}/{activeClients.Count}");
                     phaseSucceeded = false;
                     break;
                 }

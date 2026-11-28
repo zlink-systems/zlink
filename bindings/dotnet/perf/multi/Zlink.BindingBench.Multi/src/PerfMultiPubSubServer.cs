@@ -1,6 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Threading;
 using Systems.Zlink;
 using static PerfRunner;
 
@@ -28,8 +27,6 @@ internal static class PerfMultiPubSubServer
 
         server.Bind(endpoint);
         endpoint = server.Options.LastEndpoint;
-        RecalculateAutoHwm(ctx);
-        PrintAutoHwmSnapshot(server, "server", options.Transport, size);
         WriteStdoutLine($"READY,{endpoint}");
 
         if (!controlState.WaitForStart(readyTimeoutMs))
@@ -38,6 +35,8 @@ internal static class PerfMultiPubSubServer
                 Console.Error.WriteLine("multi_server_error:no_start");
             return controlState.StopRequested ? 0 : 2;
         }
+        ctx.RecalculateAutoHwm();
+        PrintAutoHwmSnapshot(server, "server", options.Transport, size);
 
         const uint runId = 1;
         ulong seq = 1;
@@ -56,7 +55,11 @@ internal static class PerfMultiPubSubServer
         WriteStdoutLine($"PHASE_DONE,{size},1");
         if (!controlState.WaitForPhase("PHASE_PACED", readyTimeoutMs,
                 out long activeReceived) || activeReceived <= 0)
+        {
+            if (!controlState.StopRequested)
+                Console.Error.WriteLine($"multi_server_error:pubsub_no_paced_gate:active_sends,{activeSends}");
             return 2;
+        }
 
         var schedule = new MultiPacedSchedule(
             MultiTargetRate(activeReceived, durationSeconds));
@@ -90,7 +93,7 @@ internal static class PerfMultiPubSubServer
                 caughtUpNs != 0 && nowNs >= caughtUpNs
                     ? PerfPhase.Latency : PerfPhase.Warmup,
                 size, seq++, nowNs);
-            if (!Publish(server, message))
+            if (!TryPublish(server, message))
                 return 2;
             schedule.Accepted(EpochNs(), schedule.Submitted());
         }
@@ -113,28 +116,23 @@ internal static class PerfMultiPubSubServer
         return 0;
     }
 
-    private static bool Publish(IPubSocket server, Message message)
+    private static bool TryPublish(IPubSocket server, Message message)
     {
-        Message? tail = PerfSocketIo.MeasurementPartCount == 2
+        using Message? tail = PerfSocketIo.MeasurementPartCount == 2
             ? Message.Allocate(0) : null;
-        try
-        {
-            var submit = server.TryPublish(Topic).Message(message);
-            if (tail != null)
-                submit = submit.Message(tail);
-            return submit.Flags(SendFlags.None).Submit();
-        }
-        finally
-        {
-            tail?.Dispose();
-        }
+        var submit = server.TryPublish(Topic).Message(message);
+        if (tail != null)
+            submit = submit.Message(tail);
+        return submit.Submit();
     }
 
     private static bool PublishStopToken(IPubSocket server, int size,
         uint runId, PerfPhase phase,
         RunnerControlState controlState)
     {
-        while (!controlState.StopRequested)
+        // Match the C stop-token submit limits.
+        server.Options.SendTimeout = TimeSpan.FromSeconds(2);
+        for (int attempt = 0; attempt < 5 && !controlState.StopRequested; attempt++)
         {
             try
             {
@@ -142,21 +140,21 @@ internal static class PerfMultiPubSubServer
                     PerfMetricHeaderSize);
                 StampMetricHeader(message.AsSpan(), runId, phase,
                     size, 0, 0);
-                if (Publish(server, message))
-                    return true;
+                using Message? tail = PerfSocketIo.MeasurementPartCount == 2
+                    ? Message.Allocate(0) : null;
+                var submit = server.Publish(Topic).Message(message);
+                if (tail != null)
+                    submit = submit.Message(tail);
+                submit.Flags(SendFlags.None).Submit();
+                return true;
             }
-            catch (ZlinkException ex) when (IsTransientStopPublishErrno(
-                                                ex.NativeErrno))
+            catch (ZlinkException ex) when (
+                PerfShared.IsTransientBackpressure(ex.NativeErrno))
             {
             }
         }
 
-        return true;
-    }
-
-    private static bool IsTransientStopPublishErrno(int errno)
-    {
-        return IsWouldBlock(errno) || IsInterrupted(errno) || errno == 110;
+        return false;
     }
 
     private static bool RunPublishPhase(IPubSocket server, int payloadSize,
@@ -172,7 +170,7 @@ internal static class PerfMultiPubSubServer
             using Message message = Message.Allocate(payloadSize);
             StampMetricHeader(message.AsSpan(), runId, phase, size, seq++,
                 EpochNs());
-            if (!Publish(server, message))
+            if (!TryPublish(server, message))
                 return false;
             if (Stopwatch.GetTimestamp() < deadlineTicks)
                 sendCount++;
