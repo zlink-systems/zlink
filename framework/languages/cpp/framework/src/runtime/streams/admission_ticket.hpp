@@ -32,6 +32,7 @@ std::optional<bytes_t> decode_base64url (std::string_view encoded);
 bool valid_stream_name (std::string_view name) noexcept;
 std::uint64_t random_nonzero_u64 ();
 
+inline constexpr std::size_t max_rid_bytes = 255;
 inline constexpr std::uint64_t ticket_lifetime_ms = 30'000;
 
 class ticket_signer_t

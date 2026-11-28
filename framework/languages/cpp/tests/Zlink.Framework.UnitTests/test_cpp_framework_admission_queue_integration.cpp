@@ -9,10 +9,10 @@
 #include <zlink/framework.hpp>
 
 #include <cstdlib>
-#include <array>
 #include <atomic>
 #include <future>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <syncstream>
 #include <thread>
@@ -33,6 +33,7 @@ using namespace std::chrono_literals;
 constexpr char mesh_name[] = "queue-test-mesh";
 constexpr char stream_name[] = "queue-test-stream";
 constexpr char authentication[] = "login";
+constexpr char probe[] = "probe";
 constexpr auto host_startup_timeout = 10s;
 
 class session_t final : public fw::packet_stream_session_t
@@ -41,6 +42,8 @@ class session_t final : public fw::packet_stream_session_t
     static inline std::atomic_int entries{0};
     static inline std::atomic_int active{0};
     static inline std::atomic_int peak{0};
+    static inline std::promise<void> first_entered;
+    static inline fw::task_completion_source_t<void> release_first;
 
     fw::task_t<void> on_connected (fw::stream_t &) override { co_return; }
     fw::task_t<void> on_disconnected (fw::stream_t &) override { co_return; }
@@ -50,14 +53,24 @@ class session_t final : public fw::packet_stream_session_t
                                 const fw::session_message_context_t &context,
                                 const fw::message_t &) override
     {
-        require (context.packet_name == authentication, "queue packet reached application");
-        ++entries;
-        const auto count = ++active;
-        const auto finish = std::shared_ptr<void> (nullptr, [] (void *) { --active; });
-        auto maximum = peak.load ();
-        while (maximum < count && !peak.compare_exchange_weak (maximum, count)) {
+        require (context.packet_name == authentication || context.packet_name == probe,
+                 "queue packet reached application");
+        const bool authenticating = context.packet_name == authentication;
+        const auto finish = std::shared_ptr<void> (nullptr, [authenticating] (void *) {
+            if (authenticating)
+                --active;
+        });
+        if (authenticating) {
+            const auto entry = ++entries;
+            const auto count = ++active;
+            auto maximum = peak.load ();
+            while (maximum < count && !peak.compare_exchange_weak (maximum, count)) {
+            }
+            if (entry == 1) {
+                first_entered.set_value ();
+                co_await release_first.task ();
+            }
         }
-        std::this_thread::sleep_for (100ms);
         json_t payload = {{"admitted", true}};
         const auto response = fw::message_t::from (std::move (payload));
         auto reply = stream.reply_packet (response);
@@ -169,61 +182,109 @@ void await_serving (host_t &host, const char *message)
     }
 }
 
-void enter (const std::string &endpoint, const fw::detail::stream_runtime_t &runtime)
+class login_peer_t
 {
-    // Position pushes can be five seconds apart. CTest bounds the scenario.
-    wire_peer_t peer (endpoint, wire_read_deadline_t::enclosing_test);
-    const auto send = [&] (std::uint64_t seq, const char *name, std::string ticket = {}) {
+  public:
+    login_peer_t (const std::string &endpoint, const fw::detail::stream_runtime_t &runtime) :
+        _peer (endpoint, wire_read_deadline_t::enclosing_test), _runtime (runtime)
+    {
+    }
+
+    void enqueue ()
+    {
+        send (1, authentication);
+        const auto rejected = _peer.read (_runtime);
+        require (rejected.header.kind () == stream_message_kind_t::error
+                   && rejected.header.metadata (queue::client_queue_required_key) == "1",
+                 "authentication without ticket did not return queueRequired");
+
+        send (2, queue::client_enqueue_packet);
+        for (;;) {
+            const auto frame = _peer.read (_runtime);
+            require (frame.header.kind () != stream_message_kind_t::error,
+                     ("enqueue returned an error: " + frame.payload).c_str ());
+            if (frame.header.packet_name () == queue::client_ticket_packet) {
+                read_ticket (frame.payload);
+            } else if (frame.header.kind () == stream_message_kind_t::response
+                       && frame.header.request_seq () == 2) {
+                if (json_t::parse (frame.payload).contains ("ticket"))
+                    read_ticket (frame.payload);
+                return;
+            }
+        }
+    }
+
+    void authenticate (std::optional<int> expected_position = std::nullopt)
+    {
+        bool saw_position = !expected_position;
+        while (_ticket.empty ()) {
+            const auto frame = _peer.read (_runtime);
+            require (frame.header.kind () != stream_message_kind_t::error,
+                     ("waiting for ticket returned an error: " + frame.payload).c_str ());
+            if (frame.header.packet_name () == queue::client_ticket_packet) {
+                require (frame.header.kind () == stream_message_kind_t::send,
+                         "report delivery did not arrive as Send");
+                read_ticket (frame.payload);
+            } else if (expected_position
+                       && frame.header.packet_name () == queue::client_position_packet) {
+                require (frame.header.kind () == stream_message_kind_t::send,
+                         "position report did not arrive as Send");
+                saw_position |= json_t::parse (frame.payload).at ("position") == *expected_position;
+            }
+        }
+        require (saw_position, "queued session did not receive its new position before its ticket");
+        send (3, authentication, std::move (_ticket));
+    }
+
+    void expect_admitted () { expect_response (3); }
+
+    void expect_no_extra_delivery ()
+    {
+        send (4, probe);
+        expect_response (4);
+    }
+
+    bool has_ticket () const { return !_ticket.empty (); }
+
+  private:
+    void expect_response (std::uint64_t seq)
+    {
+        for (;;) {
+            const auto frame = _peer.read (_runtime);
+            require (frame.header.packet_name () != queue::client_ticket_packet
+                       && frame.header.packet_name () != queue::client_position_packet,
+                     "admitted session received an additional queue delivery");
+            if (frame.header.request_seq () != seq)
+                continue;
+            require (frame.header.kind () == stream_message_kind_t::response
+                       && json_t::parse (frame.payload).at ("admitted") == true,
+                     ("session request failed: " + frame.payload).c_str ());
+            return;
+        }
+    }
+
+    void send (std::uint64_t seq, const char *name, std::string ticket = {})
+    {
         fw::detail::stream_metadata_t metadata;
         if (!ticket.empty ())
             metadata.with (queue::client_ticket_key, std::move (ticket));
         const stream_header_t request (stream_message_kind_t::request, fw::stream_codec_t::json,
                                        stream_header_flags_t::has_request_seq, seq, name,
                                        std::move (metadata));
-        peer.send (runtime, request, "{}");
-    };
-
-    send (1, authentication);
-    const auto rejected = peer.read (runtime);
-    require (rejected.header.kind () == stream_message_kind_t::error
-               && rejected.header.metadata (queue::client_queue_required_key) == "1",
-             "authentication without ticket did not return queueRequired");
-
-    send (2, queue::client_enqueue_packet);
-    std::string ticket;
-    bool enqueue_done = false;
-    while (!enqueue_done || ticket.empty ()) {
-        const auto frame = peer.read (runtime);
-        if (frame.header.kind () == stream_message_kind_t::error)
-            throw std::runtime_error ("enqueue returned an error: " + frame.payload);
-        enqueue_done = enqueue_done
-                       || (frame.header.kind () == stream_message_kind_t::response
-                           && frame.header.request_seq () == 2);
-        if (frame.header.packet_name () == queue::client_ticket_packet
-            || frame.header.kind () == stream_message_kind_t::response) {
-            const auto payload = json_t::parse (frame.payload);
-            if (payload.contains ("ticket"))
-                ticket = payload.at ("ticket").get<std::string> ();
-        }
+        _peer.send (_runtime, request, "{}");
     }
 
-    send (3, authentication, std::move (ticket));
-    for (;;) {
-        const auto frame = peer.read (runtime);
-        if (frame.header.request_seq () != 3)
-            continue;
-        if (frame.header.kind () == stream_message_kind_t::error) {
-            const auto queue_required = frame.header.metadata (queue::client_queue_required_key);
-            throw std::runtime_error (
-              "ticketed authentication returned an error on " + endpoint + " queueRequired="
-              + std::string (queue_required.value_or ("<absent>")) + ": " + frame.payload);
-        }
-        require (frame.header.kind () == stream_message_kind_t::response
-                   && json_t::parse (frame.payload).at ("admitted") == true,
-                 "ticketed authentication failed");
-        break;
+    void read_ticket (const std::string &payload)
+    {
+        require (_ticket.empty (), "session received multiple tickets before authentication");
+        _ticket = json_t::parse (payload).at ("ticket").get<std::string> ();
     }
-}
+
+    wire_peer_t _peer;
+    const fw::detail::stream_runtime_t &_runtime;
+    std::string _ticket;
+};
+
 } // namespace
 
 int main (int argc, char **argv)
@@ -262,14 +323,39 @@ int main (int argc, char **argv)
         const auto server_endpoint = endpoint (server);
         const auto client_endpoint = endpoint (client);
         const auto wire = fw::detail::stream_runtime_t::from (server.app.advanced ().zlink ());
-        std::array clients{std::async (std::launch::async, [&] { enter (server_endpoint, wire); }),
-                           std::async (std::launch::async, [&] { enter (client_endpoint, wire); }),
-                           std::async (std::launch::async, [&] { enter (server_endpoint, wire); })};
-        for (auto &result : clients)
-            result.get ();
+        login_peer_t first (client_endpoint, wire);
+        login_peer_t second (server_endpoint, wire);
+        login_peer_t third (server_endpoint, wire);
+        if (phase_one_only)
+            session_t::release_first.complete (fw::result_t<void>::success ());
+        const auto entered = session_t::first_entered.get_future ();
+        try {
+            first.enqueue ();
+            first.authenticate ();
+            require (entered.wait_for (5s) == std::future_status::ready,
+                     "first authentication did not enter the handler");
+            second.enqueue ();
+            third.enqueue ();
+            require (!second.has_ticket () && !third.has_ticket () && session_t::active == 1,
+                     "queued sessions received a ticket while the only permit was held");
+        }
+        catch (const std::exception &) {
+            session_t::release_first.complete (fw::result_t<void>::success ());
+            throw;
+        }
+        session_t::release_first.complete (fw::result_t<void>::success ());
+        second.authenticate ();
+        first.expect_admitted ();
+        third.authenticate (1);
+        second.expect_admitted ();
+        third.expect_admitted ();
+        first.expect_no_extra_delivery ();
+        second.expect_no_extra_delivery ();
+        third.expect_no_extra_delivery ();
         require (session_t::entries == 3 && session_t::peak == 1,
                  "G=1 did not admit all three clients at a peak concurrency of one");
-        std::cout << "PASS two node G=1: 3 authentications, peak 1\n";
+        std::cout
+          << "PASS two node G=1: 3 authentications, peak 1, 2 session-bound ticket pushes\n";
     }
     catch (const std::exception &error) {
         std::cerr << "FAIL " << error.what () << '\n';

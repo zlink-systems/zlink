@@ -232,7 +232,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         });
     }
 
-    void push_admission (const std::vector<admission_queue::delivery_t> &deliveries);
+    void
+    push_admission (std::shared_ptr<const std::vector<admission_queue::delivery_t>> deliveries);
 
     void report_admission_error (std::exception_ptr error);
 

@@ -967,7 +967,8 @@ void arm_admission_silence_locked (const std::shared_ptr<connector_state_t> &sta
 {
     auto &queue = *state->admission_queue;
     cancel_request_alarm (queue.silence_alarm);
-    const auto due = request_time_after (now, std::chrono::seconds (15));
+    constexpr auto reregistration_silence = std::chrono::seconds (15);
+    const auto due = request_time_after (now, reregistration_silence);
     queue.silence_at = due;
     queue.silence_alarm = schedule_request_alarm_locked (
       state, due, [due, connection = std::weak_ptr (state->connection)] (const auto &locked) {

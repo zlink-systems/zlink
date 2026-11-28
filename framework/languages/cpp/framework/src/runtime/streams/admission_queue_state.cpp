@@ -10,7 +10,7 @@ namespace
 {
 constexpr auto report_validity = std::chrono::seconds (3);
 constexpr auto position_interval = std::chrono::seconds (5);
-constexpr auto rate_window = std::chrono::milliseconds (ticket_lifetime_ms);
+constexpr std::chrono::milliseconds rate_window = std::chrono::seconds (30);
 }
 
 queue_time_t queue_time_t::now ()
@@ -218,7 +218,8 @@ bool queue_state_t::issue (queue_time_t now)
 
 std::int32_t queue_state_t::estimate_wait_ms (std::int32_t position, std::size_t issued)
 {
-    const auto numerator = static_cast<std::uint64_t> (position) * (issued ? 30'000 : 1000);
+    const auto numerator =
+      static_cast<std::uint64_t> (position) * (issued ? rate_window.count () : 1000);
     const auto denominator = issued ? issued : 1;
     const auto delay = numerator / denominator + (numerator % denominator != 0);
     return static_cast<std::int32_t> (

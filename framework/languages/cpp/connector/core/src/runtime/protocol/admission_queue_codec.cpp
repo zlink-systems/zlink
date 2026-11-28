@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <zlink/detail/admission_ticket_wire.hpp>
 
 namespace zlink::stream_connector::detail
 {
@@ -37,9 +38,8 @@ bool valid_ticket (std::string_view ticket)
 {
     constexpr std::string_view alphabet =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    // A v1 ticket holds 49 bytes. The second symbol completes version 1 and
-    // the final symbol has four zero padding bits.
-    return ticket.size () == 66 && ticket.front () == 'A'
+    // The second symbol completes version 1 and the final symbol has four zero padding bits.
+    return ticket.size () == zlink::detail::admission_ticket_encoded_size && ticket.front () == 'A'
            && alphabet.substr (16, 16).find (ticket[1]) != std::string_view::npos
            && std::string_view ("AQgw").find (ticket.back ()) != std::string_view::npos
            && std::all_of (ticket.begin () + 2, ticket.end () - 1,

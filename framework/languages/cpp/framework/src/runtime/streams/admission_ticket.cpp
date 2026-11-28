@@ -2,6 +2,7 @@
 #include "runtime/streams/admission_ticket.hpp"
 
 #include "runtime/locations/base64.hpp"
+#include <zlink/detail/admission_ticket_wire.hpp>
 #include <zlink/framework/detail/utf8.hpp>
 
 #include <openssl/crypto.h>
@@ -16,8 +17,10 @@ namespace zlink::framework::runtime::admission_queue
 namespace
 {
 
-constexpr std::size_t header_size = 17;
-constexpr std::size_t mac_size = 32;
+using zlink::detail::admission_ticket_encoded_size;
+using zlink::detail::admission_ticket_header_size;
+using zlink::detail::admission_ticket_mac_size;
+using zlink::detail::admission_ticket_size;
 constexpr std::uint64_t clock_skew_ms = 2000;
 
 void append_u64 (bytes_t &output, std::uint64_t value)
@@ -36,7 +39,7 @@ std::uint64_t read_u64 (std::span<const std::byte> bytes)
 
 bool valid_rid (const bytes_t &value)
 {
-    return !value.empty () && value.size () <= 255;
+    return !value.empty () && value.size () <= max_rid_bytes;
 }
 
 bool valid_connection (const connection_t &value)
@@ -73,9 +76,9 @@ bytes_t mac_input (const connection_t &connection, std::span<const std::byte> he
     return input;
 }
 
-std::array<unsigned char, mac_size> sign (const bytes_t &key, const bytes_t &input)
+std::array<unsigned char, admission_ticket_mac_size> sign (const bytes_t &key, const bytes_t &input)
 {
-    std::array<unsigned char, mac_size> mac{};
+    std::array<unsigned char, admission_ticket_mac_size> mac{};
     unsigned size = 0;
     if (!HMAC (EVP_sha256 (), key.data (), static_cast<int> (key.size ()),
                reinterpret_cast<const unsigned char *> (input.data ()), input.size (), mac.data (),
@@ -141,7 +144,7 @@ std::string ticket_signer_t::issue (const connection_t &connection,
     if (epoch == 0 || !valid_connection (connection))
         throw std::invalid_argument ("Invalid STREAM admission ticket identity");
     bytes_t bytes;
-    bytes.reserve (header_size + mac_size);
+    bytes.reserve (admission_ticket_size);
     bytes.push_back (std::byte{1});
     append_u64 (bytes, expiration);
     append_u64 (bytes, epoch);
@@ -156,10 +159,11 @@ bool ticket_signer_t::verify (const connection_t &connection,
                               std::uint64_t epoch,
                               std::uint64_t now) const
 {
-    if (epoch == 0 || ticket.size () != 66 || !valid_connection (connection))
+    if (epoch == 0 || ticket.size () != admission_ticket_encoded_size
+        || !valid_connection (connection))
         return false;
     const auto bytes = decode_base64url (ticket);
-    if (!bytes || bytes->size () != header_size + mac_size || bytes->front () != std::byte{1})
+    if (!bytes || bytes->size () != admission_ticket_size || bytes->front () != std::byte{1})
         return false;
     const auto wire = std::span (*bytes);
     if (read_u64 (wire.subspan (9, 8)) != epoch)
@@ -167,10 +171,11 @@ bool ticket_signer_t::verify (const connection_t &connection,
     const auto expiration = read_u64 (wire.subspan (1, 8));
     if (now > expiration && now - expiration > clock_skew_ms)
         return false;
-    const auto input = mac_input (connection, wire.first (header_size));
+    const auto input = mac_input (connection, wire.first (admission_ticket_header_size));
     const auto matches = [&] (const bytes_t &key) {
         const auto mac = sign (key, input);
-        return CRYPTO_memcmp (wire.data () + header_size, mac.data (), mac.size ()) == 0;
+        return CRYPTO_memcmp (wire.data () + admission_ticket_header_size, mac.data (), mac.size ())
+               == 0;
     };
     return matches (_current) || (!_previous.empty () && matches (_previous));
 }

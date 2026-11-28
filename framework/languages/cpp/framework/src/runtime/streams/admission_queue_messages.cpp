@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "runtime/streams/admission_queue_messages.hpp"
+#include <zlink/detail/admission_ticket_wire.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
 
 #include <charconv>
@@ -54,7 +55,8 @@ std::int32_t integer (const json_t &value, std::int32_t min)
 bytes_t rid (const json_t &value)
 {
     const auto &encoded = text (value);
-    if (encoded.empty () || encoded.size () > 340)
+    if (encoded.empty ()
+        || encoded.size () > zlink::detail::unpadded_base64url_size (max_rid_bytes))
         invalid_message ();
     auto bytes = decode_base64url (encoded);
     if (!bytes)
@@ -106,7 +108,8 @@ delivery_t read_delivery (const json_t &value)
     issued_ticket_t ticket;
     if (kind == "ticket" || value.contains ("ticket")) {
         const auto &encoded = text (required (value, "ticket"));
-        if (encoded.size () != 66 || !decode_base64url (encoded))
+        if (encoded.size () != zlink::detail::admission_ticket_encoded_size
+            || !decode_base64url (encoded))
             invalid_message ();
         ticket.ticket = encoded;
     }

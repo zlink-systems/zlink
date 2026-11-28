@@ -8,6 +8,7 @@
 #include "runtime/streams/stream_host_ingress.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include <boost/asio/post.hpp>
+#include <algorithm>
 #include <exception>
 #include <tuple>
 
@@ -178,51 +179,45 @@ void stream_host_service_t::listener_t::unregister_active_stream (const stream_t
 }
 
 void stream_host_service_t::listener_t::push_admission (
-  const std::vector<admission_queue::delivery_t> &deliveries)
+  std::shared_ptr<const std::vector<admission_queue::delivery_t>> deliveries)
 {
     using namespace admission_queue;
-    if (std::ranges::none_of (deliveries, [&] (const auto &delivery) {
-            return delivery.session.stream == _stream.name;
-        }))
-        return;
-    auto streams =
-      _active_streams_lane
-        .run ([this] {
-            std::map<bytes_t, stream_t> result;
-            for (const auto &entry : _active_streams) {
-                if (const auto rid = entry.stream.routing_id ()) {
-                    const auto raw = rid->to_bytes ();
-                    const auto bytes = std::as_bytes (std::span (raw));
-                    result.emplace (bytes_t (bytes.begin (), bytes.end ()), entry.stream);
-                }
-            }
-            return result;
-        })
-        .get ();
-    for (const auto &delivery : deliveries) {
-        if (delivery.session.stream != _stream.name)
-            continue;
-        const auto stream = streams.find (delivery.session.rid);
-        if (stream == streams.end () || _runtime.session_closed (stream->second).stop_requested ())
-            continue;
-        const auto *name = std::holds_alternative<position_t> (delivery.value)
-                             ? client_position_packet
-                             : client_ticket_packet;
-        try {
-            auto sent = _runtime.write_admission_packet (stream->second, name,
-                                                         client_payload (delivery.value));
-            detail::observe_task_completion (
-              sent, [weak = weak_from_this ()] (const result_t<void> &result) {
-                  if (!result) {
-                      if (const auto owner = weak.lock ())
-                          owner->report_admission_error (result.exception ());
-                  }
-              });
+    const auto report_failure = [weak = weak_from_this ()] (const result_t<void> &result) {
+        if (!result) {
+            if (const auto owner = weak.lock ())
+                owner->report_admission_error (result.exception ());
         }
-        catch (const std::exception &) {
-            report_admission_error (std::current_exception ());
-        }
-    }
+    };
+    auto posted = _active_streams_lane.run_task (
+      [self = shared_from_this (), deliveries = std::move (deliveries), report_failure] {
+          for (const auto &delivery : *deliveries) {
+              if (delivery.session.stream != self->_stream.name)
+                  continue;
+              const auto target =
+                std::ranges::find_if (self->_active_streams, [&] (const auto &entry) {
+                    const auto rid = entry.stream.routing_id ();
+                    return rid
+                           && std::ranges::equal (
+                             std::as_bytes (std::span (rid->data (), rid->size ())),
+                             delivery.session.rid);
+                });
+              if (target == self->_active_streams.end ()
+                  || self->_runtime.session_closed (target->stream).stop_requested ())
+                  continue;
+              const auto *name = std::holds_alternative<position_t> (delivery.value)
+                                   ? client_position_packet
+                                   : client_ticket_packet;
+              try {
+                  auto sent = self->_runtime.write_admission_packet (
+                    target->stream, name, client_payload (delivery.value));
+                  detail::observe_task_completion (sent, report_failure);
+              }
+              catch (const std::exception &) {
+                  self->report_admission_error (std::current_exception ());
+              }
+          }
+      });
+    detail::observe_task_completion (posted, report_failure);
 }
 
 void stream_host_service_t::listener_t::report_admission_error (std::exception_ptr error)

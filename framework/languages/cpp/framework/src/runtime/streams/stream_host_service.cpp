@@ -550,9 +550,13 @@ stream_host_service_t::report_admission (std::weak_ptr<stream_host_ingress_t> we
         try {
             auto deliveries =
               co_await ingress->queue ()->report (ingress->limit (), ingress->in_flight ());
-            for (const auto &weak_listener : listeners) {
-                if (const auto listener = weak_listener.lock ())
-                    listener->push_admission (deliveries);
+            if (!deliveries.empty ()) {
+                auto batch = std::make_shared<const std::vector<admission_queue::delivery_t>> (
+                  std::move (deliveries));
+                for (const auto &weak_listener : listeners) {
+                    if (const auto listener = weak_listener.lock ())
+                        listener->push_admission (batch);
+                }
             }
         }
         catch (const std::exception &) {
