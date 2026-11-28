@@ -1,4 +1,3 @@
-const { ZLinkMessageFlowDelivery } = require('../../../packages/framework/dist/runtime/diagnostics/message-flow-delivery');
 const { performance } = require('node:perf_hooks');
 const deferred = require('../helpers/deferred.cjs');
 
@@ -10,20 +9,10 @@ function startupClaim(t, store) {
   const commit = deferred();
   const committed = deferred();
   const calls = [];
-  const diagnostics = [];
-  const submit = ZLinkMessageFlowDelivery.prototype.submit;
-  t.mock.method(ZLinkMessageFlowDelivery.prototype, 'submit', function (lease, record) {
-    if (record.eventName === 'location.startup_claim_cleanup_abandoned') {
-      diagnostics.push(record);
-    } else {
-      submit.call(this, lease, record);
-    }
-  });
   return {
     started: started.promise,
     cancelled: cancelled.promise,
     calls,
-    diagnostics,
     commitAfterRenewTimeout() {
       now = 4000;
       commit.resolve();

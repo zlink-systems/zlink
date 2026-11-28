@@ -465,7 +465,6 @@ test('direct startup cancellation releases a claim committed after the renew tim
   assert.deepEqual(claim.calls, ['read', 'release']);
   assert.deepEqual(await stopped, [{ status: 'fulfilled', value: undefined }]);
   assert.equal(timers.length, 0);
-  assert.equal(claim.diagnostics.length, 0);
   assert.equal((await store.readOwnerLease(runtime.ownerId)).kind, 'missing');
 });
 

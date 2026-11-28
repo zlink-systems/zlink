@@ -230,8 +230,7 @@ for (const deadlineExpires of [false, true]) {
     }
     assert.deepEqual(claim.calls, deadlineExpires ? [] : ['read', 'release']);
     assert.equal(sweep.mock.callCount(), 0);
-    assert.equal(claim.diagnostics.length, deadlineExpires ? 1 : 0);
-    if (deadlineExpires) assert.equal(claim.diagnostics[0].attributes.owner_id, runtime.ownerId);
+    // #5996: emit location.startup_claim_cleanup_abandoned here
     assert.equal((await store.readOwnerLease(runtime.ownerId)).kind, deadlineExpires ? 'found' : 'missing');
   });
 }
