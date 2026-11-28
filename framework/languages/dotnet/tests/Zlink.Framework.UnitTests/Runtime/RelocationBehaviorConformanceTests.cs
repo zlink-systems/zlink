@@ -4262,11 +4262,11 @@ internal sealed class BeginBehaviorJoinHandler(RelocationBehaviorTrace trace)
         CancellationToken cancellationToken
     )
     {
-        trace.Record("relocationRequested");
         actor
             .Context.JoinSpot(request.TargetSpotId, request)
             .Timeout(request.JoinTimeout ?? TimeSpan.FromSeconds(15))
             .Defer();
+        trace.Record("relocationRequested");
         await trace.ReleaseJoinHandler.Task.WaitAsync(cancellationToken);
         return new BehaviorAck("join");
     }
