@@ -90,12 +90,13 @@ _native_subscribe_owner = (
 
 
 _DEFAULT_OPTION_BUFFER_SIZE = 256
+_DEFAULT_TOPIC_RECEIVE_BUFFER_SIZE = 256
 
 
 def _new_topic_receive_buffer(initial_buffer=None):
     if initial_buffer is None:
-        buffer = ctypes.create_string_buffer(256)
-        return buffer, buffer, 256
+        buffer = ctypes.create_string_buffer(_DEFAULT_TOPIC_RECEIVE_BUFFER_SIZE)
+        return buffer, buffer, len(buffer)
     capacity = len(initial_buffer)
     return (
         initial_buffer,
