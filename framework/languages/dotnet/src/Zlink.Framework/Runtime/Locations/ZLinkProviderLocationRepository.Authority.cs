@@ -1643,7 +1643,10 @@ internal sealed partial class ZLinkProviderLocationRepository
             }
             catch
             {
-                var reconciled = await ReadRecordForReconciliationAsync<AggregateRecord>(key)
+                var reconciled = await RunAmbiguousStoreStepAsync(
+                        token => ReadRecordAsync<AggregateRecord>(key, token),
+                        $"Confirmation of aggregate prepare '{fence.AggregateId:N}' exceeded its internal deadline."
+                    )
                     .ConfigureAwait(false);
                 if (
                     reconciled is not null
@@ -1868,13 +1871,23 @@ internal sealed partial class ZLinkProviderLocationRepository
             }
             catch
             {
-                var reconciled = await ReadRecordForReconciliationAsync<AggregateRecord>(key)
+                var reconciled = await RunAmbiguousStoreStepAsync(
+                        token => ReadRecordAsync<AggregateRecord>(key, token),
+                        $"Confirmation of aggregate commit '{fence.AggregateId:N}' exceeded its internal deadline."
+                    )
                     .ConfigureAwait(false);
                 if (reconciled?.Record.Status != AggregateStatus.Committed)
                     throw;
-                await NormalizeCommittedAggregateForAmbiguousAsync(fence, reconciled.Record)
+                return await RunAmbiguousStoreStepAsync(
+                        async token =>
+                        {
+                            await NormalizeCommittedAggregateAsync(fence, reconciled.Record, token)
+                                .ConfigureAwait(false);
+                            return ZLinkAggregateCommitResult.AlreadyCommitted;
+                        },
+                        $"Normalization of committed aggregate '{fence.AggregateId:N}' exceeded its internal deadline."
+                    )
                     .ConfigureAwait(false);
-                return ZLinkAggregateCommitResult.AlreadyCommitted;
             }
             if (result is not ZLinkStoreWriteResult.Applied)
             {
@@ -4118,16 +4131,31 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ConfigureAwait(false);
     }
 
-    private async ValueTask NormalizeCommittedAggregateForAmbiguousAsync(
-        ZLinkAggregateFence fence,
-        AggregateRecord aggregate
+    private async ValueTask<TResult> RunAmbiguousStoreStepAsync<TResult>(
+        Func<CancellationToken, ValueTask<TResult>> operation,
+        string timeoutMessage
     )
     {
-        using var deadline = new CancellationTokenSource(AmbiguousReconciliationTimeout);
-        await NormalizeCommittedAggregateAsync(fence, aggregate, deadline.Token)
-            .AsTask()
-            .WaitAsync(deadline.Token)
-            .ConfigureAwait(false);
+        using var deadline = new CancellationTokenSource(AmbiguousReconciliationTimeout, _time);
+        var cancellationToken = deadline.Token;
+        try
+        {
+            return await operation(cancellationToken)
+                .AsTask()
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error)
+            when (error.CancellationToken == cancellationToken
+                && cancellationToken.IsCancellationRequested
+            )
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                timeoutMessage,
+                innerException: error
+            );
+        }
     }
 
     private static bool AggregateParticipantsEqual(
