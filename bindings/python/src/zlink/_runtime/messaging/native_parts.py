@@ -2,8 +2,8 @@
 """Project Core whole-message submission onto public payload ownership.
 
 Core consumes the submitted native parts even on rejection. The submitted
-parts hold independent references so a rejected submit leaves the caller's
-``Message`` intact.
+parts hold independent references. The binding consumes the caller's
+``Message`` on admission or when it retains staging for a WRITABLE wait.
 """
 
 from .message_materializer import Message, ReceivedMessage
@@ -28,8 +28,8 @@ def _payload_parts(payload):
     return parts
 
 
-def _consume_submitted_messages(payload, result):
-    if result == SubmitResult.OK:
+def _consume_submitted_messages(payload, result, *, retry_retained=False):
+    if result == SubmitResult.OK or retry_retained:
         for part in _payload_parts(payload):
             if isinstance(part, Message):
                 part.close()
