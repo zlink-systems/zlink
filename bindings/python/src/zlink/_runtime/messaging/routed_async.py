@@ -652,13 +652,25 @@ class CompletionOwner:
         if self._public_owner is None:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
 
-    @staticmethod
-    def _submit_error(result, internal_errno):
+    def _finish_rejected_submit_locked(
+        self, entry, result, internal_errno, completion_id, initial_send=False
+    ):
+        if completion_id != 0:
+            resubmit = self._publish_writable_locked(entry, completion_id)
+            if result == SubmitResult.BACKPRESSURED:
+                if internal_errno == errno.EAGAIN:
+                    if not initial_send or self._public_owner is not None:
+                        return result, resubmit
+                    result, internal_errno = SubmitResult.INVALID_STATE, 0
+                elif entry.kind == ZLINK_COMPLETION_SEND:
+                    result, internal_errno = SubmitResult.INTERNAL_ERROR, errno.EPROTO
         try:
             typed_result = SubmitResult(int(result))
         except ValueError:
             typed_result = int(result)
-        return SubmitError(typed_result, int(internal_errno))
+        error = SubmitError(typed_result, int(internal_errno))
+        entry.fail(error)
+        return error, False
 
     def _capture_writable(self, entry, completion):
         record = (
@@ -897,48 +909,25 @@ class CompletionOwner:
             return None
         resubmit = False
         with self._lock:
-            writable_wait = (
-                rc == int(SubmitResult.BACKPRESSURED)
-                and internal_errno == errno.EAGAIN
-                and completion_id != 0
-            )
-            ownerless_wait = (
-                initial_attempt
-                and self._public_owner is None
-                and writable_wait
-            )
             # A successful SEND never enters either completion registry.
             if rc == int(SubmitResult.OK):
+                outcome = rc
                 if completion_id != 0:
                     self._publish_writable_locked(entry, completion_id)
                     entry.fail(SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO))
                 else:
                     entry.succeed_send()
-            elif rc == int(SubmitResult.BACKPRESSURED):
-                if completion_id != 0:
-                    resubmit = self._publish_writable_locked(entry, completion_id)
-                if ownerless_wait:
-                    entry.fail(SubmitError(SubmitResult.INVALID_STATE, 0))
-                    rc = int(SubmitResult.INVALID_STATE)
-                elif not writable_wait:
-                    error = (
-                        self._submit_error(rc, internal_errno)
-                        if completion_id == 0
-                        else SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
-                    )
-                    entry.fail(error)
-                    rc = int(SubmitResult.INTERNAL_ERROR)
             else:
-                if completion_id != 0:
-                    self._publish_writable_locked(entry, completion_id)
-                entry.fail(self._submit_error(rc, internal_errno))
+                outcome, resubmit = self._finish_rejected_submit_locked(
+                    entry, rc, internal_errno, completion_id, initial_attempt
+                )
 
             if entry.releasable:
                 if self._entries.get(entry.context) is entry:
                     self._unregister(entry)
         if resubmit:
             self._defer_retry(entry)
-        return rc
+        return outcome
 
     def _attempt_request(self, entry):
         with self._lock:
@@ -979,33 +968,39 @@ class CompletionOwner:
         with self._lock:
             if rc == int(SubmitResult.OK):
                 if completion_id == 0:
-                    entry.fail(SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO))
-                    rc = int(SubmitResult.INTERNAL_ERROR)
+                    outcome = SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
+                    entry.fail(outcome)
                 else:
                     self._finish_request_submit(entry, completion_id)
-            elif (
-                rc == int(SubmitResult.BACKPRESSURED)
-                and internal_errno == errno.EAGAIN
-                and completion_id != 0
-            ):
-                resubmit = self._publish_writable_locked(entry, completion_id)
+                    outcome = rc
             else:
-                if completion_id != 0:
-                    self._publish_writable_locked(entry, completion_id)
-                entry.fail(self._submit_error(rc, internal_errno))
-                if rc == int(SubmitResult.BACKPRESSURED):
-                    rc = int(SubmitResult.INTERNAL_ERROR)
+                outcome, resubmit = self._finish_rejected_submit_locked(
+                    entry, rc, internal_errno, completion_id
+                )
 
             if entry.releasable:
                 self._unregister(entry)
         if resubmit:
             self._defer_retry(entry)
-        return rc
+        return outcome
+
+    @staticmethod
+    def _finish_initial_submit(entry, payload, outcome):
+        if outcome is None or isinstance(outcome, SubmitError):
+            error = entry._error if outcome is None else outcome
+            entry.detach()
+            if error is not None:
+                raise error
+            raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EIO)
+        _consume_submitted_messages(
+            payload, outcome, retry_retained=(outcome == SubmitResult.BACKPRESSURED)
+        )
+        return SubmitResult(outcome)
 
     def submit_send(self, target, payload):
         loop = asyncio.get_running_loop()
         if _native_extension is not None:
-            rc, entry = _native_extension.start_send(
+            outcome, entry = _native_extension.start_send(
                 self, target, payload, loop
             )
         else:
@@ -1023,20 +1018,8 @@ class CompletionOwner:
                         SubmitResult.INVALID_STATE,
                         getattr(errno, "ESHUTDOWN", errno.ECANCELED),
                     )
-            rc = self._attempt_send(entry)
-        if rc not in (
-            int(SubmitResult.OK),
-            int(SubmitResult.BACKPRESSURED),
-        ):
-            error = entry._error
-            entry.detach()
-            if error is not None:
-                raise error
-            raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EIO)
-        _consume_submitted_messages(
-            payload, rc, retry_retained=(rc == SubmitResult.BACKPRESSURED)
-        )
-        return SubmitResult(rc), entry.admitted
+            outcome = self._attempt_send(entry)
+        return self._finish_initial_submit(entry, payload, outcome), entry.admitted
 
     def submit_send_sync(self, target, payload):
         native_parts = _materialize_native_parts(payload)
@@ -1073,20 +1056,9 @@ class CompletionOwner:
         except BaseException:
             entry._release_payload()
             raise
-        rc = self._attempt_request(entry)
-        if rc not in (
-            int(SubmitResult.OK),
-            int(SubmitResult.BACKPRESSURED),
-        ):
-            error = entry._error
-            entry.detach()
-            if error is not None:
-                raise error
-            raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EIO)
-        _consume_submitted_messages(
-            payload, rc, retry_retained=(rc == SubmitResult.BACKPRESSURED)
-        )
-        return SubmitResult(rc), entry.admitted, entry.future
+        outcome = self._attempt_request(entry)
+        result = self._finish_initial_submit(entry, payload, outcome)
+        return result, entry.admitted, entry.future
 
     def submit_request_sync(self, target, payload, timeout_ms):
         entry = _CompletionEntry(ZLINK_COMPLETION_REQUEST)
