@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Streams;
@@ -326,9 +327,11 @@ public sealed class JoinCallbackSendTests
                             ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId)
                         )
                 );
+                Assert.Null(authority.Snapshot.Relocation);
                 Assert.False(
                     ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(authority.Snapshot, out _)
                 );
+                Assert.Equal(target.LocalNodeRid, authority.Snapshot.Allocation.Descriptor.Rid);
                 Assert.True(target.Runtime.TryGetActorState(actor.ActorId, out var state));
                 Assert.False(state.Handoff.TargetActivation.IsCompleted);
                 Assert.Empty(trace.DeliveredMarkers);

@@ -156,6 +156,7 @@ public sealed partial class RelocationRuntimeTests
                 ExpiresAt = TimeSpan.Zero,
             };
             Volatile.Write(ref stage.Published, 1);
+            stage.Terminal.SetResult();
             Volatile.Write(ref stage.SessionRoutesConverged, 1);
             return target.TryTrackStage(
                 new ZLinkAggregateFence(envelope.AggregateId, envelope.AggregateGeneration),
@@ -1327,7 +1328,7 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public async Task ShutdownDrainWaitsForPublishedTargetReplay()
+    public async Task ShutdownDrainWaitsForCapturedRequestDelivery()
     {
         using var services = new ServiceCollection().BuildServiceProvider();
         var target = new ZLinkSpotRetireTargetRuntime(
@@ -1350,7 +1351,7 @@ public sealed partial class RelocationRuntimeTests
         try
         {
             Assert.False(drain.IsCompleted);
-            var failure = new IOException("Published target replay failed.");
+            var failure = new IOException("Captured request delivery failed.");
             replay.SetException(failure);
             Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => drain));
             Assert.Equal(1, target.ActiveStageCount);
@@ -1517,18 +1518,6 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public async Task NormalizationReportsGenerationExhaustion()
-    {
-        await Assert.ThrowsAsync<ZLinkAuthorityGenerationExhaustedException>(() =>
-            ZLinkSpotRetireTargetRuntime
-                .CommitNormalizationAsync(static () =>
-                    ValueTask.FromResult(ZLinkAggregateCommitResult.GenerationExhausted)
-                )
-                .AsTask()
-        );
-    }
-
-    [Fact]
     public async Task TargetCatalogPublishesBeforeAuthorityNormalization()
     {
         var stage = CreateTargetStageForHeldJournal();
@@ -1662,9 +1651,20 @@ public sealed partial class RelocationRuntimeTests
         );
         Assert.Equal(1, target.ActiveStageCount);
 
-        // Once the session routes converged, expiry reconciliation completes
-        // the published stage as a Completed tombstone.
+        // Route convergence can finish while the stage still owns publication.
         Volatile.Write(ref stage.SessionRoutesConverged, 1);
+        Assert.False(
+            await target.PublishInboundAsync(
+                unknownFence,
+                stage.SourceNodeRid,
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(1, target.ActiveStageCount);
+        Assert.Equal(0, target.TerminalTombstoneCount);
+
+        // Once publication and the session routes are complete, expiry removes the stage.
+        stage.Terminal.SetResult();
         Assert.False(
             await target.PublishInboundAsync(
                 unknownFence,

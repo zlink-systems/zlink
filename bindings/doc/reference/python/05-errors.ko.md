@@ -71,17 +71,18 @@ except SubmitError as ex:
 
 | Member | 의미 |
 | --- | --- |
-| `ZlinkError(code: int, native_errno: int = 0)` | 순수 public 생성자다(기반이 protected/abstract이고 subclass를 통해서만 도달 가능한 다른 언어와 다름) |
+| `ZlinkError(code: int, internal_errno: int = 0)` | 기본 오류 타입을 직접 생성한다. |
 | `code` | property, 실패를 분류하는 zlink result code |
-| `native_errno` | property, 밑에 깔린 native errno, 없으면 `0` |
+| `internal_errno` | 실패의 원인이 된 errno를 반환하는 속성이다. 해당 값이 없으면 `0`을 반환한다. |
 | `_TypedZlinkError.result` | property, typed result enum; 모든 typed exception이 실제로 파생하는 non-public 중간 계층에 선언됨 — 이 `__init__`은 **raw code가 알려진 enum member와 맞지 않을 때 `ValueError`를 잡아서 예외를 던지거나 무관한 값으로 조용히 매핑하는 대신 raw 정수를 그대로 보존한다**, 이는 특히 더 새로운 Core가 이 binding이 아직 모르는 result를 보고할 때를 견디기 위함이다 |
+
+`native_errno`는 `internal_errno`와 같은 값을 반환하는 폐기 예정 별칭이다. 다음 호환성이 깨지는 릴리스에서 삭제한다.
 
 **Completion result.** 해당 없음 — 이건 내장 `RuntimeError`를
 확장하는 exception 계층 자체다.
 
-**선택 기준.** 구체적 typed exception(`SubmitError` 등)을 잡아 typed
-`.result`를 읽거나, exception 타입 전체에 걸쳐 `.code`/
-`.native_errno`만 일반적으로 필요할 땐 공유 `ZlinkError`를 잡는다.
+**선택 기준.** 타입이 지정된 `.result`를 읽으려면 `SubmitError`처럼 구체적인 예외를 처리한다.
+여러 예외 타입에서 공통으로 `.code`와 `.internal_errno`를 읽으려면 `ZlinkError`를 처리한다.
 no-data와 일시적 back-pressure는 절대 일반 exception으로 보고되지
 않는다 — 대신 Sockets/Messaging category의 `bool`/`None` 반환
 `recv_into`/`submit` 관례를 참고한다. 더 새로운 Core와 통신할 때

@@ -262,13 +262,28 @@ internal sealed partial class ZLinkFrameworkRuntime
                 //  Waiting for the host-wide operation count here would make an
                 //  accepted turn wait for the relocation marker that can only be
                 //  published after this preflight returns.
-                preflightStage = "initial_actor_handoff_wait";
+                preflightStage = "completion_preflight";
                 if (
                     await _actorDrainCoordinator
                         .HasCompletionBlockerAsync(cancellationToken)
                         .ConfigureAwait(false)
                 )
                     return ZLinkFrameworkRelocationReason.OperationInProgress;
+                preflightStage = "relocation_target_preflight";
+                if (
+                    (
+                        Services.GetService<ZLinkSpotRetireTargetRuntime>() is { } spotTarget
+                        && await spotTarget
+                            .HasFinishingSpotTargetAsync(cancellationToken)
+                            .ConfigureAwait(false)
+                    )
+                    || await _standaloneActorRelocationRuntime
+                        .HasFinishingActorTargetAsync(cancellationToken)
+                        .ConfigureAwait(false)
+                )
+                    return ZLinkFrameworkRelocationReason.OperationInProgress;
+
+                preflightStage = "initial_actor_handoff_wait";
                 await WaitForAcceptedActorHandoffsAsync(cancellationToken).ConfigureAwait(false);
 
                 var operationBaseline = SnapshotOperationAdmissions();
@@ -1129,7 +1144,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         Func<Task> admitPrefix,
         Func<Task, Func<ValueTask>, ValueTask> settleCompletion,
         CancellationToken cancellationToken,
-        Action finishTargetStage
+        Action dispatchOpened
     )
     {
         var completion = CreateCanonicalRoutedActorCompletion(request, spotId, recovery);
@@ -1226,8 +1241,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                         await _actorHandoffAdmissions
                             .RecordCompletionAsync(completion, spotId)
                             .ConfigureAwait(false);
-                        finishTargetStage();
                         actorState.Handoff.Complete(request.HandoffId);
+                        dispatchOpened();
                     }
                 )
                 .ConfigureAwait(false);
@@ -2957,13 +2972,17 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkActorRuntimeState actorState,
         string handoffId,
         string receiverMeshName,
-        Func<ZLinkActorHandoffFrame, Task>? dispatch = null
+        Func<ZLinkActorHandoffFrame, Task>? dispatch = null,
+        Func<ZLinkActorHandoffFrame, bool>? isCapturedRequest = null,
+        long? acceptedThrough = null
     )
     {
         var start = actorState.Handoff.TargetActivation;
         return actorState.Handoff.AdmitDurablePrefix(
             handoffId,
-            frame => AdmitActorHandoffFrame(actorState, frame, start, receiverMeshName, dispatch)
+            frame => AdmitActorHandoffFrame(actorState, frame, start, receiverMeshName, dispatch),
+            isCapturedRequest,
+            acceptedThrough
         );
     }
 
@@ -2989,6 +3008,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             async ct =>
             {
                 actorState.Handoff.ClaimDurableFrame(frame);
+                if (frame.TargetAdmission is { IsCompletedSuccessfully: true, Result: false })
+                    return;
                 using var dispatchScope = actorState.EnterDispatch();
                 using var invocation = ZLinkApplicationJobQueueInvocation.Enter(prepared!);
                 if (dispatch is not null)
@@ -3013,6 +3034,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             async ct =>
             {
                 await start.WaitAsync(ct).ConfigureAwait(false);
+                if (frame.TargetAdmission is { } authorization)
+                    await authorization.WaitAsync(ct).ConfigureAwait(false);
                 var acquired = await hostQueue.AcquireAsync(ct, frame.Origin).ConfigureAwait(false);
                 Interlocked.Exchange(ref prepared, acquired);
                 if (ct.IsCancellationRequested)

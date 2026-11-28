@@ -92,8 +92,7 @@ final class ZLinkSharedPendingOwnershipTest {
         tasks.poll(5, TimeUnit.SECONDS).run();
         var boundary = reservation.join().get(actor);
         boundary.release();
-        tasks.poll(5, TimeUnit.SECONDS).run();
-        boundary.finished().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        runUntilDone(tasks, boundary.finished().toCompletableFuture());
         assertDoesNotThrow(actor::close);
         actor.close();
         spot.close();
@@ -264,6 +263,20 @@ final class ZLinkSharedPendingOwnershipTest {
         IMPORT,
         CANCEL,
         DEQUEUE
+    }
+
+    // The shared gate may hand the finish turn to a later drain when a turn exhausts its time
+    // budget (execution contract §9), so drive the queue until the future completes.
+    private static void runUntilDone(BlockingQueue<Runnable> tasks, CompletableFuture<?> done)
+            throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!done.isDone()) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) fail("shared boundary did not finish within 5 seconds");
+            Runnable task = tasks.poll(remaining, TimeUnit.NANOSECONDS);
+            if (task != null) task.run();
+        }
+        done.join();
     }
 
     private static void verifyPublicationAfterTailChange(TailChange change) throws Exception {

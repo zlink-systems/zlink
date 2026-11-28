@@ -476,15 +476,15 @@ class RouterSocket(
             except BaseException:
                 _close_native_parts(native_parts)
                 raise
-            rc, native_errno, _ = _native_extension.submit_storage(
+            rc, internal_errno, _ = _native_extension.submit_storage(
                 self._handle, target, native_parts, 0, 0, None,
                 _reply_token_value(token),
             )
             if rc != int(SubmitResult.OK):
-                _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
+                _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
             return
         native_rid = _copy_routing_id(routing_id)
-        rc, native_errno = _submit_parts(
+        rc, internal_errno = _submit_parts(
             native_parts,
             lambda parts_ptr, part_count: lib().zlink_reply(
                 self._handle,
@@ -495,7 +495,7 @@ class RouterSocket(
             ),
         )
         if rc != int(SubmitResult.OK):
-            _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
+            _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
 
     def _replace_router_received(
         self, received, owner, routing_id, token_value, route_generation=0
@@ -762,14 +762,11 @@ class XPubSocket(
             subscribed=bool(subscribed.value),
         )
 
-    def _receive_subscription_event(self, *, flags=0):
-        return self._subscription_event(flags)
-
-    def receive_subscription_event_into(self, event, *, flags=0):
+    def receive_subscription_event_into(self, event: SubscriptionEvent, *, flags=0) -> bool:
         if event is None or not hasattr(event, "_adopt_from"):
             raise TypeError("event must be a SubscriptionEvent")
         try:
-            fresh = self._receive_subscription_event(flags=flags)
+            fresh = self._subscription_event(flags)
         except RecvError as ex:
             if (int(flags) & 1) and ex.result == RecvResult.NO_DATA:
                 return False

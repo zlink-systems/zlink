@@ -445,7 +445,7 @@ Socket의 공통 option facade에 있는
   message, subscription event, pull 수신에 사용하는 `StreamPacket` 값.
 - 모든 socket family와 그 typed option. `SubSocket::subscription_at(index)`와
   `XSubSocket::subscription_at(index)`는 해당 인덱스의 subscription filter와
-  pattern 여부를 반환한다. 해당 인덱스가 없으면 `None`을 반환한다.
+  pattern 여부를 반환한다. 해당 인덱스가 없으면 `Ok(None)`을 반환한다. 바인딩은 자기 버퍼로 `zlink_subscription_at`를 한 번 부른다. 빈 filter를 포함해 OK 결과면 조회를 끝내고, 버퍼가 작다는 결과(`ENOBUFS`)일 때만 Core가 돌려준 길이로 한 번 더 부른다. 범위 밖 인덱스(`ENOENT`)는 오류가 아니라 항목 없음으로 반환하고, 그 밖의 실패는 `Err(ConfigError)`로 반환한다.
 - Monitor, poller, timer, readiness 의미.
 
 Rust 이름과 ownership 모델은 C와 다를 수 있지만, 동작은 core 능력의 의미와
