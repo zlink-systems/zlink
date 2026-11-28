@@ -581,6 +581,10 @@ if(ZLINK_CPP_BUILD_TESTS)
     target_link_options(test_cpp_contract_send_without_wait_token PRIVATE
       "LINKER:--wrap=zlink_send" "LINKER:--wrap=zlink_send_rid"
       "LINKER:--wrap=zlink_completion_recv")
+    add_cpp_contract_test(test_cpp_contract_reply_submit_errno
+      "tests/contract/test_cpp_contract_reply_submit_errno.cpp")
+    target_link_options(test_cpp_contract_reply_submit_errno PRIVATE
+      "LINKER:--wrap=zlink_reply" "LINKER:--wrap=zlink_msg_close")
     foreach(test_name IN ITEMS
         test_cpp_contract_writable_token_delivery
         test_cpp_contract_completion_drain_order)
