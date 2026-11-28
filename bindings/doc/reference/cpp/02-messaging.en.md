@@ -47,6 +47,10 @@ Copy construction/assignment perform a deep copy of the payload.
 **Completion result.** Every member is synchronous. Sending a message consumes its payload — the
 native frame moves into the transport on a successful send, leaving the instance invalid; call
 `close()` to release a message that will not be sent.
+A consumed or closed message returns `nullptr` from `data()` and `0` from `size()`.
+Resubmitting that message throws `submit_error_t` with
+`submit_result_t::invalid_handle` before the binding calls Core to submit it.
+If a multipart submission fails with this error, the caller retains its valid lvalue parts.
 
 **When to use.** A sized constructor or a copying `from(...)` factory to build an outbound payload
 from data the caller doesn't need to keep raw ownership of. Use
