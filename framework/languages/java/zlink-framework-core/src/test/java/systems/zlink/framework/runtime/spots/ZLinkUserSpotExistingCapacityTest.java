@@ -108,6 +108,7 @@ final class ZLinkUserSpotExistingCapacityTest {
                         new ZLinkProviderLocationRepository(
                                 store, monotonicNanos::get, fencingMargin));
         try (var runtime = start(options, runtimeStores)) {
+            ZLinkFrameworkRuntimeTestAccess.awaitServing(runtime, Duration.ofSeconds(5));
             runtime.spotManager()
                     .getOrCreate("occupied-room", "room")
                     .submit()

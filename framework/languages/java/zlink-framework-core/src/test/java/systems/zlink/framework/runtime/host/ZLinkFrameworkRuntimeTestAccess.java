@@ -1,5 +1,9 @@
 package systems.zlink.framework.runtime.host;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -22,12 +26,17 @@ import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Flow;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
@@ -291,6 +300,49 @@ public final class ZLinkFrameworkRuntimeTestAccess {
 
     public static ZLinkFrameworkRuntimeState state(ZLinkFrameworkRuntime runtime) {
         return runtime.state();
+    }
+
+    public static void awaitServing(ZLinkFrameworkRuntime runtime, Duration timeout)
+            throws Exception {
+        var serving = new CompletableFuture<Void>();
+        var subscription = new AtomicReference<Flow.Subscription>();
+        runtime.observe()
+                .subscribe(
+                        new Flow.Subscriber<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>() {
+                            @Override
+                            public void onSubscribe(Flow.Subscription value) {
+                                subscription.set(value);
+                                value.request(Long.MAX_VALUE);
+                            }
+
+                            @Override
+                            public void onNext(
+                                    ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus> observed) {
+                                if (observed.status().state()
+                                        == ZLinkFrameworkRuntimeState.SERVING) {
+                                    serving.complete(null);
+                                }
+                            }
+
+                            @Override
+                            public void onError(Throwable failure) {
+                                serving.completeExceptionally(failure);
+                            }
+
+                            @Override
+                            public void onComplete() {
+                                serving.completeExceptionally(
+                                        new IllegalStateException(
+                                                "Runtime observation completed before Serving"));
+                            }
+                        });
+        try {
+            serving.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            assertTrue(runtime.isReady(), "Serving observation must match runtime readiness");
+        } finally {
+            var active = subscription.get();
+            if (active != null) active.cancel();
+        }
     }
 
     public static ZLinkChannelRuntime channels(ZLinkFrameworkRuntime runtime) {
