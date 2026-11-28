@@ -830,8 +830,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
                     authority_split =
                       committed_units != 0
-                      || moved.reason
-                           == runtime::stateful::relocation_reason_t::owner_lease_expired
+                      || moved.reason == runtime::stateful::relocation_reason_t::owner_lease_expired
                       || moved.reason == runtime::stateful::relocation_reason_t::authority_missing;
                     terminal.reason = relocation_reason_t::relocation_failed;
                     complete (terminal);
@@ -904,8 +903,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
                     authority_split =
                       committed_units != 0
-                      || moved.reason
-                           == runtime::stateful::relocation_reason_t::owner_lease_expired
+                      || moved.reason == runtime::stateful::relocation_reason_t::owner_lease_expired
                       || moved.reason == runtime::stateful::relocation_reason_t::authority_missing;
                     terminal.reason = relocation_reason_t::relocation_failed;
                     complete (terminal);
