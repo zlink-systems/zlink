@@ -25,6 +25,8 @@ try {
 
     Invoke-Stage 'go test all Go packages (cgo pointer checks enabled)' { go test ./... }
     Invoke-Stage 'go vet all Go packages' { go vet ./... }
+    Invoke-Stage 'go test Go perf module' { go -C perf test ./... }
+    Invoke-Stage 'go vet Go perf module' { go -C perf vet ./... }
     Invoke-Stage 'raw contract and hot-path guards' {
         go test ./internal/native -run 'Test(OptimizationGuard|RawCore11Allowlist|HotPathCostInventory|EveryPackagedCoreExportHasAnOwner)' -count=1
     }
