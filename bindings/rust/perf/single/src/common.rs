@@ -26,6 +26,9 @@ use zlink::{
 // Wire-level stop token used by sender threads to signal phase end to a
 // receiver waiting on a poller. PERF_SINGLE_TEST_POLICY § 1.4 mandates this
 // pattern instead of `AtomicBool sender_done` + short polling.
+// Progress completions once every this many submissions while submitting continuously
+// (C bindings/c/perf/single/common/perf_single_reqrep.hpp:431).
+const REQREP_PROGRESS_EVERY: usize = 64;
 const DEFAULT_TIMEOUT_MS: u64 = 200;
 
 pub const STOP_TOKEN: &[u8] = b"__zlink_perf_stop__";
@@ -840,6 +843,7 @@ where
     let mut events = [zlink::PollEvent::default()];
     let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
     let mut task_context = TaskContext::from_waker(&waker);
+    let mut submitted_since_progress = 0usize;
 
     while now_ns() < active_deadline_ns {
         let mut progressed = false;
@@ -862,6 +866,23 @@ where
                     break;
                 }
                 requests.push(submission.reply);
+                submitted_since_progress += 1;
+                if submitted_since_progress == REQREP_PROGRESS_EVERY {
+                    submitted_since_progress = 0;
+                    if poller
+                        .wait(&mut events, 0)
+                        .map_err(|error| error.to_string())?
+                        != 0
+                    {
+                        drain_reqrep_completions(
+                            &mut requests,
+                            &mut task_context,
+                            &mut stats,
+                            config.size,
+                            active_deadline_ns,
+                        )?;
+                    }
+                }
             }
         }
 
