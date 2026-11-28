@@ -3,7 +3,7 @@
   "version": 1,
   "senderLanguages": ["cpp", "dotnet", "java", "node"],
   "ownerLanguages": {
-    "cpp": "expected-failure-before-owner-fix",
+    "cpp": "expected-failure-before-5974",
     "dotnet": "enabled",
     "java": "enabled",
     "node": "enabled"

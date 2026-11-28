@@ -46,6 +46,7 @@ namespace runtime = zlink::framework::runtime;
 
 #include "login_admission.hpp"
 #include "outage_location_store.hpp"
+#include "sealed_join_observation.hpp"
 
 namespace
 {
@@ -903,6 +904,7 @@ namespace
  * context, so the event sink and this node's own routing id travel through
  * file-scope pointers. */
 event_sink_t *g_user_spot_sink = nullptr;
+std::shared_ptr<sealed_join_observation_t> g_sealed_join;
 std::string g_user_spot_node_rid;
 std::shared_ptr<outage_location_store_t> g_outage_store;
 std::atomic_uint64_t g_outage_instances{0}, g_outage_probe_calls{0};
@@ -965,6 +967,8 @@ class relocation_actor_t final : public fw::actor_t
     fw::task_t<void> on_join_completed (const fw::actor_join_completion_t &completion) override
     {
         if (std::get_if<fw::actor_join_accepted_t> (&completion) != nullptr) {
+            if (g_sealed_join)
+                g_sealed_join->fail_completion (actor_id, g_user_spot_node_rid);
             user_spot_event ("user-spot-join-completed|status=accepted|actor=" + actor_id);
         } else if (std::get_if<fw::actor_join_rejected_t> (&completion) != nullptr) {
             user_spot_event ("user-spot-join-completed|status=rejected|actor=" + actor_id);
@@ -1116,6 +1120,14 @@ class relocation_entry_spot_t final : public fw::entry_spot_t<relocation_actor_t
     /* Explicit "still on the source" reply instead of a NOT_FOUND retry storm
      * (mirrors Node's SourceProbeHandler and Java's
      * SourceUserSpotProbeHandler). */
+    void late_send (relocation_actor_t &actor,
+                    fw::message_context_t &,
+                    const user_spot_late_send_t &message)
+    {
+        user_spot_event ("late-actor-send-executed|actor=" + actor.actor_id
+                         + "|marker=" + message.marker);
+    }
+
     user_spot_probe_res_t probe (const relocation_actor_t &actor,
                                  fw::message_context_t &,
                                  const user_spot_probe_req_t &request)
@@ -1143,6 +1155,8 @@ class relocation_user_spot_t final : public fw::spot_t<relocation_actor_t>
 
     void configure () override
     {
+        _context.handlers ().add_actor_send<&relocation_user_spot_t::late_send> (
+          user_spot_late_send_t::packet_name);
         _context.handlers ().add_actor_request<&relocation_user_spot_t::probe> (
           user_spot_probe_req_t::packet_name);
     }
@@ -1189,6 +1203,14 @@ class relocation_user_spot_t final : public fw::spot_t<relocation_actor_t>
     }
 
     fw::task_t<void> on_leave_actor (relocation_actor_t &) override { co_return; }
+
+    void late_send (relocation_actor_t &actor,
+                    fw::message_context_t &,
+                    const user_spot_late_send_t &message)
+    {
+        user_spot_event ("late-actor-send-executed|actor=" + actor.actor_id
+                         + "|marker=" + message.marker);
+    }
 
     user_spot_probe_res_t probe (const relocation_actor_t &actor,
                                  fw::message_context_t &,
@@ -1620,9 +1642,10 @@ class user_spot_target_service_t final : public fw::hosted_service_t
                 observe_source_peer (sink, routes, mesh_runtime);
             });
         }
-        _probe = std::thread ([this, &sink, &actors, target_node_rid] {
-            probe_joined_actor (sink, actors, target_node_rid);
-        });
+        if (!g_sealed_join || !g_sealed_join->enabled ())
+            _probe = std::thread ([this, &sink, &actors, target_node_rid] {
+                probe_joined_actor (sink, actors, target_node_rid);
+            });
         if (g_outage_store) {
             auto &manager = services.get_required<fw::actor_manager_t> ();
             auto &location = services.get_required<runtime::location_runtime_t> ();
@@ -2070,6 +2093,14 @@ int main (int argc, char **argv)
         }
 
         auto app = fw::app_t::create ();
+        if (mode == "user-spot-target") {
+            g_sealed_join = std::make_shared<sealed_join_observation_t> (
+              option ("actor-id", "cross-lang-user-spot-actor"), option ("event-file") + ".flow",
+              [] (const std::string &line) { user_spot_event (line); });
+            if (g_sealed_join->enabled ())
+                app.logging ().use_callback_sink (
+                  [] (const fw::log_record_t &record) { g_sealed_join->observe (record); });
+        }
         app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
             auto sink = std::make_unique<event_sink_t> (option ("event-file"));
             g_user_spot_sink = sink.get ();

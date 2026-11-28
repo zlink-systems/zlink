@@ -205,14 +205,48 @@ result_t<void> actor_transfer_coordinator_t::try_begin_local (const std::string 
       .get ();
 }
 
-task_t<void> actor_transfer_coordinator_t::mark_local_completion_failed (std::string actor_key)
+task_t<actor_transfer_coordinator_t::backlog_result_t>
+actor_transfer_coordinator_t::seal_failed_join_completion (std::string actor_key,
+                                                           std::string committed_handoff_id)
 {
-    return _lane.run_task ([this, actor_key = std::move (actor_key)] {
-        const auto found = _moves.find (actor_key);
-        if (found != _moves.end () && found->second.phase == actor_move_phase_t::local) {
-            found->second.local_completion_sealed_at = std::chrono::steady_clock::now ();
-            found->second.phase = actor_move_phase_t::local_completion_failed;
+    return _lane.run_task ([this, actor_key = std::move (actor_key),
+                            handoff_id = std::move (committed_handoff_id)] () -> backlog_result_t {
+        const auto moving = _moves.find (actor_key);
+        if (moving == _moves.end ())
+            return {};
+        auto &move = moving->second;
+        if (handoff_id.empty ()) {
+            if (move.phase == actor_move_phase_t::local) {
+                move.join_completion_sealed_at = std::chrono::steady_clock::now ();
+                move.phase = actor_move_phase_t::local_completion_failed;
+                return std::make_shared<std::vector<handoff_packet_t>> ();
+            }
+            return {};
         }
+        const auto admission = _admissions.find (handoff_id);
+        if (move.phase != actor_move_phase_t::target_committing || move.transfer_id != handoff_id
+            || admission == _admissions.end () || admission->second.actor_key != actor_key)
+            return {};
+        auto terminal_backlog = std::make_shared<std::vector<handoff_packet_t>> ();
+        _completed_admissions.insert (_admissions.extract (admission));
+        if (auto queued = _backlogs.extract (actor_key))
+            *terminal_backlog = std::move (queued.mapped ());
+        move.transfer_id.clear ();
+        move.phase = actor_move_phase_t::remote_join_completion_sealed;
+        wake_management_on_lane ();
+        return terminal_backlog;
+    });
+}
+
+void actor_transfer_coordinator_t::retire_remote_join_seal (const std::string &actor_key)
+{
+    // Called under the Spot state lane (erase_actor_route_unlocked). Coordinator lane work never
+    // waits on the state lane, so this synchronous wait cannot deadlock.
+    _lane.run_sync ([&] {
+        const auto moving = _moves.find (actor_key);
+        if (moving != _moves.end ()
+            && moving->second.phase == actor_move_phase_t::remote_join_completion_sealed)
+            erase_move_on_lane (actor_key);
     });
 }
 
@@ -380,12 +414,14 @@ actor_transfer_coordinator_t::try_append_backlog_unlocked (const std::string &ac
     const auto *move = blocking_move_on_lane (actor_key);
     if (!move)
         return handoff_append_result_t::not_moving;
+    if (move->phase == actor_move_phase_t::remote_join_completion_sealed)
+        return handoff_append_result_t::join_completion_failed;
     if (move->phase == actor_move_phase_t::local_completion_failed) {
         // A native record can reach the Actor after its FIFO already admitted it.
         const auto *record =
           packet.application_record ? packet.application_record->identity () : nullptr;
         if (!record || record->actor_admitted_at == std::chrono::steady_clock::time_point::min ()
-            || record->actor_admitted_at > move->local_completion_sealed_at)
+            || record->actor_admitted_at > move->join_completion_sealed_at)
             return handoff_append_result_t::join_completion_failed;
     }
     const auto backlog_found = _backlogs.find (actor_key);
@@ -940,14 +976,21 @@ actor_transfer_coordinator_t::blocking_move_on_lane (const std::string &actor_ke
 
 bool actor_transfer_coordinator_t::blocks_dispatch (const std::string &actor_key) const
 {
-    return _lane.run_checked ([&, this] { return blocking_move_on_lane (actor_key) != nullptr; })
+    return _lane.run_checked ([&, this] { return has_blocking_transfer_on_lane (actor_key); })
       .get ();
+}
+
+bool actor_transfer_coordinator_t::has_blocking_transfer_on_lane (
+  const std::string &actor_key) const
+{
+    const auto *move = blocking_move_on_lane (actor_key);
+    return move && move->phase != actor_move_phase_t::remote_join_completion_sealed;
 }
 
 task_t<bool> actor_transfer_coordinator_t::blocks_dispatch_async (std::string actor_key) const
 {
     return _lane.run_task ([this, actor_key = std::move (actor_key)] {
-        return blocking_move_on_lane (actor_key) != nullptr;
+        return has_blocking_transfer_on_lane (actor_key);
     });
 }
 

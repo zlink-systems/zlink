@@ -116,7 +116,8 @@ task_t<bool> settle_handoff_packet (std::shared_ptr<detail::spot_node_builder_st
                                     result_t<zlink::message_t> completed);
 
 void fail_handoff_backlog (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
-                           std::vector<detail::handoff_packet_t> discarded);
+                           std::vector<detail::handoff_packet_t> discarded,
+                           const actor_ref_t *sealed_actor = nullptr);
 
 std::optional<zlink::routing_id_t>
 handoff_routing_id (const std::map<std::string, std::string> &metadata, std::string_view key);

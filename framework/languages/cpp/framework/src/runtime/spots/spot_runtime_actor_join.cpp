@@ -2831,8 +2831,15 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
             native = co_await settlement;
             if (!result && accepted) {
                 work->waiting.store ("failed_completion_cleanup", std::memory_order_relaxed);
-                co_await node->actor_transfer_coordinator->mark_local_completion_failed (
-                  actor_key (actor));
+                const auto sealed =
+                  co_await node->actor_transfer_coordinator->seal_failed_join_completion (
+                    actor_key (actor));
+                if (sealed)
+                    report_spot_dispatch_error (
+                      node, dispatch_error_surface_t::actor_relocation,
+                      dispatch_message_kind_t::control, dispatch_error_reason_t::handler_exception,
+                      dispatch_error_action_t::drop, "OnJoinCompleted", {}, {},
+                      std::string (actor.actor_id ().value ()), result.exception (), {});
             }
             if (native && result) {
                 work->waiting.store ("local_actor_owner", std::memory_order_relaxed);
@@ -4775,6 +4782,47 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                                 try {
                                     runtime::actor_execution_scope_t actor_scope (
                                       key, std::string (target_spot_id));
+                                    const auto confirm_execution_ready = [&] {
+                                        if (node->location_lifecycle) {
+                                            const auto actors =
+                                              executor->actor_executor_snapshot ();
+                                            if (actors) {
+                                                const auto actor = actors->find (key);
+                                                if (actor != actors->end ())
+                                                    actor->second->queue ()
+                                                      ->confirm_execution_ready (
+                                                        node->location_lifecycle
+                                                          ->execution_runtime ()
+                                                          .execution_clock () ());
+                                            }
+                                        }
+                                    };
+                                    if (!delivered && !completion_failure) {
+                                        // Like fail_commit below: coordinator lane work never waits on
+                                        // this lane, so the synchronous result cannot deadlock.
+                                        auto sealed =
+                                          node->actor_transfer_coordinator
+                                            ->seal_failed_join_completion (key, transfer_id)
+                                            .result ()
+                                            .value ();
+                                        if (sealed) {
+                                            fail_handoff_backlog (node, std::move (*sealed),
+                                                                  &committed);
+                                            confirm_execution_ready ();
+                                            report_spot_dispatch_error (
+                                              node, dispatch_error_surface_t::actor_relocation,
+                                              dispatch_message_kind_t::control,
+                                              dispatch_error_reason_t::handler_exception,
+                                              dispatch_error_action_t::drop, "OnJoinCompleted", {},
+                                              {}, std::string (committed.actor_id ().value ()),
+                                              delivered.exception (), {});
+                                            commit_state->mark_committed ();
+                                            settle_turn (
+                                              remote_actor_commit_turn_state_t::outcome_t{.success =
+                                                                                            true});
+                                            return;
+                                        }
+                                    }
                                     if (!delivered) {
                                         fail_handoff_backlog (
                                           node, node->actor_transfer_coordinator->fail_commit (
@@ -4921,16 +4969,7 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                                           "publication"});
                                         return;
                                     }
-                                    if (node->location_lifecycle) {
-                                        const auto actors = executor->actor_executor_snapshot ();
-                                        if (actors) {
-                                            const auto actor = actors->find (key);
-                                            if (actor != actors->end ())
-                                                actor->second->queue ()->confirm_execution_ready (
-                                                  node->location_lifecycle->execution_runtime ()
-                                                    .execution_clock () ());
-                                        }
-                                    }
+                                    confirm_execution_ready ();
                                     commit_state->mark_committed ();
                                     auto replay_owner =
                                       std::make_shared<spot_node_runtime_t> (node);
