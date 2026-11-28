@@ -30,7 +30,7 @@ def test_nodrop_reports_backpressure_on_full_subscription_pipe(nonblocking):
 
         with zlink.Message.from_(b"caller owned") as source:
             publisher.publish("topic").messages(source, b"").submit()
-            assert source.to_bytes() == b"caller owned"
+            assert source.to_bytes() == b""
         assert subscriber.subscribe_into(received)
         assert received.to_bytes_list() == [b"caller owned", b""]
         received.close()
@@ -68,7 +68,7 @@ def test_publish_without_subscribers_succeeds(factory):
         assert publisher.publish("unmatched").message(b"discarded").submit() is None
         with zlink.Message.from_(b"caller owned") as payload:
             assert publisher.publish("unmatched").messages(payload, b"").submit() is None
-            assert payload.to_bytes() == b"caller owned"
+            assert payload.to_bytes() == b""
 
 
 def test_publish_projects_core_not_connected(monkeypatch):

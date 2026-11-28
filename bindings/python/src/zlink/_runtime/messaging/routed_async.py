@@ -36,7 +36,7 @@ from ..handles.native_support import (
     _native_extension,
 )
 from .message_materializer import Message
-from .native_parts import _materialize_native_parts
+from .native_parts import _consume_submitted_messages, _materialize_native_parts
 
 
 def _close_messages(messages):
@@ -1041,11 +1041,13 @@ class CompletionOwner:
             if error is not None:
                 raise error
             raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EIO)
+        _consume_submitted_messages(payload, rc)
         return SubmitResult(rc), entry.admitted
 
     def submit_send_sync(self, target, payload):
         native_parts = _materialize_native_parts(payload)
         rc, internal_errno, completion_id = self._submit_parts(target, native_parts, 0)
+        _consume_submitted_messages(payload, rc)
         if rc != int(SubmitResult.OK):
             _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
         if completion_id != 0:
@@ -1135,13 +1137,14 @@ class CompletionOwner:
             if error is not None:
                 raise error
             raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EIO)
+        _consume_submitted_messages(payload, rc)
         return SubmitResult(rc), entry.admitted, entry.future
 
     def submit_request_sync(self, target, payload, timeout_ms):
-        native_parts = _materialize_native_parts(payload)
         entry = _CompletionEntry(ZLINK_COMPLETION_REQUEST)
         self._register(entry)
         try:
+            native_parts = _materialize_native_parts(payload)
             rc, internal_errno, completion_id = self._submit_parts(
                 target, native_parts, 0, entry, int(timeout_ms)
             )
@@ -1149,6 +1152,7 @@ class CompletionOwner:
             entry.fail_submit()
             self._unregister(entry)
             raise
+        _consume_submitted_messages(payload, rc)
         if rc != int(SubmitResult.OK):
             entry.fail_submit()
             self._unregister(entry)

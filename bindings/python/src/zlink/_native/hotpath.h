@@ -281,10 +281,16 @@ static PyObject *py_submit_storage (PyObject *self, PyObject *args)
             goto fail;
         rid_ptr = &rid;
     }
-    unsigned long timeout_ms =
-      timeout == Py_None ? 0 : PyLong_AsUnsignedLong (timeout);
+    /* Core takes a uint32_t millisecond timeout. unsigned long is 32 bits on
+       Windows, so read 64 bits and range-check explicitly. */
+    unsigned long long timeout_ms =
+      timeout == Py_None ? 0 : PyLong_AsUnsignedLongLong (timeout);
     if (PyErr_Occurred ())
         goto fail;
+    if (timeout_ms > UINT32_MAX) {
+        PyErr_SetString (PyExc_OverflowError, "timeout exceeds UINT32_MAX milliseconds");
+        goto fail;
+    }
     Py_ssize_t count = PyList_GET_SIZE (parts);
     Py_buffer inline_views[8] = {{0}};
     Py_buffer *views = count <= 8 ? inline_views : PyMem_Calloc (count, sizeof (Py_buffer));

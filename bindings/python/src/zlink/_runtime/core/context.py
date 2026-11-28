@@ -160,6 +160,7 @@ class NativeContextOptions:
 
     @property
     def thread_name_prefix(self):
+        # Core limits the prefix to 16 bytes including NUL (core/doc/spec/core/01-context.ko.md:271).
         raw = ctypes.create_string_buffer(16)
         size = ctypes.c_size_t(len(raw))
         native = lib()
