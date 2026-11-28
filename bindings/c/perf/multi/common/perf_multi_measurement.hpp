@@ -12,6 +12,11 @@ namespace perf_multi_measurement
 {
 static const uint64_t settle_ns = 500000000ULL;
 static const uint64_t catch_up_window_ns = 500000000ULL;
+// Paced poll waits: floor to ms and cap at max_wait_ms. Under recheck_below_ms the wait is 0,
+// so the sender rechecks right away instead of oversleeping the next send.
+static const int recheck_below_ms = 1;
+static const int max_wait_ms = 50;
+static const uint64_t ns_per_ms = 1000000ULL;
 
 inline bool is_paced_receive_phase (uint8_t phase)
 {
@@ -108,6 +113,18 @@ struct schedule_t
                              : 0);
     }
     bool due (uint64_t now_ns) const { return rate > 0.0 && now_ns >= next_ns (); }
+    // Wait until the next send or end_ns, whichever comes first. 0 means recheck now: the
+    // deadline has passed or less than recheck_below_ms remains.
+    int wait_ms (uint64_t now_ns, uint64_t end_ns) const
+    {
+        const uint64_t until = end_ns < next_ns () ? end_ns : next_ns ();
+        if (now_ns >= until)
+            return 0;
+        const uint64_t ms = (until - now_ns) / ns_per_ms;
+        return ms < static_cast<uint64_t> (recheck_below_ms) ? 0
+               : ms > static_cast<uint64_t> (max_wait_ms)    ? max_wait_ms
+                                                             : static_cast<int> (ms);
+    }
     void accepted (uint64_t now_ns)
     {
         if (now_ns > next_ns () && now_ns - next_ns () > 1000000ULL)
