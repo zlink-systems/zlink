@@ -14,6 +14,7 @@
 #include <memory>
 #include <memory_resource>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -104,7 +105,9 @@ class completion_owner_t
     bool start_async_request (const std::shared_ptr<completion_entry_t> &entry_);
     void register_blocking_entry (const std::shared_ptr<completion_entry_t> &entry_);
     void register_send_entry (const std::shared_ptr<completion_entry_t> &entry_);
-    void unregister_entry (void *submit_context_) noexcept;
+    void reject_wait_token (void *submit_context_, uint64_t token_);
+    void unregister_entry (void *submit_context_,
+                           zlink_completion_id_t captured_token_ = 0) noexcept;
     size_t drain ();
     void drain_inline (const std::shared_ptr<completion_entry_t> &entry_);
 
@@ -115,6 +118,12 @@ class completion_owner_t
     const std::shared_ptr<socket_handle_t> &socket_handle () const noexcept { return _socket; }
 
   private:
+    struct early_send_t
+    {
+        zlink_completion_id_t token;
+        std::shared_ptr<completion_entry_t> entry;
+    };
+
     void insert_entry_locked (const std::shared_ptr<completion_entry_t> &entry_);
     size_t drain_impl (completion_entry_t *inline_target_);
 
@@ -133,7 +142,8 @@ class completion_owner_t
     // address: a rejected SEND is registered after Core already recorded the
     // context, so the key has to be the value Core will hand back.
     std::pmr::unordered_map<void *, std::shared_ptr<completion_entry_t>> _entries;
-    std::pmr::unordered_map<void *, zlink_completion_t> _early_send_completions;
+    std::pmr::unordered_map<void *, early_send_t *> _early_send_completions;
+    std::pmr::set<zlink_completion_id_t> _rejected_wait_tokens;
     std::condition_variable _send_registered;
     const void *_public_owner = nullptr;
     bool _shutdown = false;

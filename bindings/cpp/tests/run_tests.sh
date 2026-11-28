@@ -13,6 +13,8 @@ else
 fi
 BUILD_DIR="${CPP_DIR}/build"
 
+bash "${SCRIPT_DIR}/test_sample_build_directory.sh" "${BUILD_DIR}"
+
 CONFIGURE_ARGS=(
   -DZLINK_CORE_DIR=${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core}
   -DZLINK_CPP_CORE_BUILD_DIR=${CORE_BUILD_DIR}

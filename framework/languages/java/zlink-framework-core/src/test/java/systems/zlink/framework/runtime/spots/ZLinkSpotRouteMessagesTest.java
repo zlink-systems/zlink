@@ -99,7 +99,7 @@ final class ZLinkSpotRouteMessagesTest {
     void decodesReplyAndFrameworkError() {
         List<Message> reply = List.of(message("reply"));
         try {
-            assertEquals("reply", messages.decodeReply(reply, String.class));
+            assertEquals("reply", messages.decodeReply(reply, String.class, Optional.empty()));
         } finally {
             Message.closeAll(reply);
         }
@@ -111,7 +111,9 @@ final class ZLinkSpotRouteMessagesTest {
             ZLinkFrameworkException failure =
                     assertThrows(
                             ZLinkFrameworkException.class,
-                            () -> messages.decodeReply(unavailable, String.class));
+                            () ->
+                                    messages.decodeReply(
+                                            unavailable, String.class, Optional.empty()));
             assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failure.kind());
             assertEquals("route is converging", failure.getMessage());
         } finally {
@@ -138,7 +140,7 @@ final class ZLinkSpotRouteMessagesTest {
                                     ZLinkChannelEnvelope.reply(requestHeader)),
                             message("reply"));
             try {
-                assertEquals("reply", messages.decodeReply(reply, String.class));
+                assertEquals("reply", messages.decodeReply(reply, String.class, Optional.empty()));
             } finally {
                 Message.closeAll(reply);
                 Message.closeAll(List.of(request.get(0)));
@@ -157,7 +159,7 @@ final class ZLinkSpotRouteMessagesTest {
             ZLinkFrameworkException failure =
                     assertThrows(
                             ZLinkFrameworkException.class,
-                            () -> messages.decodeReply(stale, String.class));
+                            () -> messages.decodeReply(stale, String.class, Optional.empty()));
             assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failure.kind());
             assertTrue(ZLinkFrameworkErrorOrigin.isFramework(failure));
         } finally {
@@ -173,7 +175,9 @@ final class ZLinkSpotRouteMessagesTest {
             ZLinkFrameworkException failure =
                     assertThrows(
                             ZLinkFrameworkException.class,
-                            () -> messages.decodeReply(application, String.class));
+                            () ->
+                                    messages.decodeReply(
+                                            application, String.class, Optional.empty()));
             assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failure.kind());
             assertFalse(ZLinkFrameworkErrorOrigin.isFramework(failure));
         } finally {

@@ -25,6 +25,16 @@ public interface ZLinkStreamNodeBuilder {
 
     ZLinkStreamNodeBuilder authenticationRetryDelay(Duration delay);
 
+    ZLinkStreamNodeBuilder admissionQueueEnabled(boolean enabled);
+
+    ZLinkStreamNodeBuilder admissionQueueKey(String key);
+
+    ZLinkStreamNodeBuilder admissionQueuePreviousKey(String key);
+
+    ZLinkStreamNodeBuilder admissionQueueMeshName(String meshName);
+
+    ZLinkStreamNodeBuilder admissionGlobalLimit(int limit);
+
     ZLinkStreamSocketConfig configureSocket();
 
     ZLinkStreamNodeBuilder setTlsServer(String certificatePath, String keyPath);
