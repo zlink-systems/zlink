@@ -28,14 +28,17 @@ inline std::vector<message_t> take_send_parts (operation_state_t &state_)
 
 template <typename RestoreSources>
 bool submit_wait_or_throw (submit_result_t result_, int errno_,
-                           zlink_completion_id_t id_, send_flags_t flags_,
+                           zlink_completion_id_t id_, operation_state_t &state_,
+                           void *user_context_,
                            const RestoreSources &restore_sources_)
 {
     if (result_ == submit_result_t::backpressured && id_ != 0) {
         if (errno_ != EAGAIN) {
+            if (auto runtime = state_.raw.socket->runtime.lock ())
+                runtime->completion->reject_wait_token (user_context_, id_);
             result_ = submit_result_t::internal_error;
             errno_ = EPROTO;
-        } else if (flags_ == send_flags_t::dontwait) {
+        } else if (state_.flags == send_flags_t::dontwait) {
             return false;
         }
     }
@@ -109,7 +112,7 @@ inline bool submit_raw_send_state (operation_state_t &state_,
         return false;
 
     return submit_wait_or_throw (result, submit_errno,
-      completion_id_out_ ? *completion_id_out_ : 0, state_.flags, [] {});
+      completion_id_out_ ? *completion_id_out_ : 0, state_, user_context_, [] {});
 }
 
 inline bool submit_raw_request_state (
@@ -177,7 +180,7 @@ inline bool submit_raw_request_state (
     }
 
     return submit_wait_or_throw (result, submit_errno, *completion_id_out_,
-                                 state_.flags, restore_sources);
+                                 state_, user_context_, restore_sources);
 }
 
 } // namespace detail

@@ -23,6 +23,7 @@ int fixture_early_send_waiting(void);
 void fixture_release_early_send(void);
 void fixture_backpressure_once(int with_token);
 void fixture_invalid_wait_token_once(void);
+uintptr_t fixture_invalid_wait_context(void);
 void fixture_writable(uint64_t id, uintptr_t context, const char *rid);
 void fixture_writable_result(uint64_t id, uintptr_t context, const char *rid, int result, int terminal_errno);
 void fixture_request(uint64_t id, uintptr_t context);
@@ -51,7 +52,8 @@ func BackpressureOnce(withToken bool) {
 	C.fixture_backpressure_once(flag)
 }
 
-func InvalidWaitTokenOnce() { C.fixture_invalid_wait_token_once() }
+func InvalidWaitTokenOnce()       { C.fixture_invalid_wait_token_once() }
+func InvalidWaitContext() uintptr { return uintptr(C.fixture_invalid_wait_context()) }
 
 func Writable(id uint64, context uintptr, rid string) {
 	value := C.CString(rid)

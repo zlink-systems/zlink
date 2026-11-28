@@ -241,9 +241,10 @@ func submitManagedSend(
 		send.payload.close()
 		return nil, newSubmitError(SubmitInvalidState, int(C.ESHUTDOWN))
 	}
-	// Only the in-flight count is recorded before the native call. A completion
-	// entry is created after Core returns a wait token.
-	owner.inflightSends++
+	if owner.inflightSends == nil {
+		owner.inflightSends = make(map[uintptr]*earlyWritableRecord)
+	}
+	owner.inflightSends[key] = nil
 	owner.mu.Unlock()
 	waitID, err := send.attempt(key)
 	if waitID == 0 {
@@ -251,7 +252,7 @@ func submitManagedSend(
 			send.payload.takeSourceOwnership()
 		}
 		send.payload.close()
-		owner.discardEarlyWritable(key)
+		owner.discardInitialSend(key)
 		if err != nil {
 			return nil, err
 		}

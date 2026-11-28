@@ -56,11 +56,11 @@ func TestInvalidWaitTokenErrno(t *testing.T) {
 			}
 			owner := socket.completion
 			owner.mu.Lock()
-			entries, early := len(owner.entries), len(owner.earlyWritable)
+			entries, inFlight := len(owner.entries), len(owner.inflightSends)
 			owner.mu.Unlock()
-			if entries != 0 || early != 0 || completiontest.Trace() != "B" {
-				t.Fatalf("failed submit left entries=%d, early records=%d, trace=%q",
-					entries, early, completiontest.Trace())
+			if entries != 0 || inFlight != 0 || completiontest.Trace() != "B" {
+				t.Fatalf("failed submit left entries=%d, in-flight sends=%d, trace=%q",
+					entries, inFlight, completiontest.Trace())
 			}
 		})
 
