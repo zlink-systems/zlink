@@ -140,8 +140,9 @@ jobs:
       - uses: actions/checkout@v5
         if: needs.changes.outputs[matrix.scope] == 'true'
         with:
-          # The Java private-access check compares against origin/main.
-          fetch-depth: ${{ matrix.scope == 'java' && 0 || 1 }}
+          # The Java private-access check compares against origin/main. Quote 0:
+          # a bare 0 is falsy in expressions, so `&& 0 || 1` always gave 1.
+          fetch-depth: ${{ matrix.scope == 'java' && '0' || '1' }}
           persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
