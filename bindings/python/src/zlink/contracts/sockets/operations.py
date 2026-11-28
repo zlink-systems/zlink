@@ -123,7 +123,10 @@ class RequestOp(_FluentMessageOp, Protocol):
     def messages(self, *payloads) -> "RequestOp": ...
 
     def timeout(self, timeout) -> "RequestOp":
-        """Set the reply timeout."""
+        """Set the reply timeout in seconds (``float``).
+
+        ``None`` or ``0`` uses the socket's ``request_timeout_ms``.
+        """
         ...
 
     def submit(self) -> RequestSubmission:

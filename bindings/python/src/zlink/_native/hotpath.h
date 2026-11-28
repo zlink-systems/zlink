@@ -31,9 +31,9 @@
     X(_defer_retry) \
     X(_dispatch_retry) \
     X(_entries) \
-    X(_entries_by_id) \
     X(_error) \
     X(_finish_rejected_submit_locked) \
+    X(_abort_rejected_submit) \
     X(_handle) \
     X(_index) \
     X(_keepalive) \
@@ -616,12 +616,6 @@ static PyMethodDef entry_init_def = {"__init__", (PyCFunction) entry_init, METH_
 static PyMethodDef entry_clone_def = {"clone_payload", entry_clone_payload, METH_NOARGS, NULL};
 static PyMethodDef send_succeed_def = {"succeed_send", send_entry_succeed, METH_NOARGS, NULL};
 
-static PyObject *entry_context (PyObject *entry, void *closure)
-{
-    (void) closure;
-    return PyLong_FromVoidPtr (entry);
-}
-
 static PyObject *entry_state (PyObject *entry, void *closure)
 {
     PyObject *condition = lock_entry (entry);
@@ -640,7 +634,6 @@ static PyObject *entry_state (PyObject *entry, void *closure)
 }
 
 static PyGetSetDef entry_properties[] = {
-  {"context", entry_context, NULL, NULL, NULL},
   {"settled", entry_state, NULL, NULL, &hp__settled},
   {"waiting_native", entry_state, NULL, NULL, &hp__native_wait},
   {"releasable", entry_state, NULL, NULL, NULL},
@@ -1094,15 +1087,9 @@ static PyObject *owner_drain (PyObject *owner, PyObject *args, PyObject *kwargs)
             Py_XDECREF (context);
             goto done;
         }
-        PyObject *entries = PyObject_GetAttr (owner, hp__entries_by_id);
-        entry = entries ? hot_call (entries, hp_get, "(O)", id) : NULL;
+        PyObject *entries = PyObject_GetAttr (owner, hp__entries);
+        entry = entries ? hot_call (entries, hp_get, "(O)", context) : NULL;
         Py_XDECREF (entries);
-        if (entry == Py_None) {
-            Py_CLEAR (entry);
-            entries = PyObject_GetAttr (owner, hp__entries);
-            entry = entries ? hot_call (entries, hp_get, "(O)", context) : NULL;
-            Py_XDECREF (entries);
-        }
         Py_DECREF (context);
         unlock_entry (guard);
         guard = NULL;
@@ -1344,15 +1331,23 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
         PyObject *projection = hot_call (owner, hp__finish_rejected_submit_locked,
                                          "OiiKi", entry, rc, err, completion_id,
                                          initial_attempt);
-        if (!projection)
-            goto done;
-        PyObject *projected_outcome, *retry;
-        if (PyArg_ParseTuple (projection, "OO", &projected_outcome, &retry)) {
-            resubmit = PyObject_IsTrue (retry);
-            if (resubmit >= 0)
-                outcome = Py_NewRef (projected_outcome);
+        if (projection) {
+            PyObject *projected_outcome, *retry;
+            if (PyArg_ParseTuple (projection, "OO", &projected_outcome, &retry)) {
+                resubmit = PyObject_IsTrue (retry);
+                if (resubmit >= 0)
+                    outcome = Py_NewRef (projected_outcome);
+            }
+            Py_DECREF (projection);
         }
-        Py_DECREF (projection);
+        if (!outcome) {
+            PyObject *type, *error, *tb;
+            PyErr_Fetch (&type, &error, &tb);
+            PyObject *aborted = hot_call (owner, hp__abort_rejected_submit, "(O)", entry);
+            Py_XDECREF (aborted);
+            PyErr_Restore (type, error, tb);
+            goto done;
+        }
     } else if (completion_id) {
         PyObject *published =
           hot_call (owner, hp__publish_writable_locked, "OK", entry, completion_id);
@@ -1693,6 +1688,7 @@ static PyObject *entry_capture (PyObject *entry, PyObject *completion)
     PyObject *condition = lock_entry (entry);
     PyObject *value = Py_NewRef (Py_None), *failure = Py_NewRef (Py_None);
     PyObject *deliver = NULL, *result = NULL, *discarded = NULL;
+    int context_matches = 0;
     if (!condition)
         goto close_completion;
     int captured = entry_truth (entry, hp__captured);
@@ -1700,12 +1696,15 @@ static PyObject *entry_capture (PyObject *entry, PyObject *completion)
     PyObject *entry_id = PyObject_GetAttr (entry, hp_completion_id);
     int matches = entry_id && PyLong_AsUnsignedLongLong (entry_id) == record.completion_id;
     Py_XDECREF (entry_id);
+    PyObject *entry_context = PyObject_GetAttr (entry, hp_context);
+    context_matches = entry_context && PyLong_AsVoidPtr (entry_context) == record.user_context;
+    Py_XDECREF (entry_context);
     unlock_entry (condition);
     condition = NULL;
     if (PyErr_Occurred ())
         goto close_completion;
     if (!captured) {
-        if ((published && (!matches || record.user_context != (void *) entry))
+        if ((published && (!matches || !context_matches))
             || record.kind != ZLINK_COMPLETION_REQUEST) {
             Py_SETREF (failure, request_failure (module, ZLINK_REQUEST_INTERNAL_ERROR, EPROTO));
         } else if (record.request_result != ZLINK_REQUEST_OK) {
@@ -1781,7 +1780,7 @@ close_completion:;
         entry_id = PyObject_GetAttr (entry, hp_completion_id);
         matches = entry_id && PyLong_AsUnsignedLongLong (entry_id) == record.completion_id;
         Py_XDECREF (entry_id);
-        if (!matches || record.user_context != (void *) entry) {
+        if (!matches || !context_matches) {
             Py_XSETREF (failure, request_failure (module, ZLINK_REQUEST_INTERNAL_ERROR, EPROTO));
             if (!failure || PyObject_SetAttr (entry, hp__value, Py_None) < 0)
                 goto done;

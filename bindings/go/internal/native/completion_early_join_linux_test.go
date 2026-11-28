@@ -59,7 +59,10 @@ func TestSendEarlyWritableJoinsBeforeDrainReturns(t *testing.T) {
 		owner := socket.completion
 		owner.mu.Lock()
 		defer owner.mu.Unlock()
-		return len(owner.earlyWritable) == 1 && len(owner.entries) == 0
+		for _, record := range owner.inflightSends {
+			return record != nil && len(owner.entries) == 0
+		}
+		return false
 	})
 	select {
 	case err := <-drained:
@@ -89,10 +92,10 @@ func TestSendEarlyWritableJoinsBeforeDrainReturns(t *testing.T) {
 	}
 	owner := socket.completion
 	owner.mu.Lock()
-	entries, early := len(owner.entries), len(owner.earlyWritable)
+	entries, inFlight := len(owner.entries), len(owner.inflightSends)
 	owner.mu.Unlock()
-	if entries != 0 || early != 0 {
-		t.Fatalf("completion state after retry: entries=%d early=%d", entries, early)
+	if entries != 0 || inFlight != 0 {
+		t.Fatalf("completion state after retry: entries=%d in-flight sends=%d", entries, inFlight)
 	}
 	if got := completiontest.Trace(); got != "WNS" {
 		t.Fatalf("native call order = %q, want WNS", got)

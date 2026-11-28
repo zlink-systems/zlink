@@ -46,6 +46,11 @@ with socket:
 **선택 기준.** 아래 모든 구체 socket type이 이 Protocol을 확장하고
 자신만의 `connect`/`disconnect`/send/recv 표면을 추가한다.
 
+STREAM을 제외한 raw 소켓의 `connection_attempts_snapshot()`은 outbound 연결
+등록마다 `ConnectionAttempt` 한 행을 반환한다. `PollEventFlag.POLLCONNECT`로
+변경을 감시한다. 조회 중 더 새로운 변경이 없으면 성공한 snapshot이 readiness를
+해제한다.
+
 ---
 
 ## `CommonSocketOptions`와 타입별 확장
@@ -75,11 +80,8 @@ socket.options.submit_retry_mode = SubmitRetryMode.LOCAL_FAILURE
 | `max_message_size` | 수신 허용하는 메시지 한 건의 최대 바이트 크기 |
 | `backlog` | listening socket의 대기 연결 큐 길이 |
 | `reconnect_interval_ms` / `reconnect_interval_max_ms` | 재연결 시도 사이 간격 / 그 간격의 상한 |
-| `submit_retry_mode` | local back-pressure에서 실패한 submit이 자동 재시도되는지 |
+| `submit_retry_mode` | `SubmitRetryMode.OFF` 또는 `SubmitRetryMode.LOCAL_FAILURE`를 사용한다. |
 | `submit_retry_timeout_ms` / `submit_retry_attempts` | `submit_retry_mode`가 요청할 때의 재시도 timeout/횟수 상한 |
-| `heartbeat_interval_ms` | idle connection에서 heartbeat ping 간격 — **지금까지 다룬 다른 어떤 언어도 이 property를 노출하지 않는다** |
-| `heartbeat_ttl_ms` | heartbeat 없이 remote가 connection을 얼마나 살려두는지 — 같은 독점성 |
-| `heartbeat_timeout_ms` | connection을 죽었다고 취급하기 전 heartbeat reply를 얼마나 기다리는지 — 같은 독점성 |
 
 **Options — 타입별 확장.**
 
@@ -91,13 +93,13 @@ socket.options.submit_retry_mode = SubmitRetryMode.LOCAL_FAILURE
 | `RouterSocketOptions` | `mandatory` | 알 수 없는 route에서 조용히 버리는 대신 오류 |
 | | `handover` | `rid_duplicate_policy`의 편의 wrapper |
 | | `probe` | connect 시 빈 probe 전송 |
-| | `connect_routing_id` | 이 binding의 socket contract 전체에서 *유일한* routing-id 형태 표면 — 어떤 socket type도 자신만의 `set_routing_id`/`get_routing_id`가 없다는 README의 참고 참조 |
+| | `connect_routing_id` | 다음 outbound 연결의 peer routing ID를 지정한다. |
 | | `weight` / `request_timeout_ms` | 양방향 모두 |
 | `StreamSocketOptions` | `notify` | 활성화 시 peer connect/disconnect를 application 메시지로 전달 |
 | `PubSocketOptions` | `verbose` / `verboser` | 중복 포함 모든 (un)subscribe 메시지를 전달 |
 | | `manual` / `manual_last_value` | 구독이 `approve_subscribe`/`reject_subscribe`를 요구; `manual_last_value`는 새로 승인된 구독자에게 topic별 마지막 캐시 메시지도 재전송 |
 | | `no_drop` | back-pressure에서 조용히 버리는 대신 오류 |
-| | `welcome_message` | 새로 연결된 구독자 각각에게 자동 전송 |
+| | `welcome_message` | 새 구독자에게 자동으로 전송한다. 현재 getter는 256바이트를 넘는 값을 조회하면 `ConfigError`를 발생시킨다. |
 | | `topics_count` | 읽기 전용, 활성 구독 개수 |
 | | `approve_subscribe(routing_id)` / `reject_subscribe(routing_id)` | set-only, getter 없음 |
 | `SubSocketOptions` | `topics_count` | 읽기 전용 — 이 socket이 가진 유일한 타입별 option |
@@ -106,9 +108,7 @@ socket.options.submit_retry_mode = SubmitRetryMode.LOCAL_FAILURE
 
 **선택 기준.** 기본값이 배포 환경에 맞지 않을 때 socket이 메시지
 교환을 시작하기 전에 `send_high_water_mark`/`receive_high_water_mark`,
-`linger_ms`를 설정한다. transport 자신의 TCP keep-alive와 독립적으로
-ZMTP 레벨 liveness 감지를 조정하려면 세 `heartbeat_*` property를
-사용한다.
+`linger_ms`를 설정한다.
 
 ---
 
@@ -153,8 +153,8 @@ submission = dealer.request().message(b"payload").timeout(5.0).submit()
 reply = await submission.reply
 ```
 
-**Options.** **`set_routing_id`/`get_routing_id`가 전혀 없다** — README
-참고.
+**Options.** `set_routing_id`와 `get_routing_id`로 DEALER 소켓 자체의
+routing ID를 설정하고 조회한다.
 
 | Member | 의미 |
 | --- | --- |
@@ -328,7 +328,7 @@ received.reply().message(b"ok").submit()
 | `PublishOp.submit()` | 발행을 동기적으로 완료한다. |
 | `ReplyOp.submit()` | 응답을 동기적으로 제출한다. |
 
-제출한 `Message`는 Core가 수락하면 소비된다. 동기 거절이면 호출자에게 그대로 남는다. 비동기 전송·요청이 `BACKPRESSURED`로 대기 토큰을 받으면 binding이 재제출용 사본을 확보한 시점에 원본을 소비한다. 소비된 `Message`는 빈 데이터와 크기 0을 반환한다. 계속 쓰려면 제출 전에 `Message.copy()`로 사본을 만든다.
+제출한 `Message`는 Core가 수락하면 소비된다. 동기 거절이면 호출자에게 그대로 남는다. 비동기 전송·요청이 `BACKPRESSURED`로 대기 토큰을 받으면 binding이 재제출용 사본을 확보한 시점에 원본을 소비한다. 소비된 `Message`는 빈 데이터와 크기 0을 반환한다. 다시 제출하면 `ConfigError`의 `ConfigResult.INVALID_HANDLE`로 실패한다. 계속 쓰려면 제출 전에 `Message.copy()`로 사본을 만든다.
 
 비동기 요청이나 수용 대기가 필요한 전송을 제출하기 전에 소켓을
 `PollEventFlag.POLLCOMPLETION`으로 등록한다. 수용이나 응답을 기다리는 동안

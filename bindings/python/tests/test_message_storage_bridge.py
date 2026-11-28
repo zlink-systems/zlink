@@ -38,6 +38,7 @@ def test_native_submission_preserves_mixed_public_parts(part_count):
     asyncio.run(exercise())
 
 
+@pytest.mark.skipif(native_support._native_extension is None, reason="checks C extension clone")
 def test_completion_clones_survive_source_close():
     import ctypes
     from zlink._native.ffi import ZlinkCompletion, ZlinkMsg

@@ -2,11 +2,13 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
+import systems.zlink.framework.runtime.streams.ZLinkAdmissionQueueMessages;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -130,7 +132,15 @@ final class ZLinkSpotRouteMessages {
                 flowState);
     }
 
-    <TReply> TReply decodeReply(List<Message> replyParts, Class<TReply> replyType) {
+    static Message encodeReplyHeader(ZLinkChannelEnvelope.Header request) {
+        String requestName = request.messageName();
+        String replyName = ZLinkAdmissionQueueMessages.replyName(requestName);
+        return ZLinkChannelEnvelope.encodeHeader(
+                ZLinkChannelEnvelope.reply(request, replyName == null ? requestName : replyName));
+    }
+
+    <TReply> TReply decodeReply(
+            List<Message> replyParts, Class<TReply> replyType, Optional<String> requestName) {
         ZLinkChannelEnvelope.Header header =
                 ZLinkChannelEnvelope.tryDecodeHeader(replyParts, false);
         if (header != null && header.isError()) {
@@ -144,6 +154,17 @@ final class ZLinkSpotRouteMessages {
                     header.errorMessage(),
                     null,
                     header.metadata());
+        }
+        String expectedName = requestName.map(ZLinkAdmissionQueueMessages::replyName).orElse(null);
+        if (expectedName != null
+                && (header == null
+                        || header.kind() != ZLinkChannelEnvelope.KIND_RESPONSE
+                        || !expectedName.equals(header.messageName()))) {
+            String actualName = header == null ? null : header.messageName();
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "Expected admission queue response '%s', received '%s'."
+                            .formatted(expectedName, actualName));
         }
         Message emptyReply = null;
         try {

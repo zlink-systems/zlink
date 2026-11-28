@@ -191,8 +191,10 @@ inline int with_borrowed_native_parts (const std::vector<message_t> &parts_, Bod
         }
 
         const int rc = body_ (views_, count_);
+        const int saved_errno = errno;
         for (size_t i = 0; i < count_; ++i)
             (void) zlink_msg_close (&views_[i]);
+        errno = saved_errno;
         return rc;
     };
 

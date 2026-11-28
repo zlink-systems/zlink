@@ -48,6 +48,10 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             new CopyOnWriteArrayList<>();
     private final List<ZLinkStreamAdmissionWaitingHandler> admissionWaitingHandlers =
             new CopyOnWriteArrayList<>();
+    private final List<ZLinkStreamAdmissionQueuedHandler> admissionQueuedHandlers =
+            new CopyOnWriteArrayList<>();
+    private final List<ZLinkStreamAdmissionPositionHandler> admissionPositionHandlers =
+            new CopyOnWriteArrayList<>();
     private final ZLinkStreamDispatchQueue dispatchQueue;
     final ZLinkStreamActorRegistry actorRegistry;
     private final ZLinkStreamConnectorPayloadCodec payloadCodec;
@@ -100,7 +104,16 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             Supplier<CompletionStage<? extends ZLinkStreamTransportConnection>> openTransport) {
         this.timeouts = timeouts;
         this.pendingRequests =
-                new ZLinkStreamPendingRequests(timeouts, clock, admissionJitterMillis);
+                new ZLinkStreamPendingRequests(
+                        timeouts,
+                        clock,
+                        admissionJitterMillis,
+                        new ZLinkStreamAdmissionQueue(
+                                timeouts,
+                                this::nextRequestSeq,
+                                this::sendAdmissionEnqueue,
+                                this::notifyAdmissionQueued,
+                                this::notifyAdmissionPosition));
         this.configuration = ZLinkStreamConnectorConfiguration.from(options);
         this.dispatchQueue = new ZLinkStreamDispatchQueue(this::publishError);
         this.actorRegistry =
@@ -247,6 +260,20 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         Objects.requireNonNull(handler, "handler");
         admissionWaitingHandlers.add(handler);
         return () -> admissionWaitingHandlers.remove(handler);
+    }
+
+    @Override
+    public AutoCloseable onAdmissionQueued(ZLinkStreamAdmissionQueuedHandler handler) {
+        Objects.requireNonNull(handler, "handler");
+        admissionQueuedHandlers.add(handler);
+        return () -> admissionQueuedHandlers.remove(handler);
+    }
+
+    @Override
+    public AutoCloseable onAdmissionPosition(ZLinkStreamAdmissionPositionHandler handler) {
+        Objects.requireNonNull(handler, "handler");
+        admissionPositionHandlers.add(handler);
+        return () -> admissionPositionHandlers.remove(handler);
     }
 
     @Override
@@ -458,6 +485,12 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             byte[] body,
             ZLinkStreamActorRegistry.DefaultActor actor) {
         try {
+            var metadata = original.metadata();
+            String ticket = request.ticket();
+            if (ticket != null) {
+                metadata = new HashMap<>(metadata);
+                metadata.put(ZLinkStreamAdmissionQueue.TICKET, ticket);
+            }
             var header =
                     new ZLinkStreamWireProtocol.Header(
                             original.kind(),
@@ -465,7 +498,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                             original.flags(),
                             nextRequestSeq(),
                             original.name(),
-                            original.metadata(),
+                            metadata,
                             original.correlationId(),
                             original.flowId(),
                             original.flowOrigin(),
@@ -504,6 +537,56 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                                     pendingRequests.fail(sequence, failure);
                                     writeFailure.accept(failure);
                                 }));
+    }
+
+    private void sendAdmissionEnqueue(
+            ZLinkStreamTransportConnection expected, long sequence, BooleanSupplier canWrite) {
+        var header =
+                new ZLinkStreamWireProtocol.Header(
+                        ZLinkStreamWireProtocol.KIND_REQUEST,
+                        ZLinkStreamWireProtocol.CODEC_JSON,
+                        ZLinkStreamWireProtocol.FLAG_HAS_REQUEST_SEQ,
+                        sequence,
+                        ZLinkStreamAdmissionQueue.ENQUEUE,
+                        Map.of(),
+                        nextCorrelationId());
+        sendFrame(
+                header,
+                new byte[] {'{', '}'},
+                (owner, write, writeFailure) -> {
+                    if (owner != expected) {
+                        throw ZLinkStreamException.disconnected(
+                                "connection ended before admission enqueue");
+                    }
+                    return sendChain.enqueueDeferred(
+                            owner,
+                            () ->
+                                    canWrite.getAsBoolean()
+                                            ? traceWrite(header, write.get())
+                                            : CompletableFuture.completedFuture(null),
+                            writeFailure);
+                });
+    }
+
+    private void notifyAdmissionQueued() {
+        for (var handler : admissionQueuedHandlers) {
+            dispatchUserCallback(
+                    () ->
+                            admissionQueuedHandlers.contains(handler)
+                                    ? handler.handle()
+                                    : CompletableFuture.completedFuture(null));
+        }
+    }
+
+    private void notifyAdmissionPosition(ZLinkStreamAdmissionQueue.Position position) {
+        for (var handler : admissionPositionHandlers) {
+            dispatchUserCallback(
+                    () ->
+                            admissionPositionHandlers.contains(handler)
+                                    ? handler.handle(
+                                            position.position(), position.estimatedWaitMs())
+                                    : CompletableFuture.completedFuture(null));
+        }
     }
 
     private void notifyAdmissionWaiting(String packetName, String actorId, Duration retryAfter) {

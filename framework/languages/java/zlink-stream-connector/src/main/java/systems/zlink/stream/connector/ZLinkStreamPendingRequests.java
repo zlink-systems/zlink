@@ -24,12 +24,17 @@ final class ZLinkStreamPendingRequests {
     private final ScheduledExecutorService scheduler;
     private final LongSupplier clock;
     private final IntSupplier jitterMillis;
+    final ZLinkStreamAdmissionQueue queue;
 
     ZLinkStreamPendingRequests(
-            ScheduledExecutorService scheduler, LongSupplier clock, IntSupplier jitterMillis) {
+            ScheduledExecutorService scheduler,
+            LongSupplier clock,
+            IntSupplier jitterMillis,
+            ZLinkStreamAdmissionQueue queue) {
         this.scheduler = scheduler;
         this.clock = clock;
         this.jitterMillis = jitterMillis;
+        this.queue = queue;
     }
 
     long nanoTime() {
@@ -66,16 +71,25 @@ final class ZLinkStreamPendingRequests {
         return request != null && request.admissionRejected(sequence, hint, receivedAt);
     }
 
-    void complete(long sequence, Supplier<ZLinkStreamEncodedPayload> decode) {
+    boolean queueRequired(long sequence, long receivedAt) {
+        PendingRequest request = attempts.get(sequence);
+        if (request == null || !request.waitForTicket(sequence, receivedAt)) {
+            return false;
+        }
+        queue.add(request);
+        return true;
+    }
+
+    boolean complete(long sequence, Supplier<ZLinkStreamEncodedPayload> decode) {
         PendingRequest request = attempts.get(sequence);
         if (request == null) {
-            return;
+            return false;
         }
         ZLinkStreamEncodedPayload payload = decode.get();
         boolean completed = false;
         try {
             if (!request.terminateAttempt(sequence)) {
-                return;
+                return true;
             }
             if (request.deadline - nanoTime() <= 0) {
                 request.publishFailure(request.timeoutFailure());
@@ -95,6 +109,7 @@ final class ZLinkStreamPendingRequests {
                 payload.payload().close();
             }
         }
+        return true;
     }
 
     boolean fail(long sequence, Throwable failure) {
@@ -111,6 +126,8 @@ final class ZLinkStreamPendingRequests {
      * owner means the connector is closing. The ending cause is preserved.
      */
     void failAll(Throwable ex, ZLinkStreamTransportConnection owner) {
+        var malformedPush = ex.getCause() instanceof ZLinkStreamAdmissionQueue.MalformedPush;
+        var waiting = queue.connectionEnded(owner, malformedPush);
         ZLinkStreamException failure =
                 ex instanceof ZLinkStreamException coded
                                 && coded.errorCode() == ZLinkStreamErrorCode.DISCONNECTED
@@ -126,7 +143,7 @@ final class ZLinkStreamPendingRequests {
             }
         }
         for (PendingRequest request : ended) {
-            request.publishFailure(failure);
+            request.publishFailure(waiting.contains(request) ? ex : failure);
         }
     }
 
@@ -176,6 +193,7 @@ final class ZLinkStreamPendingRequests {
         private CompletableFuture<Void> write;
         private ScheduledFuture<?> timeoutTask;
         private ScheduledFuture<?> retryTask;
+        private volatile String ticket;
 
         private PendingRequest(
                 ZLinkStreamTransportConnection owner,
@@ -218,6 +236,37 @@ final class ZLinkStreamPendingRequests {
             return this.sequence == sequence && deadline - nanoTime() > 0;
         }
 
+        String ticket() {
+            return ticket;
+        }
+
+        synchronized boolean isPending() {
+            return timeoutTask != null && deadline - nanoTime() > 0;
+        }
+
+        private synchronized boolean waitForTicket(long sequence, long receivedAt) {
+            if (this.sequence != sequence) {
+                return false;
+            }
+            ticket = null;
+            beginAdmissionWait(receivedAt);
+            return true;
+        }
+
+        void retryWithTicket(String ticket) {
+            this.ticket = ticket;
+            scheduleRetry(nanoTime());
+        }
+
+        private void beginAdmissionWait(long receivedAt) {
+            clearAttempt();
+            // Later rejections can only produce a later admission deadline.
+            if (admissionBudget < deadline - receivedAt) {
+                deadline = receivedAt + admissionBudget;
+                scheduleTimeout();
+            }
+        }
+
         private boolean admissionRejected(long sequence, String hint, long receivedAt) {
             int millis = admissionDelayMillis(hint);
             long retryAt = 0;
@@ -228,12 +277,7 @@ final class ZLinkStreamPendingRequests {
                 if (millis < 0) {
                     terminate();
                 } else {
-                    clearAttempt();
-                    // Later rejections can only produce a later admission deadline.
-                    if (admissionBudget < deadline - receivedAt) {
-                        deadline = receivedAt + admissionBudget;
-                        scheduleTimeout();
-                    }
+                    beginAdmissionWait(receivedAt);
                     retryAt =
                             receivedAt
                                     + TimeUnit.MILLISECONDS.toNanos(
