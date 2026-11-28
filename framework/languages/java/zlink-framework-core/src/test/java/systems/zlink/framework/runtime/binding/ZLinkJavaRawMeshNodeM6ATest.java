@@ -62,6 +62,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import java.util.logging.SimpleFormatter;
 import java.util.stream.IntStream;
 
 final class ZLinkJavaRawMeshNodeM6ATest {
@@ -233,6 +234,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         RoutingId localRid = RoutingId.from("decode-target");
         var wire = new ZLinkServiceM6AWireCodec();
         var protocolErrors = new AtomicInteger();
+        var lastProtocolError = new AtomicReference<LogRecord>();
+        var formatter = new SimpleFormatter();
         var decodeDrops = new AtomicInteger();
         Logger logger = Logger.getLogger(ZLinkJavaRawMeshNode.class.getName());
         Handler diagnostics =
@@ -240,8 +243,10 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     @Override
                     public void publish(LogRecord record) {
                         if (record.getMessage()
-                                .startsWith("ProtocolError: rejected service record"))
+                                .startsWith("ProtocolError: rejected service record")) {
+                            lastProtocolError.set(record);
                             protocolErrors.incrementAndGet();
+                        }
                     }
 
                     @Override
@@ -382,6 +387,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                         node.dispatch(receiveDecodeRecord(port, router));
                         ZLinkTelemetryTestFence.awaitIdle();
                         assertEquals(beforeOneWay + 1, protocolErrors.get());
+                        assertEquals(
+                                "ProtocolError: rejected service record from decode-source",
+                                formatter.formatMessage(lastProtocolError.get()));
                         assertEquals(dropsBeforeOneWay + 1, decodeDrops.get());
                     }
                 }

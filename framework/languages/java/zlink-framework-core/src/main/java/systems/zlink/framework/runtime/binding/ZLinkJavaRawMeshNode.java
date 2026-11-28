@@ -6796,7 +6796,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private void rejectProtocolRecord(ZLinkJavaRawServicePort.Inbound inbound, String surface) {
-        ZLinkTelemetryOwner.logParameter(
+        ZLinkTelemetryOwner.logParameters(
                 telemetryHost,
                 LOGGER,
                 Level.WARNING,
